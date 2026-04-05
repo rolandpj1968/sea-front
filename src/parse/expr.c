@@ -82,12 +82,22 @@ static int get_binop_prec(Parser *p, TokenKind k) {
     case TK_CARET:                                   return PREC_BITXOR;
     case TK_AMP:                                     return PREC_BITAND;
     case TK_EQ: case TK_NE:                          return PREC_EQUALITY;
-    case TK_LT: case TK_LE: case TK_GT: case TK_GE: return PREC_RELAT;
+    case TK_LT: case TK_LE:                          return PREC_RELAT;
+    case TK_GT: case TK_GE:
+        /* N4659 §17.2/3 [temp.names]: inside a template-argument-list,
+         * > is the closing delimiter, not greater-than. Similarly >>
+         * splits into two >'s. Don't treat these as binary operators
+         * when parsing template arguments. */
+        if (p->template_depth > 0) return 0;
+        return PREC_RELAT;
     case TK_SPACESHIP:
-        /* <=> only valid in C++20 and later — N4861 §7.6.8 */
         if (p->std >= CPP20) return PREC_COMPARE;
         return 0;
-    case TK_SHL: case TK_SHR:                        return PREC_SHIFT;
+    case TK_SHL:                                      return PREC_SHIFT;
+    case TK_SHR:
+        /* >> inside template args is two >'s, not shift */
+        if (p->template_depth > 0) return 0;
+        return PREC_SHIFT;
     case TK_PLUS: case TK_MINUS:                     return PREC_ADD;
     case TK_STAR: case TK_SLASH: case TK_PERCENT:    return PREC_MUL;
     default:                                          return 0;
@@ -162,10 +172,22 @@ static Node *primary_expr(Parser *p) {
 
     /* Identifier — §8.1.4 [expr.prim.id]
      *   id-expression: unqualified-id | qualified-id
-     * For the first pass, just a bare identifier.
-     * Stage 2 adds qualified-id (::name, ns::name). */
+     *
+     * N4659 §17.2/3 [temp.names] — Rule 4 disambiguation:
+     *   If the identifier is a template-name and is followed by '<',
+     *   parse as a template-id (simple-template-id) rather than treating
+     *   '<' as less-than.
+     *   "After name lookup finds that a name is a template-name, if this
+     *    name is followed by a <, the < is always taken as the delimiter
+     *    of a template-argument-list and never as the less-than operator."
+     */
     if (tok->kind == TK_IDENT) {
         advance(p);
+
+        /* Rule 4: template-name followed by < → template-id */
+        if (at(p, TK_LT) && lookup_is_template_name(p, tok))
+            return parse_template_id(p, tok);
+
         Node *node = new_node(p, ND_IDENT, tok);
         node->ident.name = tok;
         return node;

@@ -93,6 +93,17 @@ typedef enum {
     ND_PARAM,           /* parameter-declaration — N4659 §11.3.5 [dcl.fct] */
     ND_TYPEDEF,         /* typedef — N4659 §10.1.3 [dcl.typedef] */
 
+    /* -- Templates --
+     * N4659 §17 [temp] (Annex A.12 [gram.temp])
+     * C++20: adds concepts (requires-clause on template-declaration),
+     *        abbreviated function templates (auto params)
+     * C++23: no changes to template grammar
+     */
+    ND_TEMPLATE_DECL,   /* template-declaration — N4659 §17.1 [temp]
+                         *   template < template-parameter-list > declaration */
+    ND_TEMPLATE_ID,     /* simple-template-id — N4659 §17.2 [temp.names]
+                         *   template-name < template-argument-list(opt) > */
+
     /* -- Top level -- */
     ND_TRANSLATION_UNIT, /* translation-unit — N4659 §6.1 [basic.link]
                           * C++20: adds module-declaration at TU level */
@@ -333,6 +344,26 @@ struct Node {
             Token *name;    /* may be NULL for unnamed params */
         } param;
 
+        /* ND_TEMPLATE_DECL — N4659 §17.1 [temp] (Annex A.12)
+         *   template < template-parameter-list > declaration
+         * The inner declaration can be a class, function, variable,
+         * alias, or another template (nested templates).
+         * C++20: adds requires-clause after template-parameter-list */
+        struct {
+            Node **params;      /* template-parameter-list (type-params + non-type) */
+            int nparams;
+            Node *decl;         /* the templated declaration */
+        } template_decl;
+
+        /* ND_TEMPLATE_ID — N4659 §17.2 [temp.names]
+         *   simple-template-id: template-name < template-argument-list(opt) >
+         * Used in expressions and type-specifiers: vector<int>, pair<A,B> */
+        struct {
+            Token *name;        /* the template-name */
+            Node **args;        /* template-argument-list */
+            int nargs;
+        } template_id;
+
         /* ND_TRANSLATION_UNIT — N4659 §6.1 [basic.link]
          * translation-unit: declaration-seq(opt)
          * C++20: extends with module-declaration, export-declaration */
@@ -508,6 +539,8 @@ struct DeclarativeRegion {
 typedef struct {
     int                pos;     /* index into TokenArray */
     DeclarativeRegion *region;
+    int                template_depth;
+    bool               split_shr;
 } ParseState;
 
 /* ================================================================== */
@@ -524,6 +557,13 @@ struct Parser {
     CppStandard std;           /* C++17 baseline; 20/23 gated behind this flag */
     bool tentative;            /* when true, return NULL on error instead of aborting */
     DeclarativeRegion *region; /* current innermost declarative region (§6.3) */
+    int template_depth;        /* nesting depth of template-argument-lists being parsed.
+                                * When > 0, TK_SHR (>>) is treated as two '>' tokens
+                                * (N4659 §17.2/3 [temp.names]). */
+    bool split_shr;            /* true when a >> has been "split": the first > was
+                                * consumed, the second > is virtual. peek()/at()
+                                * return a synthetic TK_GT; advance() clears the flag.
+                                * N4659 §17.2/3 [temp.names]. */
 };
 
 /* ================================================================== */
@@ -611,24 +651,50 @@ Node *parse_compound_stmt(Parser *p);
  *   declaration:
  *       simple-declaration
  *       function-definition
- *       // and many others (template, namespace, using, etc.)
+ *       template-declaration           (§17.1)
+ *       explicit-instantiation         (deferred)
+ *       explicit-specialization        (deferred)
+ *       linkage-specification          (extern "C")
+ *       namespace-definition           (deferred)
+ *       // and others
  *
- *   simple-declaration:
- *       decl-specifier-seq init-declarator-list(opt) ;
- *       // C++17: adds structured bindings (§11.5)
- *       // C++20: adds concept-definition, module-decl, export-decl
+ *   template-declaration:              (§17.1, Annex A.12)
+ *       template < template-parameter-list > declaration
  *
  * Stmt-vs-decl disambiguation (Rule 1, N4659 §9.8 [stmt.ambig]):
- *   "An expression-statement with a function-style explicit type
- *    conversion as its leftmost subexpression can be indistinguishable
- *    from a declaration ... The disambiguation is that any statement
- *    that could be a declaration IS a declaration."
- *
- * First pass: approximate the type-name oracle with built-in type
- * keywords. User-defined type names require the symbol table (Stage 2).
+ *   "any statement that could be a declaration IS a declaration."
  */
 Node *parse_declaration(Parser *p);
 Node *parse_top_level_decl(Parser *p);
+
+/*
+ * Template declaration — N4659 §17.1 [temp] (Annex A.12 [gram.temp])
+ *   template < template-parameter-list > declaration
+ *
+ * Parses the template parameter list, pushes a REGION_TEMPLATE scope
+ * (§6.3.9 [basic.scope.temp]) for the template parameters, then
+ * parses the inner declaration. Registers the declared name as
+ * ENTITY_TEMPLATE in the enclosing scope.
+ *
+ * C++20: adds requires-clause after template-parameter-list
+ * C++23: no changes
+ */
+Node *parse_template_declaration(Parser *p);
+
+/*
+ * Template argument list — N4659 §17.2 [temp.names]
+ *   template-argument-list:
+ *       template-argument ...(opt)
+ *       template-argument-list , template-argument ...(opt)
+ *   template-argument:
+ *       constant-expression | type-id | id-expression
+ *
+ * Called when '<' is known to start a template-argument-list
+ * (i.e., after lookup_is_template_name confirmed the name).
+ * Handles >> splitting (§17.2/3): when inside template args,
+ * TK_SHR is treated as two '>' tokens.
+ */
+Node *parse_template_id(Parser *p, Token *name);
 
 /* ================================================================== */
 /* Type construction — type.c                                          */

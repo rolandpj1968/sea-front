@@ -1,0 +1,18 @@
+(translation-unit
+  (template (params (param ? "T"))
+    (func-def int "add" (params (param int "a") (param int "b"))
+      (block
+        (return (+ (ident "a") (ident "b"))))))
+  (template (params (param ? "T") (param int "N"))
+    (var-decl struct Array))
+  (template (params (param ? "T"))
+    (var-decl struct Box))
+  (template (params (param ? "A") (param ? "B"))
+    (var-decl struct Pair))
+  (func-def int "main" (params)
+    (block
+      (var-decl int "x" (call (template-id "add" (var-decl int)) (num 1) (num 2)))
+      (var-decl struct Array "arr")
+      (var-decl struct Box "nested")
+      (var-decl struct Box "complex")
+      (return (ident "x")))))

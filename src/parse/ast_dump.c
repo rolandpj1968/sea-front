@@ -368,6 +368,31 @@ static void dump(Node *node, int depth) {
         printf("(typedef)");
         break;
 
+    case ND_TEMPLATE_DECL:
+        printf("(template (params");
+        for (int i = 0; i < node->template_decl.nparams; i++) {
+            printf(" ");
+            dump(node->template_decl.params[i], depth + 1);
+        }
+        printf(")");
+        if (node->template_decl.decl) {
+            printf("\n");
+            indent(depth + 1);
+            dump(node->template_decl.decl, depth + 1);
+        }
+        printf(")");
+        break;
+
+    case ND_TEMPLATE_ID:
+        printf("(template-id \"%.*s\"", node->template_id.name->len,
+               node->template_id.name->loc);
+        for (int i = 0; i < node->template_id.nargs; i++) {
+            printf(" ");
+            dump(node->template_id.args[i], depth + 1);
+        }
+        printf(")");
+        break;
+
     case ND_TRANSLATION_UNIT:
         printf("(translation-unit");
         dump_children(node->tu.decls, node->tu.ndecls, depth + 1);

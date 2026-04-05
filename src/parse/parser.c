@@ -9,20 +9,38 @@
 
 /* ------------------------------------------------------------------ */
 /* Token stream operations — index-based cursor into contiguous array  */
+/*                                                                     */
+/* The split_shr flag handles >> splitting (N4659 §17.2/3):            */
+/* When a >> is split inside template args, the first > is consumed    */
+/* and split_shr is set. Subsequent peek/at/advance see a virtual      */
+/* TK_GT until the flag is cleared by advance.                         */
 /* ------------------------------------------------------------------ */
 
+/* Synthetic TK_GT token used when split_shr is active */
+static Token synthetic_gt = { .kind = TK_GT, .loc = ">", .len = 1 };
+
 Token *peek(Parser *p) {
+    if (p->split_shr)
+        return &synthetic_gt;
     return &p->tokens[p->pos];
 }
 
 Token *peek_ahead(Parser *p, int n) {
+    if (p->split_shr) {
+        if (n == 0) return &synthetic_gt;
+        n--;  /* the virtual > occupies slot 0 */
+    }
     int idx = p->pos + n;
     if (idx >= p->ntokens)
-        idx = p->ntokens - 1;  /* clamp to EOF */
+        idx = p->ntokens - 1;
     return &p->tokens[idx];
 }
 
 Token *advance(Parser *p) {
+    if (p->split_shr) {
+        p->split_shr = false;
+        return &synthetic_gt;
+    }
     Token *tok = &p->tokens[p->pos];
     if (tok->kind != TK_EOF)
         p->pos++;
@@ -30,10 +48,19 @@ Token *advance(Parser *p) {
 }
 
 bool at(Parser *p, TokenKind k) {
+    if (p->split_shr)
+        return k == TK_GT;
     return p->tokens[p->pos].kind == k;
 }
 
 bool consume(Parser *p, TokenKind k) {
+    if (p->split_shr) {
+        if (k == TK_GT) {
+            p->split_shr = false;
+            return true;
+        }
+        return false;
+    }
     if (p->tokens[p->pos].kind == k) {
         advance(p);
         return true;
@@ -42,6 +69,16 @@ bool consume(Parser *p, TokenKind k) {
 }
 
 Token *expect(Parser *p, TokenKind k) {
+    if (p->split_shr) {
+        if (k == TK_GT) {
+            p->split_shr = false;
+            return &synthetic_gt;
+        }
+        if (p->tentative)
+            return NULL;
+        error_tok(&p->tokens[p->pos], "expected '%s', got '>'",
+                  token_kind_name(k));
+    }
     if (p->tokens[p->pos].kind == k)
         return advance(p);
     if (p->tentative)
@@ -51,6 +88,8 @@ Token *expect(Parser *p, TokenKind k) {
 }
 
 bool at_eof(Parser *p) {
+    if (p->split_shr)
+        return false;
     return p->tokens[p->pos].kind == TK_EOF;
 }
 
@@ -71,12 +110,16 @@ ParseState parser_save(Parser *p) {
     ParseState s;
     s.pos = p->pos;
     s.region = p->region;
+    s.template_depth = p->template_depth;
+    s.split_shr = p->split_shr;
     return s;
 }
 
 void parser_restore(Parser *p, ParseState saved) {
     p->pos = saved.pos;
     p->region = saved.region;
+    p->template_depth = saved.template_depth;
+    p->split_shr = saved.split_shr;
 }
 
 /* ------------------------------------------------------------------ */
@@ -92,16 +135,12 @@ Node *new_node(Parser *p, NodeKind kind, Token *tok) {
 
 /*
  * Integer literal node — N4659 §5.13.2 [lex.icon]
- *
- * Converts the token's lexer-computed value into the 128-bit
- * representation (lo/hi + sign flag). The token carries suffix
- * info (u, l, ll, etc.) for type determination by sema.
  */
 Node *new_num_node(Parser *p, Token *tok) {
     Node *node = new_node(p, ND_NUM, tok);
     node->num.lo = (uint64_t)tok->ival;
     node->num.hi = 0;
-    node->num.is_signed = true;  /* default; sema refines based on suffix */
+    node->num.is_signed = true;
     return node;
 }
 
@@ -116,7 +155,6 @@ Node *new_fnum_node(Parser *p, Token *tok) {
 
 /*
  * Binary expression node — covers N4659 §8.5 through §8.18
- * (multiplicative through assignment).
  */
 Node *new_binary_node(Parser *p, TokenKind op, Node *lhs, Node *rhs,
                       Token *tok) {
@@ -147,9 +185,6 @@ Node *new_unary_node(Parser *p, TokenKind op, Node *operand, Token *tok) {
  *
  * C++20: extends with module-declaration, export-declaration
  *   (N4861 §10.1 [module.unit])
- *
- * Parses the entire token stream into an AST rooted at
- * ND_TRANSLATION_UNIT containing a list of top-level declarations.
  */
 Node *parse(TokenArray tokens, Arena *arena, CppStandard std) {
     Parser p;
@@ -161,6 +196,8 @@ Node *parse(TokenArray tokens, Arena *arena, CppStandard std) {
     p.std = std;
     p.tentative = false;
     p.region = NULL;
+    p.template_depth = 0;
+    p.split_shr = false;
 
     /* N4659 §6.3.6/3 [basic.scope.namespace]:
      * "The outermost declarative region of a translation unit is also

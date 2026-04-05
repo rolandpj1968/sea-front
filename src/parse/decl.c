@@ -468,6 +468,11 @@ Node *parse_top_level_decl(Parser *p) {
         return NULL;
     }
 
+    /* template-declaration — N4659 §17.1 [temp] (Annex A.12)
+     *   template < template-parameter-list > declaration */
+    if (at(p, TK_KW_TEMPLATE))
+        return parse_template_declaration(p);
+
     /* linkage-specification — N4659 §10.5 [dcl.link]
      *   extern string-literal { declaration-seq(opt) }
      *   extern string-literal declaration
@@ -509,4 +514,333 @@ Node *parse_top_level_decl(Parser *p) {
     }
 
     return parse_declaration(p);
+}
+
+/* ------------------------------------------------------------------ */
+/* Template declarations — N4659 §17 [temp]                            */
+/*                          N4861 §13 [temp] (C++20)                   */
+/*                          N4950 §13 [temp] (C++23)                   */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Parse a single template parameter.
+ *
+ * N4659 §17.1 [temp] (Annex A.12):
+ *   template-parameter:
+ *       type-parameter
+ *       parameter-declaration
+ *
+ *   type-parameter:
+ *       type-parameter-key ...(opt) identifier(opt)
+ *       type-parameter-key identifier(opt) = type-id
+ *       template < template-parameter-list > type-parameter-key ...(opt) identifier(opt)
+ *       template < template-parameter-list > type-parameter-key identifier(opt) = id-expression
+ *
+ *   type-parameter-key: class | typename
+ *
+ * If the parameter starts with 'class' or 'typename' (and isn't followed
+ * by something that makes it a non-type parameter like 'class Foo' where
+ * Foo is already a type), it's a type parameter. Otherwise it's a non-type
+ * parameter (parsed as a regular parameter-declaration).
+ */
+static Node *parse_template_parameter(Parser *p) {
+    Token *tok = peek(p);
+
+    /* type-parameter: typename T or class T
+     * N4659 §17.1/1: type-parameter-key is 'class' or 'typename' */
+    if (tok->kind == TK_KW_TYPENAME || tok->kind == TK_KW_CLASS) {
+        /* Disambiguate: 'typename T' (type param) vs 'typename Foo::bar' (dependent name)
+         * and 'class X' (type param) vs elaborated-type-specifier.
+         * Heuristic: if next token is ident, comma, >, >>, =, or ..., it's a type param. */
+        Token *next = peek_ahead(p, 1);
+        if (next->kind == TK_IDENT || next->kind == TK_COMMA ||
+            next->kind == TK_GT || next->kind == TK_SHR ||
+            next->kind == TK_ASSIGN || next->kind == TK_ELLIPSIS ||
+            next->kind == TK_EOF) {
+
+            advance(p);  /* consume class/typename */
+
+            /* Optional pack expansion ... */
+            bool is_pack = consume(p, TK_ELLIPSIS);
+            (void)is_pack;  /* used in later stages */
+
+            /* Optional identifier */
+            Token *name = NULL;
+            if (at(p, TK_IDENT))
+                name = advance(p);
+
+            /* Register the type parameter name in the template scope.
+             * N4659 §6.3.9 [basic.scope.temp]: template parameter names
+             * are in the template's declarative region. */
+            if (name)
+                region_declare(p, name->loc, name->len, ENTITY_TYPE, NULL);
+
+            /* Optional default: = type-id */
+            if (consume(p, TK_ASSIGN)) {
+                /* Skip the default type-id — consume until , or > or >> */
+                int depth = 0;
+                while (!at_eof(p)) {
+                    if (depth == 0 && (at(p, TK_COMMA) || at(p, TK_GT) || at(p, TK_SHR)))
+                        break;
+                    if (at(p, TK_LT)) depth++;
+                    if (at(p, TK_GT)) depth--;
+                    advance(p);
+                }
+            }
+
+            Node *node = new_node(p, ND_PARAM, tok);
+            node->param.name = name;
+            node->param.ty = NULL;  /* type params have no type — they ARE types */
+            return node;
+        }
+        /* else: fall through to non-type parameter parsing */
+    }
+
+    /* template-template parameter:
+     * template < template-parameter-list > class/typename identifier(opt)
+     * Deferred: just skip to , or > for now */
+    if (tok->kind == TK_KW_TEMPLATE) {
+        /* Skip nested template<...> */
+        advance(p);  /* template */
+        expect(p, TK_LT);
+        int depth = 1;
+        while (depth > 0 && !at_eof(p)) {
+            if (at(p, TK_LT)) depth++;
+            if (at(p, TK_GT)) { depth--; if (depth == 0) break; }
+            if (at(p, TK_SHR) && depth <= 1) { depth--; break; }
+            advance(p);
+        }
+        if (at(p, TK_GT)) advance(p);
+
+        /* Consume class/typename */
+        if (at(p, TK_KW_CLASS) || at(p, TK_KW_TYPENAME))
+            advance(p);
+
+        /* Optional identifier */
+        Token *name = NULL;
+        if (at(p, TK_IDENT)) {
+            name = advance(p);
+            region_declare(p, name->loc, name->len, ENTITY_TEMPLATE, NULL);
+        }
+
+        /* Optional default */
+        if (consume(p, TK_ASSIGN)) {
+            int d = 0;
+            while (!at_eof(p)) {
+                if (d == 0 && (at(p, TK_COMMA) || at(p, TK_GT) || at(p, TK_SHR)))
+                    break;
+                if (at(p, TK_LT)) d++;
+                if (at(p, TK_GT)) d--;
+                advance(p);
+            }
+        }
+
+        Node *node = new_node(p, ND_PARAM, tok);
+        node->param.name = name;
+        return node;
+    }
+
+    /* Non-type template parameter: parsed as a parameter-declaration
+     * e.g., 'int N', 'bool B = true', 'auto V' */
+    Type *ty = parse_type_specifiers(p);
+    Node *param = parse_declarator(p, ty);
+    param->kind = ND_PARAM;
+
+    /* Register non-type parameter name */
+    if (param->var_decl.name)
+        region_declare(p, param->var_decl.name->loc,
+                      param->var_decl.name->len, ENTITY_VARIABLE, ty);
+
+    /* Optional default value: = constant-expression */
+    if (consume(p, TK_ASSIGN)) {
+        /* Skip default — consume until , or > or >> */
+        int depth = 0;
+        while (!at_eof(p)) {
+            if (depth == 0 && (at(p, TK_COMMA) || at(p, TK_GT) || at(p, TK_SHR)))
+                break;
+            if (at(p, TK_LT)) depth++;
+            if (at(p, TK_GT)) depth--;
+            advance(p);
+        }
+    }
+
+    return param;
+}
+
+/*
+ * parse_template_declaration — N4659 §17.1 [temp]
+ *
+ *   template-declaration:
+ *       template < template-parameter-list > declaration
+ *
+ * N4659 §6.3.9 [basic.scope.temp]:
+ *   "The declarative region of the name of a template parameter
+ *    is the smallest template-declaration in which the name
+ *    was introduced."
+ */
+Node *parse_template_declaration(Parser *p) {
+    Token *tok = expect(p, TK_KW_TEMPLATE);
+
+    /* explicit-specialization: template <> declaration */
+    if (at(p, TK_LT) && peek_ahead(p, 1)->kind == TK_GT) {
+        advance(p);  /* < */
+        advance(p);  /* > */
+        /* Parse the specialized declaration */
+        Node *decl = parse_declaration(p);
+        Node *node = new_node(p, ND_TEMPLATE_DECL, tok);
+        node->template_decl.params = NULL;
+        node->template_decl.nparams = 0;
+        node->template_decl.decl = decl;
+        return node;
+    }
+
+    expect(p, TK_LT);
+
+    /* Push template parameter scope — §6.3.9 [basic.scope.temp] */
+    region_push(p, REGION_TEMPLATE);
+
+    /* Parse template-parameter-list */
+    Vec params = vec_new(p->arena);
+    if (!at(p, TK_GT) && !at(p, TK_SHR)) {
+        vec_push(&params, parse_template_parameter(p));
+        while (consume(p, TK_COMMA))
+            vec_push(&params, parse_template_parameter(p));
+    }
+
+    expect(p, TK_GT);
+
+    /* Parse the templated declaration.
+     * This can be a class, function, variable, alias, or nested template. */
+    Node *decl;
+    if (at(p, TK_KW_TEMPLATE))
+        decl = parse_template_declaration(p);  /* nested template */
+    else
+        decl = parse_declaration(p);
+
+    /* Pop template parameter scope */
+    region_pop(p);
+
+    /* Register the template name in the enclosing scope.
+     * The name comes from the inner declaration — may be in different
+     * places depending on the declaration kind:
+     *   - function: func.name
+     *   - variable: var_decl.name
+     *   - struct/class/enum with no declarator: var_decl.ty->tag */
+    Token *tmpl_name = NULL;
+    if (decl) {
+        switch (decl->kind) {
+        case ND_FUNC_DEF:
+        case ND_FUNC_DECL:
+            tmpl_name = decl->func.name;
+            break;
+        case ND_VAR_DECL:
+            tmpl_name = decl->var_decl.name;
+            /* Bare struct/class/enum: name is in the type's tag */
+            if (!tmpl_name && decl->var_decl.ty && decl->var_decl.ty->tag)
+                tmpl_name = decl->var_decl.ty->tag;
+            break;
+        default:
+            break;
+        }
+    }
+    if (tmpl_name)
+        region_declare(p, tmpl_name->loc, tmpl_name->len,
+                      ENTITY_TEMPLATE, NULL);
+
+    Node *node = new_node(p, ND_TEMPLATE_DECL, tok);
+    node->template_decl.params = (Node **)params.data;
+    node->template_decl.nparams = params.len;
+    node->template_decl.decl = decl;
+    return node;
+}
+
+/*
+ * parse_template_id — N4659 §17.2 [temp.names]
+ *
+ *   simple-template-id:
+ *       template-name < template-argument-list(opt) >
+ *
+ *   template-argument:
+ *       constant-expression
+ *       type-id
+ *       id-expression
+ *
+ * Called from primary_expr/postfix_expr when an identifier is known
+ * to be a template-name (via lookup_is_template_name).
+ *
+ * Handles >> splitting: when template_depth > 0 and we see TK_SHR,
+ * we treat it as two '>' tokens. The first closes the inner template-
+ * argument-list; the remaining '>' is left for the outer.
+ *
+ * N4659 §17.2/3: "When parsing a template-argument-list, the first
+ *   non-nested > is taken as the ending delimiter rather than a
+ *   greater-than operator."
+ */
+Node *parse_template_id(Parser *p, Token *name) {
+    Token *tok = name;
+    expect(p, TK_LT);
+    p->template_depth++;
+
+    Vec args = vec_new(p->arena);
+
+    if (!at(p, TK_GT) && !(at(p, TK_SHR) && p->template_depth > 0)) {
+        for (;;) {
+            /* template-argument: type-id or constant-expression or id-expression.
+             * N4659 §17.3/2 [temp.arg] Rule 5: "type-id always wins."
+             * For the first pass, try type first if at a type specifier. */
+            if (at_type_specifier(p)) {
+                /* Tentative: try type-id */
+                ParseState saved = parser_save(p);
+                p->tentative = true;
+                Type *ty = parse_type_name(p);
+                bool ty_ok = (ty != NULL);
+                p->tentative = false;
+
+                if (ty_ok && (at(p, TK_COMMA) || at(p, TK_GT) ||
+                              (at(p, TK_SHR) && p->template_depth > 0))) {
+                    /* Successfully parsed as type-id, and next is , or > */
+                    /* Create a node to represent the type argument */
+                    parser_restore(p, saved);
+                    ty = parse_type_name(p);
+                    Node *arg = new_node(p, ND_VAR_DECL, peek(p));
+                    arg->var_decl.ty = ty;
+                    arg->var_decl.name = NULL;
+                    vec_push(&args, arg);
+                } else {
+                    /* Not a clean type-id — parse as expression */
+                    parser_restore(p, saved);
+                    vec_push(&args, parse_assign_expr(p));
+                }
+            } else {
+                /* Not a type specifier — parse as expression */
+                vec_push(&args, parse_assign_expr(p));
+            }
+
+            if (!consume(p, TK_COMMA))
+                break;
+        }
+    }
+
+    /* Closing > — handle >> splitting.
+     * N4659 §17.2/3 [temp.names]: "When parsing a template-argument-list,
+     * the first non-nested > is taken as the ending delimiter rather than
+     * a greater-than operator."
+     *
+     * For >>: advance past the >> token and set split_shr so the next
+     * peek()/at()/advance() returns a virtual TK_GT for the outer
+     * template-argument-list. No token mutation — safe for tentative parsing. */
+    if (at(p, TK_SHR) && p->template_depth > 0) {
+        advance(p);         /* consume the >> token */
+        p->split_shr = true; /* leave a virtual > for the outer consumer */
+    } else {
+        expect(p, TK_GT);
+    }
+
+    p->template_depth--;
+
+    Node *node = new_node(p, ND_TEMPLATE_ID, tok);
+    node->template_id.name = name;
+    node->template_id.args = (Node **)args.data;
+    node->template_id.nargs = args.len;
+    return node;
 }

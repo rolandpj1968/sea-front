@@ -206,8 +206,24 @@ Type *parse_type_specifiers(Parser *p) {
      * token is a user-defined type-name via name lookup (§6.4). */
     if (!seen_any && peek(p)->kind == TK_IDENT) {
         Declaration *d = lookup_unqualified(p, peek(p)->loc, peek(p)->len);
-        if (d && (d->entity == ENTITY_TYPE || d->entity == ENTITY_TAG)) {
+        if (d && (d->entity == ENTITY_TYPE || d->entity == ENTITY_TAG ||
+                  d->entity == ENTITY_TEMPLATE)) {
             Token *name_tok = advance(p);
+
+            /* N4659 §17.2 [temp.names]: if the type-name is a template-name
+             * followed by <, parse the template-argument-list to form a
+             * simple-template-id used as a type-specifier. */
+            if (d->entity == ENTITY_TEMPLATE && at(p, TK_LT)) {
+                parse_template_id(p, name_tok);  /* consumes <args> */
+                /* For now, the resulting type is opaque — sema resolves
+                 * the template specialization. */
+                Type *ty = new_type(p, TY_STRUCT);
+                ty->is_const = is_const;
+                ty->is_volatile = is_volatile;
+                ty->tag = name_tok;
+                return ty;
+            }
+
             Type *ty = d->type;
             if (ty) {
                 /* Copy the type so we don't modify the declaration's type
@@ -287,9 +303,12 @@ bool at_type_specifier(Parser *p) {
     case TK_IDENT:
         /* N4659 §10.1.7.1 [dcl.type.simple]: a type-name (typedef-name,
          * class-name, or enum-name) is a valid simple-type-specifier.
+         * A template-name followed by <args> is also a type-specifier
+         * (simple-template-id, §17.2).
          * Consult name lookup (§6.4) to determine if this identifier
-         * refers to a type. */
-        return lookup_is_type_name(p, peek(p));
+         * refers to a type or template. */
+        return lookup_is_type_name(p, peek(p)) ||
+               lookup_is_template_name(p, peek(p));
     default:
         return false;
     }
