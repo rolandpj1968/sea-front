@@ -423,18 +423,50 @@ Node *parse_declaration(Parser *p) {
         expect(p, TK_RPAREN);
     }
 
-    /* N4659 §6.3.2/1 [basic.scope.pdecl]: register the variable name
-     * at its point of declaration (after declarator, before initializer
-     * — but we've already parsed the initializer, which is fine for a
-     * bootstrap tool processing valid source). */
+    /* N4659 §6.3.2/1 [basic.scope.pdecl]: register the variable name */
     if (decl->var_decl.name)
         region_declare(p, decl->var_decl.name->loc,
                       decl->var_decl.name->len, ENTITY_VARIABLE,
                       decl->var_decl.ty);
 
-    /* TODO: handle comma-separated declarators:
-     *   int x = 1, y = 2, *z;
-     * For the first pass, single declarator only. */
+    /* Comma-separated declarators — N4659 §10 [dcl.dcl]
+     *   init-declarator-list:
+     *       init-declarator
+     *       init-declarator-list , init-declarator
+     *
+     * Each subsequent declarator shares the same base type (decl-specifier-seq)
+     * but may add its own pointer/array/function modifiers.
+     * E.g.: int x = 1, *y, z[10]; */
+    if (at(p, TK_COMMA)) {
+        Vec decls = vec_new(p->arena);
+        vec_push(&decls, decl);
+
+        while (consume(p, TK_COMMA)) {
+            Node *next_decl = parse_declarator(p, base_ty);
+
+            if (consume(p, TK_ASSIGN))
+                next_decl->var_decl.init = parse_assign_expr(p);
+            else if (consume(p, TK_LPAREN)) {
+                next_decl->var_decl.init = parse_expr(p);
+                expect(p, TK_RPAREN);
+            }
+
+            if (next_decl->var_decl.name)
+                region_declare(p, next_decl->var_decl.name->loc,
+                              next_decl->var_decl.name->len, ENTITY_VARIABLE,
+                              next_decl->var_decl.ty);
+
+            vec_push(&decls, next_decl);
+        }
+
+        expect(p, TK_SEMI);
+
+        /* Wrap multiple declarators in a block node */
+        Node *block = new_node(p, ND_BLOCK, start_tok);
+        block->block.stmts = (Node **)decls.data;
+        block->block.nstmts = decls.len;
+        return block;
+    }
 
     expect(p, TK_SEMI);
     return decl;

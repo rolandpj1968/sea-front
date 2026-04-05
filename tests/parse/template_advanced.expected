@@ -9,6 +9,8 @@
         (return (ident "x")))))
   (template (params (param int "N"))
     (var-decl struct Fixed))
+  (template (params)
+    (var-decl struct Box))
   (func-def int "main" (params)
     (block
       (var-decl struct Box "deep")

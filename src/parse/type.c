@@ -146,6 +146,13 @@ Type *parse_type_specifiers(Parser *p) {
             ty->is_volatile = is_volatile;
             if (at(p, TK_IDENT))
                 ty->tag = advance(p);
+            /* N4659 §17.2 [temp.names]: struct/class followed by a
+             * template-id: 'struct Foo<int>' — consume the template
+             * argument list. This occurs in explicit specializations
+             * and in elaborated-type-specifiers with template args. */
+            if (ty->tag && at(p, TK_LT) && lookup_is_template_name(p, ty->tag)) {
+                parse_template_id(p, ty->tag);
+            }
             /* Skip class body { ... } if present — N4659 §12.1 [class.mem] */
             if (consume(p, TK_LBRACE)) {
                 int depth = 1;
@@ -210,10 +217,15 @@ Type *parse_type_specifiers(Parser *p) {
                   d->entity == ENTITY_TEMPLATE)) {
             Token *name_tok = advance(p);
 
-            /* N4659 §17.2 [temp.names]: if the type-name is a template-name
-             * followed by <, parse the template-argument-list to form a
-             * simple-template-id used as a type-specifier. */
-            if (d->entity == ENTITY_TEMPLATE && at(p, TK_LT)) {
+            /* N4659 §17.2 [temp.names]: if the name is (also) a template-name
+             * and is followed by <, parse the template-argument-list to form a
+             * simple-template-id used as a type-specifier.
+             * A name can be both a type and a template (e.g., after explicit
+             * specialization registers the name as ENTITY_TYPE while the
+             * primary template registered it as ENTITY_TEMPLATE). */
+            if (at(p, TK_LT) && (d->entity == ENTITY_TEMPLATE ||
+                lookup_unqualified_kind(p, name_tok->loc, name_tok->len,
+                                        ENTITY_TEMPLATE) != NULL)) {
                 parse_template_id(p, name_tok);  /* consumes <args> */
                 /* For now, the resulting type is opaque — sema resolves
                  * the template specialization. */

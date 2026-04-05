@@ -2,6 +2,8 @@ template<typename T> struct Box { T val; };
 template<typename A, typename B> struct Pair { A a; B b; };
 template<typename T> T identity(T x) { return x; }
 template<int N> struct Fixed { int data[10]; };
+template<> struct Box<int> { int special; };
+
 int main() {
     Box<Box<Box<int>>> deep;
     Pair<int, Box<int>> mixed;

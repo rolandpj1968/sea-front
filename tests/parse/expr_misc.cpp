@@ -1,6 +1,5 @@
 int main() {
-    int a = 1;
-    int b = 2;
+    int a = 1, b = 2;
     int c = a > b ? a : b;
     a += 10;
     b -= 5;

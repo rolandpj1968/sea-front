@@ -1,8 +1,9 @@
 (translation-unit
   (func-def int "main" (params)
     (block
-      (var-decl int "a" (num 1))
-      (var-decl int "b" (num 2))
+      (block
+        (var-decl int "a" (num 1))
+        (var-decl int "b" (num 2)))
       (var-decl int "c" (?: (> (ident "a") (ident "b")) (ident "a") (ident "b")))
       (+= (ident "a") (num 10))
       (-= (ident "b") (num 5))
