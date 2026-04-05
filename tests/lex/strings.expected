@@ -1,0 +1,21 @@
+./tests/lex/strings.cpp:1:1: STR                  '"hello"'
+./tests/lex/strings.cpp:1:9: STR                  'u8"world"'  enc=u8
+./tests/lex/strings.cpp:1:19: STR                  'u"x"'  enc=u
+./tests/lex/strings.cpp:1:24: STR                  'U"y"'  enc=U
+./tests/lex/strings.cpp:1:29: STR                  'L"z"'  enc=L
+./tests/lex/strings.cpp:2:1: STR                  'R"(raw)"'  raw
+./tests/lex/strings.cpp:2:10: STR                  'R"delim(content)delim"'  raw
+./tests/lex/strings.cpp:3:1: STR                  'u8R"(a)"'  enc=u8  raw
+./tests/lex/strings.cpp:3:10: STR                  'LR"(b)"'  enc=L  raw
+./tests/lex/strings.cpp:3:18: STR                  'uR"(c)"'  enc=u  raw
+./tests/lex/strings.cpp:3:26: STR                  'UR"(d)"'  enc=U  raw
+./tests/lex/strings.cpp:4:1: CHAR                 ''a''  val=97
+./tests/lex/strings.cpp:4:5: CHAR                 ''\n''  val=10
+./tests/lex/strings.cpp:4:10: CHAR                 ''\x41''  val=65
+./tests/lex/strings.cpp:4:17: CHAR                 'u'x''  val=120  enc=u
+./tests/lex/strings.cpp:4:22: CHAR                 'U'x''  val=120  enc=U
+./tests/lex/strings.cpp:4:27: CHAR                 'L'x''  val=120  enc=L
+./tests/lex/strings.cpp:4:32: CHAR                 'u8'x''  val=120  enc=u8
+./tests/lex/strings.cpp:5:1: STR                  '"hello"_s'  ud_suffix='_s'
+./tests/lex/strings.cpp:5:11: NUM                  '42_km'  val=0  ud_suffix='_km'
+./tests/lex/strings.cpp:5:17: CHAR                 ''x'_c'  val=120  ud_suffix='_c'
