@@ -1,0 +1,9 @@
+# C++ standard draft PDFs (copyrighted, download separately)
+*.pdf
+
+# Build artifacts
+*.o
+*.a
+*.so
+*.out
+sea-front
