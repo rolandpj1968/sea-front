@@ -318,14 +318,60 @@ Node *parse_stmt(Parser *p) {
         return new_node(p, ND_NULL_STMT, tok);
     }
 
-    /* declaration-statement — §9.7 [stmt.dcl]
-     *   N4659 §9.8 [stmt.ambig]: "any statement that could be a
-     *   declaration IS a declaration."
+    /* declaration-statement vs expression-statement
      *
-     * First-pass heuristic: if current token is a type-specifier keyword,
-     * parse as declaration. User-defined type names need symbol table. */
-    if (at_type_specifier(p))
-        return parse_declaration(p);
+     * N4659 §9.8 [stmt.ambig] (C++20: §8.9, C++23: §8.9):
+     *   "There is an ambiguity in the grammar involving expression-
+     *    statements and declarations: An expression-statement with a
+     *    function-style explicit type conversion as its leftmost
+     *    subexpression can be indistinguishable from a declaration
+     *    where the first declarator starts with a (. In those cases
+     *    the statement is a declaration."
+     *
+     * §9.8/2: "the whole statement might need to be examined to
+     *   determine whether this is the case."
+     *
+     * §9.8/3: "The disambiguation is purely syntactic."
+     *
+     * Three cases:
+     *   (a) Built-in type keyword (int, char, const, etc.) — always a
+     *       declaration, no ambiguity. Parse directly.
+     *   (b) User-defined type-name — potentially ambiguous.
+     *       Use tentative parse: try declaration, fall back to expression.
+     *   (c) Not a type at all — expression-statement.
+     */
+
+    if (at_type_specifier(p)) {
+        /* Case (a): built-in type keyword — definitely a declaration */
+        if (peek(p)->kind != TK_IDENT)
+            return parse_declaration(p);
+
+        /* Case (b): identifier that is a type-name — potentially ambiguous.
+         * Per §9.8: "any statement that could be a declaration IS a
+         * declaration." We must try parsing as a declaration first.
+         *
+         * §9.8/2: "the whole statement might need to be examined"
+         *
+         * Strategy: save state, try parse_declaration() in tentative mode.
+         * Check if the previous token consumed was ';' (i.e., the
+         * declaration parse completed successfully through the semicolon).
+         * If so, restore and re-parse in committed mode.
+         * If not, restore and parse as expression-statement. */
+        ParseState saved = parser_save(p);
+        p->tentative = true;
+        parse_declaration(p);
+        /* Check: did the tentative parse consume through a ';'?
+         * If so, the token just before current pos is ';'. */
+        bool decl_ok = (p->pos > saved.pos &&
+                        p->tokens[p->pos - 1].kind == TK_SEMI);
+        p->tentative = false;
+        parser_restore(p, saved);
+
+        if (decl_ok)
+            return parse_declaration(p);
+
+        /* Fall through to expression-statement */
+    }
 
     /* expression-statement — §9.2 [stmt.expr]
      *   expression(opt) ; */
