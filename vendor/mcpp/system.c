@@ -1925,6 +1925,38 @@ static void init_predefines( void)
         init_std_defines();
     if (stdc3)
         set_pragma_op();
+
+    /* sea-front: Define Clang/GCC built-in feature-test macros.
+     *
+     * These are function-like macros that GCC and Clang define as compiler
+     * built-ins. mcpp doesn't know about them, so #if __has_feature(x)
+     * causes "Operator '(' in incorrect context". We define them as
+     * regular macros that expand to conservative defaults:
+     *   __has_feature(x)    -> 0  (we don't claim any features)
+     *   __has_extension(x)  -> 0
+     *   __has_builtin(x)    -> 0
+     *   __has_include(x)    -> 0
+     *   __has_include_next(x) -> 0
+     *   __has_attribute(x)  -> 0
+     *   __has_declspec_attribute(x) -> 0
+     *   __has_cpp_attribute(x) -> 0
+     *   __has_c_attribute(x)  -> 0
+     *   __has_warning(x)    -> 0
+     *   __is_identifier(x)  -> 1  (everything is an identifier to us)
+     *
+     * This is sufficient for preprocessing: #if branches using these
+     * will take the #else path, which is the portable/fallback code. */
+    look_and_install( "__has_feature", 1, "x", "0");
+    look_and_install( "__has_extension", 1, "x", "0");
+    look_and_install( "__has_builtin", 1, "x", "0");
+    look_and_install( "__has_include", 1, "x", "0");
+    look_and_install( "__has_include_next", 1, "x", "0");
+    look_and_install( "__has_attribute", 1, "x", "0");
+    look_and_install( "__has_declspec_attribute", 1, "x", "0");
+    look_and_install( "__has_cpp_attribute", 1, "x", "0");
+    look_and_install( "__has_c_attribute", 1, "x", "0");
+    look_and_install( "__has_warning", 1, "x", "0");
+    look_and_install( "__is_identifier", 1, "x", "1");
 }
 
 static void init_std_defines( void)
