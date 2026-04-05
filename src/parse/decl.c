@@ -78,13 +78,40 @@
  * override the default grouping. We handle this recursively.
  */
 Node *parse_declarator(Parser *p, Type *base_ty) {
-    /* ptr-operator: consume leading *'s */
-    while (consume(p, TK_STAR)) {
-        base_ty = new_ptr_type(p, base_ty);
-        /* cv-qualifiers after * — N4659 §11.3.1/1 [dcl.ptr] */
-        while (at(p, TK_KW_CONST) || at(p, TK_KW_VOLATILE)) {
-            if (consume(p, TK_KW_CONST))    base_ty->is_const = true;
-            if (consume(p, TK_KW_VOLATILE)) base_ty->is_volatile = true;
+    /* ptr-operator — N4659 §11.3 [dcl.meaning]
+     *   ptr-operator:
+     *       * cv-qualifier-seq(opt)                    — pointer
+     *       & attribute-specifier-seq(opt)             — lvalue reference
+     *       && attribute-specifier-seq(opt)            — rvalue reference
+     *       nested-name-specifier * cv-qualifier-seq   — ptr-to-member (deferred)
+     *
+     * N4659 §11.3.2 [dcl.ref]:
+     *   "In a declaration T D where D has either of the forms
+     *    & attribute-specifier-seq(opt) D1
+     *    && attribute-specifier-seq(opt) D1
+     *    and the type of the identifier in the declaration T D1 is
+     *    'derived-declarator-type-list T', then the type of the
+     *    identifier of D is 'derived-declarator-type-list reference to T'."
+     *
+     * Note: && in declarator context is TK_LAND (logical AND token),
+     * not two separate & tokens. This is unambiguous because we're
+     * already committed to parsing a declarator. */
+    for (;;) {
+        if (consume(p, TK_STAR)) {
+            base_ty = new_ptr_type(p, base_ty);
+            /* cv-qualifiers after * — N4659 §11.3.1/1 [dcl.ptr] */
+            while (at(p, TK_KW_CONST) || at(p, TK_KW_VOLATILE)) {
+                if (consume(p, TK_KW_CONST))    base_ty->is_const = true;
+                if (consume(p, TK_KW_VOLATILE)) base_ty->is_volatile = true;
+            }
+        } else if (consume(p, TK_LAND)) {
+            /* && — rvalue reference (C++11) */
+            base_ty = new_rvalref_type(p, base_ty);
+        } else if (consume(p, TK_AMP)) {
+            /* & — lvalue reference */
+            base_ty = new_ref_type(p, base_ty);
+        } else {
+            break;
         }
     }
 

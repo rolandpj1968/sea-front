@@ -29,6 +29,33 @@ Type *new_ptr_type(Parser *p, Type *base) {
 }
 
 /*
+ * Lvalue reference type — N4659 §11.3.2 [dcl.ref]
+ *   ptr-operator: & attribute-specifier-seq(opt)
+ *
+ * N4659 §11.3.2/5: "There shall be no references to references,
+ * no arrays of references, and no pointers to references."
+ * (Reference collapsing is a sema concern, not parser.)
+ */
+Type *new_ref_type(Parser *p, Type *base) {
+    Type *ty = new_type(p, TY_REF);
+    ty->base = base;
+    return ty;
+}
+
+/*
+ * Rvalue reference type — N4659 §11.3.2 [dcl.ref] (C++11)
+ *   ptr-operator: && attribute-specifier-seq(opt)
+ *
+ * C++11: rvalue references enable move semantics.
+ * C++20/23: unchanged.
+ */
+Type *new_rvalref_type(Parser *p, Type *base) {
+    Type *ty = new_type(p, TY_RVALREF);
+    ty->base = base;
+    return ty;
+}
+
+/*
  * Array type — N4659 §11.3.4 [dcl.array]
  *   noptr-declarator [ constant-expression(opt) ]
  *   len == -1 means unsized (e.g., 'int a[]').
@@ -338,13 +365,20 @@ Type *parse_type_name(Parser *p) {
     Type *base = parse_type_specifiers(p);
     if (!base) return NULL;
 
-    /* Abstract pointer declarator: consume leading *'s */
-    while (consume(p, TK_STAR)) {
-        base = new_ptr_type(p, base);
-        /* cv-qualifiers after * — N4659 §11.3.1 [dcl.ptr] */
-        while (at(p, TK_KW_CONST) || at(p, TK_KW_VOLATILE)) {
-            if (consume(p, TK_KW_CONST))    base->is_const = true;
-            if (consume(p, TK_KW_VOLATILE)) base->is_volatile = true;
+    /* Abstract ptr-operator: consume *, &, && — N4659 §11.3 [dcl.meaning] */
+    for (;;) {
+        if (consume(p, TK_STAR)) {
+            base = new_ptr_type(p, base);
+            while (at(p, TK_KW_CONST) || at(p, TK_KW_VOLATILE)) {
+                if (consume(p, TK_KW_CONST))    base->is_const = true;
+                if (consume(p, TK_KW_VOLATILE)) base->is_volatile = true;
+            }
+        } else if (consume(p, TK_LAND)) {
+            base = new_rvalref_type(p, base);
+        } else if (consume(p, TK_AMP)) {
+            base = new_ref_type(p, base);
+        } else {
+            break;
         }
     }
 

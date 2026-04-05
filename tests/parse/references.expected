@@ -1,0 +1,15 @@
+(translation-unit
+  (func-def void "swap" (params (param (ref int) "a") (param (ref int) "b"))
+    (block
+      (var-decl int "t" (ident "a"))
+      (= (ident "a") (ident "b"))
+      (= (ident "b") (ident "t"))))
+  (var-decl (func-type (rvalref int) ((rvalref int))) "rval_ref" )
+  (var-decl (ref const int) "cref" (num 42))
+  (func-def int "main" (params)
+    (block
+      (block
+        (var-decl int "x" (num 1))
+        (var-decl int "y" (num 2)))
+      (call (ident "swap") (ident "x") (ident "y"))
+      (return (ident "x")))))

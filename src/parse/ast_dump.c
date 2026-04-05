@@ -45,6 +45,16 @@ static void dump_type(Type *ty) {
         dump_type(ty->base);
         printf(")");
         return;
+    case TY_REF:
+        printf("(ref ");
+        dump_type(ty->base);
+        printf(")");
+        return;
+    case TY_RVALREF:
+        printf("(rvalref ");
+        dump_type(ty->base);
+        printf(")");
+        return;
     case TY_ARRAY:
         printf("(array ");
         dump_type(ty->base);

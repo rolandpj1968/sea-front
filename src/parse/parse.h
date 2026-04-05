@@ -409,6 +409,8 @@ typedef enum {
 
     /* Compound types — N4659 §6.9.2 [basic.compound] */
     TY_PTR,             /* pointer — N4659 §11.3.1 [dcl.ptr] */
+    TY_REF,             /* lvalue reference — N4659 §11.3.2 [dcl.ref] */
+    TY_RVALREF,         /* rvalue reference — N4659 §11.3.2 [dcl.ref] (C++11) */
     TY_ARRAY,           /* array — N4659 §11.3.4 [dcl.array] */
     TY_FUNC,            /* function — N4659 §11.3.5 [dcl.fct] */
 
@@ -750,6 +752,8 @@ Node *parse_declarator(Parser *p, Type *base_ty);
 /* Type construction helpers (arena-allocated) */
 Type *new_type(Parser *p, TypeKind kind);
 Type *new_ptr_type(Parser *p, Type *base);
+Type *new_ref_type(Parser *p, Type *base);
+Type *new_rvalref_type(Parser *p, Type *base);
 Type *new_array_type(Parser *p, Type *base, int len);
 Type *new_func_type(Parser *p, Type *ret, Type **params, int nparams, bool variadic);
 
