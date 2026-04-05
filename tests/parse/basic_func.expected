@@ -1,0 +1,4 @@
+(translation-unit
+  (func-def int "main" (params)
+    (block
+      (return (num 0)))))

@@ -1,0 +1,14 @@
+(translation-unit
+  (var-decl (func-type int (int)) "f" )
+  (func-def int "main" (params)
+    (block
+      (var-decl int "a" (sizeof int))
+      (var-decl int "b" (sizeof (ident "a")))
+      (var-decl int "c" (! (ident "a")))
+      (var-decl int "d" (~ (ident "b")))
+      (var-decl int "e" (- (ident "c")))
+      (var-decl (array int 10) "arr")
+      (= ([] (ident "arr") (num 0)) (num 1))
+      (var-decl int "r" (call (ident "f") (+ (ident "a") (ident "b"))))
+      (var-decl (ptr int) "p" (& (ident "r")))
+      (return (* (ident "p"))))))

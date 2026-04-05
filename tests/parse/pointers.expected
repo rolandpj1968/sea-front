@@ -1,0 +1,8 @@
+(translation-unit
+  (func-def int "main" (params)
+    (block
+      (var-decl int "x" (num 42))
+      (var-decl (ptr int) "p" (& (ident "x")))
+      (= (* (ident "p")) (+ (* (ident "p")) (num 1)))
+      (var-decl (ptr (ptr int)) "pp" (& (ident "p")))
+      (return (* (* (ident "pp")))))))

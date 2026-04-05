@@ -1,7 +1,14 @@
 /*
  * main.c — sea-front driver program.
  *
- * Usage: sea-front [--dump-tokens] <file>
+ * Usage: sea-front [options] <file>
+ *
+ * Options:
+ *   --dump-tokens    Print token list and exit
+ *   --dump-ast       Parse and print AST and exit
+ *   --std=c++17      Set C++ standard (default: c++17)
+ *   --std=c++20      Enable C++20 features
+ *   --std=c++23      Enable C++23 features
  */
 
 #include "sea-front.h"
@@ -44,13 +51,28 @@ static void dump_tokens(Token *tok) {
     }
 }
 
+static void usage(void) {
+    fprintf(stderr, "usage: sea-front [--dump-tokens] [--dump-ast] [--std=c++17|20|23] <file>\n");
+    exit(1);
+}
+
 int main(int argc, char **argv) {
     bool do_dump_tokens = false;
+    bool do_dump_ast = false;
+    CppStandard std = CPP17;
     const char *filename = NULL;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--dump-tokens") == 0) {
             do_dump_tokens = true;
+        } else if (strcmp(argv[i], "--dump-ast") == 0) {
+            do_dump_ast = true;
+        } else if (strcmp(argv[i], "--std=c++17") == 0) {
+            std = CPP17;
+        } else if (strcmp(argv[i], "--std=c++20") == 0) {
+            std = CPP20;
+        } else if (strcmp(argv[i], "--std=c++23") == 0) {
+            std = CPP23;
         } else if (argv[i][0] == '-') {
             error("unknown option: %s", argv[i]);
         } else {
@@ -60,10 +82,8 @@ int main(int argc, char **argv) {
         }
     }
 
-    if (!filename) {
-        fprintf(stderr, "usage: sea-front [--dump-tokens] <file>\n");
-        return 1;
-    }
+    if (!filename)
+        usage();
 
     File *file = read_file(filename);
     if (!file)
@@ -71,8 +91,21 @@ int main(int argc, char **argv) {
 
     Token *tok = tokenize(file);
 
-    if (do_dump_tokens)
+    if (do_dump_tokens) {
         dump_tokens(tok);
+        return 0;
+    }
 
+    Arena arena = arena_new();
+    Node *ast = parse(tok, &arena, std);
+
+    if (do_dump_ast) {
+        dump_ast(ast, 0);
+        arena_free_all(&arena);
+        return 0;
+    }
+
+    /* Future: semantic analysis, codegen */
+    arena_free_all(&arena);
     return 0;
 }

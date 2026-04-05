@@ -1,0 +1,11 @@
+(translation-unit
+  (func-def int "main" (params (param int "x"))
+    (block
+      (switch (ident "x")
+        (block
+          (case (num 0)
+            (return (num 10)))
+          (case (num 1)
+            (return (num 20)))
+          (default
+            (return (num 30))))))))

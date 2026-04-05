@@ -1,0 +1,6 @@
+(translation-unit
+  (func-def int "main" (params (param int "argc") (param (ptr (ptr char)) "argv"))
+    (block
+      (if (> (ident "argc") (num 1))
+        (return (num 0)))
+      (return (num 1)))))

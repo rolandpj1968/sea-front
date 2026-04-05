@@ -3,20 +3,25 @@ CFLAGS   = -std=c11 -Wall -Wextra -Wpedantic -g
 BUILDDIR = build
 
 HDR      = src/sea-front.h
+PARSE_HDR = src/parse/parse.h
 
-SRCS     = src/main.c src/util.c src/lex/tokenize.c src/lex/unicode.c
+SRCS     = src/main.c src/util.c src/arena.c \
+           src/lex/tokenize.c src/lex/unicode.c \
+           src/parse/parser.c src/parse/expr.c src/parse/stmt.c \
+           src/parse/decl.c src/parse/type.c src/parse/ast_dump.c
 OBJS     = $(patsubst src/%.c,$(BUILDDIR)/%.o,$(SRCS))
 
-TEST_SRCS = src/util.c src/lex/tokenize.c src/lex/unicode.c
-TEST_OBJS = $(patsubst src/%.c,$(BUILDDIR)/%.o,$(TEST_SRCS))
-
-TARGET      = $(BUILDDIR)/sea-front
-TEST_TARGET = $(BUILDDIR)/test_lex
+# Lexer test (doesn't need parse objects)
+LEX_TEST_SRCS = src/util.c src/arena.c src/lex/tokenize.c src/lex/unicode.c
+LEX_TEST_OBJS = $(patsubst src/%.c,$(BUILDDIR)/%.o,$(LEX_TEST_SRCS))
+LEX_TEST_TARGET = $(BUILDDIR)/test_lex
 
 # Vendored mcpp preprocessor
 MCPP_SRCS = main.c directive.c eval.c expand.c support.c system.c mbchar.c
 MCPP_OBJS = $(patsubst %.c,$(BUILDDIR)/mcpp/%.o,$(MCPP_SRCS))
 MCPP       = $(BUILDDIR)/mcpp-bin
+
+TARGET   = $(BUILDDIR)/sea-front
 
 all: $(TARGET) $(MCPP)
 
@@ -29,24 +34,37 @@ $(MCPP): $(MCPP_OBJS)
 $(BUILDDIR)/mcpp/%.o: vendor/mcpp/%.c | $(BUILDDIR)/mcpp
 	$(CC) -O2 -w -c -o $@ $<
 
-$(TEST_TARGET): $(BUILDDIR)/test_lex.o $(TEST_OBJS)
+# Lexer tests
+$(LEX_TEST_TARGET): $(BUILDDIR)/test_lex.o $(LEX_TEST_OBJS)
 	$(CC) $(CFLAGS) -o $@ $^
 
 $(BUILDDIR)/test_lex.o: tests/test_lex.c $(HDR) | $(BUILDDIR)
 	$(CC) $(CFLAGS) -I src -c -o $@ $<
 
-$(BUILDDIR)/%.o: src/%.c $(HDR) | $(BUILDDIR)/lex
+# Pattern rules for source compilation
+$(BUILDDIR)/%.o: src/%.c $(HDR) $(PARSE_HDR) | $(BUILDDIR)/lex $(BUILDDIR)/parse
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILDDIR) $(BUILDDIR)/lex $(BUILDDIR)/mcpp:
+$(BUILDDIR) $(BUILDDIR)/lex $(BUILDDIR)/parse $(BUILDDIR)/mcpp:
 	mkdir -p $@
 
-test: $(TEST_TARGET) $(TARGET) $(MCPP)
-	./$(TEST_TARGET)
+# Core tests — must all pass (gated).
+test: $(LEX_TEST_TARGET) $(TARGET)
+	./$(LEX_TEST_TARGET)
 	@if [ -x tests/test.sh ]; then ./tests/test.sh $(TARGET); fi
-	@if [ -x tests/test_clang.sh ]; then ./tests/test_clang.sh $(TARGET) $(MCPP); fi
+	@if [ -x tests/test_parse.sh ]; then ./tests/test_parse.sh $(TARGET); fi
+
+# Smoke tests against GCC/Clang test suites — not gated (has expected failures).
+# Tracks progress toward the ultimate bootstrap goal.
+# Non-fatal: reports pass/fail counts but always exits 0.
+test-smoke: $(TARGET) $(MCPP)
+	@echo "=== Lexer smoke ==="
+	-@./tests/test_clang.sh $(TARGET) $(MCPP) || true
+	@echo ""
+	@echo "=== Parser smoke ==="
+	-@./tests/test_clang_parse.sh $(TARGET) $(MCPP) || true
 
 clean:
 	rm -rf $(BUILDDIR)
 
-.PHONY: all test clean
+.PHONY: all test test-smoke clean

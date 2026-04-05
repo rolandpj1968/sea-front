@@ -254,4 +254,50 @@ _Noreturn void error_at(const char *filename, const char *source,
                         char *loc, const char *fmt, ...);
 _Noreturn void error_tok(Token *tok, const char *fmt, ...);
 
+/*
+ * arena.c — Arena allocator and growable array
+ */
+typedef struct ArenaPage ArenaPage;
+struct ArenaPage {
+    ArenaPage *next;
+    size_t size;
+    size_t used;
+    char data[];        /* C99 flexible array member */
+};
+
+typedef struct {
+    ArenaPage *cur;
+    size_t page_size;
+} Arena;
+
+Arena arena_new(void);
+void *arena_alloc(Arena *a, size_t size);
+void  arena_free_all(Arena *a);
+
+typedef struct {
+    void **data;
+    int len;
+    int cap;
+    Arena *arena;
+} Vec;
+
+Vec   vec_new(Arena *arena);
+void  vec_push(Vec *v, void *item);
+void *vec_get(Vec *v, int index);
+
+/*
+ * Forward declarations for parser types (full defs in src/parse/parse.h)
+ */
+typedef struct Node Node;
+typedef struct Type Type;
+
+/* C++ standard version flag */
+typedef enum { CPP17, CPP20, CPP23 } CppStandard;
+
+/*
+ * parse — public API
+ */
+Node *parse(Token *tok, Arena *arena, CppStandard std);
+void  dump_ast(Node *node, int indent);
+
 #endif /* SEA_FRONT_H */

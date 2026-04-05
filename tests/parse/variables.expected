@@ -1,0 +1,6 @@
+(translation-unit
+  (func-def int "main" (params)
+    (block
+      (var-decl int "x" (num 5))
+      (var-decl int "y" (+ (ident "x") (num 3)))
+      (return (ident "y")))))

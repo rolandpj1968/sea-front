@@ -1,0 +1,13 @@
+(translation-unit
+  (func-def int "main" (params)
+    (block
+      (var-decl int "x" (num 10))
+      (while (> (ident "x") (num 0))
+        (= (ident "x") (- (ident "x") (num 1))))
+      (for (var-decl int "i" (num 0)) (< (ident "i") (num 5)) (= (ident "i") (+ (ident "i") (num 1)))
+        (= (ident "x") (+ (ident "x") (ident "i"))))
+      (do
+        (block
+          (= (ident "x") (+ (ident "x") (num 1))))
+        (< (ident "x") (num 100)))
+      (return (ident "x")))))
