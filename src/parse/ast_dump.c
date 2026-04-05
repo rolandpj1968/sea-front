@@ -105,6 +105,14 @@ static void dump(Node *node, int depth) {
         printf("(fnum %g)", node->fnum.fval);
         break;
 
+    case ND_BOOL_LIT:
+        printf("(%s)", node->tok->kind == TK_KW_TRUE ? "true" : "false");
+        break;
+
+    case ND_NULLPTR:
+        printf("(nullptr)");
+        break;
+
     case ND_STR:
         printf("(str '%.*s')", node->str.tok->len, node->str.tok->loc);
         break;

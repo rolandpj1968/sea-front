@@ -144,27 +144,20 @@ static Node *primary_expr(Parser *p) {
         return node;
     }
 
-    /* Boolean literals — §5.13.6 [lex.bool]
-     * 'true' and 'false' are keywords that produce integer values. */
+    /* Boolean literals — N4659 §5.13.6 [lex.bool]
+     * Distinct from integer 0/1 — sema needs to know the type is bool.
+     * The token (TK_KW_TRUE vs TK_KW_FALSE) carries the value. */
     if (tok->kind == TK_KW_TRUE || tok->kind == TK_KW_FALSE) {
         advance(p);
-        Node *node = new_node(p, ND_NUM, tok);
-        node->num.lo = (tok->kind == TK_KW_TRUE) ? 1 : 0;
-        node->num.hi = 0;
-        node->num.is_signed = false;
-        return node;
+        return new_node(p, ND_BOOL_LIT, tok);
     }
 
-    /* nullptr — §5.13.7 [lex.nullptr]
-     * C++11: nullptr is a keyword with type std::nullptr_t.
-     * For now, represent as integer 0. Sema handles the type. */
+    /* nullptr — N4659 §5.13.7 [lex.nullptr]
+     * Type is std::nullptr_t (§21.2.4 [support.nullptr]),
+     * distinct from integer 0. Sema handles the type. */
     if (tok->kind == TK_KW_NULLPTR) {
         advance(p);
-        Node *node = new_node(p, ND_NUM, tok);
-        node->num.lo = 0;
-        node->num.hi = 0;
-        node->num.is_signed = false;
-        return node;
+        return new_node(p, ND_NULLPTR, tok);
     }
 
     /* Identifier — §8.1.4 [expr.prim.id]

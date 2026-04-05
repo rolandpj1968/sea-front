@@ -31,6 +31,10 @@ typedef enum {
     ND_STR,             /* string literal — N4659 §5.13.5 [lex.string] */
     ND_CHAR,            /* character literal — N4659 §5.13.3 [lex.ccon] */
     ND_IDENT,           /* unresolved identifier (pre-sema) — N4659 §8.1.4 [expr.prim.id] */
+    ND_BOOL_LIT,        /* true/false — N4659 §5.13.6 [lex.bool] */
+    ND_NULLPTR,         /* nullptr — N4659 §5.13.7 [lex.nullptr]
+                         * Type is std::nullptr_t (§21.2.4), distinct from int 0.
+                         * C++20/23: unchanged. */
 
     ND_BINARY,          /* binary op — N4659 §8.5-§8.15 [expr.mul through expr.log.or]
                          * C++20: adds <=> at §8.10 [expr.spaceship] */
