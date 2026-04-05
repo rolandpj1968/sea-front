@@ -1,0 +1,17 @@
+(translation-unit
+  (func-def int "main" (params)
+    (block
+      (var-decl int "x" (num 5))
+      (var-decl int "a" (- (ident "x")))
+      (var-decl int "b" (+ (ident "x")))
+      (var-decl int "c" (! (ident "x")))
+      (var-decl int "d" (~ (ident "x")))
+      (var-decl (ptr int) "p" (& (ident "x")))
+      (var-decl int "e" (* (ident "p")))
+      (post-++ (ident "x"))
+      (post--- (ident "x"))
+      (++ (ident "x"))
+      (-- (ident "x"))
+      (var-decl int "f" (sizeof int))
+      (var-decl int "g" (sizeof (ident "x")))
+      (return (+ (+ (+ (+ (+ (+ (ident "a") (ident "b")) (ident "c")) (ident "d")) (ident "e")) (ident "f")) (ident "g"))))))

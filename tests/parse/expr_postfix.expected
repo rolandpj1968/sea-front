@@ -1,0 +1,15 @@
+(translation-unit
+  (var-decl struct S)
+  (var-decl (array int 10) "arr")
+  (var-decl (func-type int (int int)) "f" )
+  (func-def int "main" (params)
+    (block
+      (var-decl int "a" ([] (ident "arr") (num 3)))
+      (var-decl struct S "s")
+      (var-decl int "b" (. (ident "s") "x"))
+      (var-decl (ptr struct S) "p" (& (ident "s")))
+      (var-decl int "c" (-> (ident "p") "y"))
+      (var-decl int "d" (call (ident "f") (num 1) (num 2)))
+      (post-++ (ident "a"))
+      (post--- (ident "a"))
+      (return (+ (+ (+ (ident "a") (ident "b")) (ident "c")) (ident "d"))))))

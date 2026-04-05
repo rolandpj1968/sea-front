@@ -1,0 +1,10 @@
+(translation-unit
+  (typedef)
+  (var-decl struct Point)
+  (func-def int "main" (params)
+    (block
+      (var-decl int "x" (cast int (num 42)))
+      (var-decl int "s1" (sizeof int))
+      (var-decl int "s2" (sizeof struct Point))
+      (var-decl (ptr int) "p" (cast (ptr int) (num 0)))
+      (return (+ (+ (ident "x") (ident "s1")) (ident "s2"))))))

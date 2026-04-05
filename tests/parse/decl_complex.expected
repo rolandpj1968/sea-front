@@ -1,0 +1,17 @@
+(translation-unit
+  (var-decl (array int 10) "arr")
+  (var-decl (func-type int (int)) "f" )
+  (var-decl (func-type (ptr int) (int int)) "fp" )
+  (typedef)
+  (var-decl (ptr int) "p")
+  (typedef)
+  (typedef)
+  (typedef)
+  (var-decl int "val" (num 42))
+  (var-decl enum Color)
+  (var-decl enum Color "c")
+  (var-decl struct Foo)
+  (var-decl (ptr struct Foo) "fwd")
+  (block
+    (var-decl (func-type int ()) "ext_func"))
+  (var-decl (func-type int ()) "ext_func2"))

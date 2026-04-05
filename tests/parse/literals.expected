@@ -1,0 +1,12 @@
+(translation-unit
+  (func-def int "main" (params)
+    (block
+      (var-decl bool "t" (true))
+      (var-decl bool "f" (false))
+      (var-decl (ptr int) "p" (nullptr))
+      (var-decl (ptr const char) "s" (str '"hello"'))
+      (var-decl char "c" (char ''x''))
+      (var-decl double "d" (fnum 3.14))
+      (var-decl int "hex" (num 255))
+      (var-decl int "bin" (num 10))
+      (return (num 0)))))

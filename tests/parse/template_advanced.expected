@@ -1,0 +1,18 @@
+(translation-unit
+  (template (params (param ? "T"))
+    (var-decl struct Box))
+  (template (params (param ? "A") (param ? "B"))
+    (var-decl struct Pair))
+  (template (params (param ? "T"))
+    (func-def int "identity" (params (param int "x"))
+      (block
+        (return (ident "x")))))
+  (template (params (param int "N"))
+    (var-decl struct Fixed))
+  (func-def int "main" (params)
+    (block
+      (var-decl struct Box "deep")
+      (var-decl struct Pair "mixed")
+      (var-decl int "x" (call (template-id "identity" (var-decl int)) (num 42)))
+      (var-decl struct Fixed "f")
+      (return (ident "x")))))
