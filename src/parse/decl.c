@@ -92,31 +92,31 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
     Type *ty = base_ty;
 
     /* Parenthesized declarator: ( ptr-declarator )
-     * This handles function pointers: int (*fp)(int, int)
      *
-     * The trick: when we see '(', we need to distinguish between
-     * a grouping paren and a function parameter list. If the token
-     * after '(' could start a declarator (* or identifier), it's grouping.
-     * Otherwise it's a parameter list.
+     * N4659 §11.2 [dcl.ambig.res] — Rule 2:
+     * "The disambiguation is purely syntactic; that is, the meaning of
+     *  the names occurring in such a statement ... is not generally used
+     *  in or changed by the disambiguation."
      *
-     * N4659 §11.2 [dcl.ambig.res] — Rule 2: the disambiguation rule
-     * says "if it could be a declaration, it IS a declaration."
-     * For the first pass we use a simpler heuristic. */
+     * When we see '(' at the start of a declarator, it could be:
+     *   (a) Grouping parens: int (*fp)(int)  — '(' starts a nested declarator
+     *   (b) A function parameter list after an unnamed declarator
+     *   (c) Redundant parens around a name: T(x) means variable x of type T
+     *
+     * Heuristic: '(' followed by *, (, or a non-type identifier is grouping.
+     * '(' followed by a type keyword is a parameter list. */
     if (at(p, TK_LPAREN) && !at_type_specifier(p)) {
-        /* Check if this looks like a grouping paren:
-         * '(' followed by '*' or '(' is grouping.
-         * '(' followed by a type keyword is a parameter list. */
         Token *next = peek(p)->next;
-        if (next && (next->kind == TK_STAR || next->kind == TK_LPAREN)) {
-            /* Grouping parens — parse inner declarator */
+        if (next && (next->kind == TK_STAR || next->kind == TK_LPAREN ||
+                     (next->kind == TK_IDENT && !lookup_is_type_name(p, next)))) {
+            /* Grouping parens or redundant parens around a name.
+             * E.g.: int (*fp)(int,int)  or  T(x)  */
             advance(p);  /* skip ( */
             Node *inner = parse_declarator(p, base_ty);
             expect(p, TK_RPAREN);
 
-            /* Now parse any array/function suffixes, which wrap the inner type */
             name = inner->var_decl.name;
             ty = inner->var_decl.ty;
-            /* Fall through to suffix parsing below */
             goto parse_suffixes;
         }
     }
@@ -135,47 +135,129 @@ parse_suffixes:
      *
      * C++11: trailing return type (-> type-id)
      * C++20: requires-clause after param list
-     * C++23: explicit object parameter (this auto& self) */
-    if (consume(p, TK_LPAREN)) {
+     * C++23: explicit object parameter (this auto& self)
+     *
+     * N4659 §9.8 [stmt.ambig] / §11.2 [dcl.ambig.res]:
+     * When we see '(' after a declarator name, it could be:
+     *   (a) A function parameter list:  T f(int x);
+     *   (b) Direct-initialization:      T x(42);
+     *   (c) The "most vexing parse":    T x(T());  — function decl!
+     *
+     * Per §9.8: "any statement that could be a declaration IS a declaration."
+     * We use tentative parsing: try to parse as a parameter list; if the
+     * first token after '(' is not a type-specifier, ')', or '...', it's
+     * not a parameter list — leave it for the caller to handle as init. */
+    if (at(p, TK_LPAREN) && name) {
+        /* Peek inside the parens to decide: parameter list or init?
+         * A parameter list starts with: ), void), type-specifier, or ...
+         * Anything else (literal, non-type identifier, etc.) is init. */
+        Token *after_paren = peek(p)->next;
+        bool looks_like_params =
+            after_paren->kind == TK_RPAREN ||
+            after_paren->kind == TK_ELLIPSIS ||
+            after_paren->kind == TK_KW_VOID ||
+            /* Check if it's a type-specifier keyword or known type-name */
+            (after_paren->kind >= TK_KW_ALIGNAS /* any keyword */ ||
+             (after_paren->kind == TK_IDENT &&
+              lookup_is_type_name(p, after_paren)));
+
+        /* For the most vexing parse, we need the full heuristic.
+         * Refine: a keyword that's a type-specifier signals params. */
+        if (after_paren->kind >= TK_KW_ALIGNAS &&
+            after_paren->kind <= TK_KW_WHILE) {
+            /* It's a keyword — check if it could start a type */
+            switch (after_paren->kind) {
+            case TK_KW_VOID: case TK_KW_BOOL: case TK_KW_CHAR:
+            case TK_KW_SHORT: case TK_KW_INT: case TK_KW_LONG:
+            case TK_KW_FLOAT: case TK_KW_DOUBLE:
+            case TK_KW_SIGNED: case TK_KW_UNSIGNED:
+            case TK_KW_WCHAR_T: case TK_KW_CHAR16_T: case TK_KW_CHAR32_T:
+            case TK_KW_CONST: case TK_KW_VOLATILE:
+            case TK_KW_STRUCT: case TK_KW_UNION: case TK_KW_ENUM:
+            case TK_KW_AUTO:
+                looks_like_params = true;
+                break;
+            default:
+                looks_like_params = false;
+                break;
+            }
+        } else if (after_paren->kind == TK_IDENT) {
+            looks_like_params = lookup_is_type_name(p, after_paren);
+        } else if (after_paren->kind != TK_RPAREN &&
+                   after_paren->kind != TK_ELLIPSIS &&
+                   after_paren->kind != TK_KW_VOID) {
+            looks_like_params = false;
+        }
+
+        if (looks_like_params) {
+            advance(p);  /* consume ( */
+            Vec params = vec_new(p->arena);
+            Vec param_types = vec_new(p->arena);
+            bool variadic = false;
+
+            if (!at(p, TK_RPAREN)) {
+                if (at(p, TK_KW_VOID) && peek(p)->next &&
+                    peek(p)->next->kind == TK_RPAREN) {
+                    advance(p);  /* (void) — no params */
+                } else {
+                    for (;;) {
+                        if (consume(p, TK_ELLIPSIS)) {
+                            variadic = true;
+                            break;
+                        }
+
+                        Type *param_base = parse_type_specifiers(p);
+                        Node *param_decl = parse_declarator(p, param_base);
+                        param_decl->kind = ND_PARAM;
+
+                        vec_push(&params, param_decl);
+                        vec_push(&param_types, param_decl->var_decl.ty);
+
+                        if (!consume(p, TK_COMMA))
+                            break;
+
+                        if (at(p, TK_ELLIPSIS)) {
+                            advance(p);
+                            variadic = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            expect(p, TK_RPAREN);
+
+            ty = new_func_type(p, ty, (Type **)param_types.data,
+                               param_types.len, variadic);
+
+            Node *node = new_node(p, ND_VAR_DECL, name ? name : peek(p));
+            node->var_decl.ty = ty;
+            node->var_decl.name = name;
+            node->func.params = (Node **)params.data;
+            node->func.nparams = params.len;
+            return node;
+        }
+        /* else: not a parameter list — fall through, leave ( for caller */
+    }
+    /* Same logic for unnamed declarators (abstract) — always params */
+    if (!name && consume(p, TK_LPAREN)) {
         Vec params = vec_new(p->arena);
         Vec param_types = vec_new(p->arena);
         bool variadic = false;
 
         if (!at(p, TK_RPAREN)) {
-            /* parameter-declaration-clause — §11.3.5/3
-             *   parameter-declaration-list(opt) ...(opt)
-             *   parameter-declaration-list , ...
-             *
-             * Special case: (void) means no parameters. */
             if (at(p, TK_KW_VOID) && peek(p)->next &&
                 peek(p)->next->kind == TK_RPAREN) {
-                advance(p);  /* consume 'void' — no params */
+                advance(p);
             } else {
                 for (;;) {
-                    if (consume(p, TK_ELLIPSIS)) {
-                        variadic = true;
-                        break;
-                    }
-
-                    /* parameter-declaration — §11.3.5/3
-                     *   decl-specifier-seq declarator
-                     *   decl-specifier-seq abstract-declarator(opt) */
+                    if (consume(p, TK_ELLIPSIS)) { variadic = true; break; }
                     Type *param_base = parse_type_specifiers(p);
                     Node *param_decl = parse_declarator(p, param_base);
                     param_decl->kind = ND_PARAM;
-
                     vec_push(&params, param_decl);
                     vec_push(&param_types, param_decl->var_decl.ty);
-
-                    if (!consume(p, TK_COMMA))
-                        break;
-
-                    /* Check for trailing ... after comma */
-                    if (at(p, TK_ELLIPSIS)) {
-                        advance(p);
-                        variadic = true;
-                        break;
-                    }
+                    if (!consume(p, TK_COMMA)) break;
+                    if (at(p, TK_ELLIPSIS)) { advance(p); variadic = true; break; }
                 }
             }
         }
@@ -187,7 +269,6 @@ parse_suffixes:
         Node *node = new_node(p, ND_VAR_DECL, name ? name : peek(p));
         node->var_decl.ty = ty;
         node->var_decl.name = name;
-        /* Stash params for func_def conversion later */
         node->func.params = (Node **)params.data;
         node->func.nparams = params.len;
         return node;
@@ -321,9 +402,26 @@ Node *parse_declaration(Parser *p) {
         return func;
     }
 
-    /* Variable with initializer: = assignment-expression */
-    if (consume(p, TK_ASSIGN))
+    /* Variable with initializer — N4659 §11.6 [dcl.init]
+     *
+     *   initializer:
+     *       brace-or-equal-initializer
+     *       ( expression-list )                (direct-initialization)
+     *
+     *   brace-or-equal-initializer:
+     *       = initializer-clause
+     *       braced-init-list                   (deferred)
+     *
+     * Direct-initialization T x(expr) is distinguished from a function
+     * declarator by the heuristic in parse_declarator() — if the '(' was
+     * not consumed as a parameter list, it arrives here as init. */
+    if (consume(p, TK_ASSIGN)) {
         decl->var_decl.init = parse_assign_expr(p);
+    } else if (consume(p, TK_LPAREN)) {
+        /* Direct-initialization: T x(expr, ...) — N4659 §11.6/16 */
+        decl->var_decl.init = parse_expr(p);
+        expect(p, TK_RPAREN);
+    }
 
     /* N4659 §6.3.2/1 [basic.scope.pdecl]: register the variable name
      * at its point of declaration (after declarator, before initializer
