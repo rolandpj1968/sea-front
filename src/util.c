@@ -44,12 +44,15 @@ File *read_file(const char *path) {
     fseek(fp, 0, SEEK_SET);
 
     /*
-     * Allocate with 4 bytes of NUL padding past the end of the file.
-     * The lexer uses up to 4-character lookahead (e.g. the <:: digraph
-     * exception), and this padding guarantees those reads are safe
-     * without relying on && short-circuit evaluation for memory safety.
+     * Allocate with padding of NUL bytes past the end of the file.
+     * The lexer needs this for:
+     *   - Up to 4-byte lookahead (e.g. the <:: digraph exception)
+     *   - memcmp in raw string delimiter matching (up to 16-byte delimiter
+     *     + 1 for the closing quote = 17 bytes of lookahead past ')')
+     * 32 bytes of padding covers all cases with margin.
      */
-    char *contents = xcalloc(1, size + 4 + 1);
+    #define READ_PADDING 32
+    char *contents = xcalloc(1, size + READ_PADDING + 1);
     long nread = (long)fread(contents, 1, size, fp);
     fclose(fp);
 

@@ -23,12 +23,13 @@ static int tests_failed = 0;
 } while (0)
 
 /* Helper: tokenize a string, return token list.
- * Allocates 4 bytes of NUL padding to match read_file() contract. */
+ * Allocates 32 bytes of NUL padding to match read_file() contract
+ * (covers raw string delimiter memcmp lookahead). */
 static Token *lex(const char *src) {
     int len = (int)strlen(src);
     File *f = xmalloc(sizeof(File));
     f->name = xstrdup("<test>");
-    f->contents = xcalloc(1, len + 4 + 1);
+    f->contents = xcalloc(1, len + 32 + 1);
     memcpy(f->contents, src, len);
     f->size = len;
     return tokenize(f);

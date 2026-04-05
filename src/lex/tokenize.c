@@ -639,9 +639,13 @@ static int string_prefix_len(const char *p, int *enc, bool *is_raw, char *quote)
  * that is the semantic layer's concern.
  */
 static char *skip_escape(char *p, LexCtx *ctx) {
+    if (*p == '\0')
+        return p;  /* don't advance past NUL — caller handles the error */
     if (*p != '\\')
         return p + 1;
     p++; /* skip backslash */
+    if (*p == '\0')
+        return p;  /* backslash at end of input — caller handles */
 
     switch (*p) {
     case '\'': case '"': case '?': case '\\':
@@ -730,7 +734,7 @@ static char *skip_escape(char *p, LexCtx *ctx) {
 
     default:
         /* Unknown escape — let the semantic layer diagnose */
-        return p + 1;
+        return *p ? p + 1 : p;  /* don't advance past NUL */
     }
 }
 
@@ -817,8 +821,10 @@ static Token *read_raw_string_literal(LexCtx *ctx, int prefix_len, int enc) {
         }
 
         if (*ctx->p == ')' &&
-            memcmp(ctx->p + 1, delim_start, delim_len) == 0 &&
+            (delim_len == 0 || memcmp(ctx->p + 1, delim_start, delim_len) == 0) &&
             ctx->p[1 + delim_len] == '"') {
+            /* Safe: read_file() allocates 32 bytes of NUL padding past EOF,
+             * which covers the max delimiter length (16) + 1 for '"'. */
             ctx->p += 1 + delim_len + 1;  /* skip )delim" */
             break;
         }
