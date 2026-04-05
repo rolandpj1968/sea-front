@@ -497,11 +497,12 @@ struct DeclarativeRegion {
 
 /*
  * ParseState — save/restore for tentative parsing.
+ * Token position is an index into the contiguous TokenArray.
  * Must include the declarative region since tentative parsing may
  * push/pop regions that need to be unwound on failure.
  */
 typedef struct {
-    Token             *tok;
+    int                pos;     /* index into TokenArray */
     DeclarativeRegion *region;
 } ParseState;
 
@@ -511,8 +512,9 @@ typedef struct {
 
 typedef struct Parser Parser;
 struct Parser {
-    Token *tok;                /* current token (cursor into linked list) */
-    Token *prev;               /* previous token (for error messages) */
+    Token *tokens;             /* contiguous token array (from TokenArray) */
+    int    ntokens;            /* total token count (including EOF) */
+    int    pos;                /* current position (index into tokens[]) */
     File *file;                /* source file */
     Arena *arena;              /* all AST/Type allocations come from here */
     CppStandard std;           /* C++17 baseline; 20/23 gated behind this flag */
@@ -524,15 +526,16 @@ struct Parser {
 /* Parser operations — parser.c                                        */
 /* ================================================================== */
 
-/* Token stream */
-Token *peek(Parser *p);
-Token *advance(Parser *p);
+/* Token stream — index-based cursor into contiguous array */
+Token *peek(Parser *p);                 /* current token (no advance) */
+Token *peek_ahead(Parser *p, int n);    /* lookahead by n tokens */
+Token *advance(Parser *p);             /* return current, advance position */
 bool   at(Parser *p, TokenKind k);
 bool   consume(Parser *p, TokenKind k);
 Token *expect(Parser *p, TokenKind k);
 bool   at_eof(Parser *p);
 
-/* Tentative parsing — save/restore parser state (token + region) */
+/* Tentative parsing — save/restore parser state (position + region) */
 ParseState parser_save(Parser *p);
 void       parser_restore(Parser *p, ParseState saved);
 

@@ -13,8 +13,9 @@
 
 #include "sea-front.h"
 
-static void dump_tokens(Token *tok) {
-    for (Token *t = tok; t->kind != TK_EOF; t = t->next) {
+static void dump_tokens(TokenArray ta) {
+    for (int i = 0; i < ta.len && ta.tokens[i].kind != TK_EOF; i++) {
+        Token *t = &ta.tokens[i];
         printf("%s:%d:%d: %-20s '%.*s'",
                t->file->name, t->line, t->col,
                token_kind_name(t->kind),
@@ -89,15 +90,15 @@ int main(int argc, char **argv) {
     if (!file)
         return 1;
 
-    Token *tok = tokenize(file);
+    TokenArray tokens = tokenize(file);
 
     if (do_dump_tokens) {
-        dump_tokens(tok);
+        dump_tokens(tokens);
         return 0;
     }
 
     Arena arena = arena_new();
-    Node *ast = parse(tok, &arena, std);
+    Node *ast = parse(tokens, &arena, std);
 
     if (do_dump_ast) {
         dump_ast(ast, 0);

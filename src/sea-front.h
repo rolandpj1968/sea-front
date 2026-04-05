@@ -192,7 +192,6 @@ struct File {
 typedef struct Token Token;
 struct Token {
     TokenKind kind;
-    Token *next;
 
     char *loc;          /* pointer into source buffer */
     int len;            /* byte length of token in source */
@@ -218,6 +217,14 @@ struct Token {
     bool has_space;     /* preceded by whitespace */
 };
 
+/* Contiguous array of tokens — the output of the lexer.
+ * Replaces the linked-list approach: better cache locality,
+ * index-based save/restore for tentative parsing. */
+typedef struct {
+    Token *tokens;      /* contiguous array, arena or malloc'd */
+    int len;            /* number of tokens (including final TK_EOF) */
+} TokenArray;
+
 /* Lexer context — threaded through helpers, no globals */
 typedef struct {
     File *file;
@@ -230,10 +237,9 @@ typedef struct {
 /*
  * tokenize.c — Lexer
  */
-Token *tokenize(File *file);
+TokenArray tokenize(File *file);
 const char *token_kind_name(TokenKind kind);
 bool token_equal(Token *tok, const char *s);
-Token *token_skip(Token *tok, const char *s);
 
 /*
  * unicode.c — UTF-8 and identifier classification
@@ -297,7 +303,7 @@ typedef enum { CPP17, CPP20, CPP23 } CppStandard;
 /*
  * parse — public API
  */
-Node *parse(Token *tok, Arena *arena, CppStandard std);
+Node *parse(TokenArray tokens, Arena *arena, CppStandard std);
 void  dump_ast(Node *node, int indent);
 
 #endif /* SEA_FRONT_H */

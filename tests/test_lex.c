@@ -22,9 +22,11 @@ static int tests_failed = 0;
     } \
 } while (0)
 
-/* Helper: tokenize a string, return token list.
+/* Helper: tokenize a string, return first token.
  * Allocates 32 bytes of NUL padding to match read_file() contract
  * (covers raw string delimiter memcmp lookahead). */
+static TokenArray ta;  /* reused across tests — simple, not thread-safe */
+
 static Token *lex(const char *src) {
     int len = (int)strlen(src);
     File *f = xmalloc(sizeof(File));
@@ -32,14 +34,17 @@ static Token *lex(const char *src) {
     f->contents = xcalloc(1, len + 32 + 1);
     memcpy(f->contents, src, len);
     f->size = len;
-    return tokenize(f);
+    ta = tokenize(f);
+    return &ta.tokens[0];
 }
 
 /* Helper: get the nth token (0-indexed) */
 static Token *nth(Token *tok, int n) {
-    for (int i = 0; i < n && tok->kind != TK_EOF; i++)
-        tok = tok->next;
-    return tok;
+    /* tok points into ta.tokens; compute its index and offset */
+    int base = (int)(tok - ta.tokens);
+    int idx = base + n;
+    if (idx >= ta.len) idx = ta.len - 1;
+    return &ta.tokens[idx];
 }
 
 /* ------------------------------------------------------------------ */

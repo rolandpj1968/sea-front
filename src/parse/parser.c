@@ -8,27 +8,33 @@
 #include "parse.h"
 
 /* ------------------------------------------------------------------ */
-/* Token stream operations                                             */
+/* Token stream operations — index-based cursor into contiguous array  */
 /* ------------------------------------------------------------------ */
 
 Token *peek(Parser *p) {
-    return p->tok;
+    return &p->tokens[p->pos];
+}
+
+Token *peek_ahead(Parser *p, int n) {
+    int idx = p->pos + n;
+    if (idx >= p->ntokens)
+        idx = p->ntokens - 1;  /* clamp to EOF */
+    return &p->tokens[idx];
 }
 
 Token *advance(Parser *p) {
-    Token *tok = p->tok;
-    p->prev = tok;
+    Token *tok = &p->tokens[p->pos];
     if (tok->kind != TK_EOF)
-        p->tok = tok->next;
+        p->pos++;
     return tok;
 }
 
 bool at(Parser *p, TokenKind k) {
-    return p->tok->kind == k;
+    return p->tokens[p->pos].kind == k;
 }
 
 bool consume(Parser *p, TokenKind k) {
-    if (p->tok->kind == k) {
+    if (p->tokens[p->pos].kind == k) {
         advance(p);
         return true;
     }
@@ -36,24 +42,24 @@ bool consume(Parser *p, TokenKind k) {
 }
 
 Token *expect(Parser *p, TokenKind k) {
-    if (p->tok->kind == k)
+    if (p->tokens[p->pos].kind == k)
         return advance(p);
     if (p->tentative)
         return NULL;
-    error_tok(p->tok, "expected '%s', got '%s'",
-              token_kind_name(k), token_kind_name(p->tok->kind));
+    error_tok(&p->tokens[p->pos], "expected '%s', got '%s'",
+              token_kind_name(k), token_kind_name(p->tokens[p->pos].kind));
 }
 
 bool at_eof(Parser *p) {
-    return p->tok->kind == TK_EOF;
+    return p->tokens[p->pos].kind == TK_EOF;
 }
 
 /* ------------------------------------------------------------------ */
 /* Tentative parsing — save/restore                                    */
 /*                                                                     */
-/* The token stream is a singly-linked list. Saving position is just   */
-/* capturing the current pointer; restoring is setting it back.        */
-/* No copies, no allocator state to unwind.                            */
+/* The token stream is a contiguous array. Saving position is just     */
+/* capturing the current index; restoring is setting it back.          */
+/* No copies, no pointer chasing, no allocator state to unwind.        */
 /*                                                                     */
 /* Used for disambiguation rules:                                      */
 /*   Rule 1 (N4659 §9.8): stmt vs decl                                */
@@ -63,14 +69,13 @@ bool at_eof(Parser *p) {
 
 ParseState parser_save(Parser *p) {
     ParseState s;
-    s.tok = p->tok;
+    s.pos = p->pos;
     s.region = p->region;
     return s;
 }
 
 void parser_restore(Parser *p, ParseState saved) {
-    p->tok = saved.tok;
-    p->prev = NULL;  /* prev is unreliable after restore */
+    p->pos = saved.pos;
     p->region = saved.region;
 }
 
@@ -146,11 +151,12 @@ Node *new_unary_node(Parser *p, TokenKind op, Node *operand, Token *tok) {
  * Parses the entire token stream into an AST rooted at
  * ND_TRANSLATION_UNIT containing a list of top-level declarations.
  */
-Node *parse(Token *tok, Arena *arena, CppStandard std) {
+Node *parse(TokenArray tokens, Arena *arena, CppStandard std) {
     Parser p;
-    p.tok = tok;
-    p.prev = NULL;
-    p.file = tok->file;
+    p.tokens = tokens.tokens;
+    p.ntokens = tokens.len;
+    p.pos = 0;
+    p.file = tokens.tokens[0].file;
     p.arena = arena;
     p.std = std;
     p.tentative = false;
@@ -169,7 +175,7 @@ Node *parse(Token *tok, Arena *arena, CppStandard std) {
             vec_push(&decls, decl);
     }
 
-    Node *tu = new_node(&p, ND_TRANSLATION_UNIT, tok);
+    Node *tu = new_node(&p, ND_TRANSLATION_UNIT, &tokens.tokens[0]);
     tu->tu.decls = (Node **)decls.data;
     tu->tu.ndecls = decls.len;
     return tu;

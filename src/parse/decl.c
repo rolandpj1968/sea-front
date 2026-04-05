@@ -106,7 +106,7 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
      * Heuristic: '(' followed by *, (, or a non-type identifier is grouping.
      * '(' followed by a type keyword is a parameter list. */
     if (at(p, TK_LPAREN) && !at_type_specifier(p)) {
-        Token *next = peek(p)->next;
+        Token *next = peek_ahead(p, 1);
         if (next && (next->kind == TK_STAR || next->kind == TK_LPAREN ||
                      (next->kind == TK_IDENT && !lookup_is_type_name(p, next)))) {
             /* Grouping parens or redundant parens around a name.
@@ -151,7 +151,7 @@ parse_suffixes:
         /* Peek inside the parens to decide: parameter list or init?
          * A parameter list starts with: ), void), type-specifier, or ...
          * Anything else (literal, non-type identifier, etc.) is init. */
-        Token *after_paren = peek(p)->next;
+        Token *after_paren = peek_ahead(p, 1);
         bool looks_like_params =
             after_paren->kind == TK_RPAREN ||
             after_paren->kind == TK_ELLIPSIS ||
@@ -196,8 +196,8 @@ parse_suffixes:
             bool variadic = false;
 
             if (!at(p, TK_RPAREN)) {
-                if (at(p, TK_KW_VOID) && peek(p)->next &&
-                    peek(p)->next->kind == TK_RPAREN) {
+                if (at(p, TK_KW_VOID) &&
+                    peek_ahead(p, 1)->kind == TK_RPAREN) {
                     advance(p);  /* (void) — no params */
                 } else {
                     for (;;) {
@@ -245,8 +245,8 @@ parse_suffixes:
         bool variadic = false;
 
         if (!at(p, TK_RPAREN)) {
-            if (at(p, TK_KW_VOID) && peek(p)->next &&
-                peek(p)->next->kind == TK_RPAREN) {
+            if (at(p, TK_KW_VOID) &&
+                peek_ahead(p, 1)->kind == TK_RPAREN) {
                 advance(p);
             } else {
                 for (;;) {
@@ -480,8 +480,8 @@ Node *parse_top_level_decl(Parser *p) {
      * overload resolution (C linkage prohibits overloading).
      *
      * C++20/23: unchanged. */
-    if (at(p, TK_KW_EXTERN) && peek(p)->next &&
-        peek(p)->next->kind == TK_STR) {
+    if (at(p, TK_KW_EXTERN) &&
+        peek_ahead(p, 1)->kind == TK_STR) {
         advance(p);  /* consume 'extern' */
         advance(p);  /* consume string literal ("C" or "C++") */
 

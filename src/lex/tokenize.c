@@ -251,16 +251,6 @@ static TokenKind lookup_keyword(const char *name, int len) {
     return found ? found->kind : TK_IDENT;
 }
 
-static void convert_keywords(Token *tok) {
-    for (Token *t = tok; t->kind != TK_EOF; t = t->next) {
-        if (t->kind != TK_IDENT)
-            continue;
-        TokenKind kw = lookup_keyword(t->loc, t->len);
-        if (kw != TK_IDENT)
-            t->kind = kw;
-    }
-}
-
 /* ------------------------------------------------------------------ */
 /* Punctuator / operator reading                                       */
 /* ------------------------------------------------------------------ */
@@ -1094,17 +1084,36 @@ bool token_equal(Token *tok, const char *s) {
            memcmp(tok->loc, s, tok->len) == 0;
 }
 
-Token *token_skip(Token *tok, const char *s) {
-    if (!token_equal(tok, s))
-        error_tok(tok, "expected '%s'", s);
-    return tok->next;
-}
-
 /* ------------------------------------------------------------------ */
 /* Main tokenization loop                                              */
 /* ------------------------------------------------------------------ */
 
-Token *tokenize(File *file) {
+/*
+ * Growable token list for lexer construction.
+ * After lexing, flattened into a contiguous TokenArray.
+ */
+typedef struct TokList TokList;
+struct TokList {
+    Token **ptrs;
+    int len;
+    int cap;
+};
+
+static void toklist_push(TokList *tl, Token *tok) {
+    if (tl->len >= tl->cap) {
+        int new_cap = tl->cap < 4 ? 8 : tl->cap * 2;
+        Token **new_ptrs = xmalloc(new_cap * sizeof(Token *));
+        if (tl->ptrs) {
+            memcpy(new_ptrs, tl->ptrs, tl->len * sizeof(Token *));
+            free(tl->ptrs);
+        }
+        tl->ptrs = new_ptrs;
+        tl->cap = new_cap;
+    }
+    tl->ptrs[tl->len++] = tok;
+}
+
+TokenArray tokenize(File *file) {
     LexCtx ctx;
     ctx.file = file;
     ctx.p = file->contents;
@@ -1112,8 +1121,7 @@ Token *tokenize(File *file) {
     ctx.col = 1;
     ctx.line_start = file->contents;
 
-    Token head = {0};
-    Token *cur = &head;
+    TokList tl = {0};
 
     for (;;) {
         /* Track whitespace state before skipping */
@@ -1158,18 +1166,35 @@ Token *tokenize(File *file) {
 
         tok->has_space = has_space;
         tok->at_bol = at_bol;
-
-        cur->next = tok;
-        cur = tok;
+        toklist_push(&tl, tok);
     }
 
     /* EOF token */
     Token *eof = new_token(TK_EOF, ctx.p, 0, &ctx);
     eof->at_bol = (ctx.p == ctx.line_start);
-    cur->next = eof;
+    toklist_push(&tl, eof);
 
-    /* Two-phase keyword conversion */
-    convert_keywords(head.next);
+    /* Two-phase keyword conversion — operate on the pointer list */
+    for (int i = 0; i < tl.len; i++) {
+        Token *t = tl.ptrs[i];
+        if (t->kind != TK_IDENT)
+            continue;
+        TokenKind kw = lookup_keyword(t->loc, t->len);
+        if (kw != TK_IDENT)
+            t->kind = kw;
+    }
 
-    return head.next;
+    /* Flatten into a contiguous Token array */
+    TokenArray result;
+    result.len = tl.len;
+    result.tokens = xmalloc(tl.len * sizeof(Token));
+    for (int i = 0; i < tl.len; i++)
+        result.tokens[i] = *tl.ptrs[i];
+
+    /* Free the temporary pointer list and individual tokens */
+    for (int i = 0; i < tl.len; i++)
+        free(tl.ptrs[i]);
+    free(tl.ptrs);
+
+    return result;
 }

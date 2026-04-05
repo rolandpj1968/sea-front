@@ -442,7 +442,7 @@ static Node *ternary_expr(Parser *p) {
     if (!consume(p, TK_QUESTION))
         return cond;
 
-    Token *tok = p->prev;
+    Token *tok = &p->tokens[p->pos > 0 ? p->pos - 1 : 0];
 
     /* §8.16/1: "expression" in then-branch (comma is allowed) */
     Node *then_ = parse_expr(p);
@@ -524,7 +524,7 @@ Node *parse_expr(Parser *p) {
     if (!lhs) return NULL;
 
     while (consume(p, TK_COMMA)) {
-        Token *tok = p->prev;
+        Token *tok = &p->tokens[p->pos > 0 ? p->pos - 1 : 0];
         Node *rhs = parse_assign_expr(p);
         Node *node = new_node(p, ND_COMMA, tok);
         node->comma.lhs = lhs;

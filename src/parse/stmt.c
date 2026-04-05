@@ -303,7 +303,7 @@ Node *parse_stmt(Parser *p) {
     /* labeled-statement — §9.1 [stmt.label]
      *   identifier : statement
      * Check for ident followed by colon (not ::). */
-    if (tok->kind == TK_IDENT && tok->next && tok->next->kind == TK_COLON) {
+    if (tok->kind == TK_IDENT && peek_ahead(p, 1)->kind == TK_COLON) {
         Token *label = advance(p);  /* consume ident */
         advance(p);                 /* consume : */
         Node *node = new_node(p, ND_LABEL, tok);
