@@ -30,14 +30,20 @@
  */
 Node *parse_compound_stmt(Parser *p) {
     Token *tok = expect(p, TK_LBRACE);
-    Vec stmts = vec_new(p->arena);
 
+    /* N4659 §6.3.3/1 [basic.scope.block]: "A name declared in a block
+     * (9.3) is local to that block." */
+    region_push(p, REGION_BLOCK);
+
+    Vec stmts = vec_new(p->arena);
     while (!at(p, TK_RBRACE) && !at_eof(p)) {
         Node *s = parse_stmt(p);
         if (s)
             vec_push(&stmts, s);
     }
     expect(p, TK_RBRACE);
+
+    region_pop(p);
 
     Node *node = new_node(p, ND_BLOCK, tok);
     node->block.stmts = (Node **)stmts.data;
@@ -134,6 +140,10 @@ static Node *parse_for_stmt(Parser *p) {
     Token *tok = expect(p, TK_KW_FOR);
     expect(p, TK_LPAREN);
 
+    /* N4659 §6.3.3/4 [basic.scope.block]: "Names declared in the
+     * init-statement ... are local to the ... for statement." */
+    region_push(p, REGION_BLOCK);
+
     /* init-statement: declaration or expression-statement */
     Node *init = NULL;
     if (!at(p, TK_SEMI)) {
@@ -161,6 +171,8 @@ static Node *parse_for_stmt(Parser *p) {
     expect(p, TK_RPAREN);
 
     Node *body = parse_stmt(p);
+
+    region_pop(p);
 
     Node *node = new_node(p, ND_FOR, tok);
     node->for_.init = init;

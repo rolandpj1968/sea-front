@@ -1,0 +1,10 @@
+(translation-unit
+  (typedef)
+  (func-def int "main" (params)
+    (block
+      (var-decl int "x" (num 1))
+      (block
+        (typedef)
+        (var-decl double "y" (fnum 2)))
+      (var-decl int "z" (num 3))
+      (return (+ (ident "x") (ident "z"))))))

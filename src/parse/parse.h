@@ -413,17 +413,111 @@ struct Type {
 };
 
 /* ================================================================== */
+/* Name Lookup — N4659 §6.3-§6.4 [basic.scope, basic.lookup]           */
+/*               N4861 §6.4-§6.5 (C++20, renumbered)                   */
+/*               N4950 §6.4-§6.5 (C++23, unchanged)                    */
+/*                                                                     */
+/* "The name lookup rules apply uniformly to all names (including      */
+/*  typedef-names, namespace-names, and class-names) wherever the      */
+/*  grammar allows such names." — N4659 §6.4/1                         */
+/* ================================================================== */
+
+/*
+ * EntityKind — N4659 §6.1 [basic]
+ * What kind of entity a declared name refers to.
+ * The parser's disambiguation rules inspect this after lookup.
+ */
+typedef enum {
+    ENTITY_VARIABLE,    /* object (§6.6.2 [basic.stc]) or function (§6.6.3)
+                         * — "not a type" is all the disambiguation oracle cares about */
+    ENTITY_TYPE,        /* type-name (§10.1.7.1 [dcl.type.simple]):
+                         *   typedef-name (§10.1.3 [dcl.typedef])
+                         * | class-name (§12.1 [class.name])
+                         * | enum-name (§10.2 [dcl.enum])
+                         * C++ class name injection (§6.3.10/2, §12.1/2):
+                         *   'struct Foo {}' makes bare 'Foo' a type-name */
+    ENTITY_TAG,         /* struct/union/enum tag reached via elaborated-type-specifier
+                         * (§10.1.7.3 [dcl.type.elab])
+                         * Separate from ENTITY_TYPE per §6.3.10/2: a variable
+                         * can hide a class name, but 'struct Foo' still works */
+    ENTITY_NAMESPACE,   /* namespace-name (§10.3.1 [namespace.def]) — deferred */
+    ENTITY_TEMPLATE,    /* template-name (§17.1 [temp]) — deferred */
+    ENTITY_ENUMERATOR,  /* enumerator (§10.2 [dcl.enum]) — a named constant */
+} EntityKind;
+
+/*
+ * Declaration — N4659 §6.1 [basic]
+ * "An entity is a value, object, reference, function, enumerator, type,
+ *  class member, bit-field, template, template specialization, namespace,
+ *  or parameter pack."
+ *
+ * A Declaration records that a name was introduced into a declarative region.
+ * Arena-allocated, never freed individually.
+ */
+typedef struct Declaration Declaration;
+struct Declaration {
+    const char  *name;      /* pointer into source buffer (Token.loc) — no copy */
+    int          name_len;  /* byte length of the name */
+    EntityKind   entity;    /* what kind of entity this name refers to */
+    Type        *type;      /* associated type, or NULL */
+    Declaration *next;      /* hash chain within the declarative region */
+};
+
+/*
+ * RegionKind — N4659 §6.3 [basic.scope]
+ * The standard defines these kinds of declarative regions:
+ */
+typedef enum {
+    REGION_BLOCK,       /* §6.3.3 [basic.scope.block] — compound-statement { ... } */
+    REGION_PROTOTYPE,   /* §6.3.4 [basic.scope.proto] — function parameter names */
+    REGION_NAMESPACE,   /* §6.3.6 [basic.scope.namespace] — namespace or global */
+    REGION_CLASS,       /* §6.3.7 [basic.scope.class] — deferred (Stage 2) */
+    REGION_ENUM,        /* §6.3.8 [basic.scope.enum] — scoped enum (deferred) */
+    REGION_TEMPLATE,    /* §6.3.9 [basic.scope.temp] — template params (deferred) */
+} RegionKind;
+
+/*
+ * DeclarativeRegion — N4659 §6.3/1 [basic.scope.declarative]
+ * "Every name is introduced in some portion of the program text
+ *  called a declarative region, which is the largest part of the
+ *  program in which that name is valid"
+ *
+ * Regions nest: each has an enclosing region (except the global namespace).
+ * Arena-allocated with a fixed-size hash table for name declarations.
+ */
+#define REGION_HASH_SIZE 32
+
+typedef struct DeclarativeRegion DeclarativeRegion;
+struct DeclarativeRegion {
+    RegionKind      kind;
+    DeclarativeRegion *enclosing;   /* §6.3/1: "declarative regions can nest" */
+    Declaration    *buckets[REGION_HASH_SIZE]; /* hash table, separate chaining */
+    /* Future: Token *name — for named namespaces (§6.3.6) and classes (§6.3.7) */
+};
+
+/*
+ * ParseState — save/restore for tentative parsing.
+ * Must include the declarative region since tentative parsing may
+ * push/pop regions that need to be unwound on failure.
+ */
+typedef struct {
+    Token             *tok;
+    DeclarativeRegion *region;
+} ParseState;
+
+/* ================================================================== */
 /* Parser State                                                        */
 /* ================================================================== */
 
 typedef struct Parser Parser;
 struct Parser {
-    Token *tok;         /* current token (cursor into linked list) */
-    Token *prev;        /* previous token (for error messages) */
-    File *file;         /* source file */
-    Arena *arena;       /* all AST/Type allocations come from here */
-    CppStandard std;    /* C++17 baseline; 20/23 gated behind this flag */
-    bool tentative;     /* when true, return NULL on error instead of aborting */
+    Token *tok;                /* current token (cursor into linked list) */
+    Token *prev;               /* previous token (for error messages) */
+    File *file;                /* source file */
+    Arena *arena;              /* all AST/Type allocations come from here */
+    CppStandard std;           /* C++17 baseline; 20/23 gated behind this flag */
+    bool tentative;            /* when true, return NULL on error instead of aborting */
+    DeclarativeRegion *region; /* current innermost declarative region (§6.3) */
 };
 
 /* ================================================================== */
@@ -438,9 +532,9 @@ bool   consume(Parser *p, TokenKind k);
 Token *expect(Parser *p, TokenKind k);
 bool   at_eof(Parser *p);
 
-/* Tentative parsing — save/restore token position */
-Token *parser_save(Parser *p);
-void   parser_restore(Parser *p, Token *saved);
+/* Tentative parsing — save/restore parser state (token + region) */
+ParseState parser_save(Parser *p);
+void       parser_restore(Parser *p, ParseState saved);
 
 /* Node constructors (arena-allocated) */
 Node *new_node(Parser *p, NodeKind kind, Token *tok);
@@ -586,8 +680,53 @@ Type *new_ptr_type(Parser *p, Type *base);
 Type *new_array_type(Parser *p, Type *base, int len);
 Type *new_func_type(Parser *p, Type *ret, Type **params, int nparams, bool variadic);
 
-/* Check if current token starts a declaration (type-specifier keyword) */
+/* Check if current token starts a declaration (type-specifier keyword
+ * or, with name lookup, a user-defined type-name) */
 bool at_type_specifier(Parser *p);
+
+/* ================================================================== */
+/* Name lookup — lookup.c                                              */
+/* ================================================================== */
+
+/*
+ * N4659 §6.3 [basic.scope] — Declarative region management
+ */
+void region_push(Parser *p, RegionKind kind);
+void region_pop(Parser *p);
+
+/*
+ * N4659 §6.3.2 [basic.scope.pdecl] — Point of declaration
+ * Introduce a name into the current declarative region.
+ * No-op when p->tentative is true (speculative parse).
+ */
+Declaration *region_declare(Parser *p, const char *name, int name_len,
+                            EntityKind entity, Type *type);
+
+/*
+ * N4659 §6.4 [basic.lookup] — Name lookup
+ *
+ * §6.4.1 [basic.lookup.unqual]: "the scopes are searched for a
+ * declaration in the order listed ... name lookup ends as soon as
+ * a declaration is found for the name."
+ */
+Declaration *lookup_unqualified(Parser *p, const char *name, int name_len);
+
+/* Look up by entity kind — needed for elaborated-type-specifier
+ * (§10.1.7.3): 'struct Foo' must find ENTITY_TAG even if a variable
+ * 'Foo' hides the class name (§6.3.10/2 [basic.scope.hiding]). */
+Declaration *lookup_unqualified_kind(Parser *p, const char *name,
+                                     int name_len, EntityKind kind);
+
+/*
+ * Disambiguation oracles — convenience wrappers around lookup.
+ *
+ * §10.1.7.1: type-name = class-name | enum-name | typedef-name
+ * §17.1:     template-name = name of a template
+ *
+ * These are the "two semantic oracles" from doc/disambiguation-rules.md.
+ */
+bool lookup_is_type_name(Parser *p, Token *tok);
+bool lookup_is_template_name(Parser *p, Token *tok);
 
 /* ================================================================== */
 /* AST dump — ast_dump.c                                               */

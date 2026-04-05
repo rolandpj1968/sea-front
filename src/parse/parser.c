@@ -61,13 +61,17 @@ bool at_eof(Parser *p) {
 /*   Rule 5 (N4659 §17.3/2): type-id vs expression in template args   */
 /* ------------------------------------------------------------------ */
 
-Token *parser_save(Parser *p) {
-    return p->tok;
+ParseState parser_save(Parser *p) {
+    ParseState s;
+    s.tok = p->tok;
+    s.region = p->region;
+    return s;
 }
 
-void parser_restore(Parser *p, Token *saved) {
-    p->tok = saved;
+void parser_restore(Parser *p, ParseState saved) {
+    p->tok = saved.tok;
     p->prev = NULL;  /* prev is unreliable after restore */
+    p->region = saved.region;
 }
 
 /* ------------------------------------------------------------------ */
@@ -150,6 +154,12 @@ Node *parse(Token *tok, Arena *arena, CppStandard std) {
     p.arena = arena;
     p.std = std;
     p.tentative = false;
+    p.region = NULL;
+
+    /* N4659 §6.3.6/3 [basic.scope.namespace]:
+     * "The outermost declarative region of a translation unit is also
+     *  a namespace, called the global namespace." */
+    region_push(&p, REGION_NAMESPACE);
 
     Vec decls = vec_new(arena);
 

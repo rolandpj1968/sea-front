@@ -155,6 +155,14 @@ Type *parse_type_specifiers(Parser *p) {
                     else advance(p);
                 }
             }
+            /* N4659 §6.3.2/7 [basic.scope.pdecl]: register tag name.
+             * N4659 §6.3.10/2 [basic.scope.hiding]: also inject as
+             * a type-name (C++ class name injection, §12.1/2) so
+             * bare 'Foo' works without 'struct' prefix. */
+            if (ty->tag) {
+                region_declare(p, ty->tag->loc, ty->tag->len, ENTITY_TAG, ty);
+                region_declare(p, ty->tag->loc, ty->tag->len, ENTITY_TYPE, ty);
+            }
             return ty;
         }
         /* enum — N4659 §10.2 [dcl.enum]
@@ -181,10 +189,42 @@ Type *parse_type_specifiers(Parser *p) {
                     else advance(p);
                 }
             }
+            /* Register enum tag — same as struct (§6.3.2/3) */
+            if (ty->tag) {
+                region_declare(p, ty->tag->loc, ty->tag->len, ENTITY_TAG, ty);
+                region_declare(p, ty->tag->loc, ty->tag->len, ENTITY_TYPE, ty);
+            }
             return ty;
         }
 
         break;  /* not a type specifier — stop */
+    }
+
+    /* N4659 §10.1.7.1 [dcl.type.simple]: a type-name (typedef-name,
+     * class-name, or enum-name) can appear as a simple-type-specifier.
+     * If no keyword specifiers have been seen, check if the current
+     * token is a user-defined type-name via name lookup (§6.4). */
+    if (!seen_any && peek(p)->kind == TK_IDENT) {
+        Declaration *d = lookup_unqualified(p, peek(p)->loc, peek(p)->len);
+        if (d && (d->entity == ENTITY_TYPE || d->entity == ENTITY_TAG)) {
+            Token *name_tok = advance(p);
+            Type *ty = d->type;
+            if (ty) {
+                /* Copy the type so we don't modify the declaration's type
+                 * when adding cv-qualifiers */
+                Type *copy = arena_alloc(p->arena, sizeof(Type));
+                *copy = *ty;
+                copy->is_const = is_const;
+                copy->is_volatile = is_volatile;
+                return copy;
+            }
+            /* Fallback: unknown type structure, create an opaque type */
+            ty = new_type(p, TY_INT);
+            ty->is_const = is_const;
+            ty->is_volatile = is_volatile;
+            ty->tag = name_tok;
+            return ty;
+        }
     }
 
     if (!seen_any) {
@@ -219,10 +259,16 @@ Type *parse_type_specifiers(Parser *p) {
 
 /*
  * Check if the current token could start a type-specifier.
- * Used for stmt-vs-decl disambiguation (N4659 §9.8 [stmt.ambig]).
  *
- * First pass: only built-in type keywords. Stage 2 adds user-defined
- * type names via the symbol table ("is this identifier a type-name?").
+ * Used for stmt-vs-decl disambiguation:
+ *   N4659 §9.8 [stmt.ambig] (C++17)
+ *   N4861 §8.9 [stmt.ambig] (C++20)
+ *   N4950 §8.9 [stmt.ambig] (C++23)
+ *
+ * "any statement that could be a declaration IS a declaration"
+ *
+ * Checks built-in type keywords AND, via name lookup (§6.4), whether
+ * an identifier is a user-defined type-name (§10.1.7.1).
  */
 bool at_type_specifier(Parser *p) {
     switch (peek(p)->kind) {
@@ -236,8 +282,14 @@ bool at_type_specifier(Parser *p) {
     case TK_KW_INLINE:
     case TK_KW_TYPEDEF:
     case TK_KW_STRUCT: case TK_KW_UNION: case TK_KW_ENUM:
-    case TK_KW_AUTO:    /* C++11 auto type deduction — deferred semantics */
+    case TK_KW_AUTO:
         return true;
+    case TK_IDENT:
+        /* N4659 §10.1.7.1 [dcl.type.simple]: a type-name (typedef-name,
+         * class-name, or enum-name) is a valid simple-type-specifier.
+         * Consult name lookup (§6.4) to determine if this identifier
+         * refers to a type. */
+        return lookup_is_type_name(p, peek(p));
     default:
         return false;
     }

@@ -8,7 +8,8 @@ PARSE_HDR = src/parse/parse.h
 SRCS     = src/main.c src/util.c src/arena.c \
            src/lex/tokenize.c src/lex/unicode.c \
            src/parse/parser.c src/parse/expr.c src/parse/stmt.c \
-           src/parse/decl.c src/parse/type.c src/parse/ast_dump.c
+           src/parse/decl.c src/parse/type.c src/parse/lookup.c \
+           src/parse/ast_dump.c
 OBJS     = $(patsubst src/%.c,$(BUILDDIR)/%.o,$(SRCS))
 
 # Lexer test (doesn't need parse objects)

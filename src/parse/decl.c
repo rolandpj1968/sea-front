@@ -244,13 +244,29 @@ Node *parse_declaration(Parser *p) {
     Token *start_tok = peek(p);
 
     /* typedef — N4659 §10.1.3 [dcl.typedef]
-     * For the first pass, just skip over typedef declarations. */
+     *   typedef-name: identifier
+     *
+     * N4659 §6.3.2/1 [basic.scope.pdecl]: the point of declaration
+     * is after the complete declarator, so the typedef name becomes
+     * visible for subsequent declarations in the same scope.
+     *
+     * C++11 also allows: using identifier = type-id (alias declaration)
+     * — deferred. */
     if (consume(p, TK_KW_TYPEDEF)) {
-        /* Consume everything until ; */
-        while (!at(p, TK_SEMI) && !at_eof(p))
-            advance(p);
+        Type *base_ty = parse_type_specifiers(p);
+        Node *decl = parse_declarator(p, base_ty);
         expect(p, TK_SEMI);
-        return new_node(p, ND_TYPEDEF, start_tok);
+
+        /* Register the typedef-name into the current declarative region */
+        if (decl->var_decl.name)
+            region_declare(p, decl->var_decl.name->loc,
+                          decl->var_decl.name->len, ENTITY_TYPE,
+                          decl->var_decl.ty);
+
+        Node *node = new_node(p, ND_TYPEDEF, start_tok);
+        node->var_decl.ty = decl->var_decl.ty;
+        node->var_decl.name = decl->var_decl.name;
+        return node;
     }
 
     /* decl-specifier-seq — §10.1 [dcl.spec] */
@@ -269,7 +285,12 @@ Node *parse_declaration(Parser *p) {
     /* declarator — §11.3 [dcl.meaning] */
     Node *decl = parse_declarator(p, base_ty);
 
-    /* Function definition: type + declarator(func-type) + '{' body '}' */
+    /* Function definition: type + declarator(func-type) + '{' body '}'
+     *
+     * N4659 §6.3.4 [basic.scope.proto]: function parameters have
+     * function prototype scope. We push a REGION_PROTOTYPE before
+     * parsing the body so parameter names are visible inside.
+     * The compound-statement pushes its own REGION_BLOCK as a child. */
     if (decl->var_decl.ty && decl->var_decl.ty->kind == TY_FUNC &&
         at(p, TK_LBRACE)) {
 
@@ -278,13 +299,40 @@ Node *parse_declaration(Parser *p) {
         func->func.name = decl->var_decl.name;
         func->func.params = decl->func.params;
         func->func.nparams = decl->func.nparams;
+
+        /* Register the function name in the enclosing scope */
+        if (func->func.name)
+            region_declare(p, func->func.name->loc,
+                          func->func.name->len, ENTITY_VARIABLE,
+                          decl->var_decl.ty);
+
+        /* Push prototype scope and register parameter names */
+        region_push(p, REGION_PROTOTYPE);
+        for (int i = 0; i < func->func.nparams; i++) {
+            Node *param = func->func.params[i];
+            if (param->param.name)
+                region_declare(p, param->param.name->loc,
+                              param->param.name->len, ENTITY_VARIABLE,
+                              param->param.ty);
+        }
+
         func->func.body = parse_compound_stmt(p);
+        region_pop(p);  /* pop prototype scope */
         return func;
     }
 
     /* Variable with initializer: = assignment-expression */
     if (consume(p, TK_ASSIGN))
         decl->var_decl.init = parse_assign_expr(p);
+
+    /* N4659 §6.3.2/1 [basic.scope.pdecl]: register the variable name
+     * at its point of declaration (after declarator, before initializer
+     * — but we've already parsed the initializer, which is fine for a
+     * bootstrap tool processing valid source). */
+    if (decl->var_decl.name)
+        region_declare(p, decl->var_decl.name->loc,
+                      decl->var_decl.name->len, ENTITY_VARIABLE,
+                      decl->var_decl.ty);
 
     /* TODO: handle comma-separated declarators:
      *   int x = 1, y = 2, *z;

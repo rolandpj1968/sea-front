@@ -1,0 +1,9 @@
+(translation-unit
+  (var-decl struct Point)
+  (var-decl struct Point "p")
+  (var-decl struct Point "q")
+  (func-def int "main" (params)
+    (block
+      (var-decl struct Point "r")
+      (= (. (ident "r") "x") (num 1))
+      (return (. (ident "r") "x")))))
