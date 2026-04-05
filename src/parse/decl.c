@@ -300,19 +300,67 @@ Node *parse_declaration(Parser *p) {
  * At file scope, C++ allows:
  *   - function definitions
  *   - variable declarations
+ *   - linkage-specification (extern "C")
  *   - namespace definitions (deferred)
  *   - template declarations (deferred)
- *   - extern "C" blocks (deferred)
  *   - using declarations (deferred)
  *   - empty declarations ( ; )
- *
- * For the first pass, we handle function definitions and variable
- * declarations via parse_declaration().
  */
 Node *parse_top_level_decl(Parser *p) {
     /* Empty declaration — N4659 §10/6 */
     if (consume(p, TK_SEMI))
         return NULL;
+
+    /* Skip preprocessor leftovers — #pragma, #line, etc.
+     * These should have been consumed by the preprocessor, but mcpp
+     * in independent mode passes through unknown pragmas. We skip
+     * everything from # to the end of its line. */
+    if (at(p, TK_HASH)) {
+        int line = peek(p)->line;
+        while (!at_eof(p) && peek(p)->line == line)
+            advance(p);
+        return NULL;
+    }
+
+    /* linkage-specification — N4659 §10.5 [dcl.link]
+     *   extern string-literal { declaration-seq(opt) }
+     *   extern string-literal declaration
+     *
+     * The string-literal is "C" or "C++". This controls name mangling:
+     * extern "C" suppresses C++ mangling.
+     *
+     * For now, we parse the syntax and ignore the linkage specifier.
+     * The semantic layer will need to track it for name mangling and
+     * overload resolution (C linkage prohibits overloading).
+     *
+     * C++20/23: unchanged. */
+    if (at(p, TK_KW_EXTERN) && peek(p)->next &&
+        peek(p)->next->kind == TK_STR) {
+        advance(p);  /* consume 'extern' */
+        advance(p);  /* consume string literal ("C" or "C++") */
+
+        if (at(p, TK_LBRACE)) {
+            /* extern "C" { ... } — parse as a block of declarations.
+             * We reuse ND_BLOCK to hold the inner declarations.
+             * The linkage specifier is ignored for now. */
+            Token *brace = peek(p);
+            advance(p);
+            Vec decls = vec_new(p->arena);
+            while (!at(p, TK_RBRACE) && !at_eof(p)) {
+                Node *decl = parse_top_level_decl(p);
+                if (decl)
+                    vec_push(&decls, decl);
+            }
+            expect(p, TK_RBRACE);
+            Node *block = new_node(p, ND_BLOCK, brace);
+            block->block.stmts = (Node **)decls.data;
+            block->block.nstmts = decls.len;
+            return block;
+        }
+
+        /* extern "C" single-declaration */
+        return parse_declaration(p);
+    }
 
     return parse_declaration(p);
 }
