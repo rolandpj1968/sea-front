@@ -18,9 +18,9 @@
  *       simple-declaration
  *       asm-declaration                 (deferred)
  *       namespace-alias-definition      (deferred)
- *       using-declaration               (deferred)
- *       using-directive                 (deferred)
- *       static_assert-declaration       (deferred)
+ *       using-declaration               (partial — using T = type)
+ *       using-directive                 (implemented)
+ *       static_assert-declaration       (skip-parsed)
  *       alias-declaration               (deferred — using T = ...)
  *       opaque-enum-declaration         (deferred)
  *
@@ -35,9 +35,10 @@
  *   export-declaration, constinit, consteval.
  * C++23 changes: adds deducing this (explicit object parameter).
  *
- * This first pass handles simple-declaration and function-definition
- * with built-in type specifiers only. User-defined type names,
- * templates, namespaces, and using-declarations are deferred.
+ * Handles: simple-declaration, function-definition, template-declaration,
+ * namespace-definition, linkage-specification, using-declaration/directive,
+ * friend-declaration, static_assert. User-defined type names are resolved
+ * via name lookup (§6.4).
  */
 
 #include "parse.h"
@@ -336,7 +337,7 @@ parse_suffixes:
                             break;
                         }
 
-                        Type *param_base = parse_type_specifiers(p, /*class_def_out=*/NULL);
+                        Type *param_base = parse_type_specifiers(p).type;
                         Node *param_decl = parse_declarator(p, param_base);
                         param_decl->kind = ND_PARAM;
 
@@ -389,7 +390,7 @@ parse_suffixes:
                 /* Terminates: same as named-param loop above. */
                 for (;;) {
                     if (parser_consume(p, TK_ELLIPSIS)) { variadic = true; break; }
-                    Type *param_base = parse_type_specifiers(p, /*class_def_out=*/NULL);
+                    Type *param_base = parse_type_specifiers(p).type;
                     Node *param_decl = parse_declarator(p, param_base);
                     param_decl->kind = ND_PARAM;
                     if (parser_consume(p, TK_ASSIGN))
@@ -476,7 +477,7 @@ Node *parse_declaration(Parser *p) {
      * C++11 also allows: using identifier = type-id (alias declaration)
      * — deferred. */
     if (parser_consume(p, TK_KW_TYPEDEF)) {
-        Type *base_ty = parse_type_specifiers(p, /*class_def_out=*/NULL);
+        Type *base_ty = parse_type_specifiers(p).type;
         Node *decl = parse_declarator(p, base_ty);
         parser_expect(p, TK_SEMI);
 
@@ -526,8 +527,9 @@ Node *parse_declaration(Parser *p) {
     }
 
     /* decl-specifier-seq — §10.1 [dcl.spec] */
-    Node *class_def = NULL;
-    Type *base_ty = parse_type_specifiers(p, &class_def);
+    DeclSpec spec = parse_type_specifiers(p);
+    Type *base_ty = spec.type;
+    Node *class_def = spec.class_def;
     if (!base_ty)
         error_tok(start_tok, "expected declaration");
 
@@ -1022,7 +1024,7 @@ static Node *parse_template_parameter(Parser *p) {
 
     /* Non-type template parameter: parsed as a parameter-declaration
      * e.g., 'int N', 'bool B = true', 'auto V' */
-    Type *ty = parse_type_specifiers(p, /*class_def_out=*/NULL);
+    Type *ty = parse_type_specifiers(p).type;
     Node *param = parse_declarator(p, ty);
     param->kind = ND_PARAM;
 

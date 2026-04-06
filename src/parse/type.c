@@ -121,8 +121,9 @@ Type *new_func_type(Parser *p, Type *ret, Type **params, int nparams,
  * C++20: adds char8_t (§6.9.1)
  * C++23: no new fundamental types
  */
-Type *parse_type_specifiers(Parser *p, Node **class_def_out) {
-    if (class_def_out) *class_def_out = NULL;
+DeclSpec parse_type_specifiers(Parser *p) {
+    DeclSpec result = {0};
+
     /* Counters for specifier combination tracking */
     int cnt_void = 0, cnt_bool = 0, cnt_char = 0;
     int cnt_short = 0, cnt_int = 0, cnt_long = 0;
@@ -131,13 +132,6 @@ Type *parse_type_specifiers(Parser *p, Node **class_def_out) {
     int cnt_char16 = 0, cnt_char32 = 0, cnt_wchar = 0;
     bool is_const = false, is_volatile = false;
     bool seen_any = false;
-
-    /* Also consume storage-class and other specifiers that start declarations
-     * N4659 §10.1.1 [dcl.stc]: static, extern, register, thread_local
-     * N4659 §10.1.6 [dcl.inline]: inline
-     * These don't affect the type but mark this as a declaration. */
-    bool is_static = false, is_extern = false, is_inline = false;
-    (void)is_static; (void)is_extern; (void)is_inline; /* used in later stages */
 
     /* Terminates: each iteration either consumes a type-specifier keyword
      * (advancing pos) and continues, or breaks. The token array is finite
@@ -150,16 +144,16 @@ Type *parse_type_specifiers(Parser *p, Node **class_def_out) {
          * They don't prevent a subsequent identifier from being a type name.
          * N4659 §10.1/3 [dcl.spec]: "a name is a type-name if no prior
          * defining-type-specifier has been seen." */
-        if (tok->kind == TK_KW_CONST)    { parser_advance(p); is_const = true; continue; }
-        if (tok->kind == TK_KW_VOLATILE) { parser_advance(p); is_volatile = true; continue; }
-        if (tok->kind == TK_KW_STATIC)    { parser_advance(p); is_static = true; continue; }
-        if (tok->kind == TK_KW_EXTERN)    { parser_advance(p); is_extern = true; continue; }
-        if (tok->kind == TK_KW_INLINE)    { parser_advance(p); is_inline = true; continue; }
-        if (tok->kind == TK_KW_REGISTER)  { parser_advance(p); continue; }
-        if (tok->kind == TK_KW_CONSTEXPR) { parser_advance(p); continue; }
-        if (tok->kind == TK_KW_VIRTUAL)   { parser_advance(p); continue; }
-        if (tok->kind == TK_KW_EXPLICIT)  { parser_advance(p); continue; }
-        if (tok->kind == TK_KW_MUTABLE)   { parser_advance(p); continue; }
+        if (tok->kind == TK_KW_CONST)     { parser_advance(p); is_const = true; continue; }
+        if (tok->kind == TK_KW_VOLATILE)  { parser_advance(p); is_volatile = true; continue; }
+        if (tok->kind == TK_KW_STATIC)    { parser_advance(p); result.flags |= DECL_STATIC; continue; }
+        if (tok->kind == TK_KW_EXTERN)    { parser_advance(p); result.flags |= DECL_EXTERN; continue; }
+        if (tok->kind == TK_KW_INLINE)    { parser_advance(p); result.flags |= DECL_INLINE; continue; }
+        if (tok->kind == TK_KW_REGISTER)  { parser_advance(p); result.flags |= DECL_REGISTER; continue; }
+        if (tok->kind == TK_KW_CONSTEXPR) { parser_advance(p); result.flags |= DECL_CONSTEXPR; continue; }
+        if (tok->kind == TK_KW_VIRTUAL)   { parser_advance(p); result.flags |= DECL_VIRTUAL; continue; }
+        if (tok->kind == TK_KW_EXPLICIT)  { parser_advance(p); result.flags |= DECL_EXPLICIT; continue; }
+        if (tok->kind == TK_KW_MUTABLE)   { parser_advance(p); result.flags |= DECL_MUTABLE; continue; }
         /* alignas(expr) — N4659 §10.1.2 [dcl.align] */
         if (tok->kind == TK_KW_ALIGNAS) {
             parser_advance(p);
@@ -304,17 +298,15 @@ Type *parse_type_specifiers(Parser *p, Node **class_def_out) {
                 parser_expect(p, TK_RBRACE);
                 region_pop(p);
 
-                /* Return class definition via out-parameter */
-                if (class_def_out) {
-                    Node *cdef = new_node(p, ND_CLASS_DEF, ty->tag ? ty->tag : parser_peek(p));
-                    cdef->class_def.tag = ty->tag;
-                    cdef->class_def.members = (Node **)members.data;
-                    cdef->class_def.nmembers = members.len;
-                    *class_def_out = cdef;
-                }
+                /* Record class definition on the result */
+                Node *cdef = new_node(p, ND_CLASS_DEF, ty->tag ? ty->tag : parser_peek(p));
+                cdef->class_def.tag = ty->tag;
+                cdef->class_def.members = (Node **)members.data;
+                cdef->class_def.nmembers = members.len;
+                result.class_def = cdef;
             }
 
-            return ty;
+            result.type = ty; return result;
         }
         /* enum — N4659 §10.2 [dcl.enum]
          * Parse optional tag name and skip enumerator-list { ... }. */
@@ -330,7 +322,7 @@ Type *parse_type_specifiers(Parser *p, Node **class_def_out) {
                 ty->tag = parser_advance(p);
             /* Optional underlying type: enum E : int { ... } */
             if (parser_consume(p, TK_COLON))
-                parse_type_specifiers(p, /*class_def_out=*/NULL);  /* consume the underlying type */
+                parse_type_specifiers(p);  /* consume the underlying type */
             /* Enumerator list { ... } */
             if (parser_consume(p, TK_LBRACE)) {
                 int depth = 1;
@@ -345,7 +337,7 @@ Type *parse_type_specifiers(Parser *p, Node **class_def_out) {
                 region_declare(p, ty->tag->loc, ty->tag->len, ENTITY_TAG, ty);
                 region_declare(p, ty->tag->loc, ty->tag->len, ENTITY_TYPE, ty);
             }
-            return ty;
+            result.type = ty; return result;
         }
 
         break;  /* not a type specifier — stop */
@@ -381,7 +373,7 @@ Type *parse_type_specifiers(Parser *p, Node **class_def_out) {
         ty->is_const = is_const;
         ty->is_volatile = is_volatile;
         ty->tag = first;
-        return ty;
+        result.type = ty; return result;
     }
     if (!seen_any && parser_peek(p)->kind == TK_IDENT) {
         Declaration *d = lookup_unqualified(p, parser_peek(p)->loc, parser_peek(p)->len);
@@ -405,7 +397,7 @@ Type *parse_type_specifiers(Parser *p, Node **class_def_out) {
                 ty->is_const = is_const;
                 ty->is_volatile = is_volatile;
                 ty->tag = name_tok;
-                return ty;
+                result.type = ty; return result;
             }
 
             Type *ty = d->type;
@@ -416,19 +408,19 @@ Type *parse_type_specifiers(Parser *p, Node **class_def_out) {
                 *copy = *ty;
                 copy->is_const = is_const;
                 copy->is_volatile = is_volatile;
-                return copy;
+                result.type = copy; return result;
             }
             /* Fallback: unknown type structure, create an opaque type */
             ty = new_type(p, TY_INT);
             ty->is_const = is_const;
             ty->is_volatile = is_volatile;
             ty->tag = name_tok;
-            return ty;
+            result.type = ty; return result;
         }
     }
 
     if (!seen_any) {
-        if (p->tentative) return NULL;
+        if (p->tentative) return result; /* type is NULL — failure */
         error_tok(parser_peek(p), "expected type specifier");
     }
 
@@ -454,7 +446,7 @@ Type *parse_type_specifiers(Parser *p, Node **class_def_out) {
     ty->is_unsigned = is_unsigned_flag;
     ty->is_const = is_const;
     ty->is_volatile = is_volatile;
-    return ty;
+    result.type = ty; return result;
 }
 
 /*
@@ -509,10 +501,10 @@ bool parser_at_type_specifier(Parser *p) {
  *
  * Used in casts: (int *)x, sizeof(unsigned long), etc.
  * The abstract-declarator is a declarator with no name.
- * For the first pass, we handle pointer-to and arrays only.
+ * Handles pointer (*), lvalue reference (&), and rvalue reference (&&).
  */
 Type *parse_type_name(Parser *p) {
-    Type *base = parse_type_specifiers(p, /*class_def_out=*/NULL);
+    Type *base = parse_type_specifiers(p).type;
     if (!base) return NULL;
 
     /* Abstract ptr-operator: consume *, &, && — N4659 §11.3 [dcl.meaning]

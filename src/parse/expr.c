@@ -362,7 +362,7 @@ static Node *primary_expr(Parser *p) {
 /*       postfix-expression ++                            (post-inc)   */
 /*       postfix-expression --                            (post-dec)   */
 /*       // Also: simple-type-specifier/typename ( ... )  (functional cast) */
-/*       // Also: dynamic_cast, static_cast, etc. (deferred)           */
+/*       // Also: simple-type-specifier/typename ( ... ) (functional cast) */
 /*       // C++20: no changes to postfix grammar                       */
 /*       // C++23: adds multidimensional subscript a[i,j]              */
 /* ------------------------------------------------------------------ */

@@ -437,6 +437,26 @@ struct Node {
 };
 
 /* ================================================================== */
+/* Declaration specifier flags — N4659 §10.1 [dcl.spec]                */
+/* ================================================================== */
+
+/*
+ * Flags from the decl-specifier-seq that are NOT part of the type
+ * but affect the declaration's storage, linkage, or semantics.
+ * Parsed by parse_type_specifiers, stored on declaration nodes.
+ */
+enum {
+    DECL_STATIC    = 1 << 0,  /* §10.1.1 [dcl.stc] */
+    DECL_EXTERN    = 1 << 1,  /* §10.1.1 */
+    DECL_INLINE    = 1 << 2,  /* §10.1.6 [dcl.inline] */
+    DECL_CONSTEXPR = 1 << 3,  /* §10.1.5 [dcl.constexpr] */
+    DECL_VIRTUAL   = 1 << 4,  /* §10.1.2 — but really §12.3 [class.virtual] */
+    DECL_EXPLICIT  = 1 << 5,  /* §10.1.1 [dcl.stc] — constructors */
+    DECL_MUTABLE   = 1 << 6,  /* §10.1.1 [dcl.stc] — data members */
+    DECL_REGISTER  = 1 << 7,  /* §10.1.1 [dcl.stc] — deprecated in C++17 */
+};
+
+/* ================================================================== */
 /* Type System                                                         */
 /* ================================================================== */
 
@@ -817,7 +837,17 @@ Node *parse_template_id(Parser *p, Token *name);
  * C++20: adds char8_t, constinit, consteval
  * C++23: adds deducing this
  */
-Type *parse_type_specifiers(Parser *p, Node **class_def_out);
+/*
+ * Result of parsing a decl-specifier-seq (§10.1).
+ * Bundles the type, optional class definition, and specifier flags.
+ */
+typedef struct {
+    Type *type;         /* the parsed type (NULL on failure) */
+    Node *class_def;    /* non-NULL if a class body was parsed */
+    int   flags;        /* DECL_STATIC | DECL_EXTERN | ... */
+} DeclSpec;
+
+DeclSpec parse_type_specifiers(Parser *p);
 Type *parse_type_name(Parser *p);
 
 /*
