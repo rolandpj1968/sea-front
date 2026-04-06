@@ -30,6 +30,9 @@ static Token *new_token(TokenKind kind, char *start, int len, LexCtx *ctx) {
 static void skip_whitespace(LexCtx *ctx) {
     char *p = ctx->p;
 
+    /* Terminates: each iteration either advances p toward the NUL
+     * terminator or breaks. NUL matches none of the whitespace/comment
+     * patterns, so the loop exits. */
     for (;;) {
         if (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\f' || *p == '\v') {
             p++;
@@ -500,7 +503,9 @@ static Token *read_number(LexCtx *ctx) {
             *ctx->p == 'l' || *ctx->p == 'L')
             ctx->p++;
     } else {
-        /* Integer suffix: u/U, l/L, ll/LL, and combinations */
+        /* Integer suffix: u/U, l/L, ll/LL, and combinations.
+         * Terminates: at most 3 iterations (u + ll), then breaks.
+         * Each branch sets a flag preventing re-entry. */
         bool had_u = false, had_l = false;
         for (;;) {
             if (!had_u && (*ctx->p == 'u' || *ctx->p == 'U')) {
@@ -799,7 +804,9 @@ static Token *read_raw_string_literal(LexCtx *ctx, int prefix_len, int enc) {
 
     ctx->p++;  /* skip ( */
 
-    /* Scan for )delim" */
+    /* Scan for )delim".
+     * Terminates: each iteration advances ctx->p by one byte.
+     * NUL terminator causes error_at() which exits the program. */
     for (;;) {
         if (*ctx->p == '\0')
             error_at(ctx->file->name, ctx->file->contents, start,
@@ -1123,6 +1130,9 @@ TokenArray tokenize(File *file) {
 
     TokList tl = {0};
 
+    /* Terminates: each iteration consumes at least one byte (via a
+     * read_* function advancing ctx.p), or breaks on NUL. The source
+     * buffer is NUL-terminated, so ctx.p eventually reaches '\0'. */
     for (;;) {
         /* Track whitespace state before skipping */
         char *before_ws = ctx.p;

@@ -138,6 +138,9 @@ Type *parse_type_specifiers(Parser *p) {
     bool is_static = false, is_extern = false, is_inline = false;
     (void)is_static; (void)is_extern; (void)is_inline; /* used in later stages */
 
+    /* Terminates: each iteration either consumes a type-specifier keyword
+     * (advancing pos) and continues, or breaks. The token array is finite
+     * and non-keyword tokens cause the break. */
     for (;;) {
         Token *tok = peek(p);
 
@@ -365,7 +368,9 @@ Type *parse_type_name(Parser *p) {
     Type *base = parse_type_specifiers(p);
     if (!base) return NULL;
 
-    /* Abstract ptr-operator: consume *, &, && — N4659 §11.3 [dcl.meaning] */
+    /* Abstract ptr-operator: consume *, &, && — N4659 §11.3 [dcl.meaning]
+     * Terminates: each iteration consumes one token (*, &, or &&) or breaks.
+     * At most one & or && (references don't stack), and finite *'s. */
     for (;;) {
         if (consume(p, TK_STAR)) {
             base = new_ptr_type(p, base);

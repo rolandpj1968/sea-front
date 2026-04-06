@@ -95,7 +95,9 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
      *
      * Note: && in declarator context is TK_LAND (logical AND token),
      * not two separate & tokens. This is unambiguous because we're
-     * already committed to parsing a declarator. */
+     * already committed to parsing a declarator.
+     * Terminates: each iteration consumes a ptr-operator token (*, &, &&)
+     * or breaks. Finite tokens, each consumed at most once for & and &&. */
     for (;;) {
         if (consume(p, TK_STAR)) {
             base_ty = new_ptr_type(p, base_ty);
@@ -227,6 +229,8 @@ parse_suffixes:
                     peek_ahead(p, 1)->kind == TK_RPAREN) {
                     advance(p);  /* (void) — no params */
                 } else {
+                    /* Terminates: each iteration parses a parameter
+                     * (consuming tokens), then breaks on non-comma. */
                     for (;;) {
                         if (consume(p, TK_ELLIPSIS)) {
                             variadic = true;
@@ -276,6 +280,7 @@ parse_suffixes:
                 peek_ahead(p, 1)->kind == TK_RPAREN) {
                 advance(p);
             } else {
+                /* Terminates: same as named-param loop above. */
                 for (;;) {
                     if (consume(p, TK_ELLIPSIS)) { variadic = true; break; }
                     Type *param_base = parse_type_specifiers(p);
@@ -843,6 +848,8 @@ Node *parse_template_id(Parser *p, Token *name) {
     Vec args = vec_new(p->arena);
 
     if (!at(p, TK_GT) && !(at(p, TK_SHR) && p->template_depth > 0)) {
+        /* Terminates: each iteration parses a template argument
+         * (consuming tokens), then breaks on non-comma. */
         for (;;) {
             /* template-argument: type-id or constant-expression or id-expression.
              * N4659 §17.3/2 [temp.arg] Rule 5: "type-id always wins."

@@ -282,6 +282,9 @@ static Node *postfix_expr(Parser *p) {
     Node *node = primary_expr(p);
     if (!node) return NULL;
 
+    /* Terminates: each iteration consumes at least one token (the
+     * postfix operator). Breaks when current token is not a postfix op.
+     * Token array is finite, so pos advances toward EOF. */
     for (;;) {
         Token *tok = peek(p);
 
@@ -417,6 +420,10 @@ static Node *binary_expr(Parser *p, int min_prec) {
     Node *lhs = unary_expr(p);
     if (!lhs) return NULL;
 
+    /* Terminates: each iteration consumes the binary operator token
+     * plus at least one token for the RHS (via unary_expr). Breaks
+     * when prec == 0 (not a binary op) or prec < min_prec. EOF
+     * has prec 0, guaranteeing exit. */
     for (;;) {
         Token *op_tok = peek(p);
         int prec = get_binop_prec(p, op_tok->kind);
