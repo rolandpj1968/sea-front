@@ -15,7 +15,7 @@
       (var-decl int "second")))
   (func-def int "main" (params)
     (block
-      (var-decl int "x" (call (template-id "add" (var-decl int)) (num 1) (num 2)))
+      (var-decl int "x" (call (ident "add") (num 1) (num 2)))
       (var-decl struct Array "arr")
       (var-decl struct Box "nested")
       (var-decl struct Box "complex")

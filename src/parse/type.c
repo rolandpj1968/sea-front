@@ -151,10 +151,14 @@ Type *parse_type_specifiers(Parser *p) {
          * defining-type-specifier has been seen." */
         if (tok->kind == TK_KW_CONST)    { parser_advance(p); is_const = true; continue; }
         if (tok->kind == TK_KW_VOLATILE) { parser_advance(p); is_volatile = true; continue; }
-        if (tok->kind == TK_KW_STATIC)   { parser_advance(p); is_static = true; continue; }
-        if (tok->kind == TK_KW_EXTERN)   { parser_advance(p); is_extern = true; continue; }
-        if (tok->kind == TK_KW_INLINE)   { parser_advance(p); is_inline = true; continue; }
-        if (tok->kind == TK_KW_REGISTER) { parser_advance(p); continue; }
+        if (tok->kind == TK_KW_STATIC)    { parser_advance(p); is_static = true; continue; }
+        if (tok->kind == TK_KW_EXTERN)    { parser_advance(p); is_extern = true; continue; }
+        if (tok->kind == TK_KW_INLINE)    { parser_advance(p); is_inline = true; continue; }
+        if (tok->kind == TK_KW_REGISTER)  { parser_advance(p); continue; }
+        if (tok->kind == TK_KW_CONSTEXPR) { parser_advance(p); continue; }
+        if (tok->kind == TK_KW_VIRTUAL)   { parser_advance(p); continue; }
+        if (tok->kind == TK_KW_EXPLICIT)  { parser_advance(p); continue; }
+        if (tok->kind == TK_KW_MUTABLE)   { parser_advance(p); continue; }
 
         if (tok->kind == TK_KW_VOID)     { parser_advance(p); cnt_void++; seen_any = true; continue; }
         if (tok->kind == TK_KW_BOOL)     { parser_advance(p); cnt_bool++; seen_any = true; continue; }
@@ -459,6 +463,8 @@ bool parser_at_type_specifier(Parser *p) {
     case TK_KW_TYPEDEF:
     case TK_KW_STRUCT: case TK_KW_CLASS: case TK_KW_UNION: case TK_KW_ENUM:
     case TK_KW_AUTO:
+    case TK_KW_CONSTEXPR: case TK_KW_VIRTUAL: case TK_KW_EXPLICIT:
+    case TK_KW_MUTABLE:
         return true;
     case TK_IDENT:
         /* N4659 §10.1.7.1 [dcl.type.simple]: a type-name (typedef-name,

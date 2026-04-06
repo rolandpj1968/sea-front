@@ -20,6 +20,6 @@
     (block
       (var-decl struct Box "deep")
       (var-decl struct Pair "mixed")
-      (var-decl int "x" (call (template-id "identity" (var-decl int)) (num 42)))
+      (var-decl int "x" (call (ident "identity") (num 42)))
       (var-decl struct Fixed "f")
       (return (ident "x")))))

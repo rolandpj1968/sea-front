@@ -162,6 +162,15 @@ static Node *primary_expr(Parser *p) {
         return new_node(p, ND_BOOL_LIT, tok);
     }
 
+    /* this — N4659 §8.1.3 [expr.prim.this]
+     * Keyword expression referring to the current object in a method. */
+    if (tok->kind == TK_KW_THIS) {
+        parser_advance(p);
+        Node *node = new_node(p, ND_IDENT, tok);
+        node->ident.name = tok;
+        return node;
+    }
+
     /* nullptr — N4659 §5.13.7 [lex.nullptr]
      * Type is std::nullptr_t (§21.2.4 [support.nullptr]),
      * distinct from integer 0. Sema handles the type. */
@@ -190,22 +199,36 @@ static Node *primary_expr(Parser *p) {
             parser_advance(p);
         }
 
-        /* Consume the name chain: A :: B :: C
-         * Terminates: each iteration consumes ident + ::, or breaks. */
+        /* Consume the name chain: A :: B :: C  or  A<int> :: B
+         * Terminates: each iteration consumes ident (+ optional <args>) + ::, or breaks. */
         if (parser_at(p, TK_IDENT)) {
             Token *name = parser_advance(p);
             vec_push(&parts, name);
 
+            /* If this name is a template and followed by <, consume the
+             * template-argument-list before checking for :: */
+            if (parser_at(p, TK_LT) && lookup_is_template_name(p, name)) {
+                parse_template_id(p, name);  /* consumes <args> */
+            }
+
             while (parser_at(p, TK_SCOPE)) {
                 parser_advance(p);  /* consume :: */
 
-                /* After :: we may see: template keyword (deferred),
-                 * identifier, or operator/destructor (deferred) */
                 if (parser_at(p, TK_IDENT)) {
                     name = parser_advance(p);
                     vec_push(&parts, name);
+                    /* Template-id in the chain: A::B<int>::C */
+                    if (parser_at(p, TK_LT) && lookup_is_template_name(p, name)) {
+                        parse_template_id(p, name);
+                    }
+                } else if (parser_at(p, TK_TILDE)) {
+                    /* Qualified destructor: A::~B */
+                    parser_advance(p);
+                    if (parser_at(p, TK_IDENT))
+                        vec_push(&parts, parser_advance(p));
+                    break;
                 } else {
-                    break;  /* :: at end (e.g., before operator or ~) */
+                    break;
                 }
             }
         }
@@ -234,6 +257,28 @@ static Node *primary_expr(Parser *p) {
         node->qualified.parts = (Token **)parts.data;
         node->qualified.nparts = parts.len;
         node->qualified.global_scope = global_scope;
+        return node;
+    }
+
+    /* C++ named casts — N4659 §8.2.3-§8.2.7 [expr.cast]
+     *   static_cast < type-id > ( expression )
+     *   dynamic_cast < type-id > ( expression )
+     *   reinterpret_cast < type-id > ( expression )
+     *   const_cast < type-id > ( expression )
+     *
+     * C++20/23: unchanged. */
+    if (tok->kind == TK_KW_STATIC_CAST || tok->kind == TK_KW_DYNAMIC_CAST ||
+        tok->kind == TK_KW_REINTERPRET_CAST || tok->kind == TK_KW_CONST_CAST) {
+        parser_advance(p);
+        parser_expect(p, TK_LT);
+        Type *ty = parse_type_name(p);
+        parser_expect(p, TK_GT);
+        parser_expect(p, TK_LPAREN);
+        Node *operand = parse_expr(p);
+        parser_expect(p, TK_RPAREN);
+        Node *node = new_node(p, ND_CAST, tok);
+        node->cast.ty = ty;
+        node->cast.operand = operand;
         return node;
     }
 
@@ -421,6 +466,75 @@ static Node *postfix_expr(Parser *p) {
 
 static Node *unary_expr(Parser *p) {
     Token *tok = parser_peek(p);
+
+    /* new-expression — N4659 §8.3.4 [expr.new]
+     *   ::opt new new-placement(opt) new-type-id new-initializer(opt)
+     *   ::opt new new-placement(opt) ( type-id ) new-initializer(opt)
+     *
+     * new-placement: ( expression-list )
+     * new-initializer: ( expression-list(opt) ) | braced-init-list
+     *
+     * Also handles global scope ::new and ::delete. */
+    if (tok->kind == TK_KW_NEW ||
+        (tok->kind == TK_SCOPE && parser_peek_ahead(p, 1)->kind == TK_KW_NEW)) {
+        if (tok->kind == TK_SCOPE) parser_advance(p);
+        parser_advance(p);  /* consume 'new' */
+
+        /* Optional placement args: new (args) Type
+         * The ( could be placement or a parenthesized type-id.
+         * Heuristic: if what follows ( looks like a type and ) follows,
+         * it's the type. Otherwise it's placement args.
+         * For a bootstrap tool, we try placement first (tentative),
+         * then fall through to type parsing. */
+        if (parser_at(p, TK_LPAREN) &&
+            !(parser_peek_ahead(p, 1)->kind == TK_RPAREN)) {
+            /* Tentative: try as placement args */
+            ParseState saved = parser_save(p);
+            p->tentative = true;
+            parser_advance(p);  /* ( */
+            parse_expr(p);
+            bool ok = parser_at(p, TK_RPAREN);
+            p->tentative = false;
+            if (ok) {
+                /* Check: after ), does a type follow? If so, it was placement. */
+                parser_restore(p, saved);
+                parser_advance(p);  /* ( */
+                parse_expr(p);
+                parser_expect(p, TK_RPAREN);
+            } else {
+                parser_restore(p, saved);
+            }
+        }
+
+        /* Type being allocated */
+        Type *ty = parse_type_name(p);
+
+        /* Optional initializer: (args) or {} */
+        if (parser_consume(p, TK_LPAREN)) {
+            if (!parser_at(p, TK_RPAREN))
+                parse_expr(p);
+            parser_expect(p, TK_RPAREN);
+        }
+
+        Node *node = new_node(p, ND_CAST, tok);  /* reuse CAST for now */
+        node->cast.ty = ty;
+        node->cast.operand = NULL;
+        return node;
+    }
+
+    /* delete-expression — N4659 §8.3.5 [expr.delete]
+     *   ::opt delete cast-expression
+     *   ::opt delete [] cast-expression */
+    if (tok->kind == TK_KW_DELETE ||
+        (tok->kind == TK_SCOPE && parser_peek_ahead(p, 1)->kind == TK_KW_DELETE)) {
+        if (tok->kind == TK_SCOPE) parser_advance(p);
+        parser_advance(p);  /* consume 'delete' */
+        /* delete[] */
+        if (parser_consume(p, TK_LBRACKET))
+            parser_expect(p, TK_RBRACKET);
+        Node *operand = unary_expr(p);
+        return new_unary_node(p, TK_KW_DELETE, operand, tok);
+    }
 
     /* Pre-increment/decrement — §8.3.1 [expr.pre.incr] */
     if (tok->kind == TK_INC || tok->kind == TK_DEC) {

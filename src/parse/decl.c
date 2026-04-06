@@ -282,6 +282,29 @@ parse_suffixes:
             }
             parser_expect(p, TK_RPAREN);
 
+            /* Trailing cv-qualifier-seq and virt-specifiers on member functions
+             * N4659 §11.3.5 [dcl.fct]: ( params ) cv-qualifier-seq(opt)
+             *   ref-qualifier(opt) noexcept-specifier(opt) */
+            while (parser_consume(p, TK_KW_CONST) ||
+                   parser_consume(p, TK_KW_VOLATILE) ||
+                   parser_consume(p, TK_KW_NOEXCEPT))
+                ;
+            /* override/final are identifiers with special meaning (§12.1) */
+            while (parser_at(p, TK_IDENT) &&
+                   (token_equal(parser_peek(p), "override") ||
+                    token_equal(parser_peek(p), "final")))
+                parser_advance(p);
+            /* ref-qualifier: & or && */
+            parser_consume(p, TK_AMP);
+            parser_consume(p, TK_LAND);
+            /* noexcept(expr) */
+            if (parser_consume(p, TK_KW_NOEXCEPT)) {
+                if (parser_consume(p, TK_LPAREN)) {
+                    parse_expr(p);
+                    parser_expect(p, TK_RPAREN);
+                }
+            }
+
             ty = new_func_type(p, ty, (Type **)param_types.data,
                                param_types.len, variadic);
 
@@ -319,6 +342,24 @@ parse_suffixes:
             }
         }
         parser_expect(p, TK_RPAREN);
+
+        /* Same trailing qualifier consumption as named path */
+        while (parser_consume(p, TK_KW_CONST) ||
+               parser_consume(p, TK_KW_VOLATILE) ||
+               parser_consume(p, TK_KW_NOEXCEPT))
+            ;
+        while (parser_at(p, TK_IDENT) &&
+               (token_equal(parser_peek(p), "override") ||
+                token_equal(parser_peek(p), "final")))
+            parser_advance(p);
+        parser_consume(p, TK_AMP);
+        parser_consume(p, TK_LAND);
+        if (parser_consume(p, TK_KW_NOEXCEPT)) {
+            if (parser_consume(p, TK_LPAREN)) {
+                parse_expr(p);
+                parser_expect(p, TK_RPAREN);
+            }
+        }
 
         ty = new_func_type(p, ty, (Type **)param_types.data,
                            param_types.len, variadic);
@@ -533,11 +574,32 @@ Node *parse_declaration(Parser *p) {
     }
 
     if (parser_consume(p, TK_ASSIGN)) {
-        decl->var_decl.init = parse_assign_expr(p);
+        /* = initializer-clause — could be expression or braced-init-list */
+        if (parser_at(p, TK_LBRACE)) {
+            /* Skip braced-init-list { ... } — N4659 §11.6.4 [dcl.init.list]
+             * Terminates: balanced brace counting toward } */
+            int depth = 0;
+            while (!parser_at_eof(p)) {
+                if (parser_at(p, TK_LBRACE)) depth++;
+                if (parser_at(p, TK_RBRACE)) { depth--; if (depth <= 0) { parser_advance(p); break; } }
+                parser_advance(p);
+            }
+        } else {
+            decl->var_decl.init = parse_assign_expr(p);
+        }
     } else if (parser_consume(p, TK_LPAREN)) {
         /* Direct-initialization: T x(expr, ...) — N4659 §11.6/16 */
         decl->var_decl.init = parse_expr(p);
         parser_expect(p, TK_RPAREN);
+    } else if (parser_at(p, TK_LBRACE)) {
+        /* Braced-init-list without = : T x{ ... } — N4659 §11.6.4
+         * Terminates: balanced brace counting toward } */
+        int depth = 0;
+        while (!parser_at_eof(p)) {
+            if (parser_at(p, TK_LBRACE)) depth++;
+            if (parser_at(p, TK_RBRACE)) { depth--; if (depth <= 0) { parser_advance(p); break; } }
+            parser_advance(p);
+        }
     }
 
     /* N4659 §6.3.2/1 [basic.scope.pdecl]: register the variable name */
