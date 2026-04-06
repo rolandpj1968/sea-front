@@ -171,6 +171,23 @@ static Node *primary_expr(Parser *p) {
         break;
     }
 
+    /* Functional-cast / explicit type conversion — N4659 §8.2.3 [expr.type.conv]
+     *   simple-type-specifier ( expression-list(opt) )
+     *   simple-type-specifier braced-init-list
+     * E.g. 'bool(x)', 'int(0)'. We handle the case where the leading
+     * token is a built-in type keyword followed by '('. Identifier/type-
+     * name forms fall through to the id-expression path. */
+    if (parser_at_type_specifier(p) && tok->kind != TK_IDENT &&
+        parser_peek_ahead(p, 1)->kind == TK_LPAREN) {
+        Type *ty = parse_type_name(p);
+        parser_expect(p, TK_LPAREN);
+        Node *operand = NULL;
+        if (!parser_at(p, TK_RPAREN))
+            operand = parse_expr(p);
+        parser_expect(p, TK_RPAREN);
+        return new_cast_node(p, ty, operand, tok);
+    }
+
     /* Identifier / qualified-id — N4659 §8.1.4 [expr.prim.id]
      *   id-expression: unqualified-id | qualified-id
      *   qualified-id: nested-name-specifier template(opt) unqualified-id
@@ -230,8 +247,22 @@ static Node *primary_expr(Parser *p) {
             Token *name = (Token *)parts.data[0];
 
             /* Rule 4: template-name followed by < → template-id */
-            if (parser_at(p, TK_LT) && lookup_is_template_name(p, name))
-                return parse_template_id(p, name);
+            if (parser_at(p, TK_LT) && lookup_is_template_name(p, name)) {
+                Node *tid = parse_template_id(p, name);
+                /* template-id may be followed by :: nested-name segments
+                 * (e.g. conjunction<...>::value). Consume the trailing
+                 * chain — the value is opaque to the parser, sema resolves. */
+                while (parser_consume(p, TK_SCOPE)) {
+                    parser_consume(p, TK_KW_TEMPLATE);
+                    if (parser_at(p, TK_IDENT)) {
+                        Token *seg = parser_advance(p);
+                        if (parser_at(p, TK_LT) &&
+                            lookup_is_template_name(p, seg))
+                            parse_template_id(p, seg);
+                    }
+                }
+                return tid;
+            }
 
             Node *node = new_node(p, ND_IDENT, name);
             node->ident.name = name;

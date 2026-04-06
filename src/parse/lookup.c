@@ -226,8 +226,12 @@ bool lookup_is_type_name(Parser *p, Token *tok) {
 bool lookup_is_template_name(Parser *p, Token *tok) {
     if (tok->kind != TK_IDENT)
         return false;
-    Declaration *d = lookup_unqualified(p, tok->loc, tok->len);
-    return d && d->entity == ENTITY_TEMPLATE;
+    /* Kind-specific lookup: a template-name can be shadowed in the chain
+     * by a same-named ENTITY_TYPE/ENTITY_TAG (e.g. when the primary template
+     * is followed by an explicit specialization which re-registers the
+     * tag/type). The template-ness must still be findable. */
+    return lookup_unqualified_kind(p, tok->loc, tok->len,
+                                   ENTITY_TEMPLATE) != NULL;
 }
 
 /* ------------------------------------------------------------------ */

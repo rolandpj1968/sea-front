@@ -124,6 +124,12 @@ static void consume_trailing_qualifiers(Parser *p) {
         parser_advance(p);
         parser_advance(p);
     }
+    /* trailing-return-type — N4659 §11.3.5 [dcl.fct]
+     *   parameters-and-qualifiers trailing-return-type
+     *   trailing-return-type: -> type-id
+     * Parse and discard; the return type isn't propagated yet. */
+    if (parser_consume(p, TK_ARROW))
+        parse_type_name(p);
 }
 Node *parse_declarator(Parser *p, Type *base_ty) {
     /* ptr-operator — N4659 §11.3 [dcl.meaning]
@@ -249,9 +255,22 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
     if (!name && parser_at(p, TK_KW_OPERATOR)) {
 parse_operator_id:
         name = parser_advance(p);  /* consume 'operator' */
+        /* conversion-function-id — N4659 §16.3.2 [class.conv.fct]
+         *   operator conversion-type-id
+         * If the token after 'operator' starts a type-specifier, parse a
+         * type-id as the conversion target (and let parse_declarator
+         * accumulate any *, &, etc. that follow). */
+        if (parser_at_type_specifier(p)) {
+            parse_type_specifiers(p);
+            /* Optional ptr/ref operators on the conversion type */
+            while (parser_consume(p, TK_STAR) || parser_consume(p, TK_AMP) ||
+                   parser_consume(p, TK_LAND) || parser_consume(p, TK_KW_CONST) ||
+                   parser_consume(p, TK_KW_VOLATILE))
+                ;
+        }
         /* Consume the operator symbol(s).
          * Special cases: operator() and operator[] are multi-token. */
-        if (parser_consume(p, TK_LPAREN)) {
+        else if (parser_consume(p, TK_LPAREN)) {
             parser_expect(p, TK_RPAREN);   /* operator() */
         } else if (parser_consume(p, TK_LBRACKET)) {
             parser_expect(p, TK_RBRACKET); /* operator[] */
@@ -474,6 +493,16 @@ parse_suffixes:
  */
 Node *parse_declaration(Parser *p) {
     Token *start_tok = parser_peek(p);
+
+    /* using-declaration / using-directive / alias-declaration may appear
+     * inside class bodies (§12.2.4) and as the inner decl of a template.
+     * Delegate to the top-level handler which knows all forms. */
+    if (parser_at(p, TK_KW_USING))
+        return parse_top_level_decl(p);
+
+    /* static_assert can also appear in member-specification (§10.1.4). */
+    if (parser_at(p, TK_KW_STATIC_ASSERT))
+        return parse_top_level_decl(p);
 
     /* typedef — N4659 §10.1.3 [dcl.typedef]
      *   typedef-name: identifier
@@ -843,12 +872,21 @@ Node *parse_top_level_decl(Parser *p) {
                 parser_advance(p);
         }
 
-        /* Register the namespace name in the current (enclosing) scope
-         * BEFORE pushing the namespace's own scope. */
+        /* N4659 §10.3.1/2 [namespace.def]: a namespace-definition with a
+         * given name reopens that namespace if one already exists in the
+         * enclosing scope. Reuse the existing region so multiple
+         * 'namespace std { }' blocks share state. */
         Declaration *ns_decl = NULL;
-        if (ns)
-            ns_decl = region_declare(p, ns->loc, ns->len,
-                                     ENTITY_NAMESPACE, /*type=*/NULL);
+        DeclarativeRegion *existing = NULL;
+        if (ns) {
+            ns_decl = lookup_unqualified_kind(p, ns->loc, ns->len,
+                                              ENTITY_NAMESPACE);
+            if (ns_decl)
+                existing = ns_decl->ns_region;
+            else
+                ns_decl = region_declare(p, ns->loc, ns->len,
+                                         ENTITY_NAMESPACE, /*type=*/NULL);
+        }
 
         /* GCC __attribute__((__abi_tag__(...))) and friends after the
          * namespace name — pervasive in libstdc++. */
@@ -857,7 +895,12 @@ Node *parse_top_level_decl(Parser *p) {
         parser_expect(p, TK_LBRACE);
 
         /* N4659 §6.3.6 [basic.scope.namespace]: push named namespace scope */
-        region_push(p, REGION_NAMESPACE, ns);
+        if (existing) {
+            existing->enclosing = p->region;
+            p->region = existing;
+        } else {
+            region_push(p, REGION_NAMESPACE, ns);
+        }
 
         Vec decls = vec_new(p->arena);
         /* Terminates: each iteration parses a declaration or hits } / EOF */
@@ -1153,6 +1196,7 @@ Node *parse_template_declaration(Parser *p) {
             tmpl_name = decl->func.name;
             break;
         case ND_VAR_DECL:
+        case ND_TYPEDEF:    /* alias-template: template<...> using X = ...; */
             tmpl_name = decl->var_decl.name;
             /* Bare struct/class/enum: name is in the type's tag */
             if (!tmpl_name && decl->var_decl.ty && decl->var_decl.ty->tag)
@@ -1248,6 +1292,7 @@ Node *parse_template_id(Parser *p, Token *name) {
                 p->tentative = false;
 
                 if (ty_ok && (parser_at(p, TK_COMMA) || parser_at(p, TK_GT) ||
+                              parser_at(p, TK_ELLIPSIS) ||
                               (parser_at(p, TK_SHR) && p->template_depth > 0))) {
                     /* Successfully parsed as type-id, and next is , or > */
                     /* Create a node to represent the type argument */
@@ -1264,6 +1309,10 @@ Node *parse_template_id(Parser *p, Token *name) {
                 /* Not a type specifier — parse as expression */
                 vec_push(&args, parse_assign_expr(p));
             }
+
+            /* Pack expansion — N4659 §17.6.3 [temp.variadic]
+             *   template-argument ... */
+            parser_consume(p, TK_ELLIPSIS);
 
             if (!parser_consume(p, TK_COMMA))
                 break;

@@ -158,6 +158,22 @@ DeclSpec parse_type_specifiers(Parser *p) {
         if (tok->kind == TK_KW_VIRTUAL)   { parser_advance(p); result.flags |= DECL_VIRTUAL; continue; }
         if (tok->kind == TK_KW_EXPLICIT)  { parser_advance(p); result.flags |= DECL_EXPLICIT; continue; }
         if (tok->kind == TK_KW_MUTABLE)   { parser_advance(p); result.flags |= DECL_MUTABLE; continue; }
+        /* typename qualified-name — N4659 §17.6 [temp.res]
+         * Disambiguates a dependent qualified name as a type. Consume the
+         * keyword and let the following identifier/qualified-id be parsed
+         * as the type-specifier. */
+        if (tok->kind == TK_KW_TYPENAME)  { parser_advance(p); continue; }
+        /* auto — N4659 §10.1.7.4 [dcl.spec.auto]
+         * Placeholder type, deduced from initializer or trailing return.
+         * Treat as opaque (TY_INT placeholder); sema does deduction. */
+        if (tok->kind == TK_KW_AUTO) {
+            parser_advance(p);
+            Type *ty = new_type(p, TY_INT);
+            ty->is_const = is_const;
+            ty->is_volatile = is_volatile;
+            result.type = ty;
+            return result;
+        }
         /* alignas(expr) — N4659 §10.1.2 [dcl.align] */
         if (tok->kind == TK_KW_ALIGNAS) {
             parser_advance(p);
@@ -173,6 +189,30 @@ DeclSpec parse_type_specifiers(Parser *p) {
                 parser_expect(p, TK_RPAREN);
             }
             continue;
+        }
+
+        /* decltype(expression) — N4659 §10.1.7.2 [dcl.type.simple]
+         *   simple-type-specifier: decltype ( expression )
+         * Acts as the entire type-specifier; consume balanced parens and
+         * return an opaque type. Sema deduces the actual type. */
+        if (tok->kind == TK_KW_DECLTYPE) {
+            parser_advance(p);
+            parser_expect(p, TK_LPAREN);
+            int depth = 1;
+            while (depth > 0 && !parser_at_eof(p)) {
+                if (parser_at(p, TK_LPAREN)) depth++;
+                else if (parser_at(p, TK_RPAREN)) {
+                    depth--;
+                    if (depth == 0) break;
+                }
+                parser_advance(p);
+            }
+            parser_expect(p, TK_RPAREN);
+            Type *ty = new_type(p, TY_INT);  /* opaque placeholder */
+            ty->is_const = is_const;
+            ty->is_volatile = is_volatile;
+            result.type = ty;
+            return result;
         }
 
         if (tok->kind == TK_KW_VOID)     { parser_advance(p); cnt_void++; seen_any = true; continue; }
@@ -404,6 +444,18 @@ DeclSpec parse_type_specifiers(Parser *p) {
                 lookup_unqualified_kind(p, name_tok->loc, name_tok->len,
                                         ENTITY_TEMPLATE) != NULL)) {
                 parse_template_id(p, name_tok);  /* consumes <args> */
+                /* Trailing nested-name: enable_if<...>::type, possibly chained.
+                 * Each segment may itself be a template-id. */
+                while (parser_consume(p, TK_SCOPE)) {
+                    /* N4659 §17.2/4 [temp.names]: 'template' keyword
+                     * disambiguates a dependent member template-id. */
+                    parser_consume(p, TK_KW_TEMPLATE);
+                    if (parser_at(p, TK_IDENT)) {
+                        Token *seg = parser_advance(p);
+                        if (parser_at(p, TK_LT))
+                            parse_template_id(p, seg);
+                    }
+                }
                 /* For now, the resulting type is opaque — sema resolves
                  * the template specialization. */
                 Type *ty = new_type(p, TY_STRUCT);
@@ -433,6 +485,16 @@ DeclSpec parse_type_specifiers(Parser *p) {
     }
 
     if (!seen_any) {
+        /* Conversion function (operator T()), constructor (ClassName()),
+         * or destructor (~ClassName()) — none of these have a return type
+         * in the decl-specifier-seq position. Return a void placeholder so
+         * the declarator parser handles the operator/ctor/dtor name. */
+        TokenKind k = parser_peek(p)->kind;
+        if (k == TK_KW_OPERATOR || k == TK_TILDE) {
+            Type *ty = new_type(p, TY_VOID);
+            result.type = ty;
+            return result;
+        }
         if (p->tentative) return result; /* type is NULL — failure */
         error_tok(parser_peek(p), "expected type specifier");
     }
@@ -487,7 +549,7 @@ bool parser_at_type_specifier(Parser *p) {
     case TK_KW_INLINE:
     case TK_KW_TYPEDEF:
     case TK_KW_STRUCT: case TK_KW_CLASS: case TK_KW_UNION: case TK_KW_ENUM:
-    case TK_KW_AUTO:
+    case TK_KW_AUTO: case TK_KW_DECLTYPE: case TK_KW_TYPENAME:
     case TK_KW_CONSTEXPR: case TK_KW_VIRTUAL: case TK_KW_EXPLICIT:
     case TK_KW_MUTABLE:
         return true;
