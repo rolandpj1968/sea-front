@@ -707,6 +707,20 @@ Node *new_num_node(Parser *p, Token *tok);
 Node *new_fnum_node(Parser *p, Token *tok);
 Node *new_binary_node(Parser *p, TokenKind op, Node *lhs, Node *rhs, Token *tok);
 Node *new_unary_node(Parser *p, TokenKind op, Node *operand, Token *tok);
+Node *new_ternary_node(Parser *p, Node *cond, Node *then_, Node *else_, Token *tok);
+Node *new_cast_node(Parser *p, Type *ty, Node *operand, Token *tok);
+Node *new_call_node(Parser *p, Node *callee, Node **args, int nargs, Token *tok);
+Node *new_subscript_node(Parser *p, Node *base, Node *index, Token *tok);
+Node *new_member_node(Parser *p, Node *obj, Token *member, TokenKind op, Token *tok);
+Node *new_qualified_node(Parser *p, Token **parts, int nparts, bool global_scope, Token *tok);
+Node *new_block_node(Parser *p, Node **stmts, int nstmts, Token *tok);
+Node *new_for_node(Parser *p, Node *init, Node *cond, Node *inc, Node *body, Token *tok);
+Node *new_var_decl_node(Parser *p, Type *ty, Token *name, Token *tok);
+Node *new_typedef_node(Parser *p, Type *ty, Token *name, Token *tok);
+Node *new_param_node(Parser *p, Type *ty, Token *name, Token *tok);
+Node *new_class_def_node(Parser *p, Token *tag, Node **members, int nmembers, Token *tok);
+Node *new_template_decl_node(Parser *p, Node **params, int nparams, Node *decl, Token *tok);
+Node *new_template_id_node(Parser *p, Token *name, Node **args, int nargs, Token *tok);
 
 /* ================================================================== */
 /* Expression parser — expr.c                                          */

@@ -299,11 +299,9 @@ DeclSpec parse_type_specifiers(Parser *p) {
                 region_pop(p);
 
                 /* Record class definition on the result */
-                Node *cdef = new_node(p, ND_CLASS_DEF, ty->tag ? ty->tag : parser_peek(p));
-                cdef->class_def.tag = ty->tag;
-                cdef->class_def.members = (Node **)members.data;
-                cdef->class_def.nmembers = members.len;
-                result.class_def = cdef;
+                result.class_def = new_class_def_node(p, ty->tag,
+                    (Node **)members.data, members.len,
+                    ty->tag ? ty->tag : parser_peek(p));
             }
 
             result.type = ty; return result;

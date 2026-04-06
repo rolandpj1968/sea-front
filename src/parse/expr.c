@@ -120,25 +120,21 @@ static int get_binop_prec(Parser *p, TokenKind k) {
 static Node *primary_expr(Parser *p) {
     Token *tok = parser_peek(p);
 
-    /* Integer literal — §5.13.2 [lex.icon] */
-    if (tok->kind == TK_NUM) {
+    switch (tok->kind) {
+    case TK_NUM:        /* §5.13.2 [lex.icon] */
         parser_advance(p);
         return new_num_node(p, tok);
-    }
 
-    /* Floating literal — §5.13.4 [lex.fcon] */
-    if (tok->kind == TK_FNUM) {
+    case TK_FNUM:       /* §5.13.4 [lex.fcon] */
         parser_advance(p);
         return new_fnum_node(p, tok);
-    }
 
-    /* String literal — §5.13.5 [lex.string]
-     * Adjacent string literals are concatenated in translation phase 6
-     * (§5.13.5/13). We consume all consecutive string tokens here.
-     * The semantic layer handles actual concatenation and encoding. */
-    if (tok->kind == TK_STR) {
+    case TK_STR: {      /* §5.13.5 [lex.string]
+                         * Adjacent string literals are concatenated in
+                         * translation phase 6 (§5.13.5/13). We consume all
+                         * consecutive string tokens here; the semantic
+                         * layer handles actual concatenation and encoding. */
         parser_advance(p);
-        /* Skip adjacent string literals — they form one logical string */
         while (parser_at(p, TK_STR))
             parser_advance(p);
         Node *node = new_node(p, ND_STR, tok);
@@ -146,8 +142,7 @@ static Node *primary_expr(Parser *p) {
         return node;
     }
 
-    /* Character literal — §5.13.3 [lex.ccon] */
-    if (tok->kind == TK_CHAR) {
+    case TK_CHAR: {     /* §5.13.3 [lex.ccon] */
         parser_advance(p);
         Node *node = new_node(p, ND_CHAR, tok);
         node->chr.tok = tok;
@@ -155,28 +150,25 @@ static Node *primary_expr(Parser *p) {
     }
 
     /* Boolean literals — N4659 §5.13.6 [lex.bool]
-     * Distinct from integer 0/1 — sema needs to know the type is bool.
-     * The token (TK_KW_TRUE vs TK_KW_FALSE) carries the value. */
-    if (tok->kind == TK_KW_TRUE || tok->kind == TK_KW_FALSE) {
+     * Distinct from integer 0/1 — sema needs to know the type is bool. */
+    case TK_KW_TRUE:
+    case TK_KW_FALSE:
         parser_advance(p);
         return new_node(p, ND_BOOL_LIT, tok);
-    }
 
-    /* this — N4659 §8.1.3 [expr.prim.this]
-     * Keyword expression referring to the current object in a method. */
-    if (tok->kind == TK_KW_THIS) {
+    case TK_KW_THIS: {  /* §8.1.3 [expr.prim.this] */
         parser_advance(p);
         Node *node = new_node(p, ND_IDENT, tok);
         node->ident.name = tok;
         return node;
     }
 
-    /* nullptr — N4659 §5.13.7 [lex.nullptr]
-     * Type is std::nullptr_t (§21.2.4 [support.nullptr]),
-     * distinct from integer 0. Sema handles the type. */
-    if (tok->kind == TK_KW_NULLPTR) {
+    case TK_KW_NULLPTR: /* §5.13.7 [lex.nullptr] — type std::nullptr_t */
         parser_advance(p);
         return new_node(p, ND_NULLPTR, tok);
+
+    default:
+        break;
     }
 
     /* Identifier / qualified-id — N4659 §8.1.4 [expr.prim.id]
@@ -253,11 +245,8 @@ static Node *primary_expr(Parser *p) {
         if (parser_at(p, TK_LT) && lookup_is_template_name(p, last))
             return parse_template_id(p, last);
 
-        Node *node = new_node(p, ND_QUALIFIED, tok);
-        node->qualified.parts = (Token **)parts.data;
-        node->qualified.nparts = parts.len;
-        node->qualified.global_scope = global_scope;
-        return node;
+        return new_qualified_node(p, (Token **)parts.data, parts.len,
+                                  global_scope, tok);
     }
 
     /* C++ named casts — N4659 §8.2.3-§8.2.7 [expr.cast]
@@ -276,10 +265,7 @@ static Node *primary_expr(Parser *p) {
         parser_expect(p, TK_LPAREN);
         Node *operand = parse_expr(p);
         parser_expect(p, TK_RPAREN);
-        Node *node = new_node(p, ND_CAST, tok);
-        node->cast.ty = ty;
-        node->cast.operand = operand;
-        return node;
+        return new_cast_node(p, ty, operand, tok);
     }
 
     /* Parenthesized expression — §8.1.5 [expr.prim.paren]
@@ -299,10 +285,7 @@ static Node *primary_expr(Parser *p) {
             Type *ty = parse_type_name(p);
             parser_expect(p, TK_RPAREN);
             Node *operand = unary_expr(p);
-            Node *node = new_node(p, ND_CAST, tok);
-            node->cast.ty = ty;
-            node->cast.operand = operand;
-            return node;
+            return new_cast_node(p, ty, operand, tok);
         }
 
         Node *node = parse_expr(p);
@@ -389,11 +372,7 @@ static Node *postfix_expr(Parser *p) {
             }
             parser_expect(p, TK_RPAREN);
 
-            Node *call = new_node(p, ND_CALL, tok);
-            call->call.callee = node;
-            call->call.args = (Node **)args.data;
-            call->call.nargs = args.len;
-            node = call;
+            node = new_call_node(p, node, (Node **)args.data, args.len, tok);
             continue;
         }
 
@@ -405,10 +384,7 @@ static Node *postfix_expr(Parser *p) {
             Node *index = parse_expr(p);
             parser_expect(p, TK_RBRACKET);
 
-            Node *sub = new_node(p, ND_SUBSCRIPT, tok);
-            sub->subscript.base = node;
-            sub->subscript.index = index;
-            node = sub;
+            node = new_subscript_node(p, node, index, tok);
             continue;
         }
 
@@ -420,11 +396,7 @@ static Node *postfix_expr(Parser *p) {
             parser_advance(p);
             Token *member = parser_expect(p, TK_IDENT);
 
-            Node *mem = new_node(p, ND_MEMBER, tok);
-            mem->member.obj = node;
-            mem->member.member = member;
-            mem->member.op = op;
-            node = mem;
+            node = new_member_node(p, node, member, op, tok);
             continue;
         }
 
@@ -516,10 +488,7 @@ static Node *unary_expr(Parser *p) {
             parser_expect(p, TK_RPAREN);
         }
 
-        Node *node = new_node(p, ND_CAST, tok);  /* reuse CAST for now */
-        node->cast.ty = ty;
-        node->cast.operand = NULL;
-        return node;
+        return new_cast_node(p, ty, /*operand=*/NULL, tok);  /* reuse CAST for now */
     }
 
     /* delete-expression — N4659 §8.3.5 [expr.delete]
@@ -630,11 +599,7 @@ static Node *ternary_expr(Parser *p) {
     /* §8.16/1: "assignment-expression" in else-branch */
     Node *else_ = parse_assign_expr(p);
 
-    Node *node = new_node(p, ND_TERNARY, tok);
-    node->ternary.cond = cond;
-    node->ternary.then_ = then_;
-    node->ternary.else_ = else_;
-    return node;
+    return new_ternary_node(p, cond, then_, else_, tok);
 }
 
 /* ------------------------------------------------------------------ */

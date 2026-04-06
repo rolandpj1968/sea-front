@@ -367,9 +367,8 @@ parse_suffixes:
             ty = new_func_type(p, ty, (Type **)param_types.data,
                                param_types.len, variadic);
 
-            Node *node = new_node(p, ND_VAR_DECL, name ? name : parser_peek(p));
-            node->var_decl.ty = ty;
-            node->var_decl.name = name;
+            Node *node = new_var_decl_node(p, ty, name,
+                                           name ? name : parser_peek(p));
             node->func.params = (Node **)params.data;
             node->func.nparams = params.len;
             return node;
@@ -409,9 +408,8 @@ parse_suffixes:
         ty = new_func_type(p, ty, (Type **)param_types.data,
                            param_types.len, variadic);
 
-        Node *node = new_node(p, ND_VAR_DECL, name ? name : parser_peek(p));
-        node->var_decl.ty = ty;
-        node->var_decl.name = name;
+        Node *node = new_var_decl_node(p, ty, name,
+                                       name ? name : parser_peek(p));
         node->func.params = (Node **)params.data;
         node->func.nparams = params.len;
         return node;
@@ -436,10 +434,7 @@ parse_suffixes:
         ty = new_array_type(p, ty, len);
     }
 
-    Node *node = new_node(p, ND_VAR_DECL, name ? name : parser_peek(p));
-    node->var_decl.ty = ty;
-    node->var_decl.name = name;
-    return node;
+    return new_var_decl_node(p, ty, name, name ? name : parser_peek(p));
 }
 
 /*
@@ -487,10 +482,8 @@ Node *parse_declaration(Parser *p) {
                           decl->var_decl.name->len, ENTITY_TYPE,
                           decl->var_decl.ty);
 
-        Node *node = new_node(p, ND_TYPEDEF, start_tok);
-        node->var_decl.ty = decl->var_decl.ty;
-        node->var_decl.name = decl->var_decl.name;
-        return node;
+        return new_typedef_node(p, decl->var_decl.ty, decl->var_decl.name,
+                                start_tok);
     }
 
     /* friend declaration — N4659 §14.3 [class.friend]
@@ -538,9 +531,7 @@ Node *parse_declaration(Parser *p) {
         parser_advance(p);
         if (class_def)
             return class_def;
-        Node *node = new_node(p, ND_VAR_DECL, start_tok);
-        node->var_decl.ty = base_ty;
-        return node;
+        return new_var_decl_node(p, base_ty, /*name=*/NULL, start_tok);
     }
 
     /* declarator — §11.3 [dcl.meaning] */
@@ -671,10 +662,7 @@ Node *parse_declaration(Parser *p) {
         parser_expect(p, TK_SEMI);
 
         /* Wrap multiple declarators in a block node */
-        Node *block = new_node(p, ND_BLOCK, start_tok);
-        block->block.stmts = (Node **)decls.data;
-        block->block.nstmts = decls.len;
-        return block;
+        return new_block_node(p, (Node **)decls.data, decls.len, start_tok);
     }
 
     parser_expect(p, TK_SEMI);
@@ -761,10 +749,7 @@ Node *parse_top_level_decl(Parser *p) {
                 region_declare(p, alias_name->loc, alias_name->len,
                               ENTITY_TYPE, ty);
 
-            Node *node = new_node(p, ND_TYPEDEF, tok);
-            node->var_decl.ty = ty;
-            node->var_decl.name = alias_name;
-            return node;
+            return new_typedef_node(p, ty, alias_name, tok);
         }
 
         /* using-declaration: using Base::member; — (§10.3.3 [namespace.udecl])
@@ -825,10 +810,7 @@ Node *parse_top_level_decl(Parser *p) {
         region_pop(p);
 
         /* Return as a block of declarations */
-        Node *block = new_node(p, ND_BLOCK, tok);
-        block->block.stmts = (Node **)decls.data;
-        block->block.nstmts = decls.len;
-        return block;
+        return new_block_node(p, (Node **)decls.data, decls.len, tok);
     }
 
     /* static_assert — N4659 §10.1.4 [dcl.dcl]
@@ -885,10 +867,7 @@ Node *parse_top_level_decl(Parser *p) {
                     vec_push(&decls, decl);
             }
             parser_expect(p, TK_RBRACE);
-            Node *block = new_node(p, ND_BLOCK, brace);
-            block->block.stmts = (Node **)decls.data;
-            block->block.nstmts = decls.len;
-            return block;
+            return new_block_node(p, (Node **)decls.data, decls.len, brace);
         }
 
         /* extern "C" single-declaration */
@@ -970,10 +949,7 @@ static Node *parse_template_parameter(Parser *p) {
                 }
             }
 
-            Node *node = new_node(p, ND_PARAM, tok);
-            node->param.name = name;
-            node->param.ty = NULL;  /* type params have no type — they ARE types */
-            return node;
+            return new_param_node(p, /*ty=*/NULL, name, tok);
         }
         /* else: fall through to non-type parameter parsing */
     }
@@ -1017,9 +993,7 @@ static Node *parse_template_parameter(Parser *p) {
             }
         }
 
-        Node *node = new_node(p, ND_PARAM, tok);
-        node->param.name = name;
-        return node;
+        return new_param_node(p, /*ty=*/NULL, name, tok);
     }
 
     /* Non-type template parameter: parsed as a parameter-declaration
@@ -1069,11 +1043,8 @@ Node *parse_template_declaration(Parser *p) {
         parser_advance(p);  /* > */
         /* Parse the specialized declaration */
         Node *decl = parse_declaration(p);
-        Node *node = new_node(p, ND_TEMPLATE_DECL, tok);
-        node->template_decl.params = NULL;
-        node->template_decl.nparams = 0;
-        node->template_decl.decl = decl;
-        return node;
+        return new_template_decl_node(p, /*params=*/NULL, /*nparams=*/0,
+                                      decl, tok);
     }
 
     parser_expect(p, TK_LT);
@@ -1162,11 +1133,8 @@ Node *parse_template_declaration(Parser *p) {
         }
     }
 
-    Node *node = new_node(p, ND_TEMPLATE_DECL, tok);
-    node->template_decl.params = (Node **)params.data;
-    node->template_decl.nparams = params.len;
-    node->template_decl.decl = decl;
-    return node;
+    return new_template_decl_node(p, (Node **)params.data, params.len,
+                                  decl, tok);
 }
 
 /*
@@ -1219,10 +1187,8 @@ Node *parse_template_id(Parser *p, Token *name) {
                     /* Create a node to represent the type argument */
                     parser_restore(p, saved);
                     ty = parse_type_name(p);
-                    Node *arg = new_node(p, ND_VAR_DECL, parser_peek(p));
-                    arg->var_decl.ty = ty;
-                    arg->var_decl.name = NULL;
-                    vec_push(&args, arg);
+                    vec_push(&args, new_var_decl_node(p, ty, /*name=*/NULL,
+                                                      parser_peek(p)));
                 } else {
                     /* Not a clean type-id — parse as expression */
                     parser_restore(p, saved);
@@ -1255,9 +1221,5 @@ Node *parse_template_id(Parser *p, Token *name) {
 
     p->template_depth--;
 
-    Node *node = new_node(p, ND_TEMPLATE_ID, tok);
-    node->template_id.name = name;
-    node->template_id.args = (Node **)args.data;
-    node->template_id.nargs = args.len;
-    return node;
+    return new_template_id_node(p, name, (Node **)args.data, args.len, tok);
 }

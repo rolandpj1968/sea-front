@@ -175,6 +175,121 @@ Node *new_unary_node(Parser *p, TokenKind op, Node *operand, Token *tok) {
     return node;
 }
 
+Node *new_ternary_node(Parser *p, Node *cond, Node *then_, Node *else_,
+                       Token *tok) {
+    Node *node = new_node(p, ND_TERNARY, tok);
+    node->ternary.cond = cond;
+    node->ternary.then_ = then_;
+    node->ternary.else_ = else_;
+    return node;
+}
+
+Node *new_cast_node(Parser *p, Type *ty, Node *operand, Token *tok) {
+    Node *node = new_node(p, ND_CAST, tok);
+    node->cast.ty = ty;
+    node->cast.operand = operand;
+    return node;
+}
+
+Node *new_call_node(Parser *p, Node *callee, Node **args, int nargs,
+                    Token *tok) {
+    Node *node = new_node(p, ND_CALL, tok);
+    node->call.callee = callee;
+    node->call.args = args;
+    node->call.nargs = nargs;
+    return node;
+}
+
+Node *new_subscript_node(Parser *p, Node *base, Node *index, Token *tok) {
+    Node *node = new_node(p, ND_SUBSCRIPT, tok);
+    node->subscript.base = base;
+    node->subscript.index = index;
+    return node;
+}
+
+Node *new_member_node(Parser *p, Node *obj, Token *member, TokenKind op,
+                      Token *tok) {
+    Node *node = new_node(p, ND_MEMBER, tok);
+    node->member.obj = obj;
+    node->member.member = member;
+    node->member.op = op;
+    return node;
+}
+
+Node *new_qualified_node(Parser *p, Token **parts, int nparts,
+                         bool global_scope, Token *tok) {
+    Node *node = new_node(p, ND_QUALIFIED, tok);
+    node->qualified.parts = parts;
+    node->qualified.nparts = nparts;
+    node->qualified.global_scope = global_scope;
+    return node;
+}
+
+Node *new_block_node(Parser *p, Node **stmts, int nstmts, Token *tok) {
+    Node *node = new_node(p, ND_BLOCK, tok);
+    node->block.stmts = stmts;
+    node->block.nstmts = nstmts;
+    return node;
+}
+
+Node *new_for_node(Parser *p, Node *init, Node *cond, Node *inc, Node *body,
+                   Token *tok) {
+    Node *node = new_node(p, ND_FOR, tok);
+    node->for_.init = init;
+    node->for_.cond = cond;
+    node->for_.inc = inc;
+    node->for_.body = body;
+    return node;
+}
+
+Node *new_var_decl_node(Parser *p, Type *ty, Token *name, Token *tok) {
+    Node *node = new_node(p, ND_VAR_DECL, tok);
+    node->var_decl.ty = ty;
+    node->var_decl.name = name;
+    return node;
+}
+
+Node *new_typedef_node(Parser *p, Type *ty, Token *name, Token *tok) {
+    Node *node = new_node(p, ND_TYPEDEF, tok);
+    node->var_decl.ty = ty;
+    node->var_decl.name = name;
+    return node;
+}
+
+Node *new_param_node(Parser *p, Type *ty, Token *name, Token *tok) {
+    Node *node = new_node(p, ND_PARAM, tok);
+    node->param.ty = ty;
+    node->param.name = name;
+    return node;
+}
+
+Node *new_class_def_node(Parser *p, Token *tag, Node **members, int nmembers,
+                         Token *tok) {
+    Node *node = new_node(p, ND_CLASS_DEF, tok);
+    node->class_def.tag = tag;
+    node->class_def.members = members;
+    node->class_def.nmembers = nmembers;
+    return node;
+}
+
+Node *new_template_decl_node(Parser *p, Node **params, int nparams,
+                             Node *decl, Token *tok) {
+    Node *node = new_node(p, ND_TEMPLATE_DECL, tok);
+    node->template_decl.params = params;
+    node->template_decl.nparams = nparams;
+    node->template_decl.decl = decl;
+    return node;
+}
+
+Node *new_template_id_node(Parser *p, Token *name, Node **args, int nargs,
+                           Token *tok) {
+    Node *node = new_node(p, ND_TEMPLATE_ID, tok);
+    node->template_id.name = name;
+    node->template_id.args = args;
+    node->template_id.nargs = nargs;
+    return node;
+}
+
 /* ------------------------------------------------------------------ */
 /* Top-level entry point                                               */
 /* ------------------------------------------------------------------ */

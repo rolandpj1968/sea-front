@@ -45,10 +45,7 @@ Node *parse_compound_stmt(Parser *p) {
 
     region_pop(p);
 
-    Node *node = new_node(p, ND_BLOCK, tok);
-    node->block.stmts = (Node **)stmts.data;
-    node->block.nstmts = stmts.len;
-    return node;
+    return new_block_node(p, (Node **)stmts.data, stmts.len, tok);
 }
 
 /*
@@ -174,12 +171,7 @@ static Node *parse_for_stmt(Parser *p) {
 
     region_pop(p);
 
-    Node *node = new_node(p, ND_FOR, tok);
-    node->for_.init = init;
-    node->for_.cond = cond;
-    node->for_.inc = inc;
-    node->for_.body = body;
-    return node;
+    return new_for_node(p, init, cond, inc, body, tok);
 }
 
 /*
@@ -262,33 +254,32 @@ static Node *parse_return_stmt(Parser *p) {
 Node *parse_stmt(Parser *p) {
     Token *tok = parser_peek(p);
 
-    /* compound-statement — §9.3 */
-    if (tok->kind == TK_LBRACE)
-        return parse_compound_stmt(p);
+    switch (tok->kind) {
+    case TK_LBRACE:         return parse_compound_stmt(p);  /* §9.3 */
 
     /* selection-statements — §9.4 */
-    if (tok->kind == TK_KW_IF)      return parse_if_stmt(p);
-    if (tok->kind == TK_KW_SWITCH)  return parse_switch_stmt(p);
+    case TK_KW_IF:          return parse_if_stmt(p);
+    case TK_KW_SWITCH:      return parse_switch_stmt(p);
 
     /* iteration-statements — §9.5 */
-    if (tok->kind == TK_KW_WHILE)   return parse_while_stmt(p);
-    if (tok->kind == TK_KW_DO)      return parse_do_stmt(p);
-    if (tok->kind == TK_KW_FOR)     return parse_for_stmt(p);
+    case TK_KW_WHILE:       return parse_while_stmt(p);
+    case TK_KW_DO:          return parse_do_stmt(p);
+    case TK_KW_FOR:         return parse_for_stmt(p);
 
     /* jump-statements — §9.6 */
-    if (tok->kind == TK_KW_RETURN)  return parse_return_stmt(p);
+    case TK_KW_RETURN:      return parse_return_stmt(p);
 
-    if (tok->kind == TK_KW_BREAK) {
+    case TK_KW_BREAK:
         parser_advance(p);
         parser_expect(p, TK_SEMI);
         return new_node(p, ND_BREAK, tok);
-    }
-    if (tok->kind == TK_KW_CONTINUE) {
+
+    case TK_KW_CONTINUE:
         parser_advance(p);
         parser_expect(p, TK_SEMI);
         return new_node(p, ND_CONTINUE, tok);
-    }
-    if (tok->kind == TK_KW_GOTO) {
+
+    case TK_KW_GOTO: {
         parser_advance(p);
         Node *node = new_node(p, ND_GOTO, tok);
         node->goto_.label = parser_expect(p, TK_IDENT);
@@ -297,8 +288,24 @@ Node *parse_stmt(Parser *p) {
     }
 
     /* case / default labels — §9.1 */
-    if (tok->kind == TK_KW_CASE)    return parse_case_stmt(p);
-    if (tok->kind == TK_KW_DEFAULT) return parse_default_stmt(p);
+    case TK_KW_CASE:        return parse_case_stmt(p);
+    case TK_KW_DEFAULT:     return parse_default_stmt(p);
+
+    /* empty statement — §9.2 */
+    case TK_SEMI:
+        parser_advance(p);
+        return new_node(p, ND_NULL_STMT, tok);
+
+    /* using declaration/directive/alias inside blocks
+     * (§10.3.3 [namespace.udecl], §10.3.4 [namespace.udir])
+     * static_assert can also appear inside blocks. */
+    case TK_KW_USING:
+    case TK_KW_STATIC_ASSERT:
+        return parse_top_level_decl(p);
+
+    default:
+        break;
+    }
 
     /* labeled-statement — §9.1 [stmt.label]
      *   identifier : statement
@@ -310,24 +317,6 @@ Node *parse_stmt(Parser *p) {
         node->label.label = label;
         node->label.stmt = parse_stmt(p);
         return node;
-    }
-
-    /* empty statement — §9.2 */
-    if (tok->kind == TK_SEMI) {
-        parser_advance(p);
-        return new_node(p, ND_NULL_STMT, tok);
-    }
-
-    /* using declaration/directive/alias — can appear inside blocks
-     * (§10.3.3 [namespace.udecl], §10.3.4 [namespace.udir]) */
-    if (tok->kind == TK_KW_USING) {
-        /* Delegate to the top-level handler which handles all using forms */
-        return parse_top_level_decl(p);
-    }
-
-    /* static_assert — can appear inside blocks */
-    if (tok->kind == TK_KW_STATIC_ASSERT) {
-        return parse_top_level_decl(p);
     }
 
     /* declaration-statement vs expression-statement
