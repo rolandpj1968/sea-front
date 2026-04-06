@@ -409,13 +409,23 @@ Node *parse_declaration(Parser *p) {
      *   friend declaration
      *   friend function-definition
      *
-     * The declaration after 'friend' is parsed normally. The declared
-     * name is registered in the current scope (the class scope), which
-     * means struct/class/template names become visible. The inner
-     * declaration is wrapped in ND_FRIEND so sema can track access
-     * grants (§14.3: "a friend of a class is a function or class that
-     * is given permission to use the private and protected member names
-     * from the class"). */
+     * §14.3/1: "A friend of a class is a function or class that is
+     * given permission to use the private and protected member names
+     * from the class."
+     *
+     * §14.3/11: "For a friend class declaration, if there is no prior
+     * declaration, the class that is specified belongs to the innermost
+     * enclosing non-class scope, but if it is subsequently referenced,
+     * its name is not found by name lookup until a matching declaration
+     * is provided in the innermost enclosing non-class scope."
+     *
+     * Strictly, the friend declaration should NOT make the name visible
+     * for lookup. However, for a bootstrap tool processing valid source
+     * (where the name IS declared elsewhere), we eagerly register it
+     * in the enclosing namespace so template-id parsing works. This is
+     * a pragmatic deviation from the standard's lookup rules.
+     *
+     * The inner declaration is wrapped in ND_FRIEND for sema. */
     if (parser_consume(p, TK_KW_FRIEND)) {
         Node *inner;
         if (parser_at(p, TK_KW_TEMPLATE))
@@ -1041,11 +1051,13 @@ Node *parse_template_declaration(Parser *p) {
         region_declare(p, tmpl_name->loc, tmpl_name->len,
                       ENTITY_TEMPLATE, /*type=*/NULL);
 
-        /* N4659 §14.3/2 [class.friend]: "A friend declaration does not
-         * introduce names into the enclosing scope ... however, the name
-         * can be found by unqualified lookup." For a bootstrap tool,
-         * ensure the name is also visible in the nearest enclosing
-         * namespace so template-id parsing works at file scope. */
+        /* N4659 §14.3/11 [class.friend]: strictly, a friend-declared
+         * name is NOT found by lookup until a matching declaration
+         * appears at namespace scope. But for a bootstrap tool
+         * processing valid source (where the declaration exists),
+         * we eagerly register in the enclosing namespace so
+         * template-id parsing works without forward-declaration order
+         * sensitivity. Pragmatic deviation from the standard. */
         if (decl && decl->kind == ND_FRIEND) {
             DeclarativeRegion *ns = p->region;
             while (ns && ns->kind != REGION_NAMESPACE)
