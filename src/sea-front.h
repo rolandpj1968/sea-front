@@ -168,7 +168,13 @@ typedef enum {
 
     TK_UNKNOWN,         /* unrecognized character — passed through for parser */
 
-    TK_EOF,
+    TK_EOF,             /* end-of-file sentinel — always the last token in a
+                         * TokenArray. This is a real token (not the absence of
+                         * tokens): it has kind, loc, line, col like any other.
+                         * Parser loops terminate because TK_EOF matches no
+                         * operator, keyword, or type-specifier pattern, so every
+                         * for(;;) loop that dispatches on token kind will break
+                         * when it reaches EOF. */
 } TokenKind;
 
 /* Encoding prefix for string/char literals */
@@ -219,9 +225,15 @@ struct Token {
 
 /* Contiguous array of tokens — the output of the lexer.
  * Replaces the linked-list approach: better cache locality,
- * index-based save/restore for tentative parsing. */
+ * index-based save/restore for tentative parsing.
+ *
+ * Invariant: tokens[len-1].kind == TK_EOF. The EOF sentinel
+ * is always present and is the last element. This guarantees
+ * that parser loops scanning for specific token kinds will
+ * terminate — TK_EOF matches no operator, keyword, or type
+ * pattern, so any dispatch loop breaks when it reaches EOF. */
 typedef struct {
-    Token *tokens;      /* contiguous array, arena or malloc'd */
+    Token *tokens;      /* contiguous array, malloc'd */
     int len;            /* number of tokens (including final TK_EOF) */
 } TokenArray;
 
