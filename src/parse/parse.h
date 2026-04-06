@@ -646,11 +646,6 @@ struct Parser {
     int template_depth;        /* nesting depth of template-argument-lists being parsed.
                                 * When > 0, TK_SHR (>>) is treated as two '>' tokens
                                 * (N4659 §17.2/3 [temp.names]). */
-    Node  **pending_members;   /* set by parse_type_specifiers when a class body
-                                * is parsed. parse_declaration picks this up to
-                                * build an ND_CLASS_DEF node. NULL when no body. */
-    int     pending_nmembers;
-    Token  *pending_class_tag; /* tag token for the class being defined */
     bool split_shr;            /* true when a >> (TK_SHR) has been "split": the first >
                                 * was consumed, the second > is virtual. parser_peek()/
                                 * parser_at() return a synthetic TK_GT; parser_advance()
@@ -822,7 +817,7 @@ Node *parse_template_id(Parser *p, Token *name);
  * C++20: adds char8_t, constinit, consteval
  * C++23: adds deducing this
  */
-Type *parse_type_specifiers(Parser *p);
+Type *parse_type_specifiers(Parser *p, Node **class_def_out);
 Type *parse_type_name(Parser *p);
 
 /*
@@ -879,6 +874,13 @@ void region_pop(Parser *p);
  */
 Declaration *region_declare(Parser *p, const char *name, int name_len,
                             EntityKind entity, Type *type);
+
+/* Declare a name in a specific region (not necessarily the current one).
+ * Used for friend declarations that introduce names into the enclosing
+ * namespace (N4659 §14.3/11). */
+Declaration *region_declare_in(Parser *p, DeclarativeRegion *r,
+                               const char *name, int name_len,
+                               EntityKind entity, Type *type);
 
 /*
  * N4659 §6.4 [basic.lookup] — Name lookup

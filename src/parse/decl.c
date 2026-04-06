@@ -77,6 +77,40 @@
  * while array/function suffixes wrap from the right, and parentheses
  * override the default grouping. We handle this recursively.
  */
+
+/*
+ * Consume trailing function qualifiers after the closing ')' of a
+ * function parameter list.
+ *
+ * N4659 §11.3.5 [dcl.fct]: parameters-and-qualifiers includes
+ *   cv-qualifier-seq(opt) ref-qualifier(opt) noexcept-specifier(opt)
+ *
+ * Also consumes virt-specifiers (override, final) per §12.3 [class.virtual].
+ * Terminates: each iteration consumes a qualifier token or breaks.
+ */
+static void consume_trailing_qualifiers(Parser *p) {
+    while (parser_consume(p, TK_KW_CONST) ||
+           parser_consume(p, TK_KW_VOLATILE) ||
+           parser_consume(p, TK_KW_NOEXCEPT))
+        ;
+    while (parser_at(p, TK_IDENT) &&
+           (token_equal(parser_peek(p), "override") ||
+            token_equal(parser_peek(p), "final")))
+        parser_advance(p);
+    parser_consume(p, TK_AMP);
+    parser_consume(p, TK_LAND);
+    if (parser_consume(p, TK_KW_NOEXCEPT)) {
+        if (parser_consume(p, TK_LPAREN)) {
+            parse_expr(p);
+            parser_expect(p, TK_RPAREN);
+        }
+    }
+    /* pure-specifier: = 0 (for virtual methods) */
+    if (parser_at(p, TK_ASSIGN) && parser_peek_ahead(p, 1)->kind == TK_NUM) {
+        parser_advance(p);
+        parser_advance(p);
+    }
+}
 Node *parse_declarator(Parser *p, Type *base_ty) {
     /* ptr-operator — N4659 §11.3 [dcl.meaning]
      *   ptr-operator:
@@ -302,7 +336,7 @@ parse_suffixes:
                             break;
                         }
 
-                        Type *param_base = parse_type_specifiers(p);
+                        Type *param_base = parse_type_specifiers(p, /*class_def_out=*/NULL);
                         Node *param_decl = parse_declarator(p, param_base);
                         param_decl->kind = ND_PARAM;
 
@@ -327,28 +361,7 @@ parse_suffixes:
             }
             parser_expect(p, TK_RPAREN);
 
-            /* Trailing cv-qualifier-seq and virt-specifiers on member functions
-             * N4659 §11.3.5 [dcl.fct]: ( params ) cv-qualifier-seq(opt)
-             *   ref-qualifier(opt) noexcept-specifier(opt) */
-            while (parser_consume(p, TK_KW_CONST) ||
-                   parser_consume(p, TK_KW_VOLATILE) ||
-                   parser_consume(p, TK_KW_NOEXCEPT))
-                ;
-            /* override/final are identifiers with special meaning (§12.1) */
-            while (parser_at(p, TK_IDENT) &&
-                   (token_equal(parser_peek(p), "override") ||
-                    token_equal(parser_peek(p), "final")))
-                parser_advance(p);
-            /* ref-qualifier: & or && */
-            parser_consume(p, TK_AMP);
-            parser_consume(p, TK_LAND);
-            /* noexcept(expr) */
-            if (parser_consume(p, TK_KW_NOEXCEPT)) {
-                if (parser_consume(p, TK_LPAREN)) {
-                    parse_expr(p);
-                    parser_expect(p, TK_RPAREN);
-                }
-            }
+            consume_trailing_qualifiers(p);
 
             ty = new_func_type(p, ty, (Type **)param_types.data,
                                param_types.len, variadic);
@@ -376,7 +389,7 @@ parse_suffixes:
                 /* Terminates: same as named-param loop above. */
                 for (;;) {
                     if (parser_consume(p, TK_ELLIPSIS)) { variadic = true; break; }
-                    Type *param_base = parse_type_specifiers(p);
+                    Type *param_base = parse_type_specifiers(p, /*class_def_out=*/NULL);
                     Node *param_decl = parse_declarator(p, param_base);
                     param_decl->kind = ND_PARAM;
                     if (parser_consume(p, TK_ASSIGN))
@@ -390,23 +403,7 @@ parse_suffixes:
         }
         parser_expect(p, TK_RPAREN);
 
-        /* Same trailing qualifier consumption as named path */
-        while (parser_consume(p, TK_KW_CONST) ||
-               parser_consume(p, TK_KW_VOLATILE) ||
-               parser_consume(p, TK_KW_NOEXCEPT))
-            ;
-        while (parser_at(p, TK_IDENT) &&
-               (token_equal(parser_peek(p), "override") ||
-                token_equal(parser_peek(p), "final")))
-            parser_advance(p);
-        parser_consume(p, TK_AMP);
-        parser_consume(p, TK_LAND);
-        if (parser_consume(p, TK_KW_NOEXCEPT)) {
-            if (parser_consume(p, TK_LPAREN)) {
-                parse_expr(p);
-                parser_expect(p, TK_RPAREN);
-            }
-        }
+        consume_trailing_qualifiers(p);
 
         ty = new_func_type(p, ty, (Type **)param_types.data,
                            param_types.len, variadic);
@@ -479,7 +476,7 @@ Node *parse_declaration(Parser *p) {
      * C++11 also allows: using identifier = type-id (alias declaration)
      * — deferred. */
     if (parser_consume(p, TK_KW_TYPEDEF)) {
-        Type *base_ty = parse_type_specifiers(p);
+        Type *base_ty = parse_type_specifiers(p, /*class_def_out=*/NULL);
         Node *decl = parse_declarator(p, base_ty);
         parser_expect(p, TK_SEMI);
 
@@ -529,32 +526,16 @@ Node *parse_declaration(Parser *p) {
     }
 
     /* decl-specifier-seq — §10.1 [dcl.spec] */
-    p->pending_members = NULL;
-    p->pending_nmembers = 0;
-    p->pending_class_tag = NULL;
-    Type *base_ty = parse_type_specifiers(p);
+    Node *class_def = NULL;
+    Type *base_ty = parse_type_specifiers(p, &class_def);
     if (!base_ty)
         error_tok(start_tok, "expected declaration");
-
-    /* Check if parse_type_specifiers parsed a class body.
-     * If so, build an ND_CLASS_DEF node. */
-    Node **class_members = p->pending_members;
-    int class_nmembers = p->pending_nmembers;
-    Token *class_tag = p->pending_class_tag;
-    p->pending_members = NULL;
-    p->pending_nmembers = 0;
-    p->pending_class_tag = NULL;
 
     /* Bare type with no declarator: 'struct Foo { ... };' */
     if (parser_at(p, TK_SEMI)) {
         parser_advance(p);
-        if (class_members) {
-            Node *node = new_node(p, ND_CLASS_DEF, start_tok);
-            node->class_def.tag = class_tag;
-            node->class_def.members = class_members;
-            node->class_def.nmembers = class_nmembers;
-            return node;
-        }
+        if (class_def)
+            return class_def;
         Node *node = new_node(p, ND_VAR_DECL, start_tok);
         node->var_decl.ty = base_ty;
         return node;
@@ -1041,7 +1022,7 @@ static Node *parse_template_parameter(Parser *p) {
 
     /* Non-type template parameter: parsed as a parameter-declaration
      * e.g., 'int N', 'bool B = true', 'auto V' */
-    Type *ty = parse_type_specifiers(p);
+    Type *ty = parse_type_specifiers(p, /*class_def_out=*/NULL);
     Node *param = parse_declarator(p, ty);
     param->kind = ND_PARAM;
 
@@ -1173,23 +1154,9 @@ Node *parse_template_declaration(Parser *p) {
             DeclarativeRegion *ns = p->region;
             while (ns && ns->kind != REGION_NAMESPACE)
                 ns = ns->enclosing;
-            if (ns && ns != p->region) {
-                /* Declare directly in the namespace region */
-                uint32_t idx = 2166136261u; /* FNV-1a inline */
-                for (int i = 0; i < tmpl_name->len; i++) {
-                    idx ^= (uint8_t)tmpl_name->loc[i];
-                    idx *= 16777619u;
-                }
-                idx %= REGION_HASH_SIZE;
-                Declaration *d = arena_alloc(p->arena, sizeof(Declaration));
-                d->name = tmpl_name->loc;
-                d->name_len = tmpl_name->len;
-                d->entity = ENTITY_TEMPLATE;
-                d->type = NULL;
-                d->ns_region = NULL;
-                d->next = ns->buckets[idx];
-                ns->buckets[idx] = d;
-            }
+            if (ns && ns != p->region)
+                region_declare_in(p, ns, tmpl_name->loc, tmpl_name->len,
+                                  ENTITY_TEMPLATE, /*type=*/NULL);
         }
     }
 

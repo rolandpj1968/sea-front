@@ -198,9 +198,6 @@ Node *parse(TokenArray tokens, Arena *arena, CppStandard std) {
     p.region = NULL;
     p.template_depth = 0;
     p.split_shr = false;
-    p.pending_members = NULL;
-    p.pending_nmembers = 0;
-    p.pending_class_tag = NULL;
 
     /* N4659 §6.3.6/3 [basic.scope.namespace]:
      * "The outermost declarative region of a translation unit is also

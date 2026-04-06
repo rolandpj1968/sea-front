@@ -79,12 +79,12 @@ void region_pop(Parser *p) {
  * For a bootstrap tool processing valid C++ source, this is correct
  * — the source has already been compiled by GCC/Clang.
  */
-Declaration *region_declare(Parser *p, const char *name, int name_len,
-                            EntityKind entity, Type *type) {
+Declaration *region_declare_in(Parser *p, DeclarativeRegion *r,
+                               const char *name, int name_len,
+                               EntityKind entity, Type *type) {
     if (p->tentative)
         return NULL;
 
-    DeclarativeRegion *r = p->region;
     uint32_t idx = hash_name(name, name_len) % REGION_HASH_SIZE;
 
     Declaration *decl = arena_alloc(p->arena, sizeof(Declaration));
@@ -92,9 +92,15 @@ Declaration *region_declare(Parser *p, const char *name, int name_len,
     decl->name_len = name_len;
     decl->entity = entity;
     decl->type = type;
+    decl->ns_region = NULL;
     decl->next = r->buckets[idx];
     r->buckets[idx] = decl;
     return decl;
+}
+
+Declaration *region_declare(Parser *p, const char *name, int name_len,
+                            EntityKind entity, Type *type) {
+    return region_declare_in(p, p->region, name, name_len, entity, type);
 }
 
 /* ------------------------------------------------------------------ */

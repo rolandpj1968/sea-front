@@ -121,7 +121,8 @@ Type *new_func_type(Parser *p, Type *ret, Type **params, int nparams,
  * C++20: adds char8_t (§6.9.1)
  * C++23: no new fundamental types
  */
-Type *parse_type_specifiers(Parser *p) {
+Type *parse_type_specifiers(Parser *p, Node **class_def_out) {
+    if (class_def_out) *class_def_out = NULL;
     /* Counters for specifier combination tracking */
     int cnt_void = 0, cnt_bool = 0, cnt_char = 0;
     int cnt_short = 0, cnt_int = 0, cnt_long = 0;
@@ -303,11 +304,14 @@ Type *parse_type_specifiers(Parser *p) {
                 parser_expect(p, TK_RBRACE);
                 region_pop(p);
 
-                /* Stash parsed members on the Parser for the caller
-                 * (parse_declaration) to pick up and build ND_CLASS_DEF. */
-                p->pending_members = (Node **)members.data;
-                p->pending_nmembers = members.len;
-                p->pending_class_tag = ty->tag;
+                /* Return class definition via out-parameter */
+                if (class_def_out) {
+                    Node *cdef = new_node(p, ND_CLASS_DEF, ty->tag ? ty->tag : parser_peek(p));
+                    cdef->class_def.tag = ty->tag;
+                    cdef->class_def.members = (Node **)members.data;
+                    cdef->class_def.nmembers = members.len;
+                    *class_def_out = cdef;
+                }
             }
 
             return ty;
@@ -326,7 +330,7 @@ Type *parse_type_specifiers(Parser *p) {
                 ty->tag = parser_advance(p);
             /* Optional underlying type: enum E : int { ... } */
             if (parser_consume(p, TK_COLON))
-                parse_type_specifiers(p);  /* consume the underlying type */
+                parse_type_specifiers(p, /*class_def_out=*/NULL);  /* consume the underlying type */
             /* Enumerator list { ... } */
             if (parser_consume(p, TK_LBRACE)) {
                 int depth = 1;
@@ -508,7 +512,7 @@ bool parser_at_type_specifier(Parser *p) {
  * For the first pass, we handle pointer-to and arrays only.
  */
 Type *parse_type_name(Parser *p) {
-    Type *base = parse_type_specifiers(p);
+    Type *base = parse_type_specifiers(p, /*class_def_out=*/NULL);
     if (!base) return NULL;
 
     /* Abstract ptr-operator: consume *, &, && — N4659 §11.3 [dcl.meaning]
