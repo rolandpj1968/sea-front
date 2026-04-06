@@ -144,12 +144,17 @@ Type *parse_type_specifiers(Parser *p) {
     for (;;) {
         Token *tok = parser_peek(p);
 
-        if (tok->kind == TK_KW_CONST)    { parser_advance(p); is_const = true; seen_any = true; continue; }
-        if (tok->kind == TK_KW_VOLATILE) { parser_advance(p); is_volatile = true; seen_any = true; continue; }
-        if (tok->kind == TK_KW_STATIC)   { parser_advance(p); is_static = true; seen_any = true; continue; }
-        if (tok->kind == TK_KW_EXTERN)   { parser_advance(p); is_extern = true; seen_any = true; continue; }
-        if (tok->kind == TK_KW_INLINE)   { parser_advance(p); is_inline = true; seen_any = true; continue; }
-        if (tok->kind == TK_KW_REGISTER) { parser_advance(p); seen_any = true; continue; }
+        /* Storage-class specifiers and cv-qualifiers are part of the
+         * decl-specifier-seq (§10.1) but are NOT defining-type-specifiers.
+         * They don't prevent a subsequent identifier from being a type name.
+         * N4659 §10.1/3 [dcl.spec]: "a name is a type-name if no prior
+         * defining-type-specifier has been seen." */
+        if (tok->kind == TK_KW_CONST)    { parser_advance(p); is_const = true; continue; }
+        if (tok->kind == TK_KW_VOLATILE) { parser_advance(p); is_volatile = true; continue; }
+        if (tok->kind == TK_KW_STATIC)   { parser_advance(p); is_static = true; continue; }
+        if (tok->kind == TK_KW_EXTERN)   { parser_advance(p); is_extern = true; continue; }
+        if (tok->kind == TK_KW_INLINE)   { parser_advance(p); is_inline = true; continue; }
+        if (tok->kind == TK_KW_REGISTER) { parser_advance(p); continue; }
 
         if (tok->kind == TK_KW_VOID)     { parser_advance(p); cnt_void++; seen_any = true; continue; }
         if (tok->kind == TK_KW_BOOL)     { parser_advance(p); cnt_bool++; seen_any = true; continue; }

@@ -432,6 +432,12 @@ static void dump(Node *node, int depth) {
         break;
     }
 
+    case ND_FRIEND:
+        printf("(friend ");
+        dump(node->friend_decl.decl, depth + 1);
+        printf(")");
+        break;
+
     case ND_TRANSLATION_UNIT:
         printf("(translation-unit");
         dump_children(node->tu.decls, node->tu.ndecls, depth + 1);

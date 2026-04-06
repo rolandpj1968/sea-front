@@ -152,9 +152,32 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
 
     /* declarator-id — N4659 §11.3 [dcl.meaning]
      *   declarator-id: ...(opt) id-expression
-     * For the first pass, just an identifier (or absent for abstract declarators). */
-    if (parser_at(p, TK_IDENT))
+     *   id-expression: unqualified-id | qualified-id
+     *
+     * Handles both bare identifiers (foo) and qualified names
+     * (Foo::bar, A::B::method) for out-of-class definitions. */
+    if (parser_at(p, TK_IDENT)) {
         name = parser_advance(p);
+        /* Consume qualified-id: ident :: ident :: ... :: ident
+         * The final identifier is the actual declared name.
+         * Terminates: each iteration consumes :: + ident, or breaks. */
+        while (parser_at(p, TK_SCOPE) && parser_peek_ahead(p, 1)->kind == TK_IDENT) {
+            parser_advance(p);  /* :: */
+            name = parser_advance(p);  /* the next name component */
+        }
+        /* Handle destructor: ~ClassName */
+        if (parser_at(p, TK_SCOPE) && parser_peek_ahead(p, 1)->kind == TK_TILDE) {
+            parser_advance(p);  /* :: */
+            parser_advance(p);  /* ~ */
+            if (parser_at(p, TK_IDENT))
+                name = parser_advance(p);
+        }
+    }
+    /* Destructor at current scope: ~ClassName */
+    if (!name && parser_at(p, TK_TILDE) && parser_peek_ahead(p, 1)->kind == TK_IDENT) {
+        parser_advance(p);  /* ~ */
+        name = parser_advance(p);
+    }
 
 parse_suffixes:
     /* Function declarator suffix — N4659 §11.3.5 [dcl.fct]
@@ -382,6 +405,29 @@ Node *parse_declaration(Parser *p) {
         return node;
     }
 
+    /* friend declaration — N4659 §14.3 [class.friend]
+     *   friend declaration
+     *   friend function-definition
+     *
+     * The declaration after 'friend' is parsed normally. The declared
+     * name is registered in the current scope (the class scope), which
+     * means struct/class/template names become visible. The inner
+     * declaration is wrapped in ND_FRIEND so sema can track access
+     * grants (§14.3: "a friend of a class is a function or class that
+     * is given permission to use the private and protected member names
+     * from the class"). */
+    if (parser_consume(p, TK_KW_FRIEND)) {
+        Node *inner;
+        if (parser_at(p, TK_KW_TEMPLATE))
+            inner = parse_template_declaration(p);
+        else
+            inner = parse_declaration(p);
+
+        Node *node = new_node(p, ND_FRIEND, start_tok);
+        node->friend_decl.decl = inner;
+        return node;
+    }
+
     /* decl-specifier-seq — §10.1 [dcl.spec] */
     p->pending_members = NULL;
     p->pending_nmembers = 0;
@@ -466,6 +512,14 @@ Node *parse_declaration(Parser *p) {
      * Direct-initialization T x(expr) is distinguished from a function
      * declarator by the heuristic in parse_declarator() — if the '(' was
      * not consumed as a parameter list, it arrives here as init. */
+    /* Bit-field — N4659 §12.2.4 [class.bit]
+     *   member-declarator: identifier(opt) : constant-expression
+     * The colon after a declarator name in a class indicates bit-field width.
+     * Consume the width expression and continue. */
+    if (parser_consume(p, TK_COLON)) {
+        parse_assign_expr(p);  /* bit-field width — consumed and discarded */
+    }
+
     if (parser_consume(p, TK_ASSIGN)) {
         decl->var_decl.init = parse_assign_expr(p);
     } else if (parser_consume(p, TK_LPAREN)) {
@@ -966,13 +1020,55 @@ Node *parse_template_declaration(Parser *p) {
         case ND_CLASS_DEF:
             tmpl_name = decl->class_def.tag;
             break;
+        case ND_FRIEND:
+            /* friend template: extract name from the inner declaration */
+            if (decl->friend_decl.decl) {
+                Node *inner = decl->friend_decl.decl;
+                if (inner->kind == ND_VAR_DECL && inner->var_decl.ty &&
+                    inner->var_decl.ty->tag)
+                    tmpl_name = inner->var_decl.ty->tag;
+                else if (inner->kind == ND_CLASS_DEF)
+                    tmpl_name = inner->class_def.tag;
+                else if (inner->kind == ND_FUNC_DEF || inner->kind == ND_FUNC_DECL)
+                    tmpl_name = inner->func.name;
+            }
+            break;
         default:
             break;
         }
     }
-    if (tmpl_name)
+    if (tmpl_name) {
         region_declare(p, tmpl_name->loc, tmpl_name->len,
                       ENTITY_TEMPLATE, /*type=*/NULL);
+
+        /* N4659 §14.3/2 [class.friend]: "A friend declaration does not
+         * introduce names into the enclosing scope ... however, the name
+         * can be found by unqualified lookup." For a bootstrap tool,
+         * ensure the name is also visible in the nearest enclosing
+         * namespace so template-id parsing works at file scope. */
+        if (decl && decl->kind == ND_FRIEND) {
+            DeclarativeRegion *ns = p->region;
+            while (ns && ns->kind != REGION_NAMESPACE)
+                ns = ns->enclosing;
+            if (ns && ns != p->region) {
+                /* Declare directly in the namespace region */
+                uint32_t idx = 2166136261u; /* FNV-1a inline */
+                for (int i = 0; i < tmpl_name->len; i++) {
+                    idx ^= (uint8_t)tmpl_name->loc[i];
+                    idx *= 16777619u;
+                }
+                idx %= REGION_HASH_SIZE;
+                Declaration *d = arena_alloc(p->arena, sizeof(Declaration));
+                d->name = tmpl_name->loc;
+                d->name_len = tmpl_name->len;
+                d->entity = ENTITY_TEMPLATE;
+                d->type = NULL;
+                d->ns_region = NULL;
+                d->next = ns->buckets[idx];
+                ns->buckets[idx] = d;
+            }
+        }
+    }
 
     Node *node = new_node(p, ND_TEMPLATE_DECL, tok);
     node->template_decl.params = (Node **)params.data;

@@ -98,6 +98,10 @@ typedef enum {
     ND_PARAM,           /* parameter-declaration — N4659 §11.3.5 [dcl.fct] */
     ND_TYPEDEF,         /* typedef — N4659 §10.1.3 [dcl.typedef] */
 
+    ND_FRIEND,          /* friend declaration — N4659 §14.3 [class.friend]
+                         * Wraps the inner declaration (class, function, template).
+                         * Sema uses this to grant access to private members. */
+
     /* -- Classes --
      * N4659 §12 [class] (Annex A.8 [gram.class])
      * C++20: no structural grammar changes to class definitions
@@ -400,6 +404,12 @@ struct Node {
             int     nmembers;
             /* Future: base classes, class-key (struct vs class) */
         } class_def;
+
+        /* ND_FRIEND — N4659 §14.3 [class.friend]
+         * Wraps the friended declaration so sema can track access grants. */
+        struct {
+            Node *decl;     /* the friended declaration */
+        } friend_decl;
 
         /* ND_ACCESS_SPEC — N4659 §12.2 [class.access.spec]
          *   access-specifier : */
