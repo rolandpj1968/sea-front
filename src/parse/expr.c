@@ -170,26 +170,70 @@ static Node *primary_expr(Parser *p) {
         return new_node(p, ND_NULLPTR, tok);
     }
 
-    /* Identifier — §8.1.4 [expr.prim.id]
+    /* Identifier / qualified-id — N4659 §8.1.4 [expr.prim.id]
      *   id-expression: unqualified-id | qualified-id
+     *   qualified-id: nested-name-specifier template(opt) unqualified-id
+     *   nested-name-specifier: :: | type-name :: | namespace-name :: | ...
      *
-     * N4659 §17.2/3 [temp.names] — Rule 4 disambiguation:
-     *   If the identifier is a template-name and is followed by '<',
-     *   parse as a template-id (simple-template-id) rather than treating
-     *   '<' as less-than.
-     *   "After name lookup finds that a name is a template-name, if this
-     *    name is followed by a <, the < is always taken as the delimiter
-     *    of a template-argument-list and never as the less-than operator."
+     * Also handles global scope: ::foo
+     *
+     * N4659 §17.2/3 [temp.names] — Rule 4: template-name followed by
+     * < opens a template-argument-list.
      */
-    if (tok->kind == TK_IDENT) {
-        parser_advance(p);
+    if (tok->kind == TK_IDENT || tok->kind == TK_SCOPE) {
+        bool global_scope = false;
+        Vec parts = vec_new(p->arena);
 
-        /* Rule 4: template-name followed by < → template-id */
-        if (parser_at(p, TK_LT) && lookup_is_template_name(p, tok))
-            return parse_template_id(p, tok);
+        /* Leading :: means global scope */
+        if (tok->kind == TK_SCOPE) {
+            global_scope = true;
+            parser_advance(p);
+        }
 
-        Node *node = new_node(p, ND_IDENT, tok);
-        node->ident.name = tok;
+        /* Consume the name chain: A :: B :: C
+         * Terminates: each iteration consumes ident + ::, or breaks. */
+        if (parser_at(p, TK_IDENT)) {
+            Token *name = parser_advance(p);
+            vec_push(&parts, name);
+
+            while (parser_at(p, TK_SCOPE)) {
+                parser_advance(p);  /* consume :: */
+
+                /* After :: we may see: template keyword (deferred),
+                 * identifier, or operator/destructor (deferred) */
+                if (parser_at(p, TK_IDENT)) {
+                    name = parser_advance(p);
+                    vec_push(&parts, name);
+                } else {
+                    break;  /* :: at end (e.g., before operator or ~) */
+                }
+            }
+        }
+
+        /* If we consumed just one name with no ::, it's a simple ident */
+        if (parts.len == 1 && !global_scope) {
+            Token *name = (Token *)parts.data[0];
+
+            /* Rule 4: template-name followed by < → template-id */
+            if (parser_at(p, TK_LT) && lookup_is_template_name(p, name))
+                return parse_template_id(p, name);
+
+            Node *node = new_node(p, ND_IDENT, name);
+            node->ident.name = name;
+            return node;
+        }
+
+        /* Qualified name: A::B::C or ::foo */
+        Token *last = parts.len > 0 ? (Token *)parts.data[parts.len - 1] : tok;
+
+        /* Rule 4: final name might be a template-id: A::B<int> */
+        if (parser_at(p, TK_LT) && lookup_is_template_name(p, last))
+            return parse_template_id(p, last);
+
+        Node *node = new_node(p, ND_QUALIFIED, tok);
+        node->qualified.parts = (Token **)parts.data;
+        node->qualified.nparts = parts.len;
+        node->qualified.global_scope = global_scope;
         return node;
     }
 

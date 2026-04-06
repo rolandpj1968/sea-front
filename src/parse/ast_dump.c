@@ -135,6 +135,16 @@ static void dump(Node *node, int depth) {
         printf("(ident \"%.*s\")", node->ident.name->len, node->ident.name->loc);
         break;
 
+    case ND_QUALIFIED:
+        printf("(qualified");
+        if (node->qualified.global_scope)
+            printf(" ::");
+        for (int i = 0; i < node->qualified.nparts; i++)
+            printf(" \"%.*s\"", node->qualified.parts[i]->len,
+                   node->qualified.parts[i]->loc);
+        printf(")");
+        break;
+
     case ND_BINARY:
     case ND_ASSIGN:
         printf("(%s ", token_kind_name(node->binary.op));

@@ -31,6 +31,11 @@ typedef enum {
     ND_STR,             /* string literal — N4659 §5.13.5 [lex.string] */
     ND_CHAR,            /* character literal — N4659 §5.13.3 [lex.ccon] */
     ND_IDENT,           /* unresolved identifier (pre-sema) — N4659 §8.1.4 [expr.prim.id] */
+    ND_QUALIFIED,       /* qualified-id — N4659 §8.1.4.3 [expr.prim.id.qual]
+                         *   nested-name-specifier template(opt) unqualified-id
+                         * E.g.: std::cout, Foo::bar, ::global
+                         * Parts stored as an array of tokens (the name chain).
+                         * Sema resolves the qualified lookup. */
     ND_BOOL_LIT,        /* true/false — N4659 §5.13.6 [lex.bool] */
     ND_NULLPTR,         /* nullptr — N4659 §5.13.7 [lex.nullptr]
                          * Type is std::nullptr_t (§21.2.4), distinct from int 0.
@@ -171,6 +176,19 @@ struct Node {
         struct {
             Token *name;
         } ident;
+
+        /* ND_QUALIFIED — N4659 §8.1.4.3 [expr.prim.id.qual]
+         *   qualified-id: nested-name-specifier template(opt) unqualified-id
+         * The name chain is stored as an array of tokens: each element is
+         * an identifier or operator-function-id from the nested-name-specifier
+         * and the final unqualified-id. E.g., std::vector::size_type
+         * → parts = ["std", "vector", "size_type"], nparts = 3.
+         * global_scope is true for ::foo (starts with ::). */
+        struct {
+            Token **parts;
+            int     nparts;
+            bool    global_scope;   /* true if starts with :: */
+        } qualified;
 
         /* ND_BINARY, ND_ASSIGN — N4659 §8.5-§8.18
          * op is the TokenKind of the operator (TK_PLUS, TK_STAR, etc.)

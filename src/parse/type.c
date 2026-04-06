@@ -324,8 +324,36 @@ Type *parse_type_specifiers(Parser *p) {
 
     /* N4659 §10.1.7.1 [dcl.type.simple]: a type-name (typedef-name,
      * class-name, or enum-name) can appear as a simple-type-specifier.
+     * Also handles qualified type names: A::B::Type (§8.1.4.3).
      * If no keyword specifiers have been seen, check if the current
      * token is a user-defined type-name via name lookup (§6.4). */
+    if (!seen_any && parser_peek(p)->kind == TK_IDENT &&
+        parser_peek_ahead(p, 1)->kind == TK_SCOPE) {
+        /* Qualified type name: A::B::C — consume the chain.
+         * The parser doesn't resolve qualified lookup; treat as opaque type.
+         * Terminates: each iteration consumes ident + ::, or breaks. */
+        Token *first = parser_advance(p);
+        while (parser_consume(p, TK_SCOPE)) {
+            if (parser_at(p, TK_IDENT))
+                parser_advance(p);
+            else
+                break;
+        }
+        /* Consume trailing template-id if present: A::B<int> */
+        if (parser_at(p, TK_LT)) {
+            /* Try to parse as template-id — may or may not be one.
+             * For qualified names we speculatively consume < args >.
+             * If it's actually less-than, sema will catch it. */
+            Token *last = &p->tokens[p->pos > 0 ? p->pos - 1 : 0];
+            if (lookup_is_template_name(p, last))
+                parse_template_id(p, last);
+        }
+        Type *ty = new_type(p, TY_STRUCT);  /* opaque — sema resolves */
+        ty->is_const = is_const;
+        ty->is_volatile = is_volatile;
+        ty->tag = first;
+        return ty;
+    }
     if (!seen_any && parser_peek(p)->kind == TK_IDENT) {
         Declaration *d = lookup_unqualified(p, parser_peek(p)->loc, parser_peek(p)->len);
         if (d && (d->entity == ENTITY_TYPE || d->entity == ENTITY_TAG ||
@@ -432,8 +460,11 @@ bool parser_at_type_specifier(Parser *p) {
          * class-name, or enum-name) is a valid simple-type-specifier.
          * A template-name followed by <args> is also a type-specifier
          * (simple-template-id, §17.2).
-         * Consult name lookup (§6.4) to determine if this identifier
-         * refers to a type or template. */
+         * A qualified name (A::B) is treated as a potential type —
+         * the parser can't resolve qualified lookup, so we assume
+         * it's a type if it starts with ident::. Sema validates. */
+        if (parser_peek_ahead(p, 1)->kind == TK_SCOPE)
+            return true;  /* qualified name — assume type */
         return lookup_is_type_name(p, parser_peek(p)) ||
                lookup_is_template_name(p, parser_peek(p));
     default:
