@@ -1,0 +1,27 @@
+(translation-unit
+  (class-def "Point"
+    (var-decl int "x")
+    (var-decl int "y")
+    (func-def int "sum" (params)
+      (block
+        (return (+ (ident "x") (ident "y"))))))
+  (class-def "Animal"
+    (public)
+    (var-decl int "age")
+    (var-decl (func-type void ()) "speak")
+    (private)
+    (var-decl int "internal")
+    (protected)
+    (var-decl int "shared"))
+  (template (params (param ? "T"))
+    (class-def "Container"
+      (var-decl int "value")
+      (func-def int "get" (params)
+        (block
+          (return (ident "value"))))))
+  (var-decl struct Point "p")
+  (var-decl struct Container "c")
+  (func-def int "main" (params)
+    (block
+      (= (. (ident "p") "x") (num 1))
+      (return (call (. (ident "p") "sum"))))))

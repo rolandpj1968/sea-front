@@ -403,6 +403,25 @@ static void dump(Node *node, int depth) {
         printf(")");
         break;
 
+    case ND_CLASS_DEF:
+        printf("(class-def");
+        if (node->class_def.tag)
+            printf(" \"%.*s\"", node->class_def.tag->len,
+                   node->class_def.tag->loc);
+        dump_children(node->class_def.members, node->class_def.nmembers,
+                      depth + 1);
+        printf(")");
+        break;
+
+    case ND_ACCESS_SPEC: {
+        const char *acc = "unknown";
+        if (node->access_spec.access == TK_KW_PUBLIC) acc = "public";
+        else if (node->access_spec.access == TK_KW_PROTECTED) acc = "protected";
+        else if (node->access_spec.access == TK_KW_PRIVATE) acc = "private";
+        printf("(%s)", acc);
+        break;
+    }
+
     case ND_TRANSLATION_UNIT:
         printf("(translation-unit");
         dump_children(node->tu.decls, node->tu.ndecls, depth + 1);

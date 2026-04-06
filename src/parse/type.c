@@ -165,41 +165,126 @@ Type *parse_type_specifiers(Parser *p) {
         if (tok->kind == TK_KW_CHAR32_T) { parser_advance(p); cnt_char32++; seen_any = true; continue; }
         if (tok->kind == TK_KW_WCHAR_T)  { parser_advance(p); cnt_wchar++; seen_any = true; continue; }
 
-        /* struct/union — N4659 §12 [class], §10.1.7.3 [dcl.type.elab]
-         * For the first pass, consume tag name and skip brace-enclosed
-         * body if present. Full member parsing deferred to Stage 2. */
-        if (tok->kind == TK_KW_STRUCT || tok->kind == TK_KW_UNION) {
-            TypeKind tk = (tok->kind == TK_KW_STRUCT) ? TY_STRUCT : TY_UNION;
+        /* struct/union/class — N4659 §12 [class], §10.1.7.3 [dcl.type.elab]
+         *
+         *   class-specifier:
+         *       class-head { member-specification(opt) }
+         *   class-head:
+         *       class-key attribute-specifier-seq(opt) class-head-name
+         *           base-clause(opt)
+         *   class-key: struct | class | union
+         *
+         *   member-specification:
+         *       member-declaration member-specification(opt)
+         *       access-specifier : member-specification(opt)
+         *
+         *   member-declaration:
+         *       decl-specifier-seq(opt) member-declarator-list(opt) ;
+         *       function-definition
+         *       template-declaration
+         *       // and others (using, static_assert, etc.)
+         *
+         * C++20: no structural grammar changes to class bodies.
+         * C++23: deducing this.
+         */
+        if (tok->kind == TK_KW_STRUCT || tok->kind == TK_KW_UNION ||
+            tok->kind == TK_KW_CLASS) {
+            TypeKind tk = (tok->kind == TK_KW_UNION) ? TY_UNION : TY_STRUCT;
             parser_advance(p);
             Type *ty = new_type(p, tk);
             ty->is_const = is_const;
             ty->is_volatile = is_volatile;
+
+            /* Optional tag name */
             if (parser_at(p, TK_IDENT))
                 ty->tag = parser_advance(p);
+
             /* N4659 §17.2 [temp.names]: struct/class followed by a
-             * template-id: 'struct Foo<int>' — consume the template
-             * argument list. This occurs in explicit specializations
-             * and in elaborated-type-specifiers with template args. */
-            if (ty->tag && parser_at(p, TK_LT) && lookup_is_template_name(p, ty->tag)) {
+             * template-id (e.g., 'struct Foo<int>') */
+            if (ty->tag && parser_at(p, TK_LT) &&
+                lookup_is_template_name(p, ty->tag)) {
                 parse_template_id(p, ty->tag);
             }
-            /* Skip class body { ... } if present — N4659 §12.1 [class.mem] */
-            if (parser_consume(p, TK_LBRACE)) {
-                int depth = 1;
-                while (depth > 0 && !parser_at_eof(p)) {
-                    if (parser_consume(p, TK_LBRACE)) depth++;
-                    else if (parser_consume(p, TK_RBRACE)) depth--;
-                    else parser_advance(p);
-                }
-            }
-            /* N4659 §6.3.2/7 [basic.scope.pdecl]: register tag name.
-             * N4659 §6.3.10/2 [basic.scope.hiding]: also inject as
-             * a type-name (C++ class name injection, §12.1/2) so
-             * bare 'Foo' works without 'struct' prefix. */
+
+            /* N4659 §6.3.2/7 [basic.scope.pdecl]: register tag name
+             * before parsing the body so members can reference the class.
+             * N4659 §6.3.10/2 [basic.scope.hiding]: C++ class name
+             * injection — bare 'Foo' works without 'struct' prefix. */
             if (ty->tag) {
                 region_declare(p, ty->tag->loc, ty->tag->len, ENTITY_TAG, ty);
                 region_declare(p, ty->tag->loc, ty->tag->len, ENTITY_TYPE, ty);
             }
+
+            /* Base clause: : public Base, private Other (deferred — just skip)
+             * N4659 §13.1 [class.derived] */
+            if (parser_consume(p, TK_COLON)) {
+                /* Skip base-specifier-list until { */
+                /* Terminates: advances toward { or EOF. */
+                while (!parser_at(p, TK_LBRACE) && !parser_at_eof(p))
+                    parser_advance(p);
+            }
+
+            /* Class body { member-specification } */
+            if (parser_consume(p, TK_LBRACE)) {
+                /* N4659 §6.3.7 [basic.scope.class]: push class scope */
+                region_push(p, REGION_CLASS);
+
+                Vec members = vec_new(p->arena);
+
+                /* Terminates: each iteration consumes at least one token
+                 * (a member declaration, access specifier, or ;). Breaks
+                 * on } or EOF. */
+                while (!parser_at(p, TK_RBRACE) && !parser_at_eof(p)) {
+                    /* access-specifier : — §12.2 [class.access.spec]
+                     *   public: | protected: | private: */
+                    if ((parser_at(p, TK_KW_PUBLIC) || parser_at(p, TK_KW_PROTECTED) ||
+                         parser_at(p, TK_KW_PRIVATE)) &&
+                        parser_peek_ahead(p, 1)->kind == TK_COLON) {
+                        Token *acc_tok = parser_advance(p);
+                        parser_advance(p);  /* consume : */
+                        Node *acc = new_node(p, ND_ACCESS_SPEC, acc_tok);
+                        acc->access_spec.access = acc_tok->kind;
+                        vec_push(&members, acc);
+                        continue;
+                    }
+
+                    /* Empty declaration ( ; ) */
+                    if (parser_consume(p, TK_SEMI))
+                        continue;
+
+                    /* Skip preprocessor leftovers inside class body */
+                    if (parser_at(p, TK_HASH)) {
+                        int line = parser_peek(p)->line;
+                        while (!parser_at_eof(p) && parser_peek(p)->line == line)
+                            parser_advance(p);
+                        continue;
+                    }
+
+                    /* template-declaration inside class */
+                    if (parser_at(p, TK_KW_TEMPLATE)) {
+                        vec_push(&members, parse_template_declaration(p));
+                        continue;
+                    }
+
+                    /* member-declaration: parsed as a regular declaration.
+                     * This handles data members, method declarations, method
+                     * definitions (with body), nested types, typedefs, etc.
+                     * N4659 §12.1 [class.mem] */
+                    Node *member = parse_declaration(p);
+                    if (member)
+                        vec_push(&members, member);
+                }
+
+                parser_expect(p, TK_RBRACE);
+                region_pop(p);
+
+                /* Stash parsed members on the Parser for the caller
+                 * (parse_declaration) to pick up and build ND_CLASS_DEF. */
+                p->pending_members = (Node **)members.data;
+                p->pending_nmembers = members.len;
+                p->pending_class_tag = ty->tag;
+            }
+
             return ty;
         }
         /* enum — N4659 §10.2 [dcl.enum]
@@ -339,7 +424,7 @@ bool parser_at_type_specifier(Parser *p) {
     case TK_KW_STATIC: case TK_KW_EXTERN: case TK_KW_REGISTER:
     case TK_KW_INLINE:
     case TK_KW_TYPEDEF:
-    case TK_KW_STRUCT: case TK_KW_UNION: case TK_KW_ENUM:
+    case TK_KW_STRUCT: case TK_KW_CLASS: case TK_KW_UNION: case TK_KW_ENUM:
     case TK_KW_AUTO:
         return true;
     case TK_IDENT:

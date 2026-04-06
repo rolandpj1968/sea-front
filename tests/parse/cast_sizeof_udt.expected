@@ -1,6 +1,8 @@
 (translation-unit
   (typedef)
-  (var-decl struct Point)
+  (class-def "Point"
+    (var-decl int "x")
+    (var-decl int "y"))
   (func-def int "main" (params)
     (block
       (var-decl int "x" (cast int (num 42)))

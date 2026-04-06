@@ -1,5 +1,7 @@
 (translation-unit
-  (var-decl struct Point)
+  (class-def "Point"
+    (var-decl int "x")
+    (var-decl int "y"))
   (var-decl struct Point "p")
   (var-decl struct Point "q")
   (func-def int "main" (params)

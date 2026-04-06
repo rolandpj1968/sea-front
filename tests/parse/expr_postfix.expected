@@ -1,5 +1,7 @@
 (translation-unit
-  (var-decl struct S)
+  (class-def "S"
+    (var-decl int "x")
+    (var-decl int "y"))
   (var-decl (array int 10) "arr")
   (var-decl (func-type int (int int)) "f" )
   (func-def int "main" (params)

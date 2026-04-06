@@ -93,6 +93,18 @@ typedef enum {
     ND_PARAM,           /* parameter-declaration — N4659 §11.3.5 [dcl.fct] */
     ND_TYPEDEF,         /* typedef — N4659 §10.1.3 [dcl.typedef] */
 
+    /* -- Classes --
+     * N4659 §12 [class] (Annex A.8 [gram.class])
+     * C++20: no structural grammar changes to class definitions
+     * C++23: deducing this (explicit object parameter in methods)
+     */
+    ND_CLASS_DEF,       /* class-specifier — N4659 §12.1 [class.name]
+                         *   class-key identifier(opt) base-clause(opt)
+                         *       { member-specification(opt) }
+                         * Produced by type.c when parsing struct/class body */
+    ND_ACCESS_SPEC,     /* access-specifier — N4659 §12.2 [class.access.spec]
+                         *   public: | protected: | private: */
+
     /* -- Templates --
      * N4659 §17 [temp] (Annex A.12 [gram.temp])
      * C++20: adds concepts (requires-clause on template-declaration),
@@ -355,6 +367,28 @@ struct Node {
             Node *decl;         /* the templated declaration */
         } template_decl;
 
+        /* ND_CLASS_DEF — N4659 §12 [class] (Annex A.8 [gram.class])
+         *   class-specifier:
+         *       class-head { member-specification(opt) }
+         *   class-head:
+         *       class-key identifier(opt) base-clause(opt)
+         *
+         * Members include data members, member functions, access specifiers,
+         * nested types, static_assert, using-declarations, etc.
+         * C++20: no structural changes. C++23: deducing this. */
+        struct {
+            Token  *tag;        /* class/struct name (may be NULL for anonymous) */
+            Node  **members;    /* member-specification as array of nodes */
+            int     nmembers;
+            /* Future: base classes, class-key (struct vs class) */
+        } class_def;
+
+        /* ND_ACCESS_SPEC — N4659 §12.2 [class.access.spec]
+         *   access-specifier : */
+        struct {
+            TokenKind access;   /* TK_KW_PUBLIC, TK_KW_PROTECTED, TK_KW_PRIVATE */
+        } access_spec;
+
         /* ND_TEMPLATE_ID — N4659 §17.2 [temp.names]
          *   simple-template-id: template-name < template-argument-list(opt) >
          * Used in expressions and type-specifiers: vector<int>, pair<A,B> */
@@ -562,10 +596,27 @@ struct Parser {
     int template_depth;        /* nesting depth of template-argument-lists being parsed.
                                 * When > 0, TK_SHR (>>) is treated as two '>' tokens
                                 * (N4659 §17.2/3 [temp.names]). */
-    bool split_shr;            /* true when a >> has been "split": the first > was
-                                * consumed, the second > is virtual. parser_peek()/parser_at()
-                                * return a synthetic TK_GT; parser_advance() clears the flag.
-                                * N4659 §17.2/3 [temp.names]. */
+    Node  **pending_members;   /* set by parse_type_specifiers when a class body
+                                * is parsed. parse_declaration picks this up to
+                                * build an ND_CLASS_DEF node. NULL when no body. */
+    int     pending_nmembers;
+    Token  *pending_class_tag; /* tag token for the class being defined */
+    bool split_shr;            /* true when a >> (TK_SHR) has been "split": the first >
+                                * was consumed, the second > is virtual. parser_peek()/
+                                * parser_at() return a synthetic TK_GT; parser_advance()
+                                * clears the flag. N4659 §17.2/3 [temp.names].
+                                *
+                                * A bool suffices because the lexer's maximal munch
+                                * produces >> as one token — at most one pending > results
+                                * from a split. E.g., A<B<C<int>>> lexes as >> then >,
+                                * so we only ever split one >> at a time.
+                                *
+                                * Note: >>= (TK_SHR_ASSIGN) inside template args
+                                * (e.g., A<B<x>>=y) would need a different split
+                                * (> + >=, or > + > + =). This is not yet handled — it
+                                * would require a small pending-token queue instead of
+                                * a boolean. Rare in practice (both GCC and Clang source
+                                * avoid this pattern). */
 };
 
 /* ================================================================== */

@@ -4,11 +4,15 @@
       (block
         (return (+ (ident "a") (ident "b"))))))
   (template (params (param ? "T") (param int "N"))
-    (var-decl struct Array))
+    (class-def "Array"
+      (var-decl (array int 10) "data")))
   (template (params (param ? "T"))
-    (var-decl struct Box))
+    (class-def "Box"
+      (var-decl int "val")))
   (template (params (param ? "A") (param ? "B"))
-    (var-decl struct Pair))
+    (class-def "Pair"
+      (var-decl int "first")
+      (var-decl int "second")))
   (func-def int "main" (params)
     (block
       (var-decl int "x" (call (template-id "add" (var-decl int)) (num 1) (num 2)))

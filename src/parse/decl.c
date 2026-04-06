@@ -383,13 +383,32 @@ Node *parse_declaration(Parser *p) {
     }
 
     /* decl-specifier-seq — §10.1 [dcl.spec] */
+    p->pending_members = NULL;
+    p->pending_nmembers = 0;
+    p->pending_class_tag = NULL;
     Type *base_ty = parse_type_specifiers(p);
     if (!base_ty)
         error_tok(start_tok, "expected declaration");
 
+    /* Check if parse_type_specifiers parsed a class body.
+     * If so, build an ND_CLASS_DEF node. */
+    Node **class_members = p->pending_members;
+    int class_nmembers = p->pending_nmembers;
+    Token *class_tag = p->pending_class_tag;
+    p->pending_members = NULL;
+    p->pending_nmembers = 0;
+    p->pending_class_tag = NULL;
+
     /* Bare type with no declarator: 'struct Foo { ... };' */
     if (parser_at(p, TK_SEMI)) {
         parser_advance(p);
+        if (class_members) {
+            Node *node = new_node(p, ND_CLASS_DEF, start_tok);
+            node->class_def.tag = class_tag;
+            node->class_def.members = class_members;
+            node->class_def.nmembers = class_nmembers;
+            return node;
+        }
         Node *node = new_node(p, ND_VAR_DECL, start_tok);
         node->var_decl.ty = base_ty;
         return node;
@@ -802,6 +821,9 @@ Node *parse_template_declaration(Parser *p) {
             /* Bare struct/class/enum: name is in the type's tag */
             if (!tmpl_name && decl->var_decl.ty && decl->var_decl.ty->tag)
                 tmpl_name = decl->var_decl.ty->tag;
+            break;
+        case ND_CLASS_DEF:
+            tmpl_name = decl->class_def.tag;
             break;
         default:
             break;
