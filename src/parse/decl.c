@@ -208,10 +208,11 @@ parse_suffixes:
             after_paren->kind == TK_RPAREN ||
             after_paren->kind == TK_ELLIPSIS ||
             after_paren->kind == TK_KW_VOID ||
-            /* Check if it's a type-specifier keyword or known type-name */
+            /* Check if it's a type-specifier keyword or known type/template name */
             (after_paren->kind >= TK_KW_ALIGNAS /* any keyword */ ||
              (after_paren->kind == TK_IDENT &&
-              lookup_is_type_name(p, after_paren)));
+              (lookup_is_type_name(p, after_paren) ||
+               lookup_is_template_name(p, after_paren))));
 
         /* For the most vexing parse, we need the full heuristic.
          * Refine: a keyword that's a type-specifier signals params. */
@@ -234,7 +235,8 @@ parse_suffixes:
                 break;
             }
         } else if (after_paren->kind == TK_IDENT) {
-            looks_like_params = lookup_is_type_name(p, after_paren);
+            looks_like_params = lookup_is_type_name(p, after_paren) ||
+                                lookup_is_template_name(p, after_paren);
         } else if (after_paren->kind != TK_RPAREN &&
                    after_paren->kind != TK_ELLIPSIS &&
                    after_paren->kind != TK_KW_VOID) {
