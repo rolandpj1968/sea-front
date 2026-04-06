@@ -123,6 +123,40 @@ void parser_restore(Parser *p, ParseState saved) {
 }
 
 /* ------------------------------------------------------------------ */
+/* GCC extensions                                                      */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Skip a sequence of __attribute__((...)) GNU attribute specifiers.
+ * Lexer treats __attribute__ as a plain identifier; recognise by name.
+ *
+ * Grammar (informal): __attribute__ ( ( attribute-list ) )
+ * The body is balanced parens, so we just count.
+ *
+ * Ubiquitous in libstdc++/glibc headers; not part of ISO C++. They have
+ * no impact on the parser's understanding of the type system, so we drop
+ * them entirely.
+ */
+void parser_skip_gnu_attributes(Parser *p) {
+    while (parser_at(p, TK_IDENT) &&
+           token_equal(parser_peek(p), "__attribute__")) {
+        parser_advance(p);                  /* __attribute__ */
+        parser_expect(p, TK_LPAREN);
+        parser_expect(p, TK_LPAREN);
+        /* Now inside the inner paren — balance toward its matching ).
+         * Terminates: paren counting; advances each iteration. */
+        int depth = 1;
+        while (depth > 0 && !parser_at_eof(p)) {
+            if (parser_at(p, TK_LPAREN)) depth++;
+            else if (parser_at(p, TK_RPAREN)) { depth--; if (depth == 0) break; }
+            parser_advance(p);
+        }
+        parser_expect(p, TK_RPAREN);        /* inner ) */
+        parser_expect(p, TK_RPAREN);        /* outer ) */
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /* Node constructors (arena-allocated)                                 */
 /* ------------------------------------------------------------------ */
 

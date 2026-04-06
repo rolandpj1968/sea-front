@@ -37,6 +37,14 @@ Node *parse_compound_stmt(Parser *p) {
 
     Vec stmts = vec_new(p->arena);
     while (!parser_at(p, TK_RBRACE) && !parser_at_eof(p)) {
+        /* Skip preprocessor leftovers (#line directives etc.) — mcpp
+         * emits these on their own lines. */
+        if (parser_at(p, TK_HASH)) {
+            int line = parser_peek(p)->line;
+            while (!parser_at_eof(p) && parser_peek(p)->line == line)
+                parser_advance(p);
+            continue;
+        }
         Node *s = parse_stmt(p);
         if (s)
             vec_push(&stmts, s);

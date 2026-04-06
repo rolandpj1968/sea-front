@@ -137,6 +137,10 @@ DeclSpec parse_type_specifiers(Parser *p) {
      * (advancing pos) and continues, or breaks. The token array is finite
      * and non-keyword tokens cause the break. */
     for (;;) {
+        /* GCC __attribute__((...)) — may appear anywhere in the
+         * decl-specifier-seq in glibc/libstdc++ headers. */
+        parser_skip_gnu_attributes(p);
+
         Token *tok = parser_peek(p);
 
         /* Storage-class specifiers and cv-qualifiers are part of the
@@ -233,6 +237,17 @@ DeclSpec parse_type_specifiers(Parser *p) {
             if (ty->tag) {
                 region_declare(p, ty->tag->loc, ty->tag->len, ENTITY_TAG, ty);
                 region_declare(p, ty->tag->loc, ty->tag->len, ENTITY_TYPE, ty);
+                /* If we're inside a template-parameter region, this class
+                 * is itself a template. Register the injected-class-name
+                 * as ENTITY_TEMPLATE so its body can refer to itself with
+                 * a template-id (e.g. 'pair<U1,U2>' inside 'pair'). */
+                for (DeclarativeRegion *r = p->region; r; r = r->enclosing) {
+                    if (r->kind == REGION_TEMPLATE) {
+                        region_declare(p, ty->tag->loc, ty->tag->len,
+                                       ENTITY_TEMPLATE, /*type=*/NULL);
+                        break;
+                    }
+                }
             }
 
             /* Base clause: : public Base, private Other (deferred — just skip)

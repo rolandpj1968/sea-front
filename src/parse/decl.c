@@ -94,6 +94,19 @@ static void consume_trailing_qualifiers(Parser *p) {
            parser_consume(p, TK_KW_VOLATILE) ||
            parser_consume(p, TK_KW_NOEXCEPT))
         ;
+    /* throw(type-id-list(opt)) — N4659 §15.4 [except.spec], deprecated in
+     * C++17 but still pervasive in libstdc++ headers (e.g. throw()). */
+    if (parser_consume(p, TK_KW_THROW)) {
+        parser_expect(p, TK_LPAREN);
+        int depth = 1;
+        while (depth > 0 && !parser_at_eof(p)) {
+            if (parser_at(p, TK_LPAREN)) depth++;
+            else if (parser_at(p, TK_RPAREN)) { depth--; if (depth == 0) break; }
+            parser_advance(p);
+        }
+        parser_expect(p, TK_RPAREN);
+    }
+    parser_skip_gnu_attributes(p);
     while (parser_at(p, TK_IDENT) &&
            (token_equal(parser_peek(p), "override") ||
             token_equal(parser_peek(p), "final")))
@@ -544,7 +557,7 @@ Node *parse_declaration(Parser *p) {
      * parsing the body so parameter names are visible inside.
      * The compound-statement pushes its own REGION_BLOCK as a child. */
     if (decl->var_decl.ty && decl->var_decl.ty->kind == TY_FUNC &&
-        parser_at(p, TK_LBRACE)) {
+        (parser_at(p, TK_LBRACE) || parser_at(p, TK_COLON))) {
 
         Node *func = new_node(p, ND_FUNC_DEF, decl->tok);
         func->func.ret_ty = decl->var_decl.ty->ret;
@@ -566,6 +579,49 @@ Node *parse_declaration(Parser *p) {
                 region_declare(p, param->param.name->loc,
                               param->param.name->len, ENTITY_VARIABLE,
                               param->param.ty);
+        }
+
+        /* ctor-initializer — N4659 §15.6.2 [class.base.init]
+         *   : mem-initializer-list
+         *   mem-initializer: identifier ( expression-list(opt) )
+         *                  | identifier braced-init-list
+         *                  | identifier ... (pack expansion)
+         * Currently parsed and discarded. */
+        if (parser_consume(p, TK_COLON)) {
+            /* Terminates: each iteration consumes one mem-initializer; loop
+             * exits when no comma follows. */
+            for (;;) {
+                /* Skip the (possibly qualified or template) member name. */
+                while (parser_at(p, TK_IDENT) || parser_at(p, TK_SCOPE) ||
+                       parser_at(p, TK_LT) || parser_at(p, TK_GT) ||
+                       parser_at(p, TK_SHR))
+                    parser_advance(p);
+                if (parser_consume(p, TK_LPAREN)) {
+                    int depth = 1;
+                    while (depth > 0 && !parser_at_eof(p)) {
+                        if (parser_at(p, TK_LPAREN)) depth++;
+                        else if (parser_at(p, TK_RPAREN)) {
+                            depth--;
+                            if (depth == 0) break;
+                        }
+                        parser_advance(p);
+                    }
+                    parser_expect(p, TK_RPAREN);
+                } else if (parser_consume(p, TK_LBRACE)) {
+                    int depth = 1;
+                    while (depth > 0 && !parser_at_eof(p)) {
+                        if (parser_at(p, TK_LBRACE)) depth++;
+                        else if (parser_at(p, TK_RBRACE)) {
+                            depth--;
+                            if (depth == 0) break;
+                        }
+                        parser_advance(p);
+                    }
+                    parser_expect(p, TK_RBRACE);
+                }
+                parser_consume(p, TK_ELLIPSIS);  /* pack expansion */
+                if (!parser_consume(p, TK_COMMA)) break;
+            }
         }
 
         func->func.body = parse_compound_stmt(p);
@@ -762,6 +818,12 @@ Node *parse_top_level_decl(Parser *p) {
         return NULL;
     }
 
+    /* C++11 'inline namespace X' — N4659 §10.3.1 [namespace.def]/8.
+     * The 'inline' may precede the 'namespace' keyword. */
+    if (parser_at(p, TK_KW_INLINE) &&
+        parser_peek_ahead(p, 1)->kind == TK_KW_NAMESPACE)
+        parser_advance(p);
+
     if (parser_at(p, TK_KW_NAMESPACE)) {
         Token *tok = parser_advance(p);
 
@@ -787,6 +849,10 @@ Node *parse_top_level_decl(Parser *p) {
         if (ns)
             ns_decl = region_declare(p, ns->loc, ns->len,
                                      ENTITY_NAMESPACE, /*type=*/NULL);
+
+        /* GCC __attribute__((__abi_tag__(...))) and friends after the
+         * namespace name — pervasive in libstdc++. */
+        parser_skip_gnu_attributes(p);
 
         parser_expect(p, TK_LBRACE);
 
