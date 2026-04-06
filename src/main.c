@@ -86,7 +86,7 @@ int main(int argc, char **argv) {
     if (!filename)
         usage();
 
-    File *file = read_file(filename);
+    File *file = sf_read_file(filename);
     if (!file)
         return 1;
 

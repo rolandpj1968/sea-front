@@ -99,17 +99,17 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
      * Terminates: each iteration consumes a ptr-operator token (*, &, &&)
      * or breaks. Finite tokens, each consumed at most once for & and &&. */
     for (;;) {
-        if (consume(p, TK_STAR)) {
+        if (parser_consume(p, TK_STAR)) {
             base_ty = new_ptr_type(p, base_ty);
             /* cv-qualifiers after * — N4659 §11.3.1/1 [dcl.ptr] */
-            while (at(p, TK_KW_CONST) || at(p, TK_KW_VOLATILE)) {
-                if (consume(p, TK_KW_CONST))    base_ty->is_const = true;
-                if (consume(p, TK_KW_VOLATILE)) base_ty->is_volatile = true;
+            while (parser_at(p, TK_KW_CONST) || parser_at(p, TK_KW_VOLATILE)) {
+                if (parser_consume(p, TK_KW_CONST))    base_ty->is_const = true;
+                if (parser_consume(p, TK_KW_VOLATILE)) base_ty->is_volatile = true;
             }
-        } else if (consume(p, TK_LAND)) {
+        } else if (parser_consume(p, TK_LAND)) {
             /* && — rvalue reference (C++11) */
             base_ty = new_rvalref_type(p, base_ty);
-        } else if (consume(p, TK_AMP)) {
+        } else if (parser_consume(p, TK_AMP)) {
             /* & — lvalue reference */
             base_ty = new_ref_type(p, base_ty);
         } else {
@@ -134,15 +134,15 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
      *
      * Heuristic: '(' followed by *, (, or a non-type identifier is grouping.
      * '(' followed by a type keyword is a parameter list. */
-    if (at(p, TK_LPAREN) && !at_type_specifier(p)) {
-        Token *next = peek_ahead(p, 1);
+    if (parser_at(p, TK_LPAREN) && !parser_at_type_specifier(p)) {
+        Token *next = parser_peek_ahead(p, 1);
         if (next && (next->kind == TK_STAR || next->kind == TK_LPAREN ||
                      (next->kind == TK_IDENT && !lookup_is_type_name(p, next)))) {
             /* Grouping parens or redundant parens around a name.
              * E.g.: int (*fp)(int,int)  or  T(x)  */
-            advance(p);  /* skip ( */
+            parser_advance(p);  /* skip ( */
             Node *inner = parse_declarator(p, base_ty);
-            expect(p, TK_RPAREN);
+            parser_expect(p, TK_RPAREN);
 
             name = inner->var_decl.name;
             ty = inner->var_decl.ty;
@@ -153,8 +153,8 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
     /* declarator-id — N4659 §11.3 [dcl.meaning]
      *   declarator-id: ...(opt) id-expression
      * For the first pass, just an identifier (or absent for abstract declarators). */
-    if (at(p, TK_IDENT))
-        name = advance(p);
+    if (parser_at(p, TK_IDENT))
+        name = parser_advance(p);
 
 parse_suffixes:
     /* Function declarator suffix — N4659 §11.3.5 [dcl.fct]
@@ -176,11 +176,11 @@ parse_suffixes:
      * We use tentative parsing: try to parse as a parameter list; if the
      * first token after '(' is not a type-specifier, ')', or '...', it's
      * not a parameter list — leave it for the caller to handle as init. */
-    if (at(p, TK_LPAREN) && name) {
+    if (parser_at(p, TK_LPAREN) && name) {
         /* Peek inside the parens to decide: parameter list or init?
          * A parameter list starts with: ), void), type-specifier, or ...
          * Anything else (literal, non-type identifier, etc.) is init. */
-        Token *after_paren = peek_ahead(p, 1);
+        Token *after_paren = parser_peek_ahead(p, 1);
         bool looks_like_params =
             after_paren->kind == TK_RPAREN ||
             after_paren->kind == TK_ELLIPSIS ||
@@ -219,20 +219,20 @@ parse_suffixes:
         }
 
         if (looks_like_params) {
-            advance(p);  /* consume ( */
+            parser_advance(p);  /* consume ( */
             Vec params = vec_new(p->arena);
             Vec param_types = vec_new(p->arena);
             bool variadic = false;
 
-            if (!at(p, TK_RPAREN)) {
-                if (at(p, TK_KW_VOID) &&
-                    peek_ahead(p, 1)->kind == TK_RPAREN) {
-                    advance(p);  /* (void) — no params */
+            if (!parser_at(p, TK_RPAREN)) {
+                if (parser_at(p, TK_KW_VOID) &&
+                    parser_peek_ahead(p, 1)->kind == TK_RPAREN) {
+                    parser_advance(p);  /* (void) — no params */
                 } else {
                     /* Terminates: each iteration parses a parameter
                      * (consuming tokens), then breaks on non-comma. */
                     for (;;) {
-                        if (consume(p, TK_ELLIPSIS)) {
+                        if (parser_consume(p, TK_ELLIPSIS)) {
                             variadic = true;
                             break;
                         }
@@ -244,23 +244,23 @@ parse_suffixes:
                         vec_push(&params, param_decl);
                         vec_push(&param_types, param_decl->var_decl.ty);
 
-                        if (!consume(p, TK_COMMA))
+                        if (!parser_consume(p, TK_COMMA))
                             break;
 
-                        if (at(p, TK_ELLIPSIS)) {
-                            advance(p);
+                        if (parser_at(p, TK_ELLIPSIS)) {
+                            parser_advance(p);
                             variadic = true;
                             break;
                         }
                     }
                 }
             }
-            expect(p, TK_RPAREN);
+            parser_expect(p, TK_RPAREN);
 
             ty = new_func_type(p, ty, (Type **)param_types.data,
                                param_types.len, variadic);
 
-            Node *node = new_node(p, ND_VAR_DECL, name ? name : peek(p));
+            Node *node = new_node(p, ND_VAR_DECL, name ? name : parser_peek(p));
             node->var_decl.ty = ty;
             node->var_decl.name = name;
             node->func.params = (Node **)params.data;
@@ -270,35 +270,35 @@ parse_suffixes:
         /* else: not a parameter list — fall through, leave ( for caller */
     }
     /* Same logic for unnamed declarators (abstract) — always params */
-    if (!name && consume(p, TK_LPAREN)) {
+    if (!name && parser_consume(p, TK_LPAREN)) {
         Vec params = vec_new(p->arena);
         Vec param_types = vec_new(p->arena);
         bool variadic = false;
 
-        if (!at(p, TK_RPAREN)) {
-            if (at(p, TK_KW_VOID) &&
-                peek_ahead(p, 1)->kind == TK_RPAREN) {
-                advance(p);
+        if (!parser_at(p, TK_RPAREN)) {
+            if (parser_at(p, TK_KW_VOID) &&
+                parser_peek_ahead(p, 1)->kind == TK_RPAREN) {
+                parser_advance(p);
             } else {
                 /* Terminates: same as named-param loop above. */
                 for (;;) {
-                    if (consume(p, TK_ELLIPSIS)) { variadic = true; break; }
+                    if (parser_consume(p, TK_ELLIPSIS)) { variadic = true; break; }
                     Type *param_base = parse_type_specifiers(p);
                     Node *param_decl = parse_declarator(p, param_base);
                     param_decl->kind = ND_PARAM;
                     vec_push(&params, param_decl);
                     vec_push(&param_types, param_decl->var_decl.ty);
-                    if (!consume(p, TK_COMMA)) break;
-                    if (at(p, TK_ELLIPSIS)) { advance(p); variadic = true; break; }
+                    if (!parser_consume(p, TK_COMMA)) break;
+                    if (parser_at(p, TK_ELLIPSIS)) { parser_advance(p); variadic = true; break; }
                 }
             }
         }
-        expect(p, TK_RPAREN);
+        parser_expect(p, TK_RPAREN);
 
         ty = new_func_type(p, ty, (Type **)param_types.data,
                            param_types.len, variadic);
 
-        Node *node = new_node(p, ND_VAR_DECL, name ? name : peek(p));
+        Node *node = new_node(p, ND_VAR_DECL, name ? name : parser_peek(p));
         node->var_decl.ty = ty;
         node->var_decl.name = name;
         node->func.params = (Node **)params.data;
@@ -308,9 +308,9 @@ parse_suffixes:
 
     /* Array declarator suffix — N4659 §11.3.4 [dcl.array]
      *   noptr-declarator [ constant-expression(opt) ] attribute-specifier-seq(opt) */
-    while (consume(p, TK_LBRACKET)) {
+    while (parser_consume(p, TK_LBRACKET)) {
         int len = -1;  /* unsized */
-        if (!at(p, TK_RBRACKET)) {
+        if (!parser_at(p, TK_RBRACKET)) {
             /* For the first pass, only handle integer constant array sizes */
             /* N4659 §11.3.4 [dcl.array]: the expression must be a
              * converted constant expression of type std::size_t.
@@ -321,11 +321,11 @@ parse_suffixes:
             if (size_expr && size_expr->kind == ND_NUM)
                 len = (int)size_expr->num.lo;
         }
-        expect(p, TK_RBRACKET);
+        parser_expect(p, TK_RBRACKET);
         ty = new_array_type(p, ty, len);
     }
 
-    Node *node = new_node(p, ND_VAR_DECL, name ? name : peek(p));
+    Node *node = new_node(p, ND_VAR_DECL, name ? name : parser_peek(p));
     node->var_decl.ty = ty;
     node->var_decl.name = name;
     return node;
@@ -354,7 +354,7 @@ parse_suffixes:
  *       braced-init-list               (deferred)
  */
 Node *parse_declaration(Parser *p) {
-    Token *start_tok = peek(p);
+    Token *start_tok = parser_peek(p);
 
     /* typedef — N4659 §10.1.3 [dcl.typedef]
      *   typedef-name: identifier
@@ -365,10 +365,10 @@ Node *parse_declaration(Parser *p) {
      *
      * C++11 also allows: using identifier = type-id (alias declaration)
      * — deferred. */
-    if (consume(p, TK_KW_TYPEDEF)) {
+    if (parser_consume(p, TK_KW_TYPEDEF)) {
         Type *base_ty = parse_type_specifiers(p);
         Node *decl = parse_declarator(p, base_ty);
-        expect(p, TK_SEMI);
+        parser_expect(p, TK_SEMI);
 
         /* Register the typedef-name into the current declarative region */
         if (decl->var_decl.name)
@@ -388,8 +388,8 @@ Node *parse_declaration(Parser *p) {
         error_tok(start_tok, "expected declaration");
 
     /* Bare type with no declarator: 'struct Foo { ... };' */
-    if (at(p, TK_SEMI)) {
-        advance(p);
+    if (parser_at(p, TK_SEMI)) {
+        parser_advance(p);
         Node *node = new_node(p, ND_VAR_DECL, start_tok);
         node->var_decl.ty = base_ty;
         return node;
@@ -405,7 +405,7 @@ Node *parse_declaration(Parser *p) {
      * parsing the body so parameter names are visible inside.
      * The compound-statement pushes its own REGION_BLOCK as a child. */
     if (decl->var_decl.ty && decl->var_decl.ty->kind == TY_FUNC &&
-        at(p, TK_LBRACE)) {
+        parser_at(p, TK_LBRACE)) {
 
         Node *func = new_node(p, ND_FUNC_DEF, decl->tok);
         func->func.ret_ty = decl->var_decl.ty->ret;
@@ -447,12 +447,12 @@ Node *parse_declaration(Parser *p) {
      * Direct-initialization T x(expr) is distinguished from a function
      * declarator by the heuristic in parse_declarator() — if the '(' was
      * not consumed as a parameter list, it arrives here as init. */
-    if (consume(p, TK_ASSIGN)) {
+    if (parser_consume(p, TK_ASSIGN)) {
         decl->var_decl.init = parse_assign_expr(p);
-    } else if (consume(p, TK_LPAREN)) {
+    } else if (parser_consume(p, TK_LPAREN)) {
         /* Direct-initialization: T x(expr, ...) — N4659 §11.6/16 */
         decl->var_decl.init = parse_expr(p);
-        expect(p, TK_RPAREN);
+        parser_expect(p, TK_RPAREN);
     }
 
     /* N4659 §6.3.2/1 [basic.scope.pdecl]: register the variable name */
@@ -469,18 +469,18 @@ Node *parse_declaration(Parser *p) {
      * Each subsequent declarator shares the same base type (decl-specifier-seq)
      * but may add its own pointer/array/function modifiers.
      * E.g.: int x = 1, *y, z[10]; */
-    if (at(p, TK_COMMA)) {
+    if (parser_at(p, TK_COMMA)) {
         Vec decls = vec_new(p->arena);
         vec_push(&decls, decl);
 
-        while (consume(p, TK_COMMA)) {
+        while (parser_consume(p, TK_COMMA)) {
             Node *next_decl = parse_declarator(p, base_ty);
 
-            if (consume(p, TK_ASSIGN))
+            if (parser_consume(p, TK_ASSIGN))
                 next_decl->var_decl.init = parse_assign_expr(p);
-            else if (consume(p, TK_LPAREN)) {
+            else if (parser_consume(p, TK_LPAREN)) {
                 next_decl->var_decl.init = parse_expr(p);
-                expect(p, TK_RPAREN);
+                parser_expect(p, TK_RPAREN);
             }
 
             if (next_decl->var_decl.name)
@@ -491,7 +491,7 @@ Node *parse_declaration(Parser *p) {
             vec_push(&decls, next_decl);
         }
 
-        expect(p, TK_SEMI);
+        parser_expect(p, TK_SEMI);
 
         /* Wrap multiple declarators in a block node */
         Node *block = new_node(p, ND_BLOCK, start_tok);
@@ -500,7 +500,7 @@ Node *parse_declaration(Parser *p) {
         return block;
     }
 
-    expect(p, TK_SEMI);
+    parser_expect(p, TK_SEMI);
     return decl;
 }
 
@@ -518,23 +518,23 @@ Node *parse_declaration(Parser *p) {
  */
 Node *parse_top_level_decl(Parser *p) {
     /* Empty declaration — N4659 §10/6 */
-    if (consume(p, TK_SEMI))
+    if (parser_consume(p, TK_SEMI))
         return NULL;
 
     /* Skip preprocessor leftovers — #pragma, #line, etc.
      * These should have been consumed by the preprocessor, but mcpp
      * in independent mode passes through unknown pragmas. We skip
      * everything from # to the end of its line. */
-    if (at(p, TK_HASH)) {
-        int line = peek(p)->line;
-        while (!at_eof(p) && peek(p)->line == line)
-            advance(p);
+    if (parser_at(p, TK_HASH)) {
+        int line = parser_peek(p)->line;
+        while (!parser_at_eof(p) && parser_peek(p)->line == line)
+            parser_advance(p);
         return NULL;
     }
 
     /* template-declaration — N4659 §17.1 [temp] (Annex A.12)
      *   template < template-parameter-list > declaration */
-    if (at(p, TK_KW_TEMPLATE))
+    if (parser_at(p, TK_KW_TEMPLATE))
         return parse_template_declaration(p);
 
     /* linkage-specification — N4659 §10.5 [dcl.link]
@@ -549,24 +549,24 @@ Node *parse_top_level_decl(Parser *p) {
      * overload resolution (C linkage prohibits overloading).
      *
      * C++20/23: unchanged. */
-    if (at(p, TK_KW_EXTERN) &&
-        peek_ahead(p, 1)->kind == TK_STR) {
-        advance(p);  /* consume 'extern' */
-        advance(p);  /* consume string literal ("C" or "C++") */
+    if (parser_at(p, TK_KW_EXTERN) &&
+        parser_peek_ahead(p, 1)->kind == TK_STR) {
+        parser_advance(p);  /* consume 'extern' */
+        parser_advance(p);  /* consume string literal ("C" or "C++") */
 
-        if (at(p, TK_LBRACE)) {
+        if (parser_at(p, TK_LBRACE)) {
             /* extern "C" { ... } — parse as a block of declarations.
              * We reuse ND_BLOCK to hold the inner declarations.
              * The linkage specifier is ignored for now. */
-            Token *brace = peek(p);
-            advance(p);
+            Token *brace = parser_peek(p);
+            parser_advance(p);
             Vec decls = vec_new(p->arena);
-            while (!at(p, TK_RBRACE) && !at_eof(p)) {
+            while (!parser_at(p, TK_RBRACE) && !parser_at_eof(p)) {
                 Node *decl = parse_top_level_decl(p);
                 if (decl)
                     vec_push(&decls, decl);
             }
-            expect(p, TK_RBRACE);
+            parser_expect(p, TK_RBRACE);
             Node *block = new_node(p, ND_BLOCK, brace);
             block->block.stmts = (Node **)decls.data;
             block->block.nstmts = decls.len;
@@ -608,7 +608,7 @@ Node *parse_top_level_decl(Parser *p) {
  * parameter (parsed as a regular parameter-declaration).
  */
 static Node *parse_template_parameter(Parser *p) {
-    Token *tok = peek(p);
+    Token *tok = parser_peek(p);
 
     /* type-parameter: typename T or class T
      * N4659 §17.1/1: type-parameter-key is 'class' or 'typename' */
@@ -616,22 +616,22 @@ static Node *parse_template_parameter(Parser *p) {
         /* Disambiguate: 'typename T' (type param) vs 'typename Foo::bar' (dependent name)
          * and 'class X' (type param) vs elaborated-type-specifier.
          * Heuristic: if next token is ident, comma, >, >>, =, or ..., it's a type param. */
-        Token *next = peek_ahead(p, 1);
+        Token *next = parser_peek_ahead(p, 1);
         if (next->kind == TK_IDENT || next->kind == TK_COMMA ||
             next->kind == TK_GT || next->kind == TK_SHR ||
             next->kind == TK_ASSIGN || next->kind == TK_ELLIPSIS ||
             next->kind == TK_EOF) {
 
-            advance(p);  /* consume class/typename */
+            parser_advance(p);  /* consume class/typename */
 
             /* Optional pack expansion ... */
-            bool is_pack = consume(p, TK_ELLIPSIS);
+            bool is_pack = parser_consume(p, TK_ELLIPSIS);
             (void)is_pack;  /* used in later stages */
 
             /* Optional identifier */
             Token *name = NULL;
-            if (at(p, TK_IDENT))
-                name = advance(p);
+            if (parser_at(p, TK_IDENT))
+                name = parser_advance(p);
 
             /* Register the type parameter name in the template scope.
              * N4659 §6.3.9 [basic.scope.temp]: template parameter names
@@ -640,15 +640,15 @@ static Node *parse_template_parameter(Parser *p) {
                 region_declare(p, name->loc, name->len, ENTITY_TYPE, NULL);
 
             /* Optional default: = type-id */
-            if (consume(p, TK_ASSIGN)) {
+            if (parser_consume(p, TK_ASSIGN)) {
                 /* Skip the default type-id — consume until , or > or >> */
                 int depth = 0;
-                while (!at_eof(p)) {
-                    if (depth == 0 && (at(p, TK_COMMA) || at(p, TK_GT) || at(p, TK_SHR)))
+                while (!parser_at_eof(p)) {
+                    if (depth == 0 && (parser_at(p, TK_COMMA) || parser_at(p, TK_GT) || parser_at(p, TK_SHR)))
                         break;
-                    if (at(p, TK_LT)) depth++;
-                    if (at(p, TK_GT)) depth--;
-                    advance(p);
+                    if (parser_at(p, TK_LT)) depth++;
+                    if (parser_at(p, TK_GT)) depth--;
+                    parser_advance(p);
                 }
             }
 
@@ -665,37 +665,37 @@ static Node *parse_template_parameter(Parser *p) {
      * Deferred: just skip to , or > for now */
     if (tok->kind == TK_KW_TEMPLATE) {
         /* Skip nested template<...> */
-        advance(p);  /* template */
-        expect(p, TK_LT);
+        parser_advance(p);  /* template */
+        parser_expect(p, TK_LT);
         int depth = 1;
-        while (depth > 0 && !at_eof(p)) {
-            if (at(p, TK_LT)) depth++;
-            if (at(p, TK_GT)) { depth--; if (depth == 0) break; }
-            if (at(p, TK_SHR) && depth <= 1) { depth--; break; }
-            advance(p);
+        while (depth > 0 && !parser_at_eof(p)) {
+            if (parser_at(p, TK_LT)) depth++;
+            if (parser_at(p, TK_GT)) { depth--; if (depth == 0) break; }
+            if (parser_at(p, TK_SHR) && depth <= 1) { depth--; break; }
+            parser_advance(p);
         }
-        if (at(p, TK_GT)) advance(p);
+        if (parser_at(p, TK_GT)) parser_advance(p);
 
         /* Consume class/typename */
-        if (at(p, TK_KW_CLASS) || at(p, TK_KW_TYPENAME))
-            advance(p);
+        if (parser_at(p, TK_KW_CLASS) || parser_at(p, TK_KW_TYPENAME))
+            parser_advance(p);
 
         /* Optional identifier */
         Token *name = NULL;
-        if (at(p, TK_IDENT)) {
-            name = advance(p);
+        if (parser_at(p, TK_IDENT)) {
+            name = parser_advance(p);
             region_declare(p, name->loc, name->len, ENTITY_TEMPLATE, NULL);
         }
 
         /* Optional default */
-        if (consume(p, TK_ASSIGN)) {
+        if (parser_consume(p, TK_ASSIGN)) {
             int d = 0;
-            while (!at_eof(p)) {
-                if (d == 0 && (at(p, TK_COMMA) || at(p, TK_GT) || at(p, TK_SHR)))
+            while (!parser_at_eof(p)) {
+                if (d == 0 && (parser_at(p, TK_COMMA) || parser_at(p, TK_GT) || parser_at(p, TK_SHR)))
                     break;
-                if (at(p, TK_LT)) d++;
-                if (at(p, TK_GT)) d--;
-                advance(p);
+                if (parser_at(p, TK_LT)) d++;
+                if (parser_at(p, TK_GT)) d--;
+                parser_advance(p);
             }
         }
 
@@ -716,15 +716,15 @@ static Node *parse_template_parameter(Parser *p) {
                       param->var_decl.name->len, ENTITY_VARIABLE, ty);
 
     /* Optional default value: = constant-expression */
-    if (consume(p, TK_ASSIGN)) {
+    if (parser_consume(p, TK_ASSIGN)) {
         /* Skip default — consume until , or > or >> */
         int depth = 0;
-        while (!at_eof(p)) {
-            if (depth == 0 && (at(p, TK_COMMA) || at(p, TK_GT) || at(p, TK_SHR)))
+        while (!parser_at_eof(p)) {
+            if (depth == 0 && (parser_at(p, TK_COMMA) || parser_at(p, TK_GT) || parser_at(p, TK_SHR)))
                 break;
-            if (at(p, TK_LT)) depth++;
-            if (at(p, TK_GT)) depth--;
-            advance(p);
+            if (parser_at(p, TK_LT)) depth++;
+            if (parser_at(p, TK_GT)) depth--;
+            parser_advance(p);
         }
     }
 
@@ -743,12 +743,12 @@ static Node *parse_template_parameter(Parser *p) {
  *    was introduced."
  */
 Node *parse_template_declaration(Parser *p) {
-    Token *tok = expect(p, TK_KW_TEMPLATE);
+    Token *tok = parser_expect(p, TK_KW_TEMPLATE);
 
     /* explicit-specialization: template <> declaration */
-    if (at(p, TK_LT) && peek_ahead(p, 1)->kind == TK_GT) {
-        advance(p);  /* < */
-        advance(p);  /* > */
+    if (parser_at(p, TK_LT) && parser_peek_ahead(p, 1)->kind == TK_GT) {
+        parser_advance(p);  /* < */
+        parser_advance(p);  /* > */
         /* Parse the specialized declaration */
         Node *decl = parse_declaration(p);
         Node *node = new_node(p, ND_TEMPLATE_DECL, tok);
@@ -758,25 +758,25 @@ Node *parse_template_declaration(Parser *p) {
         return node;
     }
 
-    expect(p, TK_LT);
+    parser_expect(p, TK_LT);
 
     /* Push template parameter scope — §6.3.9 [basic.scope.temp] */
     region_push(p, REGION_TEMPLATE);
 
     /* Parse template-parameter-list */
     Vec params = vec_new(p->arena);
-    if (!at(p, TK_GT) && !at(p, TK_SHR)) {
+    if (!parser_at(p, TK_GT) && !parser_at(p, TK_SHR)) {
         vec_push(&params, parse_template_parameter(p));
-        while (consume(p, TK_COMMA))
+        while (parser_consume(p, TK_COMMA))
             vec_push(&params, parse_template_parameter(p));
     }
 
-    expect(p, TK_GT);
+    parser_expect(p, TK_GT);
 
     /* Parse the templated declaration.
      * This can be a class, function, variable, alias, or nested template. */
     Node *decl;
-    if (at(p, TK_KW_TEMPLATE))
+    if (parser_at(p, TK_KW_TEMPLATE))
         decl = parse_template_declaration(p);  /* nested template */
     else
         decl = parse_declaration(p);
@@ -842,19 +842,19 @@ Node *parse_template_declaration(Parser *p) {
  */
 Node *parse_template_id(Parser *p, Token *name) {
     Token *tok = name;
-    expect(p, TK_LT);
+    parser_expect(p, TK_LT);
     p->template_depth++;
 
     Vec args = vec_new(p->arena);
 
-    if (!at(p, TK_GT) && !(at(p, TK_SHR) && p->template_depth > 0)) {
+    if (!parser_at(p, TK_GT) && !(parser_at(p, TK_SHR) && p->template_depth > 0)) {
         /* Terminates: each iteration parses a template argument
          * (consuming tokens), then breaks on non-comma. */
         for (;;) {
             /* template-argument: type-id or constant-expression or id-expression.
              * N4659 §17.3/2 [temp.arg] Rule 5: "type-id always wins."
              * For the first pass, try type first if at a type specifier. */
-            if (at_type_specifier(p)) {
+            if (parser_at_type_specifier(p)) {
                 /* Tentative: try type-id */
                 ParseState saved = parser_save(p);
                 p->tentative = true;
@@ -862,13 +862,13 @@ Node *parse_template_id(Parser *p, Token *name) {
                 bool ty_ok = (ty != NULL);
                 p->tentative = false;
 
-                if (ty_ok && (at(p, TK_COMMA) || at(p, TK_GT) ||
-                              (at(p, TK_SHR) && p->template_depth > 0))) {
+                if (ty_ok && (parser_at(p, TK_COMMA) || parser_at(p, TK_GT) ||
+                              (parser_at(p, TK_SHR) && p->template_depth > 0))) {
                     /* Successfully parsed as type-id, and next is , or > */
                     /* Create a node to represent the type argument */
                     parser_restore(p, saved);
                     ty = parse_type_name(p);
-                    Node *arg = new_node(p, ND_VAR_DECL, peek(p));
+                    Node *arg = new_node(p, ND_VAR_DECL, parser_peek(p));
                     arg->var_decl.ty = ty;
                     arg->var_decl.name = NULL;
                     vec_push(&args, arg);
@@ -882,7 +882,7 @@ Node *parse_template_id(Parser *p, Token *name) {
                 vec_push(&args, parse_assign_expr(p));
             }
 
-            if (!consume(p, TK_COMMA))
+            if (!parser_consume(p, TK_COMMA))
                 break;
         }
     }
@@ -893,13 +893,13 @@ Node *parse_template_id(Parser *p, Token *name) {
      * a greater-than operator."
      *
      * For >>: advance past the >> token and set split_shr so the next
-     * peek()/at()/advance() returns a virtual TK_GT for the outer
+     * parser_peek()/parser_at()/parser_advance() returns a virtual TK_GT for the outer
      * template-argument-list. No token mutation — safe for tentative parsing. */
-    if (at(p, TK_SHR) && p->template_depth > 0) {
-        advance(p);         /* consume the >> token */
+    if (parser_at(p, TK_SHR) && p->template_depth > 0) {
+        parser_advance(p);         /* consume the >> token */
         p->split_shr = true; /* leave a virtual > for the outer consumer */
     } else {
-        expect(p, TK_GT);
+        parser_expect(p, TK_GT);
     }
 
     p->template_depth--;

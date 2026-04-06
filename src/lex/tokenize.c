@@ -99,8 +99,8 @@ static int ident_start_len(const char *p) {
         return 1;
     if (c >= 0x80) {
         uint32_t cp;
-        int len = decode_utf8(p, &cp);
-        if (len > 0 && is_ident_start(cp))
+        int len = lex_decode_utf8(p, &cp);
+        if (len > 0 && lex_is_ident_start(cp))
             return len;
     }
     return 0;
@@ -114,8 +114,8 @@ static int ident_continue_len(const char *p) {
         return 1;
     if (c >= 0x80) {
         uint32_t cp;
-        int len = decode_utf8(p, &cp);
-        if (len > 0 && is_ident_continue(cp))
+        int len = lex_decode_utf8(p, &cp);
+        if (len > 0 && lex_is_ident_continue(cp))
             return len;
     }
     return 0;
@@ -820,7 +820,7 @@ static Token *read_raw_string_literal(LexCtx *ctx, int prefix_len, int enc) {
         if (*ctx->p == ')' &&
             (delim_len == 0 || memcmp(ctx->p + 1, delim_start, delim_len) == 0) &&
             ctx->p[1 + delim_len] == '"') {
-            /* Safe: read_file() allocates 32 bytes of NUL padding past EOF,
+            /* Safe: sf_read_file() allocates 32 bytes of NUL padding past EOF,
              * which covers the max delimiter length (16) + 1 for '"'. */
             ctx->p += 1 + delim_len + 1;  /* skip )delim" */
             break;

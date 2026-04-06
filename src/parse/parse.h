@@ -563,8 +563,8 @@ struct Parser {
                                 * When > 0, TK_SHR (>>) is treated as two '>' tokens
                                 * (N4659 §17.2/3 [temp.names]). */
     bool split_shr;            /* true when a >> has been "split": the first > was
-                                * consumed, the second > is virtual. peek()/at()
-                                * return a synthetic TK_GT; advance() clears the flag.
+                                * consumed, the second > is virtual. parser_peek()/parser_at()
+                                * return a synthetic TK_GT; parser_advance() clears the flag.
                                 * N4659 §17.2/3 [temp.names]. */
 };
 
@@ -573,13 +573,13 @@ struct Parser {
 /* ================================================================== */
 
 /* Token stream — index-based cursor into contiguous array */
-Token *peek(Parser *p);                 /* current token (no advance) */
-Token *peek_ahead(Parser *p, int n);    /* lookahead by n tokens */
-Token *advance(Parser *p);             /* return current, advance position */
-bool   at(Parser *p, TokenKind k);
-bool   consume(Parser *p, TokenKind k);
-Token *expect(Parser *p, TokenKind k);
-bool   at_eof(Parser *p);
+Token *parser_peek(Parser *p);                 /* current token (no advance) */
+Token *parser_peek_ahead(Parser *p, int n);    /* lookahead by n tokens */
+Token *parser_advance(Parser *p);             /* return current, advance position */
+bool   parser_at(Parser *p, TokenKind k);
+bool   parser_consume(Parser *p, TokenKind k);
+Token *parser_expect(Parser *p, TokenKind k);
+bool   parser_at_eof(Parser *p);
 
 /* Tentative parsing — save/restore parser state (position + region) */
 ParseState parser_save(Parser *p);
@@ -759,7 +759,7 @@ Type *new_func_type(Parser *p, Type *ret, Type **params, int nparams, bool varia
 
 /* Check if current token starts a declaration (type-specifier keyword
  * or, with name lookup, a user-defined type-name) */
-bool at_type_specifier(Parser *p);
+bool parser_at_type_specifier(Parser *p);
 
 /* ================================================================== */
 /* Name lookup — lookup.c                                              */

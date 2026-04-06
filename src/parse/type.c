@@ -142,54 +142,54 @@ Type *parse_type_specifiers(Parser *p) {
      * (advancing pos) and continues, or breaks. The token array is finite
      * and non-keyword tokens cause the break. */
     for (;;) {
-        Token *tok = peek(p);
+        Token *tok = parser_peek(p);
 
-        if (tok->kind == TK_KW_CONST)    { advance(p); is_const = true; seen_any = true; continue; }
-        if (tok->kind == TK_KW_VOLATILE) { advance(p); is_volatile = true; seen_any = true; continue; }
-        if (tok->kind == TK_KW_STATIC)   { advance(p); is_static = true; seen_any = true; continue; }
-        if (tok->kind == TK_KW_EXTERN)   { advance(p); is_extern = true; seen_any = true; continue; }
-        if (tok->kind == TK_KW_INLINE)   { advance(p); is_inline = true; seen_any = true; continue; }
-        if (tok->kind == TK_KW_REGISTER) { advance(p); seen_any = true; continue; }
+        if (tok->kind == TK_KW_CONST)    { parser_advance(p); is_const = true; seen_any = true; continue; }
+        if (tok->kind == TK_KW_VOLATILE) { parser_advance(p); is_volatile = true; seen_any = true; continue; }
+        if (tok->kind == TK_KW_STATIC)   { parser_advance(p); is_static = true; seen_any = true; continue; }
+        if (tok->kind == TK_KW_EXTERN)   { parser_advance(p); is_extern = true; seen_any = true; continue; }
+        if (tok->kind == TK_KW_INLINE)   { parser_advance(p); is_inline = true; seen_any = true; continue; }
+        if (tok->kind == TK_KW_REGISTER) { parser_advance(p); seen_any = true; continue; }
 
-        if (tok->kind == TK_KW_VOID)     { advance(p); cnt_void++; seen_any = true; continue; }
-        if (tok->kind == TK_KW_BOOL)     { advance(p); cnt_bool++; seen_any = true; continue; }
-        if (tok->kind == TK_KW_CHAR)     { advance(p); cnt_char++; seen_any = true; continue; }
-        if (tok->kind == TK_KW_SHORT)    { advance(p); cnt_short++; seen_any = true; continue; }
-        if (tok->kind == TK_KW_INT)      { advance(p); cnt_int++; seen_any = true; continue; }
-        if (tok->kind == TK_KW_LONG)     { advance(p); cnt_long++; seen_any = true; continue; }
-        if (tok->kind == TK_KW_FLOAT)    { advance(p); cnt_float++; seen_any = true; continue; }
-        if (tok->kind == TK_KW_DOUBLE)   { advance(p); cnt_double++; seen_any = true; continue; }
-        if (tok->kind == TK_KW_SIGNED)   { advance(p); cnt_signed++; seen_any = true; continue; }
-        if (tok->kind == TK_KW_UNSIGNED) { advance(p); cnt_unsigned++; seen_any = true; continue; }
-        if (tok->kind == TK_KW_CHAR16_T) { advance(p); cnt_char16++; seen_any = true; continue; }
-        if (tok->kind == TK_KW_CHAR32_T) { advance(p); cnt_char32++; seen_any = true; continue; }
-        if (tok->kind == TK_KW_WCHAR_T)  { advance(p); cnt_wchar++; seen_any = true; continue; }
+        if (tok->kind == TK_KW_VOID)     { parser_advance(p); cnt_void++; seen_any = true; continue; }
+        if (tok->kind == TK_KW_BOOL)     { parser_advance(p); cnt_bool++; seen_any = true; continue; }
+        if (tok->kind == TK_KW_CHAR)     { parser_advance(p); cnt_char++; seen_any = true; continue; }
+        if (tok->kind == TK_KW_SHORT)    { parser_advance(p); cnt_short++; seen_any = true; continue; }
+        if (tok->kind == TK_KW_INT)      { parser_advance(p); cnt_int++; seen_any = true; continue; }
+        if (tok->kind == TK_KW_LONG)     { parser_advance(p); cnt_long++; seen_any = true; continue; }
+        if (tok->kind == TK_KW_FLOAT)    { parser_advance(p); cnt_float++; seen_any = true; continue; }
+        if (tok->kind == TK_KW_DOUBLE)   { parser_advance(p); cnt_double++; seen_any = true; continue; }
+        if (tok->kind == TK_KW_SIGNED)   { parser_advance(p); cnt_signed++; seen_any = true; continue; }
+        if (tok->kind == TK_KW_UNSIGNED) { parser_advance(p); cnt_unsigned++; seen_any = true; continue; }
+        if (tok->kind == TK_KW_CHAR16_T) { parser_advance(p); cnt_char16++; seen_any = true; continue; }
+        if (tok->kind == TK_KW_CHAR32_T) { parser_advance(p); cnt_char32++; seen_any = true; continue; }
+        if (tok->kind == TK_KW_WCHAR_T)  { parser_advance(p); cnt_wchar++; seen_any = true; continue; }
 
         /* struct/union — N4659 §12 [class], §10.1.7.3 [dcl.type.elab]
          * For the first pass, consume tag name and skip brace-enclosed
          * body if present. Full member parsing deferred to Stage 2. */
         if (tok->kind == TK_KW_STRUCT || tok->kind == TK_KW_UNION) {
             TypeKind tk = (tok->kind == TK_KW_STRUCT) ? TY_STRUCT : TY_UNION;
-            advance(p);
+            parser_advance(p);
             Type *ty = new_type(p, tk);
             ty->is_const = is_const;
             ty->is_volatile = is_volatile;
-            if (at(p, TK_IDENT))
-                ty->tag = advance(p);
+            if (parser_at(p, TK_IDENT))
+                ty->tag = parser_advance(p);
             /* N4659 §17.2 [temp.names]: struct/class followed by a
              * template-id: 'struct Foo<int>' — consume the template
              * argument list. This occurs in explicit specializations
              * and in elaborated-type-specifiers with template args. */
-            if (ty->tag && at(p, TK_LT) && lookup_is_template_name(p, ty->tag)) {
+            if (ty->tag && parser_at(p, TK_LT) && lookup_is_template_name(p, ty->tag)) {
                 parse_template_id(p, ty->tag);
             }
             /* Skip class body { ... } if present — N4659 §12.1 [class.mem] */
-            if (consume(p, TK_LBRACE)) {
+            if (parser_consume(p, TK_LBRACE)) {
                 int depth = 1;
-                while (depth > 0 && !at_eof(p)) {
-                    if (consume(p, TK_LBRACE)) depth++;
-                    else if (consume(p, TK_RBRACE)) depth--;
-                    else advance(p);
+                while (depth > 0 && !parser_at_eof(p)) {
+                    if (parser_consume(p, TK_LBRACE)) depth++;
+                    else if (parser_consume(p, TK_RBRACE)) depth--;
+                    else parser_advance(p);
                 }
             }
             /* N4659 §6.3.2/7 [basic.scope.pdecl]: register tag name.
@@ -205,25 +205,25 @@ Type *parse_type_specifiers(Parser *p) {
         /* enum — N4659 §10.2 [dcl.enum]
          * Parse optional tag name and skip enumerator-list { ... }. */
         if (tok->kind == TK_KW_ENUM) {
-            advance(p);
+            parser_advance(p);
             Type *ty = new_type(p, TY_ENUM);
             ty->is_const = is_const;
             ty->is_volatile = is_volatile;
             /* enum class / enum struct (C++11 scoped enum) */
-            if (at(p, TK_KW_CLASS) || at(p, TK_KW_STRUCT))
-                advance(p);
-            if (at(p, TK_IDENT))
-                ty->tag = advance(p);
+            if (parser_at(p, TK_KW_CLASS) || parser_at(p, TK_KW_STRUCT))
+                parser_advance(p);
+            if (parser_at(p, TK_IDENT))
+                ty->tag = parser_advance(p);
             /* Optional underlying type: enum E : int { ... } */
-            if (consume(p, TK_COLON))
+            if (parser_consume(p, TK_COLON))
                 parse_type_specifiers(p);  /* consume the underlying type */
             /* Enumerator list { ... } */
-            if (consume(p, TK_LBRACE)) {
+            if (parser_consume(p, TK_LBRACE)) {
                 int depth = 1;
-                while (depth > 0 && !at_eof(p)) {
-                    if (consume(p, TK_LBRACE)) depth++;
-                    else if (consume(p, TK_RBRACE)) depth--;
-                    else advance(p);
+                while (depth > 0 && !parser_at_eof(p)) {
+                    if (parser_consume(p, TK_LBRACE)) depth++;
+                    else if (parser_consume(p, TK_RBRACE)) depth--;
+                    else parser_advance(p);
                 }
             }
             /* Register enum tag — same as struct (§6.3.2/3) */
@@ -241,11 +241,11 @@ Type *parse_type_specifiers(Parser *p) {
      * class-name, or enum-name) can appear as a simple-type-specifier.
      * If no keyword specifiers have been seen, check if the current
      * token is a user-defined type-name via name lookup (§6.4). */
-    if (!seen_any && peek(p)->kind == TK_IDENT) {
-        Declaration *d = lookup_unqualified(p, peek(p)->loc, peek(p)->len);
+    if (!seen_any && parser_peek(p)->kind == TK_IDENT) {
+        Declaration *d = lookup_unqualified(p, parser_peek(p)->loc, parser_peek(p)->len);
         if (d && (d->entity == ENTITY_TYPE || d->entity == ENTITY_TAG ||
                   d->entity == ENTITY_TEMPLATE)) {
-            Token *name_tok = advance(p);
+            Token *name_tok = parser_advance(p);
 
             /* N4659 §17.2 [temp.names]: if the name is (also) a template-name
              * and is followed by <, parse the template-argument-list to form a
@@ -253,7 +253,7 @@ Type *parse_type_specifiers(Parser *p) {
              * A name can be both a type and a template (e.g., after explicit
              * specialization registers the name as ENTITY_TYPE while the
              * primary template registered it as ENTITY_TEMPLATE). */
-            if (at(p, TK_LT) && (d->entity == ENTITY_TEMPLATE ||
+            if (parser_at(p, TK_LT) && (d->entity == ENTITY_TEMPLATE ||
                 lookup_unqualified_kind(p, name_tok->loc, name_tok->len,
                                         ENTITY_TEMPLATE) != NULL)) {
                 parse_template_id(p, name_tok);  /* consumes <args> */
@@ -287,7 +287,7 @@ Type *parse_type_specifiers(Parser *p) {
 
     if (!seen_any) {
         if (p->tentative) return NULL;
-        error_tok(peek(p), "expected type specifier");
+        error_tok(parser_peek(p), "expected type specifier");
     }
 
     /* Map specifier combination to TypeKind per §10.1.7.2/Table 10 */
@@ -328,8 +328,8 @@ Type *parse_type_specifiers(Parser *p) {
  * Checks built-in type keywords AND, via name lookup (§6.4), whether
  * an identifier is a user-defined type-name (§10.1.7.1).
  */
-bool at_type_specifier(Parser *p) {
-    switch (peek(p)->kind) {
+bool parser_at_type_specifier(Parser *p) {
+    switch (parser_peek(p)->kind) {
     case TK_KW_VOID: case TK_KW_BOOL: case TK_KW_CHAR:
     case TK_KW_SHORT: case TK_KW_INT: case TK_KW_LONG:
     case TK_KW_FLOAT: case TK_KW_DOUBLE:
@@ -349,8 +349,8 @@ bool at_type_specifier(Parser *p) {
          * (simple-template-id, §17.2).
          * Consult name lookup (§6.4) to determine if this identifier
          * refers to a type or template. */
-        return lookup_is_type_name(p, peek(p)) ||
-               lookup_is_template_name(p, peek(p));
+        return lookup_is_type_name(p, parser_peek(p)) ||
+               lookup_is_template_name(p, parser_peek(p));
     default:
         return false;
     }
@@ -372,15 +372,15 @@ Type *parse_type_name(Parser *p) {
      * Terminates: each iteration consumes one token (*, &, or &&) or breaks.
      * At most one & or && (references don't stack), and finite *'s. */
     for (;;) {
-        if (consume(p, TK_STAR)) {
+        if (parser_consume(p, TK_STAR)) {
             base = new_ptr_type(p, base);
-            while (at(p, TK_KW_CONST) || at(p, TK_KW_VOLATILE)) {
-                if (consume(p, TK_KW_CONST))    base->is_const = true;
-                if (consume(p, TK_KW_VOLATILE)) base->is_volatile = true;
+            while (parser_at(p, TK_KW_CONST) || parser_at(p, TK_KW_VOLATILE)) {
+                if (parser_consume(p, TK_KW_CONST))    base->is_const = true;
+                if (parser_consume(p, TK_KW_VOLATILE)) base->is_volatile = true;
             }
-        } else if (consume(p, TK_LAND)) {
+        } else if (parser_consume(p, TK_LAND)) {
             base = new_rvalref_type(p, base);
-        } else if (consume(p, TK_AMP)) {
+        } else if (parser_consume(p, TK_AMP)) {
             base = new_ref_type(p, base);
         } else {
             break;

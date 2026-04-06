@@ -18,7 +18,7 @@
  * Returns the number of bytes consumed (1-4), or 0 on invalid sequence.
  * Sets *codepoint to the decoded value.
  */
-int decode_utf8(const char *p, uint32_t *codepoint) {
+int lex_decode_utf8(const char *p, uint32_t *codepoint) {
     unsigned char c = (unsigned char)*p;
 
     if (c < 0x80) {
@@ -122,7 +122,7 @@ static bool in_ranges(uint32_t cp, const Range *ranges, int count) {
     return false;
 }
 
-bool is_ident_start(uint32_t cp) {
+bool lex_is_ident_start(uint32_t cp) {
     /* ASCII fast path */
     if (cp < 0x80)
         return (cp >= 'a' && cp <= 'z') ||
@@ -132,7 +132,7 @@ bool is_ident_start(uint32_t cp) {
                      (int)(sizeof(annex_e1) / sizeof(annex_e1[0])));
 }
 
-bool is_ident_continue(uint32_t cp) {
+bool lex_is_ident_continue(uint32_t cp) {
     /* ASCII fast path */
     if (cp < 0x80)
         return (cp >= 'a' && cp <= 'z') ||

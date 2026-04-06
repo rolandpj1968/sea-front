@@ -256,14 +256,14 @@ bool token_equal(Token *tok, const char *s);
 /*
  * unicode.c — UTF-8 and identifier classification
  */
-int decode_utf8(const char *p, uint32_t *codepoint);
-bool is_ident_start(uint32_t cp);
-bool is_ident_continue(uint32_t cp);
+int lex_decode_utf8(const char *p, uint32_t *codepoint);
+bool lex_is_ident_start(uint32_t cp);
+bool lex_is_ident_continue(uint32_t cp);
 
 /*
  * util.c — Helpers
  */
-File *read_file(const char *path);
+File *sf_read_file(const char *path);
 void *xmalloc(size_t size);
 void *xcalloc(size_t nmemb, size_t size);
 char *xstrdup(const char *s);

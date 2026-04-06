@@ -118,17 +118,17 @@ static int get_binop_prec(Parser *p, TokenKind k) {
 /* ------------------------------------------------------------------ */
 
 static Node *primary_expr(Parser *p) {
-    Token *tok = peek(p);
+    Token *tok = parser_peek(p);
 
     /* Integer literal — §5.13.2 [lex.icon] */
     if (tok->kind == TK_NUM) {
-        advance(p);
+        parser_advance(p);
         return new_num_node(p, tok);
     }
 
     /* Floating literal — §5.13.4 [lex.fcon] */
     if (tok->kind == TK_FNUM) {
-        advance(p);
+        parser_advance(p);
         return new_fnum_node(p, tok);
     }
 
@@ -137,10 +137,10 @@ static Node *primary_expr(Parser *p) {
      * (§5.13.5/13). We consume all consecutive string tokens here.
      * The semantic layer handles actual concatenation and encoding. */
     if (tok->kind == TK_STR) {
-        advance(p);
+        parser_advance(p);
         /* Skip adjacent string literals — they form one logical string */
-        while (at(p, TK_STR))
-            advance(p);
+        while (parser_at(p, TK_STR))
+            parser_advance(p);
         Node *node = new_node(p, ND_STR, tok);
         node->str.tok = tok;
         return node;
@@ -148,7 +148,7 @@ static Node *primary_expr(Parser *p) {
 
     /* Character literal — §5.13.3 [lex.ccon] */
     if (tok->kind == TK_CHAR) {
-        advance(p);
+        parser_advance(p);
         Node *node = new_node(p, ND_CHAR, tok);
         node->chr.tok = tok;
         return node;
@@ -158,7 +158,7 @@ static Node *primary_expr(Parser *p) {
      * Distinct from integer 0/1 — sema needs to know the type is bool.
      * The token (TK_KW_TRUE vs TK_KW_FALSE) carries the value. */
     if (tok->kind == TK_KW_TRUE || tok->kind == TK_KW_FALSE) {
-        advance(p);
+        parser_advance(p);
         return new_node(p, ND_BOOL_LIT, tok);
     }
 
@@ -166,7 +166,7 @@ static Node *primary_expr(Parser *p) {
      * Type is std::nullptr_t (§21.2.4 [support.nullptr]),
      * distinct from integer 0. Sema handles the type. */
     if (tok->kind == TK_KW_NULLPTR) {
-        advance(p);
+        parser_advance(p);
         return new_node(p, ND_NULLPTR, tok);
     }
 
@@ -182,10 +182,10 @@ static Node *primary_expr(Parser *p) {
      *    of a template-argument-list and never as the less-than operator."
      */
     if (tok->kind == TK_IDENT) {
-        advance(p);
+        parser_advance(p);
 
         /* Rule 4: template-name followed by < → template-id */
-        if (at(p, TK_LT) && lookup_is_template_name(p, tok))
+        if (parser_at(p, TK_LT) && lookup_is_template_name(p, tok))
             return parse_template_id(p, tok);
 
         Node *node = new_node(p, ND_IDENT, tok);
@@ -201,14 +201,14 @@ static Node *primary_expr(Parser *p) {
      * a type keyword, we parse a cast. Otherwise, parenthesized expr.
      * Full disambiguation (Rule 1/2) requires the type-name oracle. */
     if (tok->kind == TK_LPAREN) {
-        advance(p);
+        parser_advance(p);
 
         /* Try C-style cast: (type)expr — §8.4 [expr.cast]
          * cast-expression: unary-expression | ( type-id ) cast-expression
          * First-pass approximation: check for built-in type keyword. */
-        if (at_type_specifier(p)) {
+        if (parser_at_type_specifier(p)) {
             Type *ty = parse_type_name(p);
-            expect(p, TK_RPAREN);
+            parser_expect(p, TK_RPAREN);
             Node *operand = unary_expr(p);
             Node *node = new_node(p, ND_CAST, tok);
             node->cast.ty = ty;
@@ -217,7 +217,7 @@ static Node *primary_expr(Parser *p) {
         }
 
         Node *node = parse_expr(p);
-        expect(p, TK_RPAREN);
+        parser_expect(p, TK_RPAREN);
         return node;
     }
 
@@ -226,18 +226,18 @@ static Node *primary_expr(Parser *p) {
      *   sizeof ( type-id )
      *   sizeof ... ( identifier )  (C++11 parameter pack — deferred) */
     if (tok->kind == TK_KW_SIZEOF) {
-        advance(p);
+        parser_advance(p);
         Node *node = new_node(p, ND_SIZEOF, tok);
 
-        if (consume(p, TK_LPAREN)) {
-            if (at_type_specifier(p)) {
+        if (parser_consume(p, TK_LPAREN)) {
+            if (parser_at_type_specifier(p)) {
                 node->sizeof_.ty = parse_type_name(p);
                 node->sizeof_.is_type = true;
             } else {
                 node->sizeof_.expr = parse_expr(p);
                 node->sizeof_.is_type = false;
             }
-            expect(p, TK_RPAREN);
+            parser_expect(p, TK_RPAREN);
         } else {
             node->sizeof_.expr = unary_expr(p);
             node->sizeof_.is_type = false;
@@ -249,11 +249,11 @@ static Node *primary_expr(Parser *p) {
      *   alignof ( type-id )
      * Always takes a type, never an expression. */
     if (tok->kind == TK_KW_ALIGNOF) {
-        advance(p);
+        parser_advance(p);
         Node *node = new_node(p, ND_ALIGNOF, tok);
-        expect(p, TK_LPAREN);
+        parser_expect(p, TK_LPAREN);
         node->alignof_.ty = parse_type_name(p);
-        expect(p, TK_RPAREN);
+        parser_expect(p, TK_RPAREN);
         return node;
     }
 
@@ -286,19 +286,19 @@ static Node *postfix_expr(Parser *p) {
      * postfix operator). Breaks when current token is not a postfix op.
      * Token array is finite, so pos advances toward EOF. */
     for (;;) {
-        Token *tok = peek(p);
+        Token *tok = parser_peek(p);
 
         /* Function call — §8.2.2 [expr.call]
          *   postfix-expression ( expression-list(opt) ) */
         if (tok->kind == TK_LPAREN) {
-            advance(p);
+            parser_advance(p);
             Vec args = vec_new(p->arena);
-            if (!at(p, TK_RPAREN)) {
+            if (!parser_at(p, TK_RPAREN)) {
                 vec_push(&args, parse_assign_expr(p));
-                while (consume(p, TK_COMMA))
+                while (parser_consume(p, TK_COMMA))
                     vec_push(&args, parse_assign_expr(p));
             }
-            expect(p, TK_RPAREN);
+            parser_expect(p, TK_RPAREN);
 
             Node *call = new_node(p, ND_CALL, tok);
             call->call.callee = node;
@@ -312,9 +312,9 @@ static Node *postfix_expr(Parser *p) {
          *   postfix-expression [ expression ]
          * C++23: a[i, j] multidimensional — deferred */
         if (tok->kind == TK_LBRACKET) {
-            advance(p);
+            parser_advance(p);
             Node *index = parse_expr(p);
-            expect(p, TK_RBRACKET);
+            parser_expect(p, TK_RBRACKET);
 
             Node *sub = new_node(p, ND_SUBSCRIPT, tok);
             sub->subscript.base = node;
@@ -328,8 +328,8 @@ static Node *postfix_expr(Parser *p) {
          *   postfix-expression -> id-expression */
         if (tok->kind == TK_DOT || tok->kind == TK_ARROW) {
             TokenKind op = tok->kind;
-            advance(p);
-            Token *member = expect(p, TK_IDENT);
+            parser_advance(p);
+            Token *member = parser_expect(p, TK_IDENT);
 
             Node *mem = new_node(p, ND_MEMBER, tok);
             mem->member.obj = node;
@@ -342,7 +342,7 @@ static Node *postfix_expr(Parser *p) {
         /* Post-increment/decrement — §8.2.6 [expr.post.incr] */
         if (tok->kind == TK_INC || tok->kind == TK_DEC) {
             TokenKind op = tok->kind;
-            advance(p);
+            parser_advance(p);
             Node *post = new_node(p, ND_POSTFIX, tok);
             post->unary.op = op;
             post->unary.operand = node;
@@ -376,11 +376,11 @@ static Node *postfix_expr(Parser *p) {
 /* ------------------------------------------------------------------ */
 
 static Node *unary_expr(Parser *p) {
-    Token *tok = peek(p);
+    Token *tok = parser_peek(p);
 
     /* Pre-increment/decrement — §8.3.1 [expr.pre.incr] */
     if (tok->kind == TK_INC || tok->kind == TK_DEC) {
-        advance(p);
+        parser_advance(p);
         Node *operand = unary_expr(p);
         return new_unary_node(p, tok->kind, operand, tok);
     }
@@ -390,7 +390,7 @@ static Node *unary_expr(Parser *p) {
     if (tok->kind == TK_STAR || tok->kind == TK_AMP ||
         tok->kind == TK_PLUS || tok->kind == TK_MINUS ||
         tok->kind == TK_EXCL || tok->kind == TK_TILDE) {
-        advance(p);
+        parser_advance(p);
         Node *operand = unary_expr(p);  /* cast-expression in the grammar, but we simplify */
         return new_unary_node(p, tok->kind, operand, tok);
     }
@@ -425,13 +425,13 @@ static Node *binary_expr(Parser *p, int min_prec) {
      * when prec == 0 (not a binary op) or prec < min_prec. EOF
      * has prec 0, guaranteeing exit. */
     for (;;) {
-        Token *op_tok = peek(p);
+        Token *op_tok = parser_peek(p);
         int prec = get_binop_prec(p, op_tok->kind);
         if (prec == 0 || prec < min_prec)
             break;
 
         TokenKind op = op_tok->kind;
-        advance(p);
+        parser_advance(p);
 
         /* Left-associative: right side binds tighter (prec + 1) */
         Node *rhs = binary_expr(p, prec + 1);
@@ -461,14 +461,14 @@ static Node *ternary_expr(Parser *p) {
     Node *cond = binary_expr(p, PREC_LOGOR);
     if (!cond) return NULL;
 
-    if (!consume(p, TK_QUESTION))
+    if (!parser_consume(p, TK_QUESTION))
         return cond;
 
     Token *tok = &p->tokens[p->pos > 0 ? p->pos - 1 : 0];
 
     /* §8.16/1: "expression" in then-branch (comma is allowed) */
     Node *then_ = parse_expr(p);
-    expect(p, TK_COLON);
+    parser_expect(p, TK_COLON);
     /* §8.16/1: "assignment-expression" in else-branch */
     Node *else_ = parse_assign_expr(p);
 
@@ -510,10 +510,10 @@ Node *parse_assign_expr(Parser *p) {
     Node *lhs = ternary_expr(p);
     if (!lhs) return NULL;
 
-    Token *tok = peek(p);
+    Token *tok = parser_peek(p);
     if (is_assign_op(tok->kind)) {
         TokenKind op = tok->kind;
-        advance(p);
+        parser_advance(p);
         /* Right-associative: recurse into assign_expr for the RHS */
         Node *rhs = parse_assign_expr(p);
 
@@ -545,7 +545,7 @@ Node *parse_expr(Parser *p) {
     Node *lhs = parse_assign_expr(p);
     if (!lhs) return NULL;
 
-    while (consume(p, TK_COMMA)) {
+    while (parser_consume(p, TK_COMMA)) {
         Token *tok = &p->tokens[p->pos > 0 ? p->pos - 1 : 0];
         Node *rhs = parse_assign_expr(p);
         Node *node = new_node(p, ND_COMMA, tok);

@@ -32,7 +32,7 @@ char *xstrdup(const char *s) {
     return p;
 }
 
-File *read_file(const char *path) {
+File *sf_read_file(const char *path) {
     FILE *fp = fopen(path, "rb");
     if (!fp) {
         fprintf(stderr, "sea-front: cannot open '%s': %s\n", path, strerror(errno));

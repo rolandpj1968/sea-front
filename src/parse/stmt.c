@@ -29,19 +29,19 @@
  * Unchanged in C++20/23.
  */
 Node *parse_compound_stmt(Parser *p) {
-    Token *tok = expect(p, TK_LBRACE);
+    Token *tok = parser_expect(p, TK_LBRACE);
 
     /* N4659 §6.3.3/1 [basic.scope.block]: "A name declared in a block
      * (9.3) is local to that block." */
     region_push(p, REGION_BLOCK);
 
     Vec stmts = vec_new(p->arena);
-    while (!at(p, TK_RBRACE) && !at_eof(p)) {
+    while (!parser_at(p, TK_RBRACE) && !parser_at_eof(p)) {
         Node *s = parse_stmt(p);
         if (s)
             vec_push(&stmts, s);
     }
-    expect(p, TK_RBRACE);
+    parser_expect(p, TK_RBRACE);
 
     region_pop(p);
 
@@ -62,25 +62,25 @@ Node *parse_compound_stmt(Parser *p) {
  * C++23 (N4950 §9.4.2): adds 'if consteval' (not yet implemented).
  */
 static Node *parse_if_stmt(Parser *p) {
-    Token *tok = expect(p, TK_KW_IF);
+    Token *tok = parser_expect(p, TK_KW_IF);
     Node *node = new_node(p, ND_IF, tok);
 
     /* C++17: if constexpr — N4659 §9.4.1/2 */
-    if (consume(p, TK_KW_CONSTEXPR))
+    if (parser_consume(p, TK_KW_CONSTEXPR))
         node->if_.is_constexpr = true;
 
-    expect(p, TK_LPAREN);
+    parser_expect(p, TK_LPAREN);
 
     /* TODO: C++17 init-statement (deferred — needs stmt-vs-decl disambig
      * within the if-condition context) */
     node->if_.cond = parse_expr(p);
 
-    expect(p, TK_RPAREN);
+    parser_expect(p, TK_RPAREN);
 
     node->if_.then_ = parse_stmt(p);
 
     /* else clause — §9.4.1/1 */
-    if (consume(p, TK_KW_ELSE))
+    if (parser_consume(p, TK_KW_ELSE))
         node->if_.else_ = parse_stmt(p);
 
     return node;
@@ -93,10 +93,10 @@ static Node *parse_if_stmt(Parser *p) {
  * Unchanged in C++20/23.
  */
 static Node *parse_while_stmt(Parser *p) {
-    Token *tok = expect(p, TK_KW_WHILE);
-    expect(p, TK_LPAREN);
+    Token *tok = parser_expect(p, TK_KW_WHILE);
+    parser_expect(p, TK_LPAREN);
     Node *cond = parse_expr(p);
-    expect(p, TK_RPAREN);
+    parser_expect(p, TK_RPAREN);
     Node *body = parse_stmt(p);
 
     Node *node = new_node(p, ND_WHILE, tok);
@@ -112,13 +112,13 @@ static Node *parse_while_stmt(Parser *p) {
  * Unchanged in C++20/23.
  */
 static Node *parse_do_stmt(Parser *p) {
-    Token *tok = expect(p, TK_KW_DO);
+    Token *tok = parser_expect(p, TK_KW_DO);
     Node *body = parse_stmt(p);
-    expect(p, TK_KW_WHILE);
-    expect(p, TK_LPAREN);
+    parser_expect(p, TK_KW_WHILE);
+    parser_expect(p, TK_LPAREN);
     Node *cond = parse_expr(p);
-    expect(p, TK_RPAREN);
-    expect(p, TK_SEMI);
+    parser_expect(p, TK_RPAREN);
+    parser_expect(p, TK_SEMI);
 
     Node *node = new_node(p, ND_DO, tok);
     node->do_.cond = cond;
@@ -137,8 +137,8 @@ static Node *parse_do_stmt(Parser *p) {
  * C++20/23: no changes to traditional for syntax.
  */
 static Node *parse_for_stmt(Parser *p) {
-    Token *tok = expect(p, TK_KW_FOR);
-    expect(p, TK_LPAREN);
+    Token *tok = parser_expect(p, TK_KW_FOR);
+    parser_expect(p, TK_LPAREN);
 
     /* N4659 §6.3.3/4 [basic.scope.block]: "Names declared in the
      * init-statement ... are local to the ... for statement." */
@@ -146,29 +146,29 @@ static Node *parse_for_stmt(Parser *p) {
 
     /* init-statement: declaration or expression-statement */
     Node *init = NULL;
-    if (!at(p, TK_SEMI)) {
-        if (at_type_specifier(p))
+    if (!parser_at(p, TK_SEMI)) {
+        if (parser_at_type_specifier(p))
             init = parse_declaration(p);  /* includes trailing ; */
         else {
-            init = new_node(p, ND_EXPR_STMT, peek(p));
+            init = new_node(p, ND_EXPR_STMT, parser_peek(p));
             init->expr_stmt.expr = parse_expr(p);
-            expect(p, TK_SEMI);
+            parser_expect(p, TK_SEMI);
         }
     } else {
-        expect(p, TK_SEMI);
+        parser_expect(p, TK_SEMI);
     }
 
     /* condition (optional) */
     Node *cond = NULL;
-    if (!at(p, TK_SEMI))
+    if (!parser_at(p, TK_SEMI))
         cond = parse_expr(p);
-    expect(p, TK_SEMI);
+    parser_expect(p, TK_SEMI);
 
     /* increment (optional) */
     Node *inc = NULL;
-    if (!at(p, TK_RPAREN))
+    if (!parser_at(p, TK_RPAREN))
         inc = parse_expr(p);
-    expect(p, TK_RPAREN);
+    parser_expect(p, TK_RPAREN);
 
     Node *body = parse_stmt(p);
 
@@ -190,10 +190,10 @@ static Node *parse_for_stmt(Parser *p) {
  * C++20/23: unchanged.
  */
 static Node *parse_switch_stmt(Parser *p) {
-    Token *tok = expect(p, TK_KW_SWITCH);
-    expect(p, TK_LPAREN);
+    Token *tok = parser_expect(p, TK_KW_SWITCH);
+    parser_expect(p, TK_LPAREN);
     Node *expr = parse_expr(p);
-    expect(p, TK_RPAREN);
+    parser_expect(p, TK_RPAREN);
     Node *body = parse_stmt(p);
 
     Node *node = new_node(p, ND_SWITCH, tok);
@@ -209,9 +209,9 @@ static Node *parse_switch_stmt(Parser *p) {
  * Unchanged in C++20/23.
  */
 static Node *parse_case_stmt(Parser *p) {
-    Token *tok = expect(p, TK_KW_CASE);
+    Token *tok = parser_expect(p, TK_KW_CASE);
     Node *expr = parse_assign_expr(p);  /* constant-expression */
-    expect(p, TK_COLON);
+    parser_expect(p, TK_COLON);
     Node *stmt = parse_stmt(p);
 
     Node *node = new_node(p, ND_CASE, tok);
@@ -225,8 +225,8 @@ static Node *parse_case_stmt(Parser *p) {
  *   default : statement
  */
 static Node *parse_default_stmt(Parser *p) {
-    Token *tok = expect(p, TK_KW_DEFAULT);
-    expect(p, TK_COLON);
+    Token *tok = parser_expect(p, TK_KW_DEFAULT);
+    parser_expect(p, TK_COLON);
     Node *stmt = parse_stmt(p);
 
     Node *node = new_node(p, ND_DEFAULT, tok);
@@ -242,13 +242,13 @@ static Node *parse_default_stmt(Parser *p) {
  * C++20: adds co_return (§9.6.3.1 — deferred, no coroutines).
  */
 static Node *parse_return_stmt(Parser *p) {
-    Token *tok = expect(p, TK_KW_RETURN);
+    Token *tok = parser_expect(p, TK_KW_RETURN);
     Node *node = new_node(p, ND_RETURN, tok);
 
-    if (!at(p, TK_SEMI))
+    if (!parser_at(p, TK_SEMI))
         node->ret.expr = parse_expr(p);
 
-    expect(p, TK_SEMI);
+    parser_expect(p, TK_SEMI);
     return node;
 }
 
@@ -260,7 +260,7 @@ static Node *parse_return_stmt(Parser *p) {
  * here: if the token starts a type-specifier, it's a declaration.
  */
 Node *parse_stmt(Parser *p) {
-    Token *tok = peek(p);
+    Token *tok = parser_peek(p);
 
     /* compound-statement — §9.3 */
     if (tok->kind == TK_LBRACE)
@@ -279,20 +279,20 @@ Node *parse_stmt(Parser *p) {
     if (tok->kind == TK_KW_RETURN)  return parse_return_stmt(p);
 
     if (tok->kind == TK_KW_BREAK) {
-        advance(p);
-        expect(p, TK_SEMI);
+        parser_advance(p);
+        parser_expect(p, TK_SEMI);
         return new_node(p, ND_BREAK, tok);
     }
     if (tok->kind == TK_KW_CONTINUE) {
-        advance(p);
-        expect(p, TK_SEMI);
+        parser_advance(p);
+        parser_expect(p, TK_SEMI);
         return new_node(p, ND_CONTINUE, tok);
     }
     if (tok->kind == TK_KW_GOTO) {
-        advance(p);
+        parser_advance(p);
         Node *node = new_node(p, ND_GOTO, tok);
-        node->goto_.label = expect(p, TK_IDENT);
-        expect(p, TK_SEMI);
+        node->goto_.label = parser_expect(p, TK_IDENT);
+        parser_expect(p, TK_SEMI);
         return node;
     }
 
@@ -303,9 +303,9 @@ Node *parse_stmt(Parser *p) {
     /* labeled-statement — §9.1 [stmt.label]
      *   identifier : statement
      * Check for ident followed by colon (not ::). */
-    if (tok->kind == TK_IDENT && peek_ahead(p, 1)->kind == TK_COLON) {
-        Token *label = advance(p);  /* consume ident */
-        advance(p);                 /* consume : */
+    if (tok->kind == TK_IDENT && parser_peek_ahead(p, 1)->kind == TK_COLON) {
+        Token *label = parser_advance(p);  /* consume ident */
+        parser_advance(p);                 /* consume : */
         Node *node = new_node(p, ND_LABEL, tok);
         node->label.label = label;
         node->label.stmt = parse_stmt(p);
@@ -314,7 +314,7 @@ Node *parse_stmt(Parser *p) {
 
     /* empty statement — §9.2 */
     if (tok->kind == TK_SEMI) {
-        advance(p);
+        parser_advance(p);
         return new_node(p, ND_NULL_STMT, tok);
     }
 
@@ -341,9 +341,9 @@ Node *parse_stmt(Parser *p) {
      *   (c) Not a type at all — expression-statement.
      */
 
-    if (at_type_specifier(p)) {
+    if (parser_at_type_specifier(p)) {
         /* Case (a): built-in type keyword — definitely a declaration */
-        if (peek(p)->kind != TK_IDENT)
+        if (parser_peek(p)->kind != TK_IDENT)
             return parse_declaration(p);
 
         /* Case (b): identifier that is a type-name — potentially ambiguous.
@@ -377,6 +377,6 @@ Node *parse_stmt(Parser *p) {
      *   expression(opt) ; */
     Node *node = new_node(p, ND_EXPR_STMT, tok);
     node->expr_stmt.expr = parse_expr(p);
-    expect(p, TK_SEMI);
+    parser_expect(p, TK_SEMI);
     return node;
 }

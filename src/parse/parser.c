@@ -19,13 +19,13 @@
 /* Synthetic TK_GT token used when split_shr is active */
 static Token synthetic_gt = { .kind = TK_GT, .loc = ">", .len = 1 };
 
-Token *peek(Parser *p) {
+Token *parser_peek(Parser *p) {
     if (p->split_shr)
         return &synthetic_gt;
     return &p->tokens[p->pos];
 }
 
-Token *peek_ahead(Parser *p, int n) {
+Token *parser_peek_ahead(Parser *p, int n) {
     if (p->split_shr) {
         if (n == 0) return &synthetic_gt;
         n--;  /* the virtual > occupies slot 0 */
@@ -36,7 +36,7 @@ Token *peek_ahead(Parser *p, int n) {
     return &p->tokens[idx];
 }
 
-Token *advance(Parser *p) {
+Token *parser_advance(Parser *p) {
     if (p->split_shr) {
         p->split_shr = false;
         return &synthetic_gt;
@@ -47,13 +47,13 @@ Token *advance(Parser *p) {
     return tok;
 }
 
-bool at(Parser *p, TokenKind k) {
+bool parser_at(Parser *p, TokenKind k) {
     if (p->split_shr)
         return k == TK_GT;
     return p->tokens[p->pos].kind == k;
 }
 
-bool consume(Parser *p, TokenKind k) {
+bool parser_consume(Parser *p, TokenKind k) {
     if (p->split_shr) {
         if (k == TK_GT) {
             p->split_shr = false;
@@ -62,13 +62,13 @@ bool consume(Parser *p, TokenKind k) {
         return false;
     }
     if (p->tokens[p->pos].kind == k) {
-        advance(p);
+        parser_advance(p);
         return true;
     }
     return false;
 }
 
-Token *expect(Parser *p, TokenKind k) {
+Token *parser_expect(Parser *p, TokenKind k) {
     if (p->split_shr) {
         if (k == TK_GT) {
             p->split_shr = false;
@@ -80,14 +80,14 @@ Token *expect(Parser *p, TokenKind k) {
                   token_kind_name(k));
     }
     if (p->tokens[p->pos].kind == k)
-        return advance(p);
+        return parser_advance(p);
     if (p->tentative)
         return NULL;
     error_tok(&p->tokens[p->pos], "expected '%s', got '%s'",
               token_kind_name(k), token_kind_name(p->tokens[p->pos].kind));
 }
 
-bool at_eof(Parser *p) {
+bool parser_at_eof(Parser *p) {
     if (p->split_shr)
         return false;
     return p->tokens[p->pos].kind == TK_EOF;
@@ -206,7 +206,7 @@ Node *parse(TokenArray tokens, Arena *arena, CppStandard std) {
 
     Vec decls = vec_new(arena);
 
-    while (!at_eof(&p)) {
+    while (!parser_at_eof(&p)) {
         Node *decl = parse_top_level_decl(&p);
         if (decl)
             vec_push(&decls, decl);
