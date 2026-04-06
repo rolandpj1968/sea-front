@@ -516,6 +516,9 @@ typedef enum {
     ENTITY_ENUMERATOR,  /* enumerator (§10.2 [dcl.enum]) — a named constant */
 } EntityKind;
 
+/* Forward declaration — Declaration references DeclarativeRegion */
+typedef struct DeclarativeRegion DeclarativeRegion;
+
 /*
  * Declaration — N4659 §6.1 [basic]
  * "An entity is a value, object, reference, function, enumerator, type,
@@ -531,6 +534,9 @@ struct Declaration {
     int          name_len;  /* byte length of the name */
     EntityKind   entity;    /* what kind of entity this name refers to */
     Type        *type;      /* associated type, or NULL */
+    DeclarativeRegion *ns_region; /* ENTITY_NAMESPACE: the namespace's region.
+                                  * Survives after the region is popped — used
+                                  * by 'using namespace' to find the region. */
     Declaration *next;      /* hash chain within the declarative region */
 };
 
@@ -558,7 +564,7 @@ typedef enum {
  */
 #define REGION_HASH_SIZE 32
 
-typedef struct DeclarativeRegion DeclarativeRegion;
+/* DeclarativeRegion typedef is forward-declared above (before Declaration) */
 struct DeclarativeRegion {
     RegionKind      kind;
     DeclarativeRegion *enclosing;   /* §6.3/1: "declarative regions can nest" */

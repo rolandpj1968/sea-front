@@ -638,10 +638,12 @@ Node *parse_top_level_decl(Parser *p) {
                 parser_advance(p);
         }
 
-        /* Register the namespace name */
+        /* Register the namespace name in the current (enclosing) scope
+         * BEFORE pushing the namespace's own scope. */
+        Declaration *ns_decl = NULL;
         if (ns)
-            region_declare(p, ns->loc, ns->len,
-                          ENTITY_NAMESPACE, /*type=*/NULL);
+            ns_decl = region_declare(p, ns->loc, ns->len,
+                                     ENTITY_NAMESPACE, /*type=*/NULL);
 
         parser_expect(p, TK_LBRACE);
 
@@ -656,6 +658,11 @@ Node *parse_top_level_decl(Parser *p) {
                 vec_push(&decls, decl);
         }
         parser_expect(p, TK_RBRACE);
+
+        /* Stash the namespace region on the declaration so
+         * 'using namespace foo' can find it after the region is popped. */
+        if (ns_decl)
+            ns_decl->ns_region = p->region;
 
         region_pop(p);
 

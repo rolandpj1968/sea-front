@@ -1,0 +1,17 @@
+(translation-unit
+  (block
+    (func-def int "add" (params (param int "a") (param int "b"))
+      (block
+        (return (+ (ident "a") (ident "b"))))))
+  (block
+    (typedef)
+    (class-def "Point"
+      (var-decl int "x")
+      (var-decl int "y")))
+  (var-decl int "x" (num 42))
+  (var-decl struct Point "p")
+  (func-def int "main" (params)
+    (block
+      (typedef)
+      (var-decl int "result" (num 10))
+      (return (+ (ident "result") (ident "x"))))))

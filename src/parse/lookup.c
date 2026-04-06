@@ -259,25 +259,15 @@ void region_add_using(Parser *p, DeclarativeRegion *ns) {
 }
 
 /*
- * Find a named namespace region by walking outward from the current
- * region. Searches for a REGION_NAMESPACE whose name matches.
+ * Find a named namespace's declarative region via name lookup.
+ * The namespace name is declared as ENTITY_NAMESPACE with the
+ * region pointer stored on the Declaration (ns_region field).
  *
- * N4659 §6.3.6 [basic.scope.namespace]: namespace names have
- * namespace scope. The region itself carries the name.
+ * N4659 §6.3.6 [basic.scope.namespace].
  */
 DeclarativeRegion *region_find_namespace(Parser *p, const char *name,
                                          int name_len) {
-    for (DeclarativeRegion *r = p->region; r; r = r->enclosing) {
-        /* Check this region itself */
-        if (r->kind == REGION_NAMESPACE && r->name &&
-            r->name->len == name_len &&
-            memcmp(r->name->loc, name, name_len) == 0)
-            return r;
-
-        /* Check declarations — namespace names are declared as ENTITY_NAMESPACE
-         * and the Declaration doesn't carry the region pointer directly.
-         * But namespaces push named regions, so we search the enclosing
-         * chain for matching REGION_NAMESPACE entries. */
-    }
-    return NULL;
+    Declaration *d = lookup_unqualified_kind(p, name, name_len,
+                                             ENTITY_NAMESPACE);
+    return d ? d->ns_region : NULL;
 }

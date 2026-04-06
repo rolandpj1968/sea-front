@@ -318,6 +318,18 @@ Node *parse_stmt(Parser *p) {
         return new_node(p, ND_NULL_STMT, tok);
     }
 
+    /* using declaration/directive/alias — can appear inside blocks
+     * (§10.3.3 [namespace.udecl], §10.3.4 [namespace.udir]) */
+    if (tok->kind == TK_KW_USING) {
+        /* Delegate to the top-level handler which handles all using forms */
+        return parse_top_level_decl(p);
+    }
+
+    /* static_assert — can appear inside blocks */
+    if (tok->kind == TK_KW_STATIC_ASSERT) {
+        return parse_top_level_decl(p);
+    }
+
     /* declaration-statement vs expression-statement
      *
      * N4659 §9.8 [stmt.ambig] (C++20: §8.9, C++23: §8.9):
