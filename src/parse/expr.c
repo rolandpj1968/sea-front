@@ -167,6 +167,46 @@ static Node *primary_expr(Parser *p) {
         parser_advance(p);
         return new_node(p, ND_NULLPTR, tok);
 
+    case TK_KW_NOEXCEPT: {
+        /* noexcept-operator — N4659 §8.3.7 [expr.unary.noexcept]
+         *   noexcept ( expression )
+         * Yields a bool prvalue. Currently parsed and discarded into an
+         * opaque BOOL_LIT-shaped node. */
+        parser_advance(p);
+        parser_expect(p, TK_LPAREN);
+        int depth = 1;
+        while (depth > 0 && !parser_at_eof(p)) {
+            if (parser_at(p, TK_LPAREN)) depth++;
+            else if (parser_at(p, TK_RPAREN)) {
+                depth--;
+                if (depth == 0) break;
+            }
+            parser_advance(p);
+        }
+        parser_expect(p, TK_RPAREN);
+        return new_node(p, ND_BOOL_LIT, tok);
+    }
+
+    case TK_LBRACE: {
+        /* braced-init-list — N4659 §11.6.4 [dcl.init.list]
+         *   { initializer-list(opt) ,(opt) }
+         * As a primary expression in C++11 list-initialization (e.g.
+         * 'return {};', 'f({1,2})'). Currently parsed and discarded into
+         * an opaque NULLPTR-shaped node. */
+        parser_advance(p);
+        int depth = 1;
+        while (depth > 0 && !parser_at_eof(p)) {
+            if (parser_at(p, TK_LBRACE)) depth++;
+            else if (parser_at(p, TK_RBRACE)) {
+                depth--;
+                if (depth == 0) break;
+            }
+            parser_advance(p);
+        }
+        parser_expect(p, TK_RBRACE);
+        return new_node(p, ND_NULLPTR, tok);  /* opaque placeholder */
+    }
+
     default:
         break;
     }
@@ -174,18 +214,26 @@ static Node *primary_expr(Parser *p) {
     /* Functional-cast / explicit type conversion — N4659 §8.2.3 [expr.type.conv]
      *   simple-type-specifier ( expression-list(opt) )
      *   simple-type-specifier braced-init-list
-     * E.g. 'bool(x)', 'int(0)'. We handle the case where the leading
-     * token is a built-in type keyword followed by '('. Identifier/type-
-     * name forms fall through to the id-expression path. */
-    if (parser_at_type_specifier(p) && tok->kind != TK_IDENT &&
-        parser_peek_ahead(p, 1)->kind == TK_LPAREN) {
+     * E.g. 'bool(x)', 'int(0)', 'typename T::U{}'. */
+    if ((tok->kind == TK_KW_TYPENAME) ||
+        (parser_at_type_specifier(p) && tok->kind != TK_IDENT &&
+         (parser_peek_ahead(p, 1)->kind == TK_LPAREN ||
+          parser_peek_ahead(p, 1)->kind == TK_LBRACE))) {
         Type *ty = parse_type_name(p);
-        parser_expect(p, TK_LPAREN);
-        Node *operand = NULL;
-        if (!parser_at(p, TK_RPAREN))
-            operand = parse_expr(p);
-        parser_expect(p, TK_RPAREN);
-        return new_cast_node(p, ty, operand, tok);
+        TokenKind open  = parser_at(p, TK_LBRACE) ? TK_LBRACE : TK_LPAREN;
+        TokenKind close = (open == TK_LBRACE)     ? TK_RBRACE : TK_RPAREN;
+        parser_expect(p, open);
+        int depth = 1;
+        while (depth > 0 && !parser_at_eof(p)) {
+            if (parser_at(p, open)) depth++;
+            else if (parser_at(p, close)) {
+                depth--;
+                if (depth == 0) break;
+            }
+            parser_advance(p);
+        }
+        parser_expect(p, close);
+        return new_cast_node(p, ty, /*operand=*/NULL, tok);
     }
 
     /* Identifier / qualified-id — N4659 §8.1.4 [expr.prim.id]
@@ -398,8 +446,11 @@ static Node *postfix_expr(Parser *p) {
             Vec args = vec_new(p->arena);
             if (!parser_at(p, TK_RPAREN)) {
                 vec_push(&args, parse_assign_expr(p));
-                while (parser_consume(p, TK_COMMA))
+                parser_consume(p, TK_ELLIPSIS);  /* pack expansion */
+                while (parser_consume(p, TK_COMMA)) {
                     vec_push(&args, parse_assign_expr(p));
+                    parser_consume(p, TK_ELLIPSIS);
+                }
             }
             parser_expect(p, TK_RPAREN);
 

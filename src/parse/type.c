@@ -293,10 +293,32 @@ DeclSpec parse_type_specifiers(Parser *p) {
             /* Base clause: : public Base, private Other (deferred — just skip)
              * N4659 §13.1 [class.derived] */
             if (parser_consume(p, TK_COLON)) {
-                /* Skip base-specifier-list until { */
-                /* Terminates: advances toward { or EOF. */
-                while (!parser_at(p, TK_LBRACE) && !parser_at_eof(p))
+                /* Skip base-specifier-list until the class body '{'.
+                 * Track paren/angle/brace depth so that '{' inside a SFINAE
+                 * expression like 'integral_constant<int, T{}>' doesn't
+                 * fool us into starting the class body early. */
+                int paren = 0, angle = 0;
+                while (!parser_at_eof(p)) {
+                    if (paren == 0 && angle == 0 && parser_at(p, TK_LBRACE))
+                        break;
+                    if (parser_at(p, TK_LBRACE)) {
+                        /* Nested braced-init in a SFINAE expression
+                         * (angle or paren depth > 0). Skip balanced. */
+                        int d = 0;
+                        do {
+                            if (parser_at(p, TK_LBRACE)) d++;
+                            else if (parser_at(p, TK_RBRACE)) d--;
+                            parser_advance(p);
+                        } while (d > 0 && !parser_at_eof(p));
+                        continue;
+                    }
+                    if (parser_at(p, TK_LPAREN)) paren++;
+                    else if (parser_at(p, TK_RPAREN)) paren--;
+                    else if (parser_at(p, TK_LT))    angle++;
+                    else if (parser_at(p, TK_GT))    angle--;
+                    else if (parser_at(p, TK_SHR))   angle -= 2;
                     parser_advance(p);
+                }
             }
 
             /* Class body { member-specification } */
@@ -428,6 +450,63 @@ DeclSpec parse_type_specifiers(Parser *p) {
         ty->tag = first;
         result.type = ty; return result;
     }
+    /* GCC/Clang type intrinsics: __underlying_type(T), __remove_cv(T), etc.
+     * Recognise __identifier ( ... ) and consume the balanced parens. */
+    if (!seen_any && parser_peek(p)->kind == TK_IDENT &&
+        parser_peek(p)->len >= 2 && parser_peek(p)->loc[0] == '_' &&
+        parser_peek(p)->loc[1] == '_' &&
+        parser_peek_ahead(p, 1)->kind == TK_LPAREN &&
+        lookup_unqualified(p, parser_peek(p)->loc, parser_peek(p)->len) == NULL) {
+        Token *name_tok = parser_advance(p);
+        parser_advance(p);  /* ( */
+        int depth = 1;
+        while (depth > 0 && !parser_at_eof(p)) {
+            if (parser_at(p, TK_LPAREN)) depth++;
+            else if (parser_at(p, TK_RPAREN)) {
+                depth--;
+                if (depth == 0) break;
+            }
+            parser_advance(p);
+        }
+        parser_expect(p, TK_RPAREN);
+        Type *ty = new_type(p, TY_INT);  /* opaque */
+        ty->is_const = is_const;
+        ty->is_volatile = is_volatile;
+        ty->tag = name_tok;
+        result.type = ty;
+        return result;
+    }
+
+    /* Unknown identifier followed by < or :: in a type position — assume
+     * it's a (template) type-name. This handles names inherited from base
+     * classes, which we don't yet model with proper inheritance lookup. */
+    if (!seen_any && parser_peek(p)->kind == TK_IDENT &&
+        lookup_unqualified(p, parser_peek(p)->loc, parser_peek(p)->len) == NULL &&
+        (parser_peek_ahead(p, 1)->kind == TK_LT ||
+         parser_peek_ahead(p, 1)->kind == TK_SCOPE)) {
+        Token *name_tok = parser_advance(p);
+        if (parser_at(p, TK_LT))
+            parse_template_id(p, name_tok);
+        while (parser_consume(p, TK_SCOPE)) {
+            parser_consume(p, TK_KW_TEMPLATE);
+            if (parser_at(p, TK_IDENT)) {
+                Token *seg = parser_advance(p);
+                if (parser_at(p, TK_LT))
+                    parse_template_id(p, seg);
+            }
+        }
+        while (parser_at(p, TK_KW_CONST) || parser_at(p, TK_KW_VOLATILE)) {
+            if (parser_consume(p, TK_KW_CONST))    is_const = true;
+            if (parser_consume(p, TK_KW_VOLATILE)) is_volatile = true;
+        }
+        Type *ty = new_type(p, TY_STRUCT);
+        ty->is_const = is_const;
+        ty->is_volatile = is_volatile;
+        ty->tag = name_tok;
+        result.type = ty;
+        return result;
+    }
+
     if (!seen_any && parser_peek(p)->kind == TK_IDENT) {
         Declaration *d = lookup_unqualified(p, parser_peek(p)->loc, parser_peek(p)->len);
         if (d && (d->entity == ENTITY_TYPE || d->entity == ENTITY_TAG ||
@@ -463,6 +542,26 @@ DeclSpec parse_type_specifiers(Parser *p) {
                 ty->is_volatile = is_volatile;
                 ty->tag = name_tok;
                 result.type = ty; return result;
+            }
+
+            /* Trailing nested-name: T::U::V, possibly with template-ids.
+             * Result is opaque to the parser; sema resolves. */
+            while (parser_consume(p, TK_SCOPE)) {
+                parser_consume(p, TK_KW_TEMPLATE);
+                if (parser_at(p, TK_IDENT)) {
+                    Token *seg = parser_advance(p);
+                    if (parser_at(p, TK_LT) &&
+                        lookup_is_template_name(p, seg))
+                        parse_template_id(p, seg);
+                }
+            }
+
+            /* Trailing cv-qualifiers — N4659 §10.1.7.1 [dcl.type.cv]
+             * 'T const' and 'T volatile' are equivalent to 'const T' /
+             * 'volatile T' for any type-name. */
+            while (parser_at(p, TK_KW_CONST) || parser_at(p, TK_KW_VOLATILE)) {
+                if (parser_consume(p, TK_KW_CONST))    is_const = true;
+                if (parser_consume(p, TK_KW_VOLATILE)) is_volatile = true;
             }
 
             Type *ty = d->type;
@@ -599,6 +698,71 @@ Type *parse_type_name(Parser *p) {
         } else {
             break;
         }
+    }
+
+    /* Grouped abstract declarator — N4659 §11.3 [dcl.meaning]
+     *   ( ptr-abstract-declarator )
+     * Handles things like 'T (*)[]' (pointer to array of T) and
+     * 'T (*)(int)' (pointer to function). We accept '(' followed by
+     * '*' or '&' / cv-qualifiers / ')', then treat the result as a
+     * pointer to the rest. The parameter list / array suffix that
+     * follows is then consumed as part of the surrounding type. */
+    if (parser_at(p, TK_LPAREN) &&
+        (parser_peek_ahead(p, 1)->kind == TK_STAR ||
+         parser_peek_ahead(p, 1)->kind == TK_AMP)) {
+        parser_advance(p);  /* ( */
+        while (parser_consume(p, TK_STAR) || parser_consume(p, TK_AMP) ||
+               parser_consume(p, TK_KW_CONST) || parser_consume(p, TK_KW_VOLATILE))
+            ;
+        parser_expect(p, TK_RPAREN);
+        base = new_ptr_type(p, base);
+        /* Optional function-parameter list of the pointed-to function. */
+        if (parser_consume(p, TK_LPAREN)) {
+            int depth = 1;
+            while (depth > 0 && !parser_at_eof(p)) {
+                if (parser_at(p, TK_LPAREN)) depth++;
+                else if (parser_at(p, TK_RPAREN)) {
+                    depth--;
+                    if (depth == 0) break;
+                }
+                parser_advance(p);
+            }
+            parser_expect(p, TK_RPAREN);
+        }
+    }
+
+    /* Pointer-to-member — N4659 §11.3.3 [dcl.mptr]
+     *   ptr-operator: nested-name-specifier * cv-qualifier-seq(opt)
+     * E.g. 'T C::*' is pointer-to-member of C of type T. We accept any
+     * 'ident :: ident :: ... :: *' chain after the base type and produce
+     * an opaque pointer type. */
+    if (parser_at(p, TK_IDENT) && parser_peek_ahead(p, 1)->kind == TK_SCOPE) {
+        /* Look ahead for '*' at the end of the nested-name-specifier. */
+        int n = 0;
+        while (parser_peek_ahead(p, n)->kind == TK_IDENT &&
+               parser_peek_ahead(p, n + 1)->kind == TK_SCOPE)
+            n += 2;
+        if (parser_peek_ahead(p, n)->kind == TK_STAR) {
+            for (int i = 0; i <= n; i++) parser_advance(p);
+            base = new_ptr_type(p, base);
+            while (parser_at(p, TK_KW_CONST) || parser_at(p, TK_KW_VOLATILE)) {
+                if (parser_consume(p, TK_KW_CONST))    base->is_const = true;
+                if (parser_consume(p, TK_KW_VOLATILE)) base->is_volatile = true;
+            }
+        }
+    }
+
+    /* Abstract array suffix — N4659 §11.3.4 [dcl.array]
+     *   abstract-declarator [ constant-expression(opt) ] */
+    while (parser_consume(p, TK_LBRACKET)) {
+        int len = -1;
+        if (!parser_at(p, TK_RBRACKET)) {
+            Node *size = parse_assign_expr(p);
+            if (size && size->kind == ND_NUM)
+                len = (int)size->num.lo;
+        }
+        parser_expect(p, TK_RBRACKET);
+        base = new_array_type(p, base, len);
     }
 
     return base;

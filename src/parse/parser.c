@@ -356,6 +356,13 @@ Node *parse(TokenArray tokens, Arena *arena, CppStandard std) {
     Vec decls = vec_new(arena);
 
     while (!parser_at_eof(&p)) {
+        /* Skip preprocessor leftovers (#line directives) at top level. */
+        if (parser_at(&p, TK_HASH)) {
+            int line = parser_peek(&p)->line;
+            while (!parser_at_eof(&p) && parser_peek(&p)->line == line)
+                parser_advance(&p);
+            continue;
+        }
         Node *decl = parse_top_level_decl(&p);
         if (decl)
             vec_push(&decls, decl);

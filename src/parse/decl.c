@@ -89,6 +89,45 @@
  * Also consumes virt-specifiers (override, final) per §12.3 [class.virtual].
  * Terminates: each iteration consumes a qualifier token or breaks.
  */
+/*
+ * Skip a template-parameter default value.
+ *
+ * Used by all three forms of template-parameter (typename, template
+ * template, non-type) to consume the right-hand side of '= ...' until
+ * we reach the next ',' or the closing '>' of the template-parameter-list.
+ *
+ * Tracks both angle-bracket and parenthesis depth so that things like
+ *   bool = __or_<X, Y<Z>>::value
+ *   typename _D = decltype(swap(declval<T&>(), declval<T&>()))
+ * don't terminate on a stray comma or > inside the default expression.
+ *
+ * Handles >> at depth 1: consumes the SHR, sets split_shr so the outer
+ * template-parameter-list parser sees a virtual '>'.
+ */
+static void skip_template_default(Parser *p) {
+    int angle = 0;
+    int paren = 0;
+    while (!parser_at_eof(p)) {
+        if (angle == 0 && paren == 0 &&
+            (parser_at(p, TK_COMMA) || parser_at(p, TK_GT) ||
+             parser_at(p, TK_SHR)))
+            break;
+        if (parser_at(p, TK_LT))         { angle++; parser_advance(p); }
+        else if (parser_at(p, TK_GT))    { angle--; parser_advance(p); }
+        else if (parser_at(p, TK_SHR)) {
+            if (angle >= 2) { angle -= 2; parser_advance(p); }
+            else if (angle == 1) {
+                parser_advance(p);
+                p->split_shr = true;
+                break;
+            } else parser_advance(p);
+        }
+        else if (parser_at(p, TK_LPAREN)) { paren++; parser_advance(p); }
+        else if (parser_at(p, TK_RPAREN)) { paren--; parser_advance(p); }
+        else parser_advance(p);
+    }
+}
+
 static void consume_trailing_qualifiers(Parser *p) {
     while (parser_consume(p, TK_KW_CONST) ||
            parser_consume(p, TK_KW_VOLATILE) ||
@@ -166,6 +205,24 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
         } else if (parser_consume(p, TK_AMP)) {
             /* & — lvalue reference */
             base_ty = new_ref_type(p, base_ty);
+        } else if (parser_at(p, TK_IDENT) &&
+                   parser_peek_ahead(p, 1)->kind == TK_SCOPE) {
+            /* nested-name-specifier * — pointer-to-member.
+             * Look ahead for '*' at the end of the nested-name chain. */
+            int n = 0;
+            while (parser_peek_ahead(p, n)->kind == TK_IDENT &&
+                   parser_peek_ahead(p, n + 1)->kind == TK_SCOPE)
+                n += 2;
+            if (parser_peek_ahead(p, n)->kind == TK_STAR) {
+                for (int i = 0; i <= n; i++) parser_advance(p);
+                base_ty = new_ptr_type(p, base_ty);
+                while (parser_at(p, TK_KW_CONST) || parser_at(p, TK_KW_VOLATILE)) {
+                    if (parser_consume(p, TK_KW_CONST))    base_ty->is_const = true;
+                    if (parser_consume(p, TK_KW_VOLATILE)) base_ty->is_volatile = true;
+                }
+            } else {
+                break;
+            }
         } else {
             break;
         }
@@ -190,7 +247,8 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
      * '(' followed by a type keyword is a parameter list. */
     if (parser_at(p, TK_LPAREN) && !parser_at_type_specifier(p)) {
         Token *next = parser_peek_ahead(p, 1);
-        if (next && (next->kind == TK_STAR || next->kind == TK_LPAREN ||
+        if (next && (next->kind == TK_STAR || next->kind == TK_AMP ||
+                     next->kind == TK_LAND || next->kind == TK_LPAREN ||
                      (next->kind == TK_IDENT && !lookup_is_type_name(p, next)))) {
             /* Grouping parens or redundant parens around a name.
              * E.g.: int (*fp)(int,int)  or  T(x)  */
@@ -905,6 +963,12 @@ Node *parse_top_level_decl(Parser *p) {
         Vec decls = vec_new(p->arena);
         /* Terminates: each iteration parses a declaration or hits } / EOF */
         while (!parser_at(p, TK_RBRACE) && !parser_at_eof(p)) {
+            if (parser_at(p, TK_HASH)) {
+                int line = parser_peek(p)->line;
+                while (!parser_at_eof(p) && parser_peek(p)->line == line)
+                    parser_advance(p);
+                continue;
+            }
             Node *decl = parse_top_level_decl(p);
             if (decl)
                 vec_push(&decls, decl);
@@ -1046,17 +1110,8 @@ static Node *parse_template_parameter(Parser *p) {
                 region_declare(p, name->loc, name->len, ENTITY_TYPE, /*type=*/NULL);
 
             /* Optional default: = type-id */
-            if (parser_consume(p, TK_ASSIGN)) {
-                /* Skip the default type-id — consume until , or > or >> */
-                int depth = 0;
-                while (!parser_at_eof(p)) {
-                    if (depth == 0 && (parser_at(p, TK_COMMA) || parser_at(p, TK_GT) || parser_at(p, TK_SHR)))
-                        break;
-                    if (parser_at(p, TK_LT)) depth++;
-                    if (parser_at(p, TK_GT)) depth--;
-                    parser_advance(p);
-                }
-            }
+            if (parser_consume(p, TK_ASSIGN))
+                skip_template_default(p);
 
             return new_param_node(p, /*ty=*/NULL, name, tok);
         }
@@ -1091,16 +1146,8 @@ static Node *parse_template_parameter(Parser *p) {
         }
 
         /* Optional default */
-        if (parser_consume(p, TK_ASSIGN)) {
-            int d = 0;
-            while (!parser_at_eof(p)) {
-                if (d == 0 && (parser_at(p, TK_COMMA) || parser_at(p, TK_GT) || parser_at(p, TK_SHR)))
-                    break;
-                if (parser_at(p, TK_LT)) d++;
-                if (parser_at(p, TK_GT)) d--;
-                parser_advance(p);
-            }
-        }
+        if (parser_consume(p, TK_ASSIGN))
+            skip_template_default(p);
 
         return new_param_node(p, /*ty=*/NULL, name, tok);
     }
@@ -1117,17 +1164,8 @@ static Node *parse_template_parameter(Parser *p) {
                       param->var_decl.name->len, ENTITY_VARIABLE, ty);
 
     /* Optional default value: = constant-expression */
-    if (parser_consume(p, TK_ASSIGN)) {
-        /* Skip default — consume until , or > or >> */
-        int depth = 0;
-        while (!parser_at_eof(p)) {
-            if (depth == 0 && (parser_at(p, TK_COMMA) || parser_at(p, TK_GT) || parser_at(p, TK_SHR)))
-                break;
-            if (parser_at(p, TK_LT)) depth++;
-            if (parser_at(p, TK_GT)) depth--;
-            parser_advance(p);
-        }
-    }
+    if (parser_consume(p, TK_ASSIGN))
+        skip_template_default(p);
 
     return param;
 }
@@ -1161,13 +1199,17 @@ Node *parse_template_declaration(Parser *p) {
     /* Push template parameter scope — §6.3.9 [basic.scope.temp] */
     region_push(p, REGION_TEMPLATE, /*name=*/NULL);
 
-    /* Parse template-parameter-list */
+    /* Parse template-parameter-list. Increment template_depth so any
+     * nested >> in a default value (e.g. 'typename _D = decay_t<_T>>')
+     * is split into two > tokens by the lexer-virtual-GT mechanism. */
+    p->template_depth++;
     Vec params = vec_new(p->arena);
     if (!parser_at(p, TK_GT) && !parser_at(p, TK_SHR)) {
         vec_push(&params, parse_template_parameter(p));
         while (parser_consume(p, TK_COMMA))
             vec_push(&params, parse_template_parameter(p));
     }
+    p->template_depth--;
 
     parser_expect(p, TK_GT);
 
@@ -1280,6 +1322,14 @@ Node *parse_template_id(Parser *p, Token *name) {
         /* Terminates: each iteration parses a template argument
          * (consuming tokens), then breaks on non-comma. */
         for (;;) {
+            /* Skip preprocessor leftovers (#line) that mcpp may emit
+             * inside multi-line template-argument-lists. */
+            while (parser_at(p, TK_HASH)) {
+                int line = parser_peek(p)->line;
+                while (!parser_at_eof(p) && parser_peek(p)->line == line)
+                    parser_advance(p);
+            }
+
             /* template-argument: type-id or constant-expression or id-expression.
              * N4659 §17.3/2 [temp.arg] Rule 5: "type-id always wins."
              * For the first pass, try type first if at a type specifier. */
@@ -1290,6 +1340,13 @@ Node *parse_template_id(Parser *p, Token *name) {
                 Type *ty = parse_type_name(p);
                 bool ty_ok = (ty != NULL);
                 p->tentative = false;
+
+                /* Skip any #line directives before the , or > follows. */
+                while (parser_at(p, TK_HASH)) {
+                    int line = parser_peek(p)->line;
+                    while (!parser_at_eof(p) && parser_peek(p)->line == line)
+                        parser_advance(p);
+                }
 
                 if (ty_ok && (parser_at(p, TK_COMMA) || parser_at(p, TK_GT) ||
                               parser_at(p, TK_ELLIPSIS) ||
@@ -1313,6 +1370,12 @@ Node *parse_template_id(Parser *p, Token *name) {
             /* Pack expansion — N4659 §17.6.3 [temp.variadic]
              *   template-argument ... */
             parser_consume(p, TK_ELLIPSIS);
+
+            while (parser_at(p, TK_HASH)) {
+                int line = parser_peek(p)->line;
+                while (!parser_at_eof(p) && parser_peek(p)->line == line)
+                    parser_advance(p);
+            }
 
             if (!parser_consume(p, TK_COMMA))
                 break;
