@@ -227,7 +227,7 @@ Type *parse_type_specifiers(Parser *p) {
             /* Class body { member-specification } */
             if (parser_consume(p, TK_LBRACE)) {
                 /* N4659 §6.3.7 [basic.scope.class]: push class scope */
-                region_push(p, REGION_CLASS);
+                region_push(p, REGION_CLASS, /*name=*/NULL);
 
                 Vec members = vec_new(p->arena);
 

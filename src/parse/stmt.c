@@ -33,7 +33,7 @@ Node *parse_compound_stmt(Parser *p) {
 
     /* N4659 §6.3.3/1 [basic.scope.block]: "A name declared in a block
      * (9.3) is local to that block." */
-    region_push(p, REGION_BLOCK);
+    region_push(p, REGION_BLOCK, /*name=*/NULL);
 
     Vec stmts = vec_new(p->arena);
     while (!parser_at(p, TK_RBRACE) && !parser_at_eof(p)) {
@@ -142,7 +142,7 @@ static Node *parse_for_stmt(Parser *p) {
 
     /* N4659 §6.3.3/4 [basic.scope.block]: "Names declared in the
      * init-statement ... are local to the ... for statement." */
-    region_push(p, REGION_BLOCK);
+    region_push(p, REGION_BLOCK, /*name=*/NULL);
 
     /* init-statement: declaration or expression-statement */
     Node *init = NULL;

@@ -40,11 +40,12 @@ static uint32_t hash_name(const char *name, int len) {
  *
  * N4659 §6.3/1: "Declarative regions can nest."
  */
-void region_push(Parser *p, RegionKind kind) {
+void region_push(Parser *p, RegionKind kind, Token *name) {
     DeclarativeRegion *r = arena_alloc(p->arena, sizeof(DeclarativeRegion));
     r->kind = kind;
     r->enclosing = p->region;
-    /* buckets are zero-initialized by arena_alloc */
+    r->name = name;
+    /* buckets, using_regions are zero-initialized by arena_alloc */
     p->region = r;
 }
 
@@ -120,10 +121,23 @@ static Declaration *lookup_in_region(DeclarativeRegion *r,
 }
 
 Declaration *lookup_unqualified(Parser *p, const char *name, int name_len) {
+    /* Terminates: walks enclosing chain toward NULL (global has no enclosing) */
     for (DeclarativeRegion *r = p->region; r; r = r->enclosing) {
+        /* Search this region's own declarations first */
         Declaration *d = lookup_in_region(r, name, name_len);
         if (d)
             return d;
+
+        /* N4659 §6.4.1/2 [basic.lookup.unqual]: "declarations from the
+         * namespace nominated by a using-directive become visible in a
+         * namespace enclosing the using-directive."
+         *
+         * Search regions imported by using-directives in this region. */
+        for (int i = 0; i < r->nusing; i++) {
+            d = lookup_in_region(r->using_regions[i], name, name_len);
+            if (d)
+                return d;
+        }
     }
     return NULL;
 }
@@ -139,14 +153,29 @@ Declaration *lookup_unqualified(Parser *p, const char *name, int name_len) {
  * name can be hidden by the name of a variable, data member, function,
  * or enumerator declared in the same scope."
  */
+static Declaration *lookup_kind_in_region(DeclarativeRegion *r,
+                                          const char *name, int name_len,
+                                          EntityKind kind) {
+    uint32_t idx = hash_name(name, name_len) % REGION_HASH_SIZE;
+    for (Declaration *d = r->buckets[idx]; d; d = d->next) {
+        if (d->name_len == name_len &&
+            memcmp(d->name, name, name_len) == 0 &&
+            d->entity == kind)
+            return d;
+    }
+    return NULL;
+}
+
 Declaration *lookup_unqualified_kind(Parser *p, const char *name,
                                      int name_len, EntityKind kind) {
     for (DeclarativeRegion *r = p->region; r; r = r->enclosing) {
-        uint32_t idx = hash_name(name, name_len) % REGION_HASH_SIZE;
-        for (Declaration *d = r->buckets[idx]; d; d = d->next) {
-            if (d->name_len == name_len &&
-                memcmp(d->name, name, name_len) == 0 &&
-                d->entity == kind)
+        Declaration *d = lookup_kind_in_region(r, name, name_len, kind);
+        if (d)
+            return d;
+        /* Also search using-directive regions */
+        for (int i = 0; i < r->nusing; i++) {
+            d = lookup_kind_in_region(r->using_regions[i], name, name_len, kind);
+            if (d)
                 return d;
         }
     }
@@ -193,4 +222,62 @@ bool lookup_is_template_name(Parser *p, Token *tok) {
         return false;
     Declaration *d = lookup_unqualified(p, tok->loc, tok->len);
     return d && d->entity == ENTITY_TEMPLATE;
+}
+
+/* ------------------------------------------------------------------ */
+/* Using directives — N4659 §10.3.4 [namespace.udir]                   */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Add a namespace's declarative region to the current region's
+ * "also search" list for unqualified lookup.
+ *
+ * N4659 §6.4.1/2: "The declarations from the namespace nominated
+ * by a using-directive become visible in a namespace enclosing the
+ * using-directive."
+ *
+ * The using list is arena-allocated and grows semi-exponentially.
+ * When the current region is popped, the list is abandoned — scoping
+ * is automatic, no explicit clearing needed.
+ */
+void region_add_using(Parser *p, DeclarativeRegion *ns) {
+    if (p->tentative || !ns)
+        return;
+
+    DeclarativeRegion *r = p->region;
+    if (r->nusing >= r->using_cap) {
+        int new_cap = r->using_cap < 4 ? 4 : r->using_cap * 2;
+        DeclarativeRegion **new_arr = arena_alloc(p->arena,
+            new_cap * sizeof(DeclarativeRegion *));
+        if (r->using_regions)
+            memcpy(new_arr, r->using_regions,
+                   r->nusing * sizeof(DeclarativeRegion *));
+        r->using_regions = new_arr;
+        r->using_cap = new_cap;
+    }
+    r->using_regions[r->nusing++] = ns;
+}
+
+/*
+ * Find a named namespace region by walking outward from the current
+ * region. Searches for a REGION_NAMESPACE whose name matches.
+ *
+ * N4659 §6.3.6 [basic.scope.namespace]: namespace names have
+ * namespace scope. The region itself carries the name.
+ */
+DeclarativeRegion *region_find_namespace(Parser *p, const char *name,
+                                         int name_len) {
+    for (DeclarativeRegion *r = p->region; r; r = r->enclosing) {
+        /* Check this region itself */
+        if (r->kind == REGION_NAMESPACE && r->name &&
+            r->name->len == name_len &&
+            memcmp(r->name->loc, name, name_len) == 0)
+            return r;
+
+        /* Check declarations — namespace names are declared as ENTITY_NAMESPACE
+         * and the Declaration doesn't carry the region pointer directly.
+         * But namespaces push named regions, so we search the enclosing
+         * chain for matching REGION_NAMESPACE entries. */
+    }
+    return NULL;
 }

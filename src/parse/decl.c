@@ -439,7 +439,7 @@ Node *parse_declaration(Parser *p) {
                           decl->var_decl.ty);
 
         /* Push prototype scope and register parameter names */
-        region_push(p, REGION_PROTOTYPE);
+        region_push(p, REGION_PROTOTYPE, /*name=*/NULL);
         for (int i = 0; i < func->func.nparams; i++) {
             Node *param = func->func.params[i];
             if (param->param.name)
@@ -551,6 +551,140 @@ Node *parse_top_level_decl(Parser *p) {
         return NULL;
     }
 
+    /* namespace-definition — N4659 §10.3.1 [namespace.def]
+     *   namespace identifier(opt) { namespace-body }
+     *   inline namespace identifier(opt) { namespace-body }
+     *
+     * C++17: nested namespace: namespace A::B::C { ... }
+     * C++20: inline nested: namespace A::inline B { ... }
+     *
+     * Also handles:
+     *   using-directive: using namespace name ;  (§10.3.4)
+     *   using-declaration: using name ;          (§10.3.3)
+     *   using alias: using T = type-id ;         (deferred)
+     */
+    if (parser_at(p, TK_KW_USING)) {
+        Token *tok = parser_advance(p);
+
+        /* using namespace foo; — §10.3.4 [namespace.udir]
+         * Find the named namespace's region and add it to the current
+         * region's using list so its declarations become visible. */
+        if (parser_consume(p, TK_KW_NAMESPACE)) {
+            Token *ns_tok = NULL;
+            if (parser_at(p, TK_IDENT))
+                ns_tok = parser_advance(p);
+            /* Skip any qualified parts (A::B::C) for now */
+            /* Terminates: advances past :: and ident pairs */
+            while (parser_consume(p, TK_SCOPE)) {
+                if (parser_at(p, TK_IDENT))
+                    ns_tok = parser_advance(p);
+            }
+            /* Find and register the using-directive */
+            if (ns_tok) {
+                DeclarativeRegion *ns = region_find_namespace(
+                    p, ns_tok->loc, ns_tok->len);
+                if (ns)
+                    region_add_using(p, ns);
+            }
+            parser_expect(p, TK_SEMI);
+            return NULL;
+        }
+
+        /* using T = type-id; — C++11 alias declaration (§10.1.3 [dcl.typedef])
+         *   alias-declaration: using identifier = type-id ;
+         * Equivalent to: typedef type-id identifier; */
+        if (parser_at(p, TK_IDENT) && parser_peek_ahead(p, 1)->kind == TK_ASSIGN) {
+            Token *alias_name = parser_advance(p);
+            parser_advance(p);  /* consume = */
+            Type *ty = parse_type_name(p);
+            parser_expect(p, TK_SEMI);
+
+            if (alias_name && ty)
+                region_declare(p, alias_name->loc, alias_name->len,
+                              ENTITY_TYPE, ty);
+
+            Node *node = new_node(p, ND_TYPEDEF, tok);
+            node->var_decl.ty = ty;
+            node->var_decl.name = alias_name;
+            return node;
+        }
+
+        /* using-declaration: using Base::member; — (§10.3.3 [namespace.udecl])
+         * For now, skip until ; */
+        /* Terminates: advances toward ; or EOF */
+        while (!parser_at(p, TK_SEMI) && !parser_at_eof(p))
+            parser_advance(p);
+        parser_expect(p, TK_SEMI);
+        (void)tok;
+        return NULL;
+    }
+
+    if (parser_at(p, TK_KW_NAMESPACE)) {
+        Token *tok = parser_advance(p);
+
+        /* Optional 'inline' namespace */
+        parser_consume(p, TK_KW_INLINE);
+
+        /* Optional namespace name (unnamed namespaces are valid) */
+        Token *ns = NULL;
+        if (parser_at(p, TK_IDENT))
+            ns = parser_advance(p);
+
+        /* C++17 nested namespace: namespace A::B { }
+         * Terminates: each iteration consumes :: and ident */
+        while (parser_consume(p, TK_SCOPE)) {
+            parser_consume(p, TK_KW_INLINE);  /* C++20: inline nested */
+            if (parser_at(p, TK_IDENT))
+                parser_advance(p);
+        }
+
+        /* Register the namespace name */
+        if (ns)
+            region_declare(p, ns->loc, ns->len,
+                          ENTITY_NAMESPACE, /*type=*/NULL);
+
+        parser_expect(p, TK_LBRACE);
+
+        /* N4659 §6.3.6 [basic.scope.namespace]: push named namespace scope */
+        region_push(p, REGION_NAMESPACE, ns);
+
+        Vec decls = vec_new(p->arena);
+        /* Terminates: each iteration parses a declaration or hits } / EOF */
+        while (!parser_at(p, TK_RBRACE) && !parser_at_eof(p)) {
+            Node *decl = parse_top_level_decl(p);
+            if (decl)
+                vec_push(&decls, decl);
+        }
+        parser_expect(p, TK_RBRACE);
+
+        region_pop(p);
+
+        /* Return as a block of declarations */
+        Node *block = new_node(p, ND_BLOCK, tok);
+        block->block.stmts = (Node **)decls.data;
+        block->block.nstmts = decls.len;
+        return block;
+    }
+
+    /* static_assert — N4659 §10.1.4 [dcl.dcl]
+     *   static_assert ( constant-expression , string-literal ) ;
+     *   C++17: static_assert ( constant-expression ) ;
+     * Parse and skip for now. */
+    if (parser_at(p, TK_KW_STATIC_ASSERT)) {
+        parser_advance(p);
+        parser_expect(p, TK_LPAREN);
+        /* Terminates: advances through balanced parens toward ) */
+        int depth = 1;
+        while (depth > 0 && !parser_at_eof(p)) {
+            if (parser_at(p, TK_LPAREN)) depth++;
+            if (parser_at(p, TK_RPAREN)) depth--;
+            if (depth > 0) parser_advance(p);
+        }
+        parser_expect(p, TK_RPAREN);
+        parser_expect(p, TK_SEMI);
+        return NULL;
+    }
+
     /* template-declaration — N4659 §17.1 [temp] (Annex A.12)
      *   template < template-parameter-list > declaration */
     if (parser_at(p, TK_KW_TEMPLATE))
@@ -656,7 +790,7 @@ static Node *parse_template_parameter(Parser *p) {
              * N4659 §6.3.9 [basic.scope.temp]: template parameter names
              * are in the template's declarative region. */
             if (name)
-                region_declare(p, name->loc, name->len, ENTITY_TYPE, NULL);
+                region_declare(p, name->loc, name->len, ENTITY_TYPE, /*type=*/NULL);
 
             /* Optional default: = type-id */
             if (parser_consume(p, TK_ASSIGN)) {
@@ -703,7 +837,7 @@ static Node *parse_template_parameter(Parser *p) {
         Token *name = NULL;
         if (parser_at(p, TK_IDENT)) {
             name = parser_advance(p);
-            region_declare(p, name->loc, name->len, ENTITY_TEMPLATE, NULL);
+            region_declare(p, name->loc, name->len, ENTITY_TEMPLATE, /*type=*/NULL);
         }
 
         /* Optional default */
@@ -780,7 +914,7 @@ Node *parse_template_declaration(Parser *p) {
     parser_expect(p, TK_LT);
 
     /* Push template parameter scope — §6.3.9 [basic.scope.temp] */
-    region_push(p, REGION_TEMPLATE);
+    region_push(p, REGION_TEMPLATE, /*name=*/NULL);
 
     /* Parse template-parameter-list */
     Vec params = vec_new(p->arena);
@@ -831,7 +965,7 @@ Node *parse_template_declaration(Parser *p) {
     }
     if (tmpl_name)
         region_declare(p, tmpl_name->loc, tmpl_name->len,
-                      ENTITY_TEMPLATE, NULL);
+                      ENTITY_TEMPLATE, /*type=*/NULL);
 
     Node *node = new_node(p, ND_TEMPLATE_DECL, tok);
     node->template_decl.params = (Node **)params.data;

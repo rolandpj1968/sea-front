@@ -563,7 +563,23 @@ struct DeclarativeRegion {
     RegionKind      kind;
     DeclarativeRegion *enclosing;   /* §6.3/1: "declarative regions can nest" */
     Declaration    *buckets[REGION_HASH_SIZE]; /* hash table, separate chaining */
-    /* Future: Token *name — for named namespaces (§6.3.6) and classes (§6.3.7) */
+
+    /* Named region — for namespaces (§6.3.6) and classes (§6.3.7).
+     * NULL for anonymous regions (blocks, prototypes). */
+    Token          *name;
+
+    /* using-directives — N4659 §10.3.4 [namespace.udir]
+     *   "using namespace foo;" makes foo's declarations visible here.
+     * N4659 §6.4.1/2: "declarations from the namespace nominated by a
+     *   using-directive become visible in a namespace enclosing the
+     *   using-directive."
+     *
+     * Arena-allocated array of pointers to nominated regions.
+     * Scoping is automatic: when this region is popped, the using
+     * list goes away with it. No explicit clearing needed. */
+    DeclarativeRegion **using_regions;
+    int                 nusing;
+    int                 using_cap;
 };
 
 /*
@@ -819,7 +835,7 @@ bool parser_at_type_specifier(Parser *p);
 /*
  * N4659 §6.3 [basic.scope] — Declarative region management
  */
-void region_push(Parser *p, RegionKind kind);
+void region_push(Parser *p, RegionKind kind, Token *name);
 void region_pop(Parser *p);
 
 /*
@@ -855,6 +871,19 @@ Declaration *lookup_unqualified_kind(Parser *p, const char *name,
  */
 bool lookup_is_type_name(Parser *p, Token *tok);
 bool lookup_is_template_name(Parser *p, Token *tok);
+
+/*
+ * N4659 §10.3.4 [namespace.udir] — Using directives
+ * Add a namespace's declarative region to the current region's
+ * "also search" list. Lookup will search these after own declarations.
+ */
+void region_add_using(Parser *p, DeclarativeRegion *ns);
+
+/*
+ * Find a named namespace region by name, searching outward.
+ * Returns NULL if not found.
+ */
+DeclarativeRegion *region_find_namespace(Parser *p, const char *name, int name_len);
 
 /* ================================================================== */
 /* AST dump — ast_dump.c                                               */
