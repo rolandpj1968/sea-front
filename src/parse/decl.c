@@ -154,29 +154,69 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
      *   declarator-id: ...(opt) id-expression
      *   id-expression: unqualified-id | qualified-id
      *
-     * Handles both bare identifiers (foo) and qualified names
-     * (Foo::bar, A::B::method) for out-of-class definitions. */
+     *   unqualified-id:
+     *       identifier
+     *       operator-function-id      (§16.5 [over.oper])
+     *       conversion-function-id    (deferred)
+     *       ~ class-name              (destructor)
+     *
+     * Handles bare identifiers, qualified names (Foo::bar),
+     * operator overloads (operator[]), and destructors (~Foo). */
     if (parser_at(p, TK_IDENT)) {
         name = parser_advance(p);
-        /* Consume qualified-id: ident :: ident :: ... :: ident
-         * The final identifier is the actual declared name.
-         * Terminates: each iteration consumes :: + ident, or breaks. */
-        while (parser_at(p, TK_SCOPE) && parser_peek_ahead(p, 1)->kind == TK_IDENT) {
-            parser_advance(p);  /* :: */
-            name = parser_advance(p);  /* the next name component */
-        }
-        /* Handle destructor: ~ClassName */
-        if (parser_at(p, TK_SCOPE) && parser_peek_ahead(p, 1)->kind == TK_TILDE) {
-            parser_advance(p);  /* :: */
-            parser_advance(p);  /* ~ */
-            if (parser_at(p, TK_IDENT))
+        /* Template-id in declarator: vec<T, A, vl_embed>::operator[] */
+        if (parser_at(p, TK_LT) && lookup_is_template_name(p, name))
+            parse_template_id(p, name);
+        /* Consume qualified-id: ident(opt <args>) :: ident :: ... :: ident
+         * Terminates: each iteration consumes :: + ident/operator, or breaks. */
+        while (parser_at(p, TK_SCOPE)) {
+            Token *after = parser_peek_ahead(p, 1);
+            if (after->kind == TK_IDENT) {
+                parser_advance(p);  /* :: */
                 name = parser_advance(p);
+            } else if (after->kind == TK_TILDE) {
+                /* Qualified destructor: Foo::~Foo */
+                parser_advance(p);  /* :: */
+                parser_advance(p);  /* ~ */
+                if (parser_at(p, TK_IDENT))
+                    name = parser_advance(p);
+                break;
+            } else if (after->kind == TK_KW_OPERATOR) {
+                /* Qualified operator: Foo::operator[] */
+                parser_advance(p);  /* :: */
+                goto parse_operator_id;
+            } else {
+                break;
+            }
         }
     }
     /* Destructor at current scope: ~ClassName */
     if (!name && parser_at(p, TK_TILDE) && parser_peek_ahead(p, 1)->kind == TK_IDENT) {
         parser_advance(p);  /* ~ */
         name = parser_advance(p);
+    }
+    /* operator-function-id — N4659 §16.5 [over.oper]
+     *   operator-function-id: operator operator-symbol
+     * Handles: operator+, operator[], operator(), operator<<, etc. */
+    if (!name && parser_at(p, TK_KW_OPERATOR)) {
+parse_operator_id:
+        name = parser_advance(p);  /* consume 'operator' */
+        /* Consume the operator symbol(s).
+         * Special cases: operator() and operator[] are multi-token. */
+        if (parser_consume(p, TK_LPAREN)) {
+            parser_expect(p, TK_RPAREN);   /* operator() */
+        } else if (parser_consume(p, TK_LBRACKET)) {
+            parser_expect(p, TK_RBRACKET); /* operator[] */
+        } else if (parser_at(p, TK_KW_NEW) || parser_at(p, TK_KW_DELETE)) {
+            parser_advance(p);  /* operator new / operator delete */
+            /* operator new[] / operator delete[] */
+            if (parser_consume(p, TK_LBRACKET))
+                parser_expect(p, TK_RBRACKET);
+        } else if (parser_peek(p)->kind >= TK_LPAREN &&
+                   parser_peek(p)->kind <= TK_HASHHASH) {
+            /* Any single operator/punctuator token */
+            parser_advance(p);
+        }
     }
 
 parse_suffixes:
@@ -266,6 +306,11 @@ parse_suffixes:
                         Node *param_decl = parse_declarator(p, param_base);
                         param_decl->kind = ND_PARAM;
 
+                        /* Default argument — N4659 §11.3.6 [dcl.fct.default]
+                         *   parameter-declaration = assignment-expression */
+                        if (parser_consume(p, TK_ASSIGN))
+                            parse_assign_expr(p);  /* consume and discard */
+
                         vec_push(&params, param_decl);
                         vec_push(&param_types, param_decl->var_decl.ty);
 
@@ -334,6 +379,8 @@ parse_suffixes:
                     Type *param_base = parse_type_specifiers(p);
                     Node *param_decl = parse_declarator(p, param_base);
                     param_decl->kind = ND_PARAM;
+                    if (parser_consume(p, TK_ASSIGN))
+                        parse_assign_expr(p);  /* default arg — §11.3.6 */
                     vec_push(&params, param_decl);
                     vec_push(&param_types, param_decl->var_decl.ty);
                     if (!parser_consume(p, TK_COMMA)) break;

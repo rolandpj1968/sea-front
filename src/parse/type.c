@@ -159,6 +159,22 @@ Type *parse_type_specifiers(Parser *p) {
         if (tok->kind == TK_KW_VIRTUAL)   { parser_advance(p); continue; }
         if (tok->kind == TK_KW_EXPLICIT)  { parser_advance(p); continue; }
         if (tok->kind == TK_KW_MUTABLE)   { parser_advance(p); continue; }
+        /* alignas(expr) — N4659 §10.1.2 [dcl.align] */
+        if (tok->kind == TK_KW_ALIGNAS) {
+            parser_advance(p);
+            if (parser_consume(p, TK_LPAREN)) {
+                /* Consume the alignment expression or type */
+                int depth = 1;
+                /* Terminates: balanced paren counting */
+                while (depth > 0 && !parser_at_eof(p)) {
+                    if (parser_at(p, TK_LPAREN)) depth++;
+                    if (parser_at(p, TK_RPAREN)) depth--;
+                    if (depth > 0) parser_advance(p);
+                }
+                parser_expect(p, TK_RPAREN);
+            }
+            continue;
+        }
 
         if (tok->kind == TK_KW_VOID)     { parser_advance(p); cnt_void++; seen_any = true; continue; }
         if (tok->kind == TK_KW_BOOL)     { parser_advance(p); cnt_bool++; seen_any = true; continue; }
