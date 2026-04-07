@@ -168,6 +168,12 @@ DeclSpec parse_type_specifiers(Parser *p) {
          * Treat as opaque (TY_INT placeholder); sema does deduction. */
         if (tok->kind == TK_KW_AUTO) {
             parser_advance(p);
+            /* Trailing cv-qualifiers: 'auto const x', 'auto volatile y'.
+             * The keyword loop above already consumed any leading cv. */
+            while (parser_at(p, TK_KW_CONST) || parser_at(p, TK_KW_VOLATILE)) {
+                if (parser_consume(p, TK_KW_CONST))    is_const = true;
+                if (parser_consume(p, TK_KW_VOLATILE)) is_volatile = true;
+            }
             Type *ty = new_type(p, TY_INT);
             ty->is_const = is_const;
             ty->is_volatile = is_volatile;

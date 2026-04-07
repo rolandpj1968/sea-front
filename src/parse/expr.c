@@ -957,6 +957,13 @@ static Node *binary_expr(Parser *p, int min_prec) {
         if (prec == 0 || prec < min_prec)
             break;
 
+        /* C++17 fold-expression boundary: 'op ...' inside a paren-
+         * expression is a fold marker, not a binary op. Stop here so
+         * the enclosing '(' handler can pick up the trailing 'op ...'
+         * and produce a fold. */
+        if (parser_peek_ahead(p, 1)->kind == TK_ELLIPSIS)
+            break;
+
         TokenKind op = op_tok->kind;
         parser_advance(p);
 

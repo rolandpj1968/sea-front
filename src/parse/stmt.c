@@ -100,18 +100,45 @@ static Node *parse_if_stmt(Parser *p) {
         ParseState saved = parser_save(p);
         bool prev_tentative = p->tentative;
         p->tentative = true;
+        bool saved_failed = p->tentative_failed;
+        p->tentative_failed = false;
         Type *base = parse_type_specifiers(p).type;
         Node *decl = base ? parse_declarator(p, base) : NULL;
         if (decl && parser_consume(p, TK_ASSIGN))
             decl->var_decl.init = parse_assign_expr(p);
-        bool ok = decl && parser_at(p, TK_RPAREN);
+        else if (decl && parser_at(p, TK_LBRACE)) {
+            /* Braced-init: 'if (T x{...})'. Skip the brace-balanced
+             * init expression. */
+            int depth = 0;
+            while (!parser_at_eof(p)) {
+                if (parser_at(p, TK_LBRACE)) depth++;
+                if (parser_at(p, TK_RBRACE)) {
+                    depth--;
+                    if (depth <= 0) { parser_advance(p); break; }
+                }
+                parser_advance(p);
+            }
+        }
+        bool ok = decl && parser_at(p, TK_RPAREN) && !p->tentative_failed;
         p->tentative = prev_tentative;
+        p->tentative_failed = saved_failed;
         parser_restore(p, saved);
         if (ok) {
             base = parse_type_specifiers(p).type;
             decl = parse_declarator(p, base);
             if (parser_consume(p, TK_ASSIGN))
                 decl->var_decl.init = parse_assign_expr(p);
+            else if (parser_at(p, TK_LBRACE)) {
+                int depth = 0;
+                while (!parser_at_eof(p)) {
+                    if (parser_at(p, TK_LBRACE)) depth++;
+                    if (parser_at(p, TK_RBRACE)) {
+                        depth--;
+                        if (depth <= 0) { parser_advance(p); break; }
+                    }
+                    parser_advance(p);
+                }
+            }
             if (decl->var_decl.name)
                 region_declare(p, decl->var_decl.name->loc,
                               decl->var_decl.name->len, ENTITY_VARIABLE,

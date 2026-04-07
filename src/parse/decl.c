@@ -354,11 +354,18 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
             if (after->kind == TK_IDENT) {
                 parser_advance(p);  /* :: */
                 name = parser_advance(p);
+                /* Speculative template-id at intermediate segments —
+                 * 'std::basic_streambuf<C, T>::operator=' style. The
+                 * '<' here is overwhelmingly a template-argument-list. */
+                if (parser_at(p, TK_LT)) {
+                    parse_template_id(p, name);
+                    qscope = NULL;  /* opaque template-id segment */
+                }
                 /* Resolve this segment in the previous scope. The LAST
                  * segment is the declarator-id name itself; we don't
                  * descend into it. We only update qscope when the
                  * qualifier (everything-but-the-last) refines further. */
-                if (parser_at(p, TK_SCOPE) && qscope) {
+                else if (parser_at(p, TK_SCOPE) && qscope) {
                     Declaration *next = lookup_in_scope(qscope, name->loc, name->len);
                     if (next && next->type && next->type->class_region)
                         qscope = next->type->class_region;
