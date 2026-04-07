@@ -1,0 +1,13 @@
+(translation-unit
+  (block
+    (var-decl int "answer" (num 42))
+    (typedef)
+    (class-def "Box"
+      (var-decl int "v")))
+  (func-def int "main" (params)
+    (block
+      (var-decl int "x" (+ (qualified "ns" "answer") (num 1)))
+      (var-decl int "y" (num 7))
+      (var-decl struct Box "b")
+      (= (. (ident "b") "v") (num 3))
+      (return (+ (+ (ident "x") (ident "y")) (. (ident "b") "v"))))))

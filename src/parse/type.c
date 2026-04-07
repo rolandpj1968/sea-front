@@ -896,11 +896,54 @@ bool parser_at_type_specifier(Parser *p) {
          * class-name, or enum-name) is a valid simple-type-specifier.
          * A template-name followed by <args> is also a type-specifier
          * (simple-template-id, §17.2).
-         * A qualified name (A::B) is treated as a potential type —
-         * the parser can't resolve qualified lookup, so we assume
-         * it's a type if it starts with ident::. Sema validates. */
-        if (parser_peek_ahead(p, 1)->kind == TK_SCOPE)
-            return true;  /* qualified name — assume type */
+         * A qualified name (A::B::...) — try to walk the chain via real
+         * lookup. If the chain resolves END-TO-END to a declaration, the
+         * answer is precise: type-like declarations → true, others →
+         * false ('std::cout' as an expression is NOT a type-specifier).
+         * If lookup runs out of scope partway, fall back to the
+         * current heuristic: assume a qualified name is a type. */
+        if (parser_peek_ahead(p, 1)->kind == TK_SCOPE) {
+            Token *first = parser_peek(p);
+            Declaration *qres = lookup_unqualified(p, first->loc, first->len);
+            DeclarativeRegion *qscope = NULL;
+            if (qres) {
+                if (qres->entity == ENTITY_NAMESPACE)
+                    qscope = qres->ns_region;
+                else if (qres->type && qres->type->class_region)
+                    qscope = qres->type->class_region;
+            }
+            if (!qscope)
+                return true;  /* leading segment unresolved — assume type */
+            int n = 1;
+            for (;;) {
+                /* Expect '::' then IDENT (no template-id support here —
+                 * a template-id segment makes the chain dependent and
+                 * we fall back to assuming type). */
+                if (parser_peek_ahead(p, n)->kind != TK_SCOPE)
+                    break;
+                Token *seg = parser_peek_ahead(p, n + 1);
+                if (seg->kind != TK_IDENT)
+                    return true;
+                Declaration *next = lookup_in_scope(qscope, seg->loc, seg->len);
+                if (!next)
+                    return true;  /* dead-end — assume type */
+                qres = next;
+                if (next->entity == ENTITY_NAMESPACE)
+                    qscope = next->ns_region;
+                else if (next->type && next->type->class_region)
+                    qscope = next->type->class_region;
+                else
+                    qscope = NULL;
+                n += 2;
+                if (!qscope)
+                    break;  /* terminal — qres holds the final entity */
+            }
+            /* Final entity is in qres. If it's a type-like declaration,
+             * return true; otherwise false (it's a value/function/etc). */
+            return qres && (qres->entity == ENTITY_TYPE ||
+                            qres->entity == ENTITY_TAG ||
+                            qres->entity == ENTITY_TEMPLATE);
+        }
         /* A template-name followed by '<' forms a simple-template-id
          * (§17.2/4) — that's a type-specifier. A bare template-name
          * alone is only a type-specifier if it also names a type (e.g.
