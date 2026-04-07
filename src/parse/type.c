@@ -406,6 +406,9 @@ DeclSpec parse_type_specifiers(Parser *p) {
                 /* Record the class's body region on the type so qualified
                  * lookups (Foo::bar) and base-class chains can find it. */
                 ty->class_region = p->region;
+                /* And the back-pointer so sema/codegen can recover the
+                 * class type from a Declaration's home region. */
+                p->region->owner_type = ty;
 
                 /* Attach base-class regions captured above. Lookup of an
                  * unqualified name in this scope walks bases after the

@@ -209,8 +209,33 @@ static void emit_expr(Node *n) {
          *
          * Detected when the callee is ND_MEMBER and the obj's resolved
          * type is a struct (or pointer-to-struct). The struct's tag
-         * gives us the class name to mangle with. */
+         * gives us the class name to mangle with.
+         *
+         * Also handles unqualified method calls inside another method
+         * body — 'doubled()' inside 'quadrupled()'. The callee is then
+         * an ND_IDENT marked implicit_this, and we recover the class
+         * via the resolved declaration's home region. */
         Node *callee = n->call.callee;
+        if (callee && callee->kind == ND_IDENT &&
+            callee->ident.implicit_this &&
+            callee->ident.resolved_decl &&
+            callee->ident.resolved_decl->type &&
+            callee->ident.resolved_decl->type->kind == TY_FUNC &&
+            callee->ident.resolved_decl->home &&
+            callee->ident.resolved_decl->home->owner_type &&
+            callee->ident.resolved_decl->home->owner_type->tag) {
+            Token *class_tag = callee->ident.resolved_decl->home->owner_type->tag;
+            Token *mname = callee->ident.name;
+            fprintf(stdout, "%.*s_%.*s(this",
+                    class_tag->len, class_tag->loc,
+                    mname->len, mname->loc);
+            for (int i = 0; i < n->call.nargs; i++) {
+                fputs(", ", stdout);
+                emit_expr(n->call.args[i]);
+            }
+            fputc(')', stdout);
+            return;
+        }
         if (callee && callee->kind == ND_MEMBER) {
             Node *obj = callee->member.obj;
             Type *ot = obj ? obj->resolved_type : NULL;
@@ -402,6 +427,31 @@ static void emit_func_def(Node *n) {
         fputs(";\n", stdout);
 }
 
+/* Emit just the signature of a method as a mangled free function.
+ * Used for forward declarations so methods can call each other in
+ * any order regardless of source ordering inside the class body. */
+static void emit_method_signature(Node *func, Token *class_tag) {
+    if (!func || func->kind != ND_FUNC_DEF) return;
+    if (!class_tag || !func->func.name) return;
+
+    emit_type(func->func.ret_ty);
+    fputc(' ', stdout);
+    fprintf(stdout, "%.*s_%.*s",
+            class_tag->len, class_tag->loc,
+            func->func.name->len, func->func.name->loc);
+    fputc('(', stdout);
+    fprintf(stdout, "struct %.*s *this", class_tag->len, class_tag->loc);
+    for (int i = 0; i < func->func.nparams; i++) {
+        fputs(", ", stdout);
+        Node *p = func->func.params[i];
+        emit_type(p->param.ty);
+        if (p->param.name)
+            fprintf(stdout, " %.*s",
+                    p->param.name->len, p->param.name->loc);
+    }
+    fputc(')', stdout);
+}
+
 /* Emit a method definition as a free C function with a mangled name
  * and an explicit 'this' parameter.
  *
@@ -416,24 +466,8 @@ static void emit_method_as_free_fn(Node *func, Token *class_tag) {
     if (!func || func->kind != ND_FUNC_DEF) return;
     if (!class_tag || !func->func.name) return;
 
-    emit_type(func->func.ret_ty);
+    emit_method_signature(func, class_tag);
     fputc(' ', stdout);
-    /* Mangled name: Class_method (no namespace mangling yet). */
-    fprintf(stdout, "%.*s_%.*s",
-            class_tag->len, class_tag->loc,
-            func->func.name->len, func->func.name->loc);
-    /* Parameter list: 'this' first, then the declared params. */
-    fputc('(', stdout);
-    fprintf(stdout, "struct %.*s *this", class_tag->len, class_tag->loc);
-    for (int i = 0; i < func->func.nparams; i++) {
-        fputs(", ", stdout);
-        Node *p = func->func.params[i];
-        emit_type(p->param.ty);
-        if (p->param.name)
-            fprintf(stdout, " %.*s",
-                    p->param.name->len, p->param.name->loc);
-    }
-    fputs(") ", stdout);
     if (func->func.body)
         emit_block(func->func.body);
     else
@@ -464,6 +498,16 @@ static void emit_class_def(Node *n) {
     }
     g_indent--;
     fputs("};\n", stdout);
+
+    /* Forward-declare every method first, so they can call each
+     * other regardless of source order inside the class body. */
+    for (int i = 0; i < n->class_def.nmembers; i++) {
+        Node *m = n->class_def.members[i];
+        if (m && m->kind == ND_FUNC_DEF) {
+            emit_method_signature(m, n->class_def.tag);
+            fputs(";\n", stdout);
+        }
+    }
 
     /* Now emit each method (ND_FUNC_DEF in the member list) as a
      * separate free function. */

@@ -19,10 +19,11 @@
 /* AST Node Kinds                                                      */
 /* ================================================================== */
 
-/* Forward declaration — Node fields reference DeclarativeRegion via
- * pointer (block.scope, func.param_scope), so we need the typedef
- * visible before struct Node is defined further down. */
+/* Forward declarations — Node fields reference DeclarativeRegion and
+ * Declaration via pointer, so we need the typedefs visible before
+ * struct Node is defined further down. */
 typedef struct DeclarativeRegion DeclarativeRegion;
+typedef struct Declaration       Declaration;
 
 typedef enum {
     /* -- Expressions --
@@ -196,8 +197,13 @@ struct Node {
             /* Sema-set: true when the name resolved to a class member
              * accessed via the implicit 'this' (i.e. unqualified
              * reference inside a method body). Codegen rewrites these
-             * to 'this->name'. */
+             * to 'this->name' (data members) or 'Class_name(this,...)'
+             * (member functions). */
             bool implicit_this;
+            /* Sema-set: the resolved declaration. NULL until sema runs.
+             * Used by codegen to recover the home class for method-
+             * call mangling. */
+            Declaration *resolved_decl;
         } ident;
 
         /* ND_QUALIFIED — N4659 §8.1.4.3 [expr.prim.id.qual]
@@ -609,7 +615,7 @@ typedef struct DeclarativeRegion DeclarativeRegion;
  * A Declaration records that a name was introduced into a declarative region.
  * Arena-allocated, never freed individually.
  */
-typedef struct Declaration Declaration;
+/* Declaration typedef forward-declared above (before Node). */
 struct Declaration {
     const char  *name;      /* pointer into source buffer (Token.loc) — no copy */
     int          name_len;  /* byte length of the name */
@@ -682,6 +688,13 @@ struct DeclarativeRegion {
     DeclarativeRegion **bases;
     int                 nbases;
     int                 bases_cap;
+
+    /* For REGION_CLASS: back-pointer to the class Type that owns this
+     * region. Lets sema/codegen recover the class name (via type->tag)
+     * starting from a Declaration found inside the region — used to
+     * mangle method calls 'doubled()' inside a method body to
+     * 'Box_doubled(this)'. */
+    Type *owner_type;
 };
 
 /*

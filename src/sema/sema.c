@@ -142,6 +142,7 @@ static void visit_ident(Sema *s, Node *n) {
     if (!name || name->kind != TK_IDENT) return;
     Declaration *d = lookup_unqualified_from(s->cur_scope, name->loc, name->len);
     if (!d) return;
+    n->ident.resolved_decl = d;
     if (d->type)
         n->resolved_type = d->type;
     if (d->home && d->home->kind == REGION_CLASS)
