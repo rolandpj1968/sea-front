@@ -431,6 +431,15 @@ parse_suffixes:
         }
 
         if (looks_like_params) {
+            /* Tentatively try parsing as a parameter list. If anything
+             * inside fails (e.g. an unparseable param expression), the
+             * '(' was actually a direct-init paren — restore and let the
+             * caller handle it as 'T x(args)' init. */
+            ParseState saved = parser_save(p);
+            bool saved_failed = p->tentative_failed;
+            p->tentative_failed = false;
+            bool prev_tentative = p->tentative;
+            p->tentative = true;
             parser_advance(p);  /* consume ( */
             Vec params = vec_new(p->arena);
             Vec param_types = vec_new(p->arena);
@@ -451,15 +460,18 @@ parse_suffixes:
 
                         Type *param_base = parse_type_specifiers(p).type;
                         Node *param_decl = parse_declarator(p, param_base);
-                        param_decl->kind = ND_PARAM;
+                        if (param_decl)
+                            param_decl->kind = ND_PARAM;
 
                         /* Default argument — N4659 §11.3.6 [dcl.fct.default]
                          *   parameter-declaration = assignment-expression */
                         if (parser_consume(p, TK_ASSIGN))
                             parse_assign_expr(p);  /* consume and discard */
 
-                        vec_push(&params, param_decl);
-                        vec_push(&param_types, param_decl->var_decl.ty);
+                        if (param_decl) {
+                            vec_push(&params, param_decl);
+                            vec_push(&param_types, param_decl->var_decl.ty);
+                        }
 
                         if (!parser_consume(p, TK_COMMA))
                             break;
@@ -473,6 +485,18 @@ parse_suffixes:
                 }
             }
             parser_expect(p, TK_RPAREN);
+
+            bool inner_failed = p->tentative_failed;
+            p->tentative = prev_tentative;
+            p->tentative_failed = saved_failed || (prev_tentative && inner_failed);
+
+            if (inner_failed) {
+                /* Param parsing failed — '(' was actually direct-init.
+                 * Restore the position and let the caller see the '('. */
+                parser_restore(p, saved);
+                p->tentative_failed = saved_failed;
+                return new_var_decl_node(p, ty, name, name);
+            }
 
             consume_trailing_qualifiers(p);
 
