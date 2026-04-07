@@ -165,6 +165,7 @@ static void emit_expr(Node *n) {
         if (n->str.tok) fprintf(stdout, "%.*s", n->str.tok->len, n->str.tok->loc);
         return;
     case ND_IDENT:
+        if (n->ident.implicit_this) fputs("this->", stdout);
         emit_token_text(n->ident.name);
         return;
     case ND_BINARY:
@@ -202,7 +203,39 @@ static void emit_expr(Node *n) {
         emit_expr(n->ternary.else_);
         fputc(')', stdout);
         return;
-    case ND_CALL:
+    case ND_CALL: {
+        /* Method call lowering: 'obj.method(args)' / 'p->method(args)'
+         * becomes 'Class_method(&obj, args)' / 'Class_method(p, args)'.
+         *
+         * Detected when the callee is ND_MEMBER and the obj's resolved
+         * type is a struct (or pointer-to-struct). The struct's tag
+         * gives us the class name to mangle with. */
+        Node *callee = n->call.callee;
+        if (callee && callee->kind == ND_MEMBER) {
+            Node *obj = callee->member.obj;
+            Type *ot = obj ? obj->resolved_type : NULL;
+            bool obj_is_ptr = ot && ot->kind == TY_PTR;
+            if (obj_is_ptr) ot = ot->base;
+            if (ot && (ot->kind == TY_STRUCT || ot->kind == TY_UNION) &&
+                ot->tag && callee->member.member) {
+                fprintf(stdout, "%.*s_%.*s(",
+                        ot->tag->len, ot->tag->loc,
+                        callee->member.member->len, callee->member.member->loc);
+                /* this argument: address-of for value, as-is for pointer. */
+                if (obj_is_ptr) {
+                    emit_expr(obj);
+                } else {
+                    fputc('&', stdout);
+                    emit_expr(obj);
+                }
+                for (int i = 0; i < n->call.nargs; i++) {
+                    fputs(", ", stdout);
+                    emit_expr(n->call.args[i]);
+                }
+                fputc(')', stdout);
+                return;
+            }
+        }
         emit_expr(n->call.callee);
         fputc('(', stdout);
         for (int i = 0; i < n->call.nargs; i++) {
@@ -211,6 +244,7 @@ static void emit_expr(Node *n) {
         }
         fputc(')', stdout);
         return;
+    }
     case ND_CAST:
         fputc('(', stdout);
         emit_type(n->cast.ty);
@@ -368,11 +402,50 @@ static void emit_func_def(Node *n) {
         fputs(";\n", stdout);
 }
 
+/* Emit a method definition as a free C function with a mangled name
+ * and an explicit 'this' parameter.
+ *
+ *   struct Point { int sum() { return x + y; } };
+ * becomes
+ *   int Point_sum(struct Point *this) { return this->x + this->y; }
+ *
+ * The 'this->' rewrite happens at the ident level — visit_ident set
+ * implicit_this on each member reference, and emit_expr emits the
+ * prefix when it sees the flag. */
+static void emit_method_as_free_fn(Node *func, Token *class_tag) {
+    if (!func || func->kind != ND_FUNC_DEF) return;
+    if (!class_tag || !func->func.name) return;
+
+    emit_type(func->func.ret_ty);
+    fputc(' ', stdout);
+    /* Mangled name: Class_method (no namespace mangling yet). */
+    fprintf(stdout, "%.*s_%.*s",
+            class_tag->len, class_tag->loc,
+            func->func.name->len, func->func.name->loc);
+    /* Parameter list: 'this' first, then the declared params. */
+    fputc('(', stdout);
+    fprintf(stdout, "struct %.*s *this", class_tag->len, class_tag->loc);
+    for (int i = 0; i < func->func.nparams; i++) {
+        fputs(", ", stdout);
+        Node *p = func->func.params[i];
+        emit_type(p->param.ty);
+        if (p->param.name)
+            fprintf(stdout, " %.*s",
+                    p->param.name->len, p->param.name->loc);
+    }
+    fputs(") ", stdout);
+    if (func->func.body)
+        emit_block(func->func.body);
+    else
+        fputs(";\n", stdout);
+}
+
 static void emit_class_def(Node *n) {
     /* Emit a C struct from the parsed class definition.
      * Members handled: data members (ND_VAR_DECL with no init).
-     * Skipped: nested types, methods, access specifiers — for the
-     * first slice we only model plain data structs. */
+     * Skipped INSIDE the struct: methods (lowered to free functions
+     * after the struct definition).
+     * Other members (nested types, access specifiers) ignored. */
     fputs("struct ", stdout);
     if (n->class_def.tag)
         fprintf(stdout, "%.*s ",
@@ -391,6 +464,14 @@ static void emit_class_def(Node *n) {
     }
     g_indent--;
     fputs("};\n", stdout);
+
+    /* Now emit each method (ND_FUNC_DEF in the member list) as a
+     * separate free function. */
+    for (int i = 0; i < n->class_def.nmembers; i++) {
+        Node *m = n->class_def.members[i];
+        if (m && m->kind == ND_FUNC_DEF)
+            emit_method_as_free_fn(m, n->class_def.tag);
+    }
 }
 
 static void emit_top_level(Node *n) {

@@ -93,6 +93,7 @@ Declaration *region_declare_in(Parser *p, DeclarativeRegion *r,
     decl->entity = entity;
     decl->type = type;
     decl->ns_region = NULL;
+    decl->home = r;
     decl->next = r->buckets[idx];
     r->buckets[idx] = decl;
     return decl;

@@ -193,6 +193,11 @@ struct Node {
          * Sema resolves it to a variable, function, enumerator, etc. */
         struct {
             Token *name;
+            /* Sema-set: true when the name resolved to a class member
+             * accessed via the implicit 'this' (i.e. unqualified
+             * reference inside a method body). Codegen rewrites these
+             * to 'this->name'. */
+            bool implicit_this;
         } ident;
 
         /* ND_QUALIFIED — N4659 §8.1.4.3 [expr.prim.id.qual]
@@ -613,6 +618,11 @@ struct Declaration {
     DeclarativeRegion *ns_region; /* ENTITY_NAMESPACE: the namespace's region.
                                   * Survives after the region is popped — used
                                   * by 'using namespace' to find the region. */
+    DeclarativeRegion *home; /* the region this Declaration was registered in.
+                              * Sema uses this to detect that an unqualified
+                              * lookup landed on a class member (region kind
+                              * REGION_CLASS) so 'x' inside a method body can
+                              * be rewritten to 'this->x'. */
     Declaration *next;      /* hash chain within the declarative region */
 };
 

@@ -132,13 +132,20 @@ static void visit_ident(Sema *s, Node *n) {
      * Walks the enclosing chain (block → prototype → namespace → ...)
      * via lookup_unqualified_from. The parser registered local
      * variables / parameters as ENTITY_VARIABLE with their Type,
-     * so we just propagate the type onto the node. */
+     * so we just propagate the type onto the node.
+     *
+     * If the resolved declaration lives in a REGION_CLASS scope, it's
+     * a class member referenced unqualifiedly inside a method body —
+     * mark the ident so codegen rewrites it to 'this->name'. */
     if (!s->cur_scope) return;
     Token *name = n->ident.name;
     if (!name || name->kind != TK_IDENT) return;
     Declaration *d = lookup_unqualified_from(s->cur_scope, name->loc, name->len);
-    if (d && d->type)
+    if (!d) return;
+    if (d->type)
         n->resolved_type = d->type;
+    if (d->home && d->home->kind == REGION_CLASS)
+        n->ident.implicit_this = true;
 }
 
 static void visit_binary(Sema *s, Node *n) {
@@ -238,6 +245,19 @@ static void visit_func_def(Sema *s, Node *n) {
     if (n->func.param_scope) s->cur_scope = n->func.param_scope;
     if (n->func.body) visit(s, n->func.body);
     s->cur_scope = saved;
+}
+
+static void visit_class_def(Sema *s, Node *n) {
+    /* Visit class members so in-class method bodies get sema'd.
+     * Method bodies need the class scope active so unqualified
+     * member references resolve via the chain. The parser already
+     * set up the function body's enclosing chain to include the
+     * class scope (during in-class parsing), so we don't need to
+     * push anything extra here — visit_func_def will pick up the
+     * func.param_scope which itself has the class region as its
+     * enclosing. */
+    for (int i = 0; i < n->class_def.nmembers; i++)
+        visit(s, n->class_def.members[i]);
 }
 
 static void visit_return(Sema *s, Node *n) {
@@ -350,6 +370,7 @@ static void visit(Sema *s, Node *n) {
     /* Declarations */
     case ND_VAR_DECL:  visit_var_decl(s, n);  return;
     case ND_FUNC_DEF:  visit_func_def(s, n);  return;
+    case ND_CLASS_DEF: visit_class_def(s, n); return;
 
     case ND_TRANSLATION_UNIT:
         for (int i = 0; i < n->tu.ndecls; i++)
