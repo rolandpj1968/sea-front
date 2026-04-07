@@ -209,8 +209,13 @@ Declaration *lookup_unqualified_kind(Parser *p, const char *name,
 bool lookup_is_type_name(Parser *p, Token *tok) {
     if (tok->kind != TK_IDENT)
         return false;
-    Declaration *d = lookup_unqualified(p, tok->loc, tok->len);
-    return d && (d->entity == ENTITY_TYPE || d->entity == ENTITY_TAG);
+    /* Kind-specific lookup: the same name may be registered as both
+     * ENTITY_TEMPLATE and ENTITY_TYPE (e.g. a class template — its
+     * tag/injected name AND its template-ness are both recorded).
+     * Plain lookup_unqualified would return whichever was inserted
+     * last; we want to know if the name names a type at all. */
+    return lookup_unqualified_kind(p, tok->loc, tok->len, ENTITY_TYPE) ||
+           lookup_unqualified_kind(p, tok->loc, tok->len, ENTITY_TAG);
 }
 
 /*

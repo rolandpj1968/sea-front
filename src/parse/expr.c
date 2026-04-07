@@ -363,15 +363,38 @@ static Node *primary_expr(Parser *p) {
         /* Try C-style cast: (type)expr — §8.4 [expr.cast]
          * cast-expression: unary-expression | ( type-id ) cast-expression
          *
-         * Tentative: parse_type_name may succeed on a qualified-id like
-         * 'std::__are_same<T,U>::__value' that is actually an expression.
-         * If the token after the type-name isn't ')', restore and parse
-         * as a parenthesized expression instead. */
+         * A type-name like 'std::foo<T>::value' could syntactically be
+         * parsed as a type AND as a qualified-id expression. We commit to
+         * the cast interpretation only if the token after ')' can start a
+         * unary-expression — anything else (binary op, ',', ';', ']', etc.)
+         * means we're really parsing a parenthesized expression. */
         if (parser_at_type_specifier(p)) {
             ParseState saved = parser_save(p);
             p->tentative = true;
             Type *ty = parse_type_name(p);
             bool ok = (ty != NULL) && parser_at(p, TK_RPAREN);
+            if (ok) {
+                /* Look at the token after the ')' */
+                TokenKind k = parser_peek_ahead(p, 1)->kind;
+                /* Tokens that cannot start a unary-expression — these
+                 * indicate we're really parsing a parenthesized expression,
+                 * not a cast. Note: '+', '-', '*', '&', '!', '~' CAN start
+                 * a unary-expression and so are not in this list. */
+                switch (k) {
+                case TK_RPAREN: case TK_RBRACE: case TK_RBRACKET:
+                case TK_SEMI: case TK_COMMA: case TK_COLON: case TK_QUESTION:
+                case TK_ASSIGN: case TK_DOT: case TK_ARROW:
+                case TK_SLASH: case TK_PERCENT: case TK_CARET: case TK_PIPE:
+                case TK_LT: case TK_GT: case TK_LE: case TK_GE:
+                case TK_EQ: case TK_NE: case TK_LAND: case TK_LOR:
+                case TK_SHL: case TK_SHR: case TK_DOTSTAR: case TK_ARROWSTAR:
+                case TK_INC: case TK_DEC:
+                    ok = false;
+                    break;
+                default:
+                    break;
+                }
+            }
             p->tentative = false;
             if (ok) {
                 parser_advance(p);  /* ) */
@@ -490,7 +513,33 @@ static Node *postfix_expr(Parser *p) {
         if (tok->kind == TK_DOT || tok->kind == TK_ARROW) {
             TokenKind op = tok->kind;
             parser_advance(p);
-            Token *member = parser_expect(p, TK_IDENT);
+            /* Optional 'template' disambiguator: x.template f<int>() */
+            parser_consume(p, TK_KW_TEMPLATE);
+            /* Pseudo-destructor / explicit operator method call:
+             *   x.operator OP    (e.g. __t.operator->())
+             *   x.~T()           (pseudo-destructor) */
+            Token *member;
+            if (parser_at(p, TK_KW_OPERATOR)) {
+                member = parser_advance(p);
+                /* Consume the operator-symbol (one or two tokens). */
+                if (parser_consume(p, TK_LPAREN))
+                    parser_expect(p, TK_RPAREN);
+                else if (parser_consume(p, TK_LBRACKET))
+                    parser_expect(p, TK_RBRACKET);
+                else if (parser_at(p, TK_KW_NEW) || parser_at(p, TK_KW_DELETE)) {
+                    parser_advance(p);
+                    if (parser_consume(p, TK_LBRACKET))
+                        parser_expect(p, TK_RBRACKET);
+                } else if (parser_peek(p)->kind >= TK_LPAREN &&
+                           parser_peek(p)->kind <= TK_HASHHASH) {
+                    parser_advance(p);
+                }
+            } else if (parser_at(p, TK_TILDE)) {
+                parser_advance(p);
+                member = parser_expect(p, TK_IDENT);
+            } else {
+                member = parser_expect(p, TK_IDENT);
+            }
 
             node = new_member_node(p, node, member, op, tok);
             continue;

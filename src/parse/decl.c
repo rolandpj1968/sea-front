@@ -392,7 +392,7 @@ parse_suffixes:
             case TK_KW_WCHAR_T: case TK_KW_CHAR16_T: case TK_KW_CHAR32_T:
             case TK_KW_CONST: case TK_KW_VOLATILE:
             case TK_KW_STRUCT: case TK_KW_UNION: case TK_KW_ENUM:
-            case TK_KW_AUTO:
+            case TK_KW_AUTO: case TK_KW_TYPENAME: case TK_KW_DECLTYPE:
                 looks_like_params = true;
                 break;
             default:
@@ -400,8 +400,12 @@ parse_suffixes:
                 break;
             }
         } else if (after_paren->kind == TK_IDENT) {
+            /* A qualified-name (ident::...) is treated as a potential type
+             * — qualified lookup isn't resolved here, but the leading
+             * segment is overwhelmingly a namespace or class scope. */
             looks_like_params = lookup_is_type_name(p, after_paren) ||
-                                lookup_is_template_name(p, after_paren);
+                                lookup_is_template_name(p, after_paren) ||
+                                parser_peek_ahead(p, 2)->kind == TK_SCOPE;
         } else if (after_paren->kind != TK_RPAREN &&
                    after_paren->kind != TK_ELLIPSIS &&
                    after_paren->kind != TK_KW_VOID) {

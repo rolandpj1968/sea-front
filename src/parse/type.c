@@ -661,8 +661,18 @@ bool parser_at_type_specifier(Parser *p) {
          * it's a type if it starts with ident::. Sema validates. */
         if (parser_peek_ahead(p, 1)->kind == TK_SCOPE)
             return true;  /* qualified name — assume type */
-        return lookup_is_type_name(p, parser_peek(p)) ||
-               lookup_is_template_name(p, parser_peek(p));
+        /* A template-name followed by '<' forms a simple-template-id
+         * (§17.2/4) — that's a type-specifier. A bare template-name
+         * alone is only a type-specifier if it also names a type (e.g.
+         * the injected-class-name inside its own class template body).
+         * Otherwise — function templates like swap, alias templates —
+         * it must NOT be parsed as a type, or 'swap(args)' in expression
+         * context would be mis-parsed as a declaration. */
+        if (lookup_is_type_name(p, parser_peek(p)))
+            return true;
+        if (lookup_is_template_name(p, parser_peek(p)))
+            return parser_peek_ahead(p, 1)->kind == TK_LT;
+        return false;
     default:
         return false;
     }
