@@ -194,6 +194,7 @@ Node *new_node(Parser *p, NodeKind kind, Token *tok) {
     Node *node = arena_alloc(p->arena, sizeof(Node));
     node->kind = kind;
     node->tok = tok;
+    node->resolved_type = NULL;
     return node;
 }
 

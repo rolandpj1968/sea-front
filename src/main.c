@@ -12,6 +12,8 @@
  */
 
 #include "sea-front.h"
+#include "sema/sema.h"
+#include "codegen/emit_c.h"
 
 static void dump_tokens(TokenArray ta) {
     for (int i = 0; i < ta.len && ta.tokens[i].kind != TK_EOF; i++) {
@@ -60,6 +62,7 @@ static void usage(void) {
 int main(int argc, char **argv) {
     bool do_dump_tokens = false;
     bool do_dump_ast = false;
+    bool do_emit_c = false;
     CppStandard std = CPP17;
     const char *filename = NULL;
 
@@ -68,6 +71,8 @@ int main(int argc, char **argv) {
             do_dump_tokens = true;
         } else if (strcmp(argv[i], "--dump-ast") == 0) {
             do_dump_ast = true;
+        } else if (strcmp(argv[i], "--emit-c") == 0) {
+            do_emit_c = true;
         } else if (strcmp(argv[i], "--std=c++17") == 0) {
             std = CPP17;
         } else if (strcmp(argv[i], "--std=c++20") == 0) {
@@ -102,6 +107,13 @@ int main(int argc, char **argv) {
 
     if (do_dump_ast) {
         dump_ast(ast, 0);
+        arena_free_all(&arena);
+        return 0;
+    }
+
+    if (do_emit_c) {
+        sema_run(ast, &arena);
+        emit_c(ast);
         arena_free_all(&arena);
         return 0;
     }

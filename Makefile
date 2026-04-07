@@ -9,7 +9,9 @@ SRCS     = src/main.c src/util.c src/arena.c \
            src/lex/tokenize.c src/lex/unicode.c \
            src/parse/parser.c src/parse/expr.c src/parse/stmt.c \
            src/parse/decl.c src/parse/type.c src/parse/lookup.c \
-           src/parse/ast_dump.c
+           src/parse/ast_dump.c \
+           src/sema/sema.c \
+           src/codegen/emit_c.c
 OBJS     = $(patsubst src/%.c,$(BUILDDIR)/%.o,$(SRCS))
 
 # Lexer test (doesn't need parse objects)
@@ -43,10 +45,10 @@ $(BUILDDIR)/test_lex.o: tests/test_lex.c $(HDR) | $(BUILDDIR)
 	$(CC) $(CFLAGS) -I src -c -o $@ $<
 
 # Pattern rules for source compilation
-$(BUILDDIR)/%.o: src/%.c $(HDR) $(PARSE_HDR) | $(BUILDDIR)/lex $(BUILDDIR)/parse
+$(BUILDDIR)/%.o: src/%.c $(HDR) $(PARSE_HDR) | $(BUILDDIR)/lex $(BUILDDIR)/parse $(BUILDDIR)/sema $(BUILDDIR)/codegen
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILDDIR) $(BUILDDIR)/lex $(BUILDDIR)/parse $(BUILDDIR)/mcpp:
+$(BUILDDIR) $(BUILDDIR)/lex $(BUILDDIR)/parse $(BUILDDIR)/sema $(BUILDDIR)/codegen $(BUILDDIR)/mcpp:
 	mkdir -p $@
 
 # Core tests — must all pass (gated).
@@ -54,6 +56,7 @@ test: $(LEX_TEST_TARGET) $(TARGET)
 	./$(LEX_TEST_TARGET)
 	@if [ -x tests/test.sh ]; then ./tests/test.sh $(TARGET); fi
 	@if [ -x tests/test_parse.sh ]; then ./tests/test_parse.sh $(TARGET); fi
+	@if [ -x tests/test_emit_c.sh ]; then ./tests/test_emit_c.sh $(TARGET); fi
 
 # Smoke tests against GCC/Clang test suites — not gated (has expected failures).
 # Tracks progress toward the ultimate bootstrap goal.

@@ -146,6 +146,15 @@ struct Node {
     NodeKind kind;
     Token *tok;         /* anchoring token — for error messages and source location */
 
+    /* Sema-resolved type of this node, when applicable.
+     *
+     * For expression nodes, this is the type of the value the
+     * expression evaluates to (e.g. 'int' for '1 + 2', 'T*' for '&x').
+     * Filled in by the sema phase; NULL until then. NULL also for
+     * non-expression nodes (statements, declarations themselves) where
+     * "type of the node" doesn't apply. */
+    Type *resolved_type;
+
     union {
         /* ND_NUM — N4659 §5.13.2 [lex.icon]
          * 128-bit binary representation with sign flag.

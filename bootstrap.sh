@@ -29,7 +29,9 @@ $CC $CFLAGS -o sea-front \
     src/parse/decl.c \
     src/parse/type.c \
     src/parse/lookup.c \
-    src/parse/ast_dump.c
+    src/parse/ast_dump.c \
+    src/sema/sema.c \
+    src/codegen/emit_c.c
 
 echo "Built: sea-front"
 
