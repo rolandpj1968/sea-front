@@ -1,0 +1,25 @@
+(translation-unit
+  (class-def "Base"
+    (typedef)
+    (var-decl int "sentinel"))
+  (class-def "Derived"
+    (func-def void "f" (params)
+      (block
+        (var-decl int "n" (num 0))
+        (cast void (ident "n")))))
+  (class-def "Mid"
+    (typedef))
+  (class-def "Leaf"
+    (func-def void "g" (params)
+      (block
+        (var-decl int "a" (num 1))
+        (var-decl long "b" (num 2))
+        (cast void (ident "a"))
+        (cast void (ident "b")))))
+  (class-def "A"
+    (typedef))
+  (class-def "B"
+    (typedef))
+  (class-def "AB"
+    (var-decl char "x")
+    (var-decl int "y")))

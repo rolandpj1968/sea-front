@@ -473,6 +473,10 @@ enum {
  * C++20 adds: constinit, consteval, concept auto, abbreviated templates.
  * C++23 adds: deducing this, static operator[].
  */
+/* Forward-declared so Type can hold a DeclarativeRegion* for class
+ * member lookup. The struct itself is defined further down. */
+typedef struct DeclarativeRegion DeclarativeRegion;
+
 typedef enum {
     /* Fundamental types — N4659 §6.9.1 [basic.fundamental] */
     TY_VOID,
@@ -529,6 +533,13 @@ struct Type {
 
     /* TY_STRUCT, TY_UNION, TY_ENUM: tag name (for 'struct Foo' usage) */
     Token *tag;
+
+    /* TY_STRUCT, TY_UNION: the declarative region holding the members
+     * of the class body (NULL for forward-declared / opaque types).
+     * Set when the class definition '{ ... }' is parsed.
+     * Used for qualified-name lookup: 'Foo::bar' resolves 'bar' in
+     * Foo's class region (and walks its base-class chain). */
+    DeclarativeRegion *class_region;
 };
 
 /* ================================================================== */
@@ -634,6 +645,16 @@ struct DeclarativeRegion {
     DeclarativeRegion **using_regions;
     int                 nusing;
     int                 using_cap;
+
+    /* Base-class regions (REGION_CLASS only) — N4659 §13 [class.derived].
+     * For 'struct Derived : public Base1, private Base2 { ... }', this
+     * holds the class regions of Base1 and Base2 in declaration order.
+     * Lookup of an unqualified name in a derived-class scope walks
+     * these after the class's own buckets (§6.4.2 [class.member.lookup]).
+     * Arena-allocated, scoped with the region. */
+    DeclarativeRegion **bases;
+    int                 nbases;
+    int                 bases_cap;
 };
 
 /*
@@ -964,6 +985,9 @@ bool lookup_is_template_name(Parser *p, Token *tok);
  * "also search" list. Lookup will search these after own declarations.
  */
 void region_add_using(Parser *p, DeclarativeRegion *ns);
+void region_add_base(Parser *p, DeclarativeRegion *base);
+Declaration *lookup_in_scope(DeclarativeRegion *scope,
+                             const char *name, int name_len);
 
 /*
  * Find a named namespace region by name, searching outward.

@@ -310,55 +310,109 @@ DeclSpec parse_type_specifiers(Parser *p) {
                 }
             }
 
-            /* Base clause: : public Base, private Other (deferred — just skip)
-             * N4659 §13.1 [class.derived] */
+            /* Base clause — N4659 §13.1 [class.derived]
+             *   base-clause: : base-specifier-list
+             *   base-specifier:
+             *       attribute-specifier-seq(opt) class-or-decltype
+             *     | attribute-specifier-seq(opt) virtual access-specifier(opt) class-or-decltype
+             *     | attribute-specifier-seq(opt) access-specifier virtual(opt) class-or-decltype
+             *
+             * We parse each base-specifier as a type-name and remember
+             * the resolved class_region (if any). The bases will be
+             * attached to the class scope after region_push below. */
+            #define MAX_BASES 16
+            DeclarativeRegion *base_regions[MAX_BASES];
+            int n_base_regions = 0;
             if (parser_consume(p, TK_COLON)) {
-                /* Skip base-specifier-list until the class body '{'.
-                 * Track paren/angle/brace depth so that '{' inside a SFINAE
-                 * expression like 'integral_constant<int, T{}>' doesn't
-                 * fool us into starting the class body early. */
-                int paren = 0, angle = 0;
-                TokenKind prev = TK_EOF;
-                while (!parser_at_eof(p)) {
-                    if (paren == 0 && angle == 0 && parser_at(p, TK_LBRACE))
+                for (;;) {
+                    parser_skip_cxx_attributes(p);
+                    parser_skip_gnu_attributes(p);
+                    /* Optional virtual + access-specifier in either order. */
+                    for (int i = 0; i < 2; i++) {
+                        if (parser_consume(p, TK_KW_VIRTUAL)) continue;
+                        if (parser_consume(p, TK_KW_PUBLIC) ||
+                            parser_consume(p, TK_KW_PROTECTED) ||
+                            parser_consume(p, TK_KW_PRIVATE))
+                            continue;
                         break;
-                    if (parser_at(p, TK_LBRACE)) {
-                        /* Nested braced-init in a SFINAE expression
-                         * (angle or paren depth > 0). Skip balanced. */
-                        int d = 0;
-                        do {
-                            if (parser_at(p, TK_LBRACE)) d++;
-                            else if (parser_at(p, TK_RBRACE)) d--;
+                    }
+                    /* Parse the base-class-name as a type-specifier.
+                     * Tentative — a SFINAE template-arg that contains
+                     * arbitrary expressions could trip us up; on
+                     * failure, fall back to the depth-tracking skipper. */
+                    ParseState saved = parser_save(p);
+                    bool prev_t = p->tentative;
+                    bool saved_failed = p->tentative_failed;
+                    p->tentative = true;
+                    p->tentative_failed = false;
+                    Type *base_ty = parse_type_specifiers(p).type;
+                    bool ok = (base_ty != NULL) && !p->tentative_failed &&
+                              (parser_at(p, TK_COMMA) || parser_at(p, TK_LBRACE));
+                    p->tentative = prev_t;
+                    p->tentative_failed = saved_failed;
+                    if (!ok) {
+                        /* Couldn't parse this base-specifier as a clean
+                         * type — skip with depth tracking and bail out
+                         * of the base-list. */
+                        parser_restore(p, saved);
+                        int paren = 0, angle = 0;
+                        TokenKind prev = TK_EOF;
+                        while (!parser_at_eof(p)) {
+                            if (paren == 0 && angle == 0 && parser_at(p, TK_LBRACE))
+                                break;
+                            if (parser_at(p, TK_LBRACE)) {
+                                int d = 0;
+                                do {
+                                    if (parser_at(p, TK_LBRACE)) d++;
+                                    else if (parser_at(p, TK_RBRACE)) d--;
+                                    parser_advance(p);
+                                } while (d > 0 && !parser_at_eof(p));
+                                continue;
+                            }
+                            if (parser_at(p, TK_LPAREN)) paren++;
+                            else if (parser_at(p, TK_RPAREN)) paren--;
+                            else if (parser_at(p, TK_LT)) {
+                                if (paren == 0 && prev != TK_RPAREN && prev != TK_NUM)
+                                    angle++;
+                            }
+                            else if (parser_at(p, TK_GT)) {
+                                if (paren == 0) angle--;
+                            }
+                            else if (parser_at(p, TK_SHR)) {
+                                if (paren == 0) angle -= 2;
+                            }
+                            prev = parser_peek(p)->kind;
                             parser_advance(p);
-                        } while (d > 0 && !parser_at_eof(p));
-                        continue;
+                        }
+                        break;
                     }
-                    if (parser_at(p, TK_LPAREN)) paren++;
-                    else if (parser_at(p, TK_RPAREN)) paren--;
-                    /* '<'/'>' inside parens is a relational operator;
-                     * also after a ')' or NUM at angle level (it's
-                     * comparing the result of an expression):
-                     *   integral_constant<bool, T(-1) < T(0)>
-                     * Don't count those as template-arg delimiters. */
-                    else if (parser_at(p, TK_LT)) {
-                        if (paren == 0 && prev != TK_RPAREN && prev != TK_NUM)
-                            angle++;
-                    }
-                    else if (parser_at(p, TK_GT)) {
-                        if (paren == 0) angle--;
-                    }
-                    else if (parser_at(p, TK_SHR)) {
-                        if (paren == 0) angle -= 2;
-                    }
-                    prev = parser_peek(p)->kind;
-                    parser_advance(p);
+                    /* Re-parse committed and record the class_region. */
+                    parser_restore(p, saved);
+                    base_ty = parse_type_specifiers(p).type;
+                    if (base_ty && base_ty->class_region &&
+                        n_base_regions < MAX_BASES)
+                        base_regions[n_base_regions++] = base_ty->class_region;
+                    /* Pack expansion '...' on a base-class type. */
+                    parser_consume(p, TK_ELLIPSIS);
+                    if (!parser_consume(p, TK_COMMA))
+                        break;
                 }
             }
+            #undef MAX_BASES
 
             /* Class body { member-specification } */
             if (parser_consume(p, TK_LBRACE)) {
                 /* N4659 §6.3.7 [basic.scope.class]: push class scope */
                 region_push(p, REGION_CLASS, /*name=*/NULL);
+                /* Record the class's body region on the type so qualified
+                 * lookups (Foo::bar) and base-class chains can find it. */
+                ty->class_region = p->region;
+
+                /* Attach base-class regions captured above. Lookup of an
+                 * unqualified name in this scope walks bases after the
+                 * class's own buckets. */
+                for (int i = 0; i < n_base_regions; i++)
+                    region_add_base(p, base_regions[i]);
 
                 /* N4659 §9.2/2 [class]: the class-name is also inserted
                  * into the scope of the class itself ("injected class

@@ -123,6 +123,16 @@ static Declaration *lookup_in_region(DeclarativeRegion *r,
         if (d->name_len == name_len && memcmp(d->name, name, name_len) == 0)
             return d;
     }
+    /* N4659 §6.4.2 [class.member.lookup]: in a class scope, also search
+     * the class's base-class subobjects. Depth-first; doesn't yet handle
+     * diamond ambiguity (the spec says ambiguous lookup is ill-formed,
+     * but for our purposes the first match is fine). */
+    if (r->kind == REGION_CLASS) {
+        for (int i = 0; i < r->nbases; i++) {
+            Declaration *d = lookup_in_region(r->bases[i], name, name_len);
+            if (d) return d;
+        }
+    }
     return NULL;
 }
 
@@ -168,6 +178,13 @@ static Declaration *lookup_kind_in_region(DeclarativeRegion *r,
             memcmp(d->name, name, name_len) == 0 &&
             d->entity == kind)
             return d;
+    }
+    /* Walk base classes — see lookup_in_region. */
+    if (r->kind == REGION_CLASS) {
+        for (int i = 0; i < r->nbases; i++) {
+            Declaration *d = lookup_kind_in_region(r->bases[i], name, name_len, kind);
+            if (d) return d;
+        }
     }
     return NULL;
 }
@@ -274,12 +291,53 @@ void region_add_using(Parser *p, DeclarativeRegion *ns) {
 }
 
 /*
+ * Add a base-class region to the current class scope —
+ * N4659 §13.1 [class.derived].
+ *
+ * 'base' is the class_region of a base class (the region holding its
+ * member declarations). When unqualified lookup runs in this class
+ * scope, base regions are searched after the class's own buckets.
+ *
+ * Skipped in tentative mode (no declarative-region pollution).
+ */
+void region_add_base(Parser *p, DeclarativeRegion *base) {
+    if (p->tentative || !base)
+        return;
+    DeclarativeRegion *r = p->region;
+    if (r->nbases >= r->bases_cap) {
+        int new_cap = r->bases_cap < 4 ? 4 : r->bases_cap * 2;
+        DeclarativeRegion **new_arr = arena_alloc(p->arena,
+            new_cap * sizeof(DeclarativeRegion *));
+        if (r->bases)
+            memcpy(new_arr, r->bases,
+                   r->nbases * sizeof(DeclarativeRegion *));
+        r->bases = new_arr;
+        r->bases_cap = new_cap;
+    }
+    r->bases[r->nbases++] = base;
+}
+
+/*
  * Find a named namespace's declarative region via name lookup.
  * The namespace name is declared as ENTITY_NAMESPACE with the
  * region pointer stored on the Declaration (ns_region field).
  *
  * N4659 §6.3.6 [basic.scope.namespace].
  */
+/*
+ * Qualified-name lookup: 'A::B'.
+ * 'scope' is the region of A; we look up B in it (walking bases for
+ * a class scope, but NOT walking enclosing scopes — qualified names
+ * are scope-restricted, N4659 §6.4.3 [basic.lookup.qual]).
+ *
+ * Returns NULL if scope is NULL or B isn't found.
+ */
+Declaration *lookup_in_scope(DeclarativeRegion *scope,
+                             const char *name, int name_len) {
+    if (!scope) return NULL;
+    return lookup_in_region(scope, name, name_len);
+}
+
 DeclarativeRegion *region_find_namespace(Parser *p, const char *name,
                                          int name_len) {
     Declaration *d = lookup_unqualified_kind(p, name, name_len,
