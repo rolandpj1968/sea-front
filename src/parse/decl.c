@@ -847,6 +847,8 @@ Node *parse_declaration(Parser *p) {
         func->func.name = decl->var_decl.name;
         func->func.params = decl->func.params;
         func->func.nparams = decl->func.nparams;
+        func->func.body = NULL;
+        func->func.param_scope = NULL;
 
         /* Register the function name in the enclosing scope */
         if (func->func.name)
@@ -867,6 +869,7 @@ Node *parse_declaration(Parser *p) {
 
         /* Push prototype scope and register parameter names */
         region_push(p, REGION_PROTOTYPE, /*name=*/NULL);
+        func->func.param_scope = p->region;
         for (int i = 0; i < func->func.nparams; i++) {
             Node *param = func->func.params[i];
             if (param->param.name)

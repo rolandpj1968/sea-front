@@ -13,6 +13,11 @@
 
 typedef struct {
     Arena *arena;
+    /* Current lexical scope. The parser stashes a region pointer on
+     * each ND_BLOCK / ND_FUNC_DEF; visit() walks them as it descends.
+     * Lookup of an unqualified identifier walks this chain via the
+     * region's enclosing pointer. */
+    DeclarativeRegion *cur_scope;
 } Sema;
 
 /* ------------------------------------------------------------------ */
@@ -123,14 +128,17 @@ static void visit_chr(Sema *s, Node *n) {
 }
 
 static void visit_ident(Sema *s, Node *n) {
-    /* Look up the identifier in the lexical scope. The parser already
-     * registered local variables in their REGION_BLOCK as ENTITY_VARIABLE
-     * with their declared Type. We don't currently have a parser->sema
-     * handoff for the symbol table, so for now we leave the resolution
-     * to the codegen-time fallback (just emit the name verbatim) and
-     * mark resolved_type NULL. */
-    (void)s;
-    (void)n;
+    /* Resolve the identifier against the current lexical scope.
+     * Walks the enclosing chain (block → prototype → namespace → ...)
+     * via lookup_unqualified_from. The parser registered local
+     * variables / parameters as ENTITY_VARIABLE with their Type,
+     * so we just propagate the type onto the node. */
+    if (!s->cur_scope) return;
+    Token *name = n->ident.name;
+    if (!name || name->kind != TK_IDENT) return;
+    Declaration *d = lookup_unqualified_from(s->cur_scope, name->loc, name->len);
+    if (d && d->type)
+        n->resolved_type = d->type;
 }
 
 static void visit_binary(Sema *s, Node *n) {
@@ -165,6 +173,22 @@ static void visit_unary(Sema *s, Node *n) {
     case TK_PLUS: case TK_MINUS: case TK_TILDE:
         n->resolved_type = ot;  /* preserves type, modulo promotion */
         break;
+    case TK_AMP: {
+        /* Address-of: result is pointer-to-operand-type. */
+        if (!ot) break;
+        Type *ptr = sema_new_type(s, TY_PTR);
+        ptr->base = ot;
+        n->resolved_type = ptr;
+        break;
+    }
+    case TK_STAR: {
+        /* Indirection: operand should be a pointer; result is the
+         * pointed-to type. Conservative — if operand isn't a pointer,
+         * leave NULL and let codegen fall back. */
+        if (ot && (ot->kind == TY_PTR || ot->kind == TY_ARRAY))
+            n->resolved_type = ot->base;
+        break;
+    }
     default:
         n->resolved_type = ot;
         break;
@@ -201,12 +225,19 @@ static void visit_var_decl(Sema *s, Node *n) {
 }
 
 static void visit_block(Sema *s, Node *n) {
+    DeclarativeRegion *saved = s->cur_scope;
+    if (n->block.scope) s->cur_scope = n->block.scope;
     for (int i = 0; i < n->block.nstmts; i++)
         visit(s, n->block.stmts[i]);
+    s->cur_scope = saved;
 }
 
 static void visit_func_def(Sema *s, Node *n) {
+    DeclarativeRegion *saved = s->cur_scope;
+    /* Enter the function's prototype scope so parameter names resolve. */
+    if (n->func.param_scope) s->cur_scope = n->func.param_scope;
     if (n->func.body) visit(s, n->func.body);
+    s->cur_scope = saved;
 }
 
 static void visit_return(Sema *s, Node *n) {
@@ -222,6 +253,31 @@ static void visit_if(Sema *s, Node *n) {
     if (n->if_.cond)  visit(s, n->if_.cond);
     if (n->if_.then_) visit(s, n->if_.then_);
     if (n->if_.else_) visit(s, n->if_.else_);
+}
+
+static void visit_while(Sema *s, Node *n) {
+    if (n->while_.cond) visit(s, n->while_.cond);
+    if (n->while_.body) visit(s, n->while_.body);
+}
+
+static void visit_do(Sema *s, Node *n) {
+    if (n->do_.body) visit(s, n->do_.body);
+    if (n->do_.cond) visit(s, n->do_.cond);
+}
+
+static void visit_for(Sema *s, Node *n) {
+    if (n->for_.init) visit(s, n->for_.init);
+    if (n->for_.cond) visit(s, n->for_.cond);
+    if (n->for_.inc)  visit(s, n->for_.inc);
+    if (n->for_.body) visit(s, n->for_.body);
+}
+
+static void visit_call(Sema *s, Node *n) {
+    visit(s, n->call.callee);
+    for (int i = 0; i < n->call.nargs; i++)
+        visit(s, n->call.args[i]);
+    /* Result type would come from the callee's TY_FUNC. For now leave
+     * NULL — codegen falls back to source-form. */
 }
 
 /* ------------------------------------------------------------------ */
@@ -250,6 +306,10 @@ static void visit(Sema *s, Node *n) {
     case ND_RETURN:    visit_return(s, n);    return;
     case ND_EXPR_STMT: visit_expr_stmt(s, n); return;
     case ND_IF:        visit_if(s, n);        return;
+    case ND_WHILE:     visit_while(s, n);     return;
+    case ND_DO:        visit_do(s, n);        return;
+    case ND_FOR:       visit_for(s, n);       return;
+    case ND_CALL:      visit_call(s, n);      return;
 
     /* Declarations */
     case ND_VAR_DECL:  visit_var_decl(s, n);  return;
@@ -273,6 +333,6 @@ static void visit(Sema *s, Node *n) {
 /* ------------------------------------------------------------------ */
 
 void sema_run(Node *tu, Arena *arena) {
-    Sema s = { .arena = arena };
+    Sema s = { .arena = arena, .cur_scope = NULL };
     visit(&s, tu);
 }

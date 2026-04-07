@@ -34,6 +34,7 @@ Node *parse_compound_stmt(Parser *p) {
     /* N4659 §6.3.3/1 [basic.scope.block]: "A name declared in a block
      * (9.3) is local to that block." */
     region_push(p, REGION_BLOCK, /*name=*/NULL);
+    DeclarativeRegion *block_region = p->region;
 
     Vec stmts = vec_new(p->arena);
     while (!parser_at(p, TK_RBRACE) && !parser_at_eof(p)) {
@@ -53,7 +54,9 @@ Node *parse_compound_stmt(Parser *p) {
 
     region_pop(p);
 
-    return new_block_node(p, (Node **)stmts.data, stmts.len, tok);
+    Node *node = new_block_node(p, (Node **)stmts.data, stmts.len, tok);
+    node->block.scope = block_region;
+    return node;
 }
 
 /*

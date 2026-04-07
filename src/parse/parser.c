@@ -294,6 +294,7 @@ Node *new_block_node(Parser *p, Node **stmts, int nstmts, Token *tok) {
     Node *node = new_node(p, ND_BLOCK, tok);
     node->block.stmts = stmts;
     node->block.nstmts = nstmts;
+    node->block.scope = NULL;  /* set by parse_compound_stmt when applicable */
     return node;
 }
 

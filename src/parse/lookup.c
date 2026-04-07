@@ -136,19 +136,14 @@ static Declaration *lookup_in_region(DeclarativeRegion *r,
     return NULL;
 }
 
-Declaration *lookup_unqualified(Parser *p, const char *name, int name_len) {
-    /* Terminates: walks enclosing chain toward NULL (global has no enclosing) */
-    for (DeclarativeRegion *r = p->region; r; r = r->enclosing) {
-        /* Search this region's own declarations first */
+/* Underlying walker — takes a starting region directly so it can be
+ * used outside the parser (e.g. by sema with no Parser handle). */
+Declaration *lookup_unqualified_from(DeclarativeRegion *start,
+                                     const char *name, int name_len) {
+    for (DeclarativeRegion *r = start; r; r = r->enclosing) {
         Declaration *d = lookup_in_region(r, name, name_len);
         if (d)
             return d;
-
-        /* N4659 §6.4.1/2 [basic.lookup.unqual]: "declarations from the
-         * namespace nominated by a using-directive become visible in a
-         * namespace enclosing the using-directive."
-         *
-         * Search regions imported by using-directives in this region. */
         for (int i = 0; i < r->nusing; i++) {
             d = lookup_in_region(r->using_regions[i], name, name_len);
             if (d)
@@ -156,6 +151,10 @@ Declaration *lookup_unqualified(Parser *p, const char *name, int name_len) {
         }
     }
     return NULL;
+}
+
+Declaration *lookup_unqualified(Parser *p, const char *name, int name_len) {
+    return lookup_unqualified_from(p->region, name, name_len);
 }
 
 /*

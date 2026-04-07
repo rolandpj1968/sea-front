@@ -19,6 +19,11 @@
 /* AST Node Kinds                                                      */
 /* ================================================================== */
 
+/* Forward declaration — Node fields reference DeclarativeRegion via
+ * pointer (block.scope, func.param_scope), so we need the typedef
+ * visible before struct Node is defined further down. */
+typedef struct DeclarativeRegion DeclarativeRegion;
+
 typedef enum {
     /* -- Expressions --
      * N4659 §8 [expr]
@@ -284,6 +289,7 @@ struct Node {
         struct {
             Node **stmts;
             int nstmts;
+            DeclarativeRegion *scope;  /* sema-side; the block's region */
         } block;
 
         /* ND_RETURN — N4659 §9.6.3 [stmt.return]
@@ -378,6 +384,7 @@ struct Node {
             Node **params;  /* array of ND_PARAM nodes */
             int nparams;
             Node *body;     /* ND_BLOCK (compound-statement) */
+            DeclarativeRegion *param_scope;  /* sema; prototype-scope region */
         } func;
 
         /* ND_PARAM — N4659 §11.3.5 [dcl.fct]
@@ -979,6 +986,8 @@ Declaration *region_declare_in(Parser *p, DeclarativeRegion *r,
  * a declaration is found for the name."
  */
 Declaration *lookup_unqualified(Parser *p, const char *name, int name_len);
+Declaration *lookup_unqualified_from(DeclarativeRegion *start,
+                                     const char *name, int name_len);
 
 /* Look up by entity kind — needed for elaborated-type-specifier
  * (§10.1.7.3): 'struct Foo' must find ENTITY_TAG even if a variable
