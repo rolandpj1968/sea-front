@@ -707,16 +707,38 @@ DeclSpec parse_type_specifiers(Parser *p) {
             }
 
             /* Trailing nested-name: T::U::V, possibly with template-ids.
-             * Result is opaque to the parser; sema resolves. */
+             * Walk via real lookup when possible — N4659 §6.4.3. */
+            DeclarativeRegion *qscope2 =
+                (d->type && d->type->class_region) ? d->type->class_region : NULL;
+            Declaration *qres2 = d;
             while (parser_consume(p, TK_SCOPE)) {
                 parser_consume(p, TK_KW_TEMPLATE);
                 if (parser_at(p, TK_IDENT)) {
                     Token *seg = parser_advance(p);
                     if (parser_at(p, TK_LT) &&
-                        lookup_is_template_name(p, seg))
+                        lookup_is_template_name(p, seg)) {
                         parse_template_id(p, seg);
+                        qres2 = NULL;
+                        qscope2 = NULL;
+                    } else if (qscope2) {
+                        Declaration *next = lookup_in_scope(qscope2, seg->loc, seg->len);
+                        qres2 = next;
+                        if (next && next->type && next->type->class_region)
+                            qscope2 = next->type->class_region;
+                        else if (next && next->entity == ENTITY_NAMESPACE)
+                            qscope2 = next->ns_region;
+                        else
+                            qscope2 = NULL;
+                    } else {
+                        qres2 = NULL;
+                    }
                 }
             }
+            /* If the chain resolved through to a real type, use it
+             * instead of d->type (the leading segment). */
+            if (qres2 && qres2 != d && qres2->type &&
+                (qres2->entity == ENTITY_TYPE || qres2->entity == ENTITY_TAG))
+                d = qres2;
 
             /* Trailing decl-specifiers: cv-qualifiers (§10.1.7.1) and
              * storage-class / function-specifier keywords that may

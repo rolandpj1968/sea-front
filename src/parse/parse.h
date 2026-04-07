@@ -684,6 +684,14 @@ struct Parser {
     CppStandard std;           /* C++17 baseline; 20/23 gated behind this flag */
     bool tentative;            /* when true, return NULL on error instead of aborting */
     bool tentative_failed;     /* set when a silenced error occurred during tentative parse */
+
+    /* Side channel from parse_declarator → parse_declaration:
+     * when the declarator-id is qualified ('void Foo::bar() { ... }'),
+     * parse_declarator sets this to Foo's class_region. The function-def
+     * branch in parse_declaration pushes it as an enclosing scope so
+     * the method body can resolve Foo's members via lookup. Cleared
+     * after each top-level declaration. */
+    DeclarativeRegion *qualified_decl_scope;
     DeclarativeRegion *region; /* current innermost declarative region (§6.3) */
     int template_depth;        /* nesting depth of template-argument-lists being parsed.
                                 * When > 0, TK_SHR (>>) is treated as two '>' tokens

@@ -315,13 +315,28 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
      * operator overloads (operator[]), and destructors (~Foo). */
     if (parser_at(p, TK_IDENT)) {
         name = parser_advance(p);
+        /* Track the resolved scope of the qualifier — N4659 §6.4.3.
+         * For 'void Foo::bar(...)', this ends up pointing at Foo's
+         * class_region so the method body can resolve members via
+         * lookup. Reset to NULL on template-id segments (instantiation-
+         * dependent, no resolved scope). */
+        Declaration *qres = lookup_unqualified(p, name->loc, name->len);
+        DeclarativeRegion *qscope = NULL;
+        if (qres) {
+            if (qres->entity == ENTITY_NAMESPACE)
+                qscope = qres->ns_region;
+            else if (qres->type && qres->type->class_region)
+                qscope = qres->type->class_region;
+        }
         /* Template-id in declarator: vec<T, A, vl_embed>::operator[].
          * Speculative — in declarator-id position '<' is overwhelmingly
          * a template-argument-list, even when our lookup can't confirm
          * the name (e.g. inline-namespace member referenced from the
          * enclosing namespace). */
-        if (parser_at(p, TK_LT))
+        if (parser_at(p, TK_LT)) {
             parse_template_id(p, name);
+            qscope = NULL;  /* template-id — opaque */
+        }
         /* Consume qualified-id: ident(opt <args>) :: ident :: ... :: ident
          * Terminates: each iteration consumes :: + ident/operator, or breaks. */
         while (parser_at(p, TK_SCOPE)) {
@@ -329,6 +344,19 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
             if (after->kind == TK_IDENT) {
                 parser_advance(p);  /* :: */
                 name = parser_advance(p);
+                /* Resolve this segment in the previous scope. The LAST
+                 * segment is the declarator-id name itself; we don't
+                 * descend into it. We only update qscope when the
+                 * qualifier (everything-but-the-last) refines further. */
+                if (parser_at(p, TK_SCOPE) && qscope) {
+                    Declaration *next = lookup_in_scope(qscope, name->loc, name->len);
+                    if (next && next->type && next->type->class_region)
+                        qscope = next->type->class_region;
+                    else if (next && next->entity == ENTITY_NAMESPACE)
+                        qscope = next->ns_region;
+                    else
+                        qscope = NULL;
+                }
             } else if (after->kind == TK_TILDE) {
                 /* Qualified destructor: Foo::~Foo */
                 parser_advance(p);  /* :: */
@@ -344,6 +372,10 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
                 break;
             }
         }
+        /* Stash the resolved class scope for parse_declaration's
+         * function-def branch to push. */
+        if (qscope)
+            p->qualified_decl_scope = qscope;
     }
     /* Destructor at current scope: ~ClassName */
     if (!name && parser_at(p, TK_TILDE) && parser_peek_ahead(p, 1)->kind == TK_IDENT) {
@@ -796,6 +828,17 @@ Node *parse_declaration(Parser *p) {
                           func->func.name->len, ENTITY_VARIABLE,
                           decl->var_decl.ty);
 
+        /* Out-of-class definition 'void Foo::bar() { ... }': swap the
+         * current region for Foo's class_region so the body resolves
+         * Foo's members via lookup. The newly pushed prototype/block
+         * regions get qscope as their enclosing chain; we restore the
+         * original region after the body. */
+        DeclarativeRegion *qscope = p->qualified_decl_scope;
+        p->qualified_decl_scope = NULL;
+        DeclarativeRegion *saved_region = p->region;
+        if (qscope && !p->tentative)
+            p->region = qscope;
+
         /* Push prototype scope and register parameter names */
         region_push(p, REGION_PROTOTYPE, /*name=*/NULL);
         for (int i = 0; i < func->func.nparams; i++) {
@@ -851,6 +894,8 @@ Node *parse_declaration(Parser *p) {
 
         func->func.body = parse_compound_stmt(p);
         region_pop(p);  /* pop prototype scope */
+        if (qscope && !p->tentative)
+            p->region = saved_region;  /* unsplice qscope */
         return func;
     }
 

@@ -391,6 +391,7 @@ Node *parse(TokenArray tokens, Arena *arena, CppStandard std) {
     p.std = std;
     p.tentative = false;
     p.tentative_failed = false;
+    p.qualified_decl_scope = NULL;
     p.region = NULL;
     p.template_depth = 0;
     p.split_shr = false;

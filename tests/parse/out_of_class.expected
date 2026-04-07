@@ -1,0 +1,25 @@
+(translation-unit
+  (class-def "Base"
+    (typedef))
+  (class-def "Outer"
+    (typedef)
+    (var-decl (func-type void ()) "method")
+    (var-decl (func-type int (int)) "multi" ))
+  (func-def void "method" (params)
+    (block
+      (var-decl int "n" (num 42))
+      (var-decl long "b" (num 1))
+      (cast void (ident "n"))
+      (cast void (ident "b"))))
+  (func-def int "multi" (params (param int "x"))
+    (block
+      (var-decl int "local" (ident "x"))
+      (return (ident "local"))))
+  (block
+    (class-def "Inner"
+      (typedef)
+      (var-decl (func-type double ()) "compute")))
+  (func-def double "compute" (params)
+    (block
+      (var-decl double "v" (num 3))
+      (return (ident "v")))))
