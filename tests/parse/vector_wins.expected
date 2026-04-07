@@ -44,7 +44,7 @@
       (block)))
   (func-def void "direct_init_two_args" (params (param (ptr int) "p"))
     (block
-      (var-decl struct Pair "x" (, (ident "p") (num 0)))
+      (var-decl struct Pair "x" (ident "p"))
       (cast void (ident "x"))))
   (class-def "H"
     (var-decl int "v")

@@ -82,7 +82,13 @@ static int get_binop_prec(Parser *p, TokenKind k) {
     case TK_CARET:                                   return PREC_BITXOR;
     case TK_AMP:                                     return PREC_BITAND;
     case TK_EQ: case TK_NE:                          return PREC_EQUALITY;
-    case TK_LT: case TK_LE:                          return PREC_RELAT;
+    case TK_LT:
+        /* Inside template-arg-list, '<' is overwhelmingly a nested
+         * template-id rather than less-than. Treat it as non-binary
+         * so the surrounding parser can dispatch to template-id parsing. */
+        if (p->template_depth > 0) return 0;
+        return PREC_RELAT;
+    case TK_LE:                                      return PREC_RELAT;
     case TK_GT: case TK_GE:
         /* N4659 §17.2/3 [temp.names]: inside a template-argument-list,
          * > is the closing delimiter, not greater-than. Similarly >>
@@ -219,7 +225,13 @@ static Node *primary_expr(Parser *p) {
     if ((tok->kind == TK_KW_TYPENAME) ||
         (parser_at_type_specifier(p) && tok->kind != TK_IDENT &&
          (parser_peek_ahead(p, 1)->kind == TK_LPAREN ||
-          parser_peek_ahead(p, 1)->kind == TK_LBRACE))) {
+          parser_peek_ahead(p, 1)->kind == TK_LBRACE)) ||
+        /* T{} braced functional cast even when T is an identifier
+         * type-name — e.g. '__tag{}'. We can be more permissive than
+         * the LPAREN case because '{' after a name is unambiguously
+         * a constructor/braced-init. */
+        (tok->kind == TK_IDENT && parser_peek_ahead(p, 1)->kind == TK_LBRACE &&
+         parser_at_type_specifier(p))) {
         /* Just the simple-type-specifier — no abstract declarator. The
          * '(' / '{' that follows is the init expression-list, NOT a
          * pointer or array suffix on the type. */
@@ -312,8 +324,35 @@ static Node *primary_expr(Parser *p) {
 
             /* If this name is a template and followed by <, consume the
              * template-argument-list before checking for :: */
-            if (parser_at(p, TK_LT) && lookup_is_template_name(p, name)) {
-                parse_template_id(p, name);  /* consumes <args> */
+            /* Speculative template-id: parse 'name<args>' if 'name' is
+             * a known template OR if the token after '<' is something
+             * that can only start a type/template argument (a type
+             * keyword), since 'less-than' would never be followed by
+             * a bare type keyword. */
+            if (parser_at(p, TK_LT)) {
+                Token *after = parser_peek_ahead(p, 1);
+                bool looks_template_arg = false;
+                switch (after->kind) {
+                case TK_KW_VOID: case TK_KW_BOOL: case TK_KW_CHAR:
+                case TK_KW_SHORT: case TK_KW_INT: case TK_KW_LONG:
+                case TK_KW_FLOAT: case TK_KW_DOUBLE:
+                case TK_KW_SIGNED: case TK_KW_UNSIGNED:
+                case TK_KW_WCHAR_T: case TK_KW_CHAR16_T: case TK_KW_CHAR32_T:
+                case TK_KW_CONST: case TK_KW_VOLATILE:
+                case TK_KW_STRUCT: case TK_KW_CLASS: case TK_KW_UNION:
+                case TK_KW_ENUM: case TK_KW_TYPENAME: case TK_KW_DECLTYPE:
+                case TK_KW_AUTO:
+                    looks_template_arg = true;
+                    break;
+                default:
+                    break;
+                }
+                /* Inside another template-argument-list, '<' is
+                 * overwhelmingly a nested template-id — speculatively
+                 * parse it. */
+                if (lookup_is_template_name(p, name) || looks_template_arg ||
+                    p->template_depth > 0)
+                    parse_template_id(p, name);
             }
 
             while (parser_at(p, TK_SCOPE)) {
@@ -422,6 +461,7 @@ static Node *primary_expr(Parser *p) {
          * means we're really parsing a parenthesized expression. */
         if (parser_at_type_specifier(p)) {
             ParseState saved = parser_save(p);
+            bool prev_tentative = p->tentative;
             p->tentative = true;
             Type *ty = parse_type_name(p);
             bool ok = (ty != NULL) && parser_at(p, TK_RPAREN);
@@ -446,7 +486,7 @@ static Node *primary_expr(Parser *p) {
                     break;
                 }
             }
-            p->tentative = false;
+            p->tentative = prev_tentative;
             if (ok) {
                 parser_advance(p);  /* ) */
                 Node *operand = unary_expr(p);
@@ -455,7 +495,13 @@ static Node *primary_expr(Parser *p) {
             parser_restore(p, saved);
         }
 
+        /* Inside '(...)' we are no longer at the immediate template-arg
+         * level, so '>'/'>='/'>>' regain their relational/shift meanings.
+         * Save and zero template_depth across the inner parse. */
+        int saved_depth = p->template_depth;
+        p->template_depth = 0;
         Node *node = parse_expr(p);
+        p->template_depth = saved_depth;
         parser_expect(p, TK_RPAREN);
         return node;
     }
@@ -556,6 +602,24 @@ static Node *postfix_expr(Parser *p) {
             continue;
         }
 
+        /* Braced-init temporary after a template-id / type-name —
+         * 'make_index_sequence<N>{}'. Treat as a postfix-style braced
+         * init: balance the braces and treat as opaque init expression. */
+        if (tok->kind == TK_LBRACE) {
+            parser_advance(p);
+            int depth = 1;
+            while (depth > 0 && !parser_at_eof(p)) {
+                if (parser_at(p, TK_LBRACE)) depth++;
+                else if (parser_at(p, TK_RBRACE)) {
+                    depth--;
+                    if (depth == 0) break;
+                }
+                parser_advance(p);
+            }
+            parser_expect(p, TK_RBRACE);
+            continue;
+        }
+
         /* Subscript — §8.2.1 [expr.sub]
          *   postfix-expression [ expression ]
          * C++23: a[i, j] multidimensional — deferred */
@@ -576,6 +640,15 @@ static Node *postfix_expr(Parser *p) {
             parser_advance(p);
             /* Optional 'template' disambiguator: x.template f<int>() */
             parser_consume(p, TK_KW_TEMPLATE);
+            /* Qualified member: x.A::B::method.
+             * Only enter when followed by '::' (we'd otherwise eat the
+             * '<' of a relational expression like 'x.first < y.first'). */
+            while (parser_at(p, TK_IDENT) &&
+                   parser_peek_ahead(p, 1)->kind == TK_SCOPE) {
+                parser_advance(p);  /* segment */
+                parser_advance(p);  /* :: */
+                parser_consume(p, TK_KW_TEMPLATE);
+            }
             /* Pseudo-destructor / explicit operator method call:
              *   x.operator OP    (e.g. __t.operator->())
              *   x.~T()           (pseudo-destructor) */
@@ -668,11 +741,12 @@ static Node *unary_expr(Parser *p) {
             !(parser_peek_ahead(p, 1)->kind == TK_RPAREN)) {
             /* Tentative: try as placement args */
             ParseState saved = parser_save(p);
+            bool prev_tentative = p->tentative;
             p->tentative = true;
             parser_advance(p);  /* ( */
             parse_expr(p);
             bool ok = parser_at(p, TK_RPAREN);
-            p->tentative = false;
+            p->tentative = prev_tentative;
             if (ok) {
                 /* Check: after ), does a type follow? If so, it was placement. */
                 parser_restore(p, saved);

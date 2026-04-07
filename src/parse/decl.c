@@ -494,6 +494,8 @@ parse_suffixes:
                             break;
                         }
 
+                        parser_skip_cxx_attributes(p);
+                        parser_skip_gnu_attributes(p);
                         Type *param_base = parse_type_specifiers(p).type;
                         Node *param_decl = parse_declarator(p, param_base);
                         if (param_decl)
@@ -535,6 +537,10 @@ parse_suffixes:
             }
 
             consume_trailing_qualifiers(p);
+
+            /* C++11 trailing return type: '-> type-id' */
+            if (parser_consume(p, TK_ARROW))
+                parse_type_name(p);  /* parsed and discarded */
 
             ty = new_func_type(p, ty, (Type **)param_types.data,
                                param_types.len, variadic);
@@ -588,6 +594,8 @@ parse_suffixes:
                 /* Terminates: same as named-param loop above. */
                 for (;;) {
                     if (parser_consume(p, TK_ELLIPSIS)) { variadic = true; break; }
+                    parser_skip_cxx_attributes(p);
+                    parser_skip_gnu_attributes(p);
                     Type *param_base = parse_type_specifiers(p).type;
                     Node *param_decl = parse_declarator(p, param_base);
                     if (param_decl) param_decl->kind = ND_PARAM;
@@ -1502,10 +1510,11 @@ Node *parse_template_id(Parser *p, Token *name) {
             if (parser_at_type_specifier(p)) {
                 /* Tentative: try type-id */
                 ParseState saved = parser_save(p);
+                bool prev_tentative = p->tentative;
                 p->tentative = true;
                 Type *ty = parse_type_name(p);
                 bool ty_ok = (ty != NULL);
-                p->tentative = false;
+                p->tentative = prev_tentative;
 
                 /* Skip any #line directives before the , or > follows. */
                 while (parser_at(p, TK_HASH)) {

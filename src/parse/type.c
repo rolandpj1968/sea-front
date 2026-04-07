@@ -676,7 +676,9 @@ DeclSpec parse_type_specifiers(Parser *p) {
             t1->kind == TK_GT || t1->kind == TK_SHR ||
             t1->kind == TK_COMMA || t1->kind == TK_RPAREN ||
             t1->kind == TK_LT ||  /* unknown<...> as opaque template-id type */
-            t1->kind == TK_LBRACKET;  /* 'new T[N]' array */
+            t1->kind == TK_LBRACKET ||  /* 'new T[N]' array */
+            t1->kind == TK_LBRACE ||  /* '-> T { body }' trailing return */
+            t1->kind == TK_SEMI;  /* 'T;' bare statement / decl */
         if (decl_shape) {
             Token *name = parser_advance(p);
             /* If followed by '<', consume the template-arg-list and any

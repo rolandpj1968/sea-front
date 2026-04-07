@@ -84,13 +84,14 @@ static Node *parse_if_stmt(Parser *p) {
      * it doesn't end at ')', restore and parse as expression. */
     if (parser_at_type_specifier(p)) {
         ParseState saved = parser_save(p);
+        bool prev_tentative = p->tentative;
         p->tentative = true;
         Type *base = parse_type_specifiers(p).type;
         Node *decl = base ? parse_declarator(p, base) : NULL;
         if (decl && parser_consume(p, TK_ASSIGN))
             decl->var_decl.init = parse_assign_expr(p);
         bool ok = decl && parser_at(p, TK_RPAREN);
-        p->tentative = false;
+        p->tentative = prev_tentative;
         parser_restore(p, saved);
         if (ok) {
             base = parse_type_specifiers(p).type;
@@ -177,6 +178,37 @@ static Node *parse_for_stmt(Parser *p) {
     /* N4659 §6.3.3/4 [basic.scope.block]: "Names declared in the
      * init-statement ... are local to the ... for statement." */
     region_push(p, REGION_BLOCK, /*name=*/NULL);
+
+    /* C++11 range-based for: 'for (decl : expr) stmt'.
+     * We don't structure it — just consume the decl-spec/declarator
+     * up to ':' then the range expression up to ')'. */
+    {
+        ParseState saved_pos = parser_save(p);
+        bool prev_t = p->tentative;
+        bool saved_failed = p->tentative_failed;
+        p->tentative = true;
+        p->tentative_failed = false;
+        if (parser_at_type_specifier(p)) {
+            Type *bt = parse_type_specifiers(p).type;
+            if (bt) parse_declarator(p, bt);
+        }
+        bool is_range = !p->tentative_failed && parser_at(p, TK_COLON);
+        p->tentative = prev_t;
+        p->tentative_failed = saved_failed;
+        parser_restore(p, saved_pos);
+        if (is_range) {
+            Type *bt = parse_type_specifiers(p).type;
+            Node *decl = bt ? parse_declarator(p, bt) : NULL;
+            parser_expect(p, TK_COLON);
+            Node *range = parse_expr(p);
+            parser_expect(p, TK_RPAREN);
+            Node *body = parse_stmt(p);
+            region_pop(p);
+            (void)decl; (void)range;
+            return new_for_node(p, /*init=*/NULL, /*cond=*/NULL,
+                                /*inc=*/NULL, body, tok);
+        }
+    }
 
     /* init-statement: declaration or expression-statement */
     Node *init = NULL;

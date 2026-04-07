@@ -8,4 +8,4 @@
       (var-decl (array int 5) "e")
       (var-decl int "x")
       (var-decl int "c" (num 7))
-      (var-decl int "g" (, (num 1) (num 2))))))
+      (var-decl int "g" (num 1)))))
