@@ -143,7 +143,8 @@ void parser_restore(Parser *p, ParseState saved) {
  */
 void parser_skip_gnu_attributes(Parser *p) {
     while (parser_at(p, TK_IDENT) &&
-           token_equal(parser_peek(p), "__attribute__")) {
+           (token_equal(parser_peek(p), "__attribute__") ||
+            token_equal(parser_peek(p), "__attribute"))) {
         parser_advance(p);                  /* __attribute__ */
         parser_expect(p, TK_LPAREN);
         parser_expect(p, TK_LPAREN);

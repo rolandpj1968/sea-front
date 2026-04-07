@@ -396,8 +396,16 @@ Node *parse_stmt(Parser *p) {
     if (parser_peek(p)->kind == TK_IDENT &&
         !parser_at_type_specifier(p)) {
         Token *t1 = parser_peek_ahead(p, 1);
+        Token *t2 = parser_peek_ahead(p, 2);
         if (t1->kind == TK_IDENT &&
             !lookup_unqualified(p, t1->loc, t1->len)) {
+            might_be_decl_ident = true;
+        }
+        /* 'IDENT * IDENT' / 'IDENT & IDENT' shapes — pointer/ref type
+         * with an unresolved leading type-name. */
+        if ((t1->kind == TK_STAR || t1->kind == TK_AMP || t1->kind == TK_LAND) &&
+            t2->kind == TK_IDENT &&
+            !lookup_unqualified(p, t2->loc, t2->len)) {
             might_be_decl_ident = true;
         }
         /* '__name(...)' followed by IDENT is a GCC type intrinsic

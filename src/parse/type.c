@@ -259,9 +259,26 @@ DeclSpec parse_type_specifiers(Parser *p) {
             ty->is_const = is_const;
             ty->is_volatile = is_volatile;
 
-            /* Optional tag name */
-            if (parser_at(p, TK_IDENT))
+            /* GCC attributes between 'class'/'struct' and the tag name. */
+            parser_skip_gnu_attributes(p);
+
+            /* Optional tag name. May be qualified — 'class A::B { ... }'
+             * — and segments may themselves be template-ids:
+             * 'class basic_ostream<C, T>::sentry'. */
+            if (parser_at(p, TK_IDENT)) {
                 ty->tag = parser_advance(p);
+                if (parser_at(p, TK_LT))
+                    parse_template_id(p, ty->tag);
+                while (parser_consume(p, TK_SCOPE)) {
+                    if (parser_at(p, TK_IDENT)) {
+                        ty->tag = parser_advance(p);
+                        if (parser_at(p, TK_LT))
+                            parse_template_id(p, ty->tag);
+                    } else {
+                        break;
+                    }
+                }
+            }
 
             /* N4659 §17.2 [temp.names]: struct/class followed by a
              * template-id (e.g., 'struct Foo<int>') */
@@ -370,6 +387,9 @@ DeclSpec parse_type_specifiers(Parser *p) {
                             parser_advance(p);
                         continue;
                     }
+
+                    /* GCC attributes before any member declaration. */
+                    parser_skip_gnu_attributes(p);
 
                     /* template-declaration inside class */
                     if (parser_at(p, TK_KW_TEMPLATE)) {
@@ -550,9 +570,11 @@ DeclSpec parse_type_specifiers(Parser *p) {
              * A name can be both a type and a template (e.g., after explicit
              * specialization registers the name as ENTITY_TYPE while the
              * primary template registered it as ENTITY_TEMPLATE). */
-            if (parser_at(p, TK_LT) && (d->entity == ENTITY_TEMPLATE ||
-                lookup_unqualified_kind(p, name_tok->loc, name_tok->len,
-                                        ENTITY_TEMPLATE) != NULL)) {
+            /* Speculative — '<' after a user-defined type-name in a type
+             * position is overwhelmingly a template-argument-list, not
+             * less-than. Our lookup may not find the template entity if
+             * it lives in an inline namespace we don't model. */
+            if (parser_at(p, TK_LT)) {
                 parse_template_id(p, name_tok);  /* consumes <args> */
                 /* Trailing nested-name: enable_if<...>::type, possibly chained.
                  * Each segment may itself be a template-id. */
@@ -637,9 +659,25 @@ DeclSpec parse_type_specifiers(Parser *p) {
              !lookup_unqualified(p, t1->loc, t1->len)) ||
             t1->kind == TK_STAR || t1->kind == TK_AMP || t1->kind == TK_LAND ||
             t1->kind == TK_GT || t1->kind == TK_SHR ||
-            t1->kind == TK_COMMA || t1->kind == TK_RPAREN;
+            t1->kind == TK_COMMA || t1->kind == TK_RPAREN ||
+            t1->kind == TK_LT ||  /* unknown<...> as opaque template-id type */
+            t1->kind == TK_LBRACKET;  /* 'new T[N]' array */
         if (decl_shape) {
             Token *name = parser_advance(p);
+            /* If followed by '<', consume the template-arg-list and any
+             * trailing '::ident' chain so the caller doesn't see them. */
+            if (parser_at(p, TK_LT))
+                parse_template_id(p, name);
+            while (parser_consume(p, TK_SCOPE)) {
+                parser_consume(p, TK_KW_TEMPLATE);
+                if (parser_at(p, TK_IDENT)) {
+                    Token *seg = parser_advance(p);
+                    if (parser_at(p, TK_LT))
+                        parse_template_id(p, seg);
+                } else {
+                    break;
+                }
+            }
             Type *ty = new_type(p, TY_INT);
             ty->is_const = is_const;
             ty->is_volatile = is_volatile;
@@ -786,9 +824,21 @@ Type *parse_type_name(Parser *p) {
      * '*' or '&' / cv-qualifiers / ')', then treat the result as a
      * pointer to the rest. The parameter list / array suffix that
      * follows is then consumed as part of the surrounding type. */
+    /* Only enter the grouped form if it's actually shaped like '(*)' or
+     * '(&)' (optionally followed by cv-quals) — i.e. the next token after
+     * the '*'/'&' chain is ')'. Otherwise the '(' is some caller's init
+     * paren (e.g. 'new T(*expr, ...)') and we must leave it alone. */
     if (parser_at(p, TK_LPAREN) &&
         (parser_peek_ahead(p, 1)->kind == TK_STAR ||
          parser_peek_ahead(p, 1)->kind == TK_AMP)) {
+        int n = 1;
+        while (parser_peek_ahead(p, n)->kind == TK_STAR ||
+               parser_peek_ahead(p, n)->kind == TK_AMP ||
+               parser_peek_ahead(p, n)->kind == TK_KW_CONST ||
+               parser_peek_ahead(p, n)->kind == TK_KW_VOLATILE)
+            n++;
+        if (parser_peek_ahead(p, n)->kind != TK_RPAREN)
+            goto no_grouped_abstract;
         parser_advance(p);  /* ( */
         while (parser_consume(p, TK_STAR) || parser_consume(p, TK_AMP) ||
                parser_consume(p, TK_KW_CONST) || parser_consume(p, TK_KW_VOLATILE))
@@ -809,6 +859,7 @@ Type *parse_type_name(Parser *p) {
             parser_expect(p, TK_RPAREN);
         }
     }
+no_grouped_abstract:;
 
     /* Pointer-to-member — N4659 §11.3.3 [dcl.mptr]
      *   ptr-operator: nested-name-specifier * cv-qualifier-seq(opt)
