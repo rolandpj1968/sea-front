@@ -1,0 +1,27 @@
+(translation-unit
+  (template (params (param ? "T"))
+    (class-def "Base"
+      (typedef)))
+  (template (params (param ? "T"))
+    (class-def "Derived"
+      (func-def void "f" (params)
+        (block
+          (var-decl int "x" (num 0))
+          (cast void (ident "x"))))))
+  (class-def "B"
+    (typedef))
+  (class-def "D"
+    (var-decl (func-type void ()) "g"))
+  (func-def void "g" (params)
+    (block
+      (var-decl int "n" (num 7))
+      (cast void (ident "n"))))
+  (class-def "Top"
+    (typedef))
+  (class-def "Mid1")
+  (class-def "Mid2")
+  (class-def "Bot"
+    (func-def void "h" (params)
+      (block
+        (var-decl long "t" (num 0))
+        (cast void (ident "t"))))))
