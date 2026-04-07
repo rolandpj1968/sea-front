@@ -538,6 +538,41 @@ static Node *primary_expr(Parser *p) {
         int saved_depth = p->template_depth;
         p->template_depth = 0;
         Node *node = parse_expr(p);
+        /* C++17 fold-expression — N4659 §8.1.6 [expr.prim.fold]
+         *   ( cast-expression op ... )           — unary right fold
+         *   ( ... op cast-expression )           — unary left fold (handled below)
+         *   ( cast-expression op ... op cast-expression )  — binary fold
+         *
+         * After parse_expr returns, the binary parser stops at any
+         * operator followed by '...'. Consume the trailing 'op...' or
+         * 'op... op expr' pattern as opaque so the caller sees ')'. */
+        for (;;) {
+            TokenKind k = parser_peek(p)->kind;
+            bool is_binop = (k == TK_PLUS || k == TK_MINUS || k == TK_STAR ||
+                             k == TK_SLASH || k == TK_PERCENT || k == TK_AMP ||
+                             k == TK_PIPE || k == TK_CARET || k == TK_LAND ||
+                             k == TK_LOR || k == TK_SHL || k == TK_SHR ||
+                             k == TK_LT || k == TK_LE || k == TK_GT || k == TK_GE ||
+                             k == TK_EQ || k == TK_NE || k == TK_COMMA ||
+                             k == TK_ASSIGN);
+            if (!is_binop) break;
+            if (parser_peek_ahead(p, 1)->kind != TK_ELLIPSIS) break;
+            parser_advance(p);  /* op */
+            parser_advance(p);  /* ... */
+            /* Optional second operand: 'op expr' for a binary fold. */
+            k = parser_peek(p)->kind;
+            is_binop = (k == TK_PLUS || k == TK_MINUS || k == TK_STAR ||
+                        k == TK_SLASH || k == TK_PERCENT || k == TK_AMP ||
+                        k == TK_PIPE || k == TK_CARET || k == TK_LAND ||
+                        k == TK_LOR || k == TK_SHL || k == TK_SHR ||
+                        k == TK_LT || k == TK_LE || k == TK_GT || k == TK_GE ||
+                        k == TK_EQ || k == TK_NE || k == TK_COMMA ||
+                        k == TK_ASSIGN);
+            if (is_binop && parser_peek_ahead(p, 1)->kind != TK_RPAREN) {
+                parser_advance(p);
+                parse_assign_expr(p);
+            }
+        }
         p->template_depth = saved_depth;
         parser_expect(p, TK_RPAREN);
         return node;

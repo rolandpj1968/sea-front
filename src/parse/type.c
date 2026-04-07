@@ -264,6 +264,9 @@ DeclSpec parse_type_specifiers(Parser *p) {
             parser_skip_cxx_attributes(p);
             parser_skip_gnu_attributes(p);
 
+            /* Leading global scope: 'struct ::Foo' / 'class ::Foo'. */
+            parser_consume(p, TK_SCOPE);
+
             /* Optional tag name. May be qualified — 'class A::B { ... }'
              * — and segments may themselves be template-ids:
              * 'class basic_ostream<C, T>::sentry'. */
@@ -354,36 +357,24 @@ DeclSpec parse_type_specifiers(Parser *p) {
                     p->tentative_failed = saved_failed;
                     if (!ok) {
                         /* Couldn't parse this base-specifier as a clean
-                         * type — skip with depth tracking and bail out
-                         * of the base-list. */
+                         * type — fall back to a paren-only skipper.
+                         *
+                         * We deliberately do NOT track angle brackets
+                         * here. Well-formed cases (including SFINAE
+                         * 'integral_constant<bool, T{}>') are handled
+                         * by the structured parser above; we only reach
+                         * the fallback when that failed. Trying to
+                         * angle-track in those cases hits '<' ambiguity
+                         * ('_R1::num < _R2::num' inside template args).
+                         * The class body always starts with '{' at
+                         * paren depth 0. */
                         parser_restore(p, saved);
-                        int paren = 0, angle = 0;
-                        TokenKind prev = TK_EOF;
+                        int paren = 0;
                         while (!parser_at_eof(p)) {
-                            if (paren == 0 && angle == 0 && parser_at(p, TK_LBRACE))
+                            if (paren == 0 && parser_at(p, TK_LBRACE))
                                 break;
-                            if (parser_at(p, TK_LBRACE)) {
-                                int d = 0;
-                                do {
-                                    if (parser_at(p, TK_LBRACE)) d++;
-                                    else if (parser_at(p, TK_RBRACE)) d--;
-                                    parser_advance(p);
-                                } while (d > 0 && !parser_at_eof(p));
-                                continue;
-                            }
                             if (parser_at(p, TK_LPAREN)) paren++;
                             else if (parser_at(p, TK_RPAREN)) paren--;
-                            else if (parser_at(p, TK_LT)) {
-                                if (paren == 0 && prev != TK_RPAREN && prev != TK_NUM)
-                                    angle++;
-                            }
-                            else if (parser_at(p, TK_GT)) {
-                                if (paren == 0) angle--;
-                            }
-                            else if (parser_at(p, TK_SHR)) {
-                                if (paren == 0) angle -= 2;
-                            }
-                            prev = parser_peek(p)->kind;
                             parser_advance(p);
                         }
                         break;
@@ -487,6 +478,12 @@ DeclSpec parse_type_specifiers(Parser *p) {
                 result.class_def->class_def.ty = ty;
             }
 
+            /* Trailing cv-qualifiers between the struct body and the
+             * declarator: 'struct {...} const var;'. */
+            while (parser_at(p, TK_KW_CONST) || parser_at(p, TK_KW_VOLATILE)) {
+                if (parser_consume(p, TK_KW_CONST))    ty->is_const = true;
+                if (parser_consume(p, TK_KW_VOLATILE)) ty->is_volatile = true;
+            }
             result.type = ty; return result;
         }
         /* enum — N4659 §10.2 [dcl.enum]

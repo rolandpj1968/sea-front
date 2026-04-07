@@ -422,6 +422,15 @@ parse_operator_id:
             /* operator new[] / operator delete[] */
             if (parser_consume(p, TK_LBRACKET))
                 parser_expect(p, TK_RBRACKET);
+        } else if (parser_at(p, TK_STR)) {
+            /* C++11 user-defined literal — N4659 §16.5.8 [over.literal]
+             *   operator-function-id: operator string-literal identifier
+             * The lexer fuses '""sv' into a single STR token with the
+             * udl suffix on it; we just consume the STR. The IDENT
+             * suffix may follow as a separate token in some lexer
+             * configurations — accept it. */
+            parser_advance(p);
+            if (parser_at(p, TK_IDENT)) parser_advance(p);
         } else if (parser_peek(p)->kind >= TK_LPAREN &&
                    parser_peek(p)->kind <= TK_HASHHASH) {
             /* Any single operator/punctuator token */
