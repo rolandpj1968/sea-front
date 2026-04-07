@@ -1,0 +1,44 @@
+(translation-unit
+  (template (params (param ? "_Ret") (param ? "_Tp"))
+    (class-def "mem_fun"
+      (func-def struct mem_fun (params (param (func-type (ptr int) ()) "pf"))
+        (block))
+      (func-def int "operator" (params (param (ptr int) "p"))
+        (block
+          (return (call (->* (ident "p") (ident "f"))))))
+      (var-decl (func-type (ptr int) ()) "f")))
+  (class-def "PMtest"
+    (var-decl int "v")
+    (func-def int "run" (params (param (ptr struct PMtest) "p") (param (ptr int) "pm"))
+      (block
+        (return (+ (->* (ident "p") (ident "pm")) (.* (* (ident "this")) (ident "pm")))))))
+  (template (params (param ? "_Str"))
+    (func-def void "str_concat" (params (param (ptr const struct _Str) "lhs") (param (ptr const struct _Str) "rhs"))
+      (block
+        (cast void (ident "lhs"))
+        (cast void (ident "rhs")))))
+  (template (params (param ? "T"))
+    (var-decl struct Box))
+  (template (params (param ? "T"))
+    (var-decl const int "npos" (- (num 1))))
+  (template (params (param ? "T"))
+    (func-def void "make_guard" (params (param (ptr int) "x"))
+      (block
+        (class-def "Guard"
+          (var-decl (ptr int) "y")
+          (func-def struct Guard (params (param (ptr int) "o"))
+            (block
+              (cast void (ident "o")))))
+        (var-decl struct Guard "g" (num 0))
+        (cast void (ident "g"))
+        (cast void (ident "x")))))
+  (template (params (param ? "T"))
+    (func-def int "do_cast" (params (param int "x"))
+      (block
+        (return (cast int (ident "x"))))))
+  (template (params (param ? "T"))
+    (var-decl struct Vec))
+  (template (params)
+    (var-decl struct Vec))
+  (template (params)
+    (var-decl struct Vec)))

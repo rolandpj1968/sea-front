@@ -1,0 +1,58 @@
+(translation-unit
+  (template (params (param ?) (param ?))
+    (class-def "s"
+      (var-decl const bool "v" (false))))
+  (class-def "C"
+    (typedef))
+  (template (params (param ? "T"))
+    (class-def "e"
+      (typedef)))
+  (func-def void "qualified_template_id_in_type" (params)
+    (block
+      (var-decl struct e "x" (num 0))
+      (cast void (ident "x"))))
+  (func-def void "cast_vs_paren" (params)
+    (block
+      (var-decl bool "b" (&& (qualified "s" "v") (true)))
+      (cast void (ident "b"))))
+  (class-def "M"
+    (var-decl (func-type (ptr int) ()) "operator"))
+  (func-def int "member_op_call" (params (param struct M "m"))
+    (block
+      (return (* (call (. (ident "m") "operator"))))))
+  (template (params (param ? "T"))
+    (class-def "A"
+      (func-def struct A (params (param (ref const struct A)))
+        (block))
+      (template (params (param ? "U"))
+        (friend (func-def bool "operator" (params (param (ref const struct A)) (param (ref const struct A)))
+            (block
+              (return (true))))))))
+  (template (params (param ? "T"))
+    (func-def void "mswap" (params (param (ref int) "a") (param (ref int) "b"))
+      (block
+        (var-decl int "t" (ident "a"))
+        (= (ident "a") (ident "b"))
+        (= (ident "b") (ident "t")))))
+  (template (params (param ? "T") (param unsigned-long "N"))
+    (func-def void "mswap" (params (param (array (ref int)) "a") (param (array (ref int)) "b"))
+      (block
+        (for (var-decl unsigned-long "i" (num 0)) (< (ident "i") (ident "N")) (++ (ident "i"))
+          (call (ident "mswap") ([] (ident "a") (ident "i")) ([] (ident "b") (ident "i")))))))
+  (class-def "Pair"
+    (func-def struct Pair (params (param (ptr int)) (param int))
+      (block)))
+  (func-def void "direct_init_two_args" (params (param (ptr int) "p"))
+    (block
+      (var-decl struct Pair "x" (, (ident "p") (num 0)))
+      (cast void (ident "x"))))
+  (class-def "H"
+    (var-decl int "v")
+    (func-def bool "eq" (params (param (ref const struct H) "o"))
+      (block
+        (return (== (cast bool (null)) (cast bool (null)))))))
+  (class-def "Inh"
+    (func-def void "f" (params (param int "i"))
+      (block
+        (var-decl int "n" (ident "i"))
+        (cast void (ident "n"))))))

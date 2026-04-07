@@ -245,7 +245,14 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
      *
      * Heuristic: '(' followed by *, (, or a non-type identifier is grouping.
      * '(' followed by a type keyword is a parameter list. */
-    if (parser_at(p, TK_LPAREN) && !parser_at_type_specifier(p)) {
+    /* Pointer-to-member grouped declarator: '(T::*name)(...)'. The leading
+     * 'T' would normally make parser_at_type_specifier return true and
+     * thus skip the grouped branch — detect this shape explicitly. */
+    bool ptm_grouped = parser_at(p, TK_LPAREN) &&
+        parser_peek_ahead(p, 1)->kind == TK_IDENT &&
+        parser_peek_ahead(p, 2)->kind == TK_SCOPE &&
+        parser_peek_ahead(p, 3)->kind == TK_STAR;
+    if (parser_at(p, TK_LPAREN) && (ptm_grouped || !parser_at_type_specifier(p))) {
         Token *next = parser_peek_ahead(p, 1);
         /* For (ident ...): only treat as grouped declarator if the ident is
          * immediately followed by ')', '(', or '[' — i.e., it could really
@@ -256,9 +263,9 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
                              (parser_peek_ahead(p, 2)->kind == TK_RPAREN ||
                               parser_peek_ahead(p, 2)->kind == TK_LPAREN ||
                               parser_peek_ahead(p, 2)->kind == TK_LBRACKET);
-        if (next && (next->kind == TK_STAR || next->kind == TK_AMP ||
+        if (ptm_grouped || (next && (next->kind == TK_STAR || next->kind == TK_AMP ||
                      next->kind == TK_LAND || next->kind == TK_LPAREN ||
-                     ident_grouped)) {
+                     ident_grouped))) {
             /* Grouping parens or redundant parens around a name.
              * E.g.: int (*fp)(int,int)  or  T(x)  */
             parser_advance(p);  /* skip ( */
@@ -285,8 +292,12 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
      * operator overloads (operator[]), and destructors (~Foo). */
     if (parser_at(p, TK_IDENT)) {
         name = parser_advance(p);
-        /* Template-id in declarator: vec<T, A, vl_embed>::operator[] */
-        if (parser_at(p, TK_LT) && lookup_is_template_name(p, name))
+        /* Template-id in declarator: vec<T, A, vl_embed>::operator[].
+         * Speculative — in declarator-id position '<' is overwhelmingly
+         * a template-argument-list, even when our lookup can't confirm
+         * the name (e.g. inline-namespace member referenced from the
+         * enclosing namespace). */
+        if (parser_at(p, TK_LT))
             parse_template_id(p, name);
         /* Consume qualified-id: ident(opt <args>) :: ident :: ... :: ident
          * Terminates: each iteration consumes :: + ident/operator, or breaks. */
@@ -419,6 +430,8 @@ parse_suffixes:
             looks_like_params = lookup_is_type_name(p, after_paren) ||
                                 lookup_is_template_name(p, after_paren) ||
                                 t2->kind == TK_SCOPE ||
+                                t2->kind == TK_STAR || t2->kind == TK_AMP ||
+                                t2->kind == TK_LAND || t2->kind == TK_LT ||
                                 (t2->kind == TK_IDENT &&
                                  !lookup_unqualified(p, t2->loc, t2->len));
         } else if (after_paren->kind == TK_SCOPE) {
@@ -516,6 +529,7 @@ parse_suffixes:
      * '(' for the caller — it may be direct-init in a tentative parse. */
     if (!name && parser_at(p, TK_LPAREN)) {
         Token *after = parser_peek_ahead(p, 1);
+        Token *after2 = parser_peek_ahead(p, 2);
         bool plausible =
             after->kind == TK_RPAREN || after->kind == TK_ELLIPSIS ||
             after->kind == TK_SCOPE ||
@@ -523,7 +537,11 @@ parse_suffixes:
             (after->kind == TK_IDENT &&
              (lookup_is_type_name(p, after) ||
               lookup_is_template_name(p, after) ||
-              parser_peek_ahead(p, 2)->kind == TK_SCOPE));
+              after2->kind == TK_SCOPE ||
+              after2->kind == TK_STAR || after2->kind == TK_AMP ||
+              after2->kind == TK_LAND ||
+              (after2->kind == TK_IDENT &&
+               !lookup_unqualified(p, after2->loc, after2->len))));
         if (!plausible)
             return new_var_decl_node(p, ty, name, parser_peek(p));
         parser_advance(p);  /* consume ( */

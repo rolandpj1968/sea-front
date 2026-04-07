@@ -265,8 +265,11 @@ DeclSpec parse_type_specifiers(Parser *p) {
 
             /* N4659 §17.2 [temp.names]: struct/class followed by a
              * template-id (e.g., 'struct Foo<int>') */
-            if (ty->tag && parser_at(p, TK_LT) &&
-                lookup_is_template_name(p, ty->tag)) {
+            if (ty->tag && parser_at(p, TK_LT)) {
+                /* Speculative — in 'class Foo<...>' position '<' is
+                 * always a template-argument-list. Don't require lookup,
+                 * since the template name may live in an inline namespace
+                 * we don't yet model. */
                 parse_template_id(p, ty->tag);
             }
 
@@ -459,6 +462,11 @@ DeclSpec parse_type_specifiers(Parser *p) {
                 break;
             }
         }
+        /* Trailing east-const cv-qualifiers: 'A::B const' / 'A::B volatile' */
+        while (parser_at(p, TK_KW_CONST) || parser_at(p, TK_KW_VOLATILE)) {
+            if (parser_consume(p, TK_KW_CONST))    is_const = true;
+            if (parser_consume(p, TK_KW_VOLATILE)) is_volatile = true;
+        }
         Type *ty = new_type(p, TY_STRUCT);  /* opaque — sema resolves */
         ty->is_const = is_const;
         ty->is_volatile = is_volatile;
@@ -606,19 +614,20 @@ DeclSpec parse_type_specifiers(Parser *p) {
         }
     }
 
-    /* Heuristic fallback: an unknown identifier followed immediately by
-     * another identifier (or '*'/'&' then an identifier) looks like a
-     * declaration with an inherited member typedef we can't resolve.
-     * Accept the leading ident as an opaque type-name. */
+    /* Heuristic fallback: an unknown identifier in a type-position
+     * context — accept it as an opaque type-name when followed by a
+     * token that can't begin/continue an expression but CAN follow a
+     * type-name (another ident, '*'/'&'/'&&', or template-arg/cast
+     * delimiters '>' / ')' / ','). This handles inherited member
+     * typedefs and templated-namespace types we don't yet resolve. */
     if (!seen_any && parser_peek(p)->kind == TK_IDENT) {
         Token *t1 = parser_peek_ahead(p, 1);
         bool decl_shape =
             (t1->kind == TK_IDENT &&
              !lookup_unqualified(p, t1->loc, t1->len)) ||
-            ((t1->kind == TK_STAR || t1->kind == TK_AMP || t1->kind == TK_LAND) &&
-             parser_peek_ahead(p, 2)->kind == TK_IDENT &&
-             !lookup_unqualified(p, parser_peek_ahead(p, 2)->loc,
-                                 parser_peek_ahead(p, 2)->len));
+            t1->kind == TK_STAR || t1->kind == TK_AMP || t1->kind == TK_LAND ||
+            t1->kind == TK_GT || t1->kind == TK_SHR ||
+            t1->kind == TK_COMMA || t1->kind == TK_RPAREN;
         if (decl_shape) {
             Token *name = parser_advance(p);
             Type *ty = new_type(p, TY_INT);

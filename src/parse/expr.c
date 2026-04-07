@@ -71,7 +71,7 @@ enum {
     PREC_SHIFT    = 12,   /* §8.8  [expr.shift]       << >> */
     PREC_ADD      = 13,   /* §8.7  [expr.add]         + - */
     PREC_MUL      = 14,   /* §8.6  [expr.mul]         * / % */
-    /* PREC_MPTR  = 15,      §8.5  [expr.mptr.oper]   .* ->*  (deferred) */
+    PREC_MPTR     = 15,   /* §8.5  [expr.mptr.oper]   .* ->* */
 };
 
 static int get_binop_prec(Parser *p, TokenKind k) {
@@ -100,6 +100,7 @@ static int get_binop_prec(Parser *p, TokenKind k) {
         return PREC_SHIFT;
     case TK_PLUS: case TK_MINUS:                     return PREC_ADD;
     case TK_STAR: case TK_SLASH: case TK_PERCENT:    return PREC_MUL;
+    case TK_DOTSTAR: case TK_ARROWSTAR:              return PREC_MPTR;
     default:                                          return 0;
     }
 }
