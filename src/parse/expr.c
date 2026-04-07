@@ -256,6 +256,25 @@ static Node *primary_expr(Parser *p) {
             parser_advance(p);
         }
 
+        /* ::operator new / ::operator delete / ::operator-symbol  —
+         * after global '::' (or after a class qualifier), an operator-id
+         * may appear. Consume 'operator' plus the operator symbol(s). */
+        if (parser_at(p, TK_KW_OPERATOR)) {
+            Token *op_tok = parser_advance(p);
+            if (parser_at(p, TK_KW_NEW) || parser_at(p, TK_KW_DELETE)) {
+                parser_advance(p);
+                if (parser_consume(p, TK_LBRACKET))
+                    parser_expect(p, TK_RBRACKET);
+            } else if (parser_consume(p, TK_LPAREN)) {
+                parser_expect(p, TK_RPAREN);
+            } else if (parser_consume(p, TK_LBRACKET)) {
+                parser_expect(p, TK_RBRACKET);
+            } else if (parser_peek(p)->kind >= TK_LPAREN &&
+                       parser_peek(p)->kind <= TK_HASHHASH) {
+                parser_advance(p);
+            }
+            vec_push(&parts, op_tok);
+        }
         /* Consume the name chain: A :: B :: C  or  A<int> :: B
          * Terminates: each iteration consumes ident (+ optional <args>) + ::, or breaks. */
         if (parser_at(p, TK_IDENT)) {
@@ -388,7 +407,6 @@ static Node *primary_expr(Parser *p) {
                 case TK_LT: case TK_GT: case TK_LE: case TK_GE:
                 case TK_EQ: case TK_NE: case TK_LAND: case TK_LOR:
                 case TK_SHL: case TK_SHR: case TK_DOTSTAR: case TK_ARROWSTAR:
-                case TK_INC: case TK_DEC:
                     ok = false;
                     break;
                 default:

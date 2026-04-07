@@ -423,6 +423,11 @@ DeclSpec parse_type_specifiers(Parser *p) {
      * Also handles qualified type names: A::B::Type (§8.1.4.3).
      * If no keyword specifiers have been seen, check if the current
      * token is a user-defined type-name via name lookup (§6.4). */
+    /* Leading global scope: ::A::B::C is a fully qualified type name. */
+    if (!seen_any && parser_at(p, TK_SCOPE)) {
+        parser_advance(p);  /* consume leading :: */
+        /* fall through to qualified-name handling below */
+    }
     if (!seen_any && parser_peek(p)->kind == TK_IDENT &&
         parser_peek_ahead(p, 1)->kind == TK_SCOPE) {
         /* Qualified type name: A::B::C — consume the chain.

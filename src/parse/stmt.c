@@ -76,9 +76,38 @@ static Node *parse_if_stmt(Parser *p) {
 
     parser_expect(p, TK_LPAREN);
 
-    /* TODO: C++17 init-statement (deferred — needs stmt-vs-decl disambig
-     * within the if-condition context) */
-    node->if_.cond = parse_expr(p);
+    /* Declaration in condition — N4659 §9.4.1 [stmt.select]
+     *   condition: expression
+     *            | attribute-specifier-seq(opt) decl-specifier-seq declarator
+     *              brace-or-equal-initializer
+     * Used as e.g. 'if (T x = expr)'. We tentatively try a declaration; if
+     * it doesn't end at ')', restore and parse as expression. */
+    if (parser_at_type_specifier(p)) {
+        ParseState saved = parser_save(p);
+        p->tentative = true;
+        Type *base = parse_type_specifiers(p).type;
+        Node *decl = base ? parse_declarator(p, base) : NULL;
+        if (decl && parser_consume(p, TK_ASSIGN))
+            decl->var_decl.init = parse_assign_expr(p);
+        bool ok = decl && parser_at(p, TK_RPAREN);
+        p->tentative = false;
+        parser_restore(p, saved);
+        if (ok) {
+            base = parse_type_specifiers(p).type;
+            decl = parse_declarator(p, base);
+            if (parser_consume(p, TK_ASSIGN))
+                decl->var_decl.init = parse_assign_expr(p);
+            if (decl->var_decl.name)
+                region_declare(p, decl->var_decl.name->loc,
+                              decl->var_decl.name->len, ENTITY_VARIABLE,
+                              decl->var_decl.ty);
+            node->if_.cond = decl;
+        } else {
+            node->if_.cond = parse_expr(p);
+        }
+    } else {
+        node->if_.cond = parse_expr(p);
+    }
 
     parser_expect(p, TK_RPAREN);
 

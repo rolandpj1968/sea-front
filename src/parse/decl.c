@@ -247,9 +247,18 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
      * '(' followed by a type keyword is a parameter list. */
     if (parser_at(p, TK_LPAREN) && !parser_at_type_specifier(p)) {
         Token *next = parser_peek_ahead(p, 1);
+        /* For (ident ...): only treat as grouped declarator if the ident is
+         * immediately followed by ')', '(', or '[' — i.e., it could really
+         * be the name in a redundant-paren declarator. Anything else (like
+         * a comma) means we're in a direct-init or call, not a declaration. */
+        bool ident_grouped = next && next->kind == TK_IDENT &&
+                             !lookup_is_type_name(p, next) &&
+                             (parser_peek_ahead(p, 2)->kind == TK_RPAREN ||
+                              parser_peek_ahead(p, 2)->kind == TK_LPAREN ||
+                              parser_peek_ahead(p, 2)->kind == TK_LBRACKET);
         if (next && (next->kind == TK_STAR || next->kind == TK_AMP ||
                      next->kind == TK_LAND || next->kind == TK_LPAREN ||
-                     (next->kind == TK_IDENT && !lookup_is_type_name(p, next)))) {
+                     ident_grouped)) {
             /* Grouping parens or redundant parens around a name.
              * E.g.: int (*fp)(int,int)  or  T(x)  */
             parser_advance(p);  /* skip ( */
@@ -406,6 +415,9 @@ parse_suffixes:
             looks_like_params = lookup_is_type_name(p, after_paren) ||
                                 lookup_is_template_name(p, after_paren) ||
                                 parser_peek_ahead(p, 2)->kind == TK_SCOPE;
+        } else if (after_paren->kind == TK_SCOPE) {
+            /* '::Foo::Bar' — fully qualified type at start of param list. */
+            looks_like_params = true;
         } else if (after_paren->kind != TK_RPAREN &&
                    after_paren->kind != TK_ELLIPSIS &&
                    after_paren->kind != TK_KW_VOID) {
@@ -469,8 +481,21 @@ parse_suffixes:
         }
         /* else: not a parameter list — fall through, leave ( for caller */
     }
-    /* Same logic for unnamed declarators (abstract) — always params */
-    if (!name && parser_consume(p, TK_LPAREN)) {
+    /* Unnamed declarator: '(' starts parameter list ONLY if what follows
+     * is plausibly a parameter (type-spec, ')', '...'). Otherwise leave
+     * '(' for the caller — it may be direct-init in a tentative parse. */
+    if (!name && parser_at(p, TK_LPAREN)) {
+        Token *after = parser_peek_ahead(p, 1);
+        bool plausible =
+            after->kind == TK_RPAREN || after->kind == TK_ELLIPSIS ||
+            (after->kind >= TK_KW_ALIGNAS && after->kind <= TK_KW_WHILE) ||
+            (after->kind == TK_IDENT &&
+             (lookup_is_type_name(p, after) ||
+              lookup_is_template_name(p, after) ||
+              parser_peek_ahead(p, 2)->kind == TK_SCOPE));
+        if (!plausible)
+            return new_var_decl_node(p, ty, name, parser_peek(p));
+        parser_advance(p);  /* consume ( */
         Vec params = vec_new(p->arena);
         Vec param_types = vec_new(p->arena);
         bool variadic = false;
