@@ -13,7 +13,7 @@
       (block
         (return (+ (->* (ident "p") (ident "pm")) (.* (* (ident "this")) (ident "pm")))))))
   (template (params (param ? "_Str"))
-    (func-def void "str_concat" (params (param (ptr const struct _Str) "lhs") (param (ptr const struct _Str) "rhs"))
+    (func-def void "str_concat" (params (param (ptr const struct value_type) "lhs") (param (ptr const struct value_type) "rhs"))
       (block
         (cast void (ident "lhs"))
         (cast void (ident "rhs")))))

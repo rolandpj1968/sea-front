@@ -11,12 +11,12 @@
   (class-def "Foo"
     (var-decl int "x")
     (var-decl int "count"))
-  (var-decl struct types "p")
+  (var-decl struct Point "p")
   (func-def int "main" (params)
     (block
       (var-decl int "a" (call (qualified "math" "add") (num 1) (num 2)))
       (var-decl int "b" (qualified "math" "PI"))
       (var-decl int "c" (qualified "Foo" "count"))
-      (var-decl struct types "q")
+      (var-decl struct Point "q")
       (= (. (ident "q") "x") (num 1))
       (return (+ (+ (+ (ident "a") (ident "b")) (ident "c")) (. (ident "q") "x"))))))

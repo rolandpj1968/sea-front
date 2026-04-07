@@ -1,0 +1,12 @@
+(translation-unit
+  (block
+    (class-def "Outer"
+      (typedef)
+      (class-def "Inner"
+        (typedef)))
+    (typedef))
+  (var-decl struct Outer "x")
+  (var-decl struct Inner "y")
+  (var-decl int "a")
+  (var-decl long "b")
+  (var-decl struct not_a_real_member "z"))

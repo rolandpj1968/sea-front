@@ -533,20 +533,49 @@ DeclSpec parse_type_specifiers(Parser *p) {
     }
     if (!seen_any && parser_peek(p)->kind == TK_IDENT &&
         parser_peek_ahead(p, 1)->kind == TK_SCOPE) {
-        /* Qualified type name: A::B::C — consume the chain.
-         * The parser doesn't resolve qualified lookup; treat as opaque type.
-         * Terminates: each iteration consumes ident + ::, or breaks. */
+        /* Qualified type name: A::B::C — N4659 §6.4.3 [basic.lookup.qual].
+         *
+         * Walk the chain via real lookup when possible. Each segment is
+         * resolved in the previous segment's scope (a namespace's
+         * ns_region or a class's class_region). If at any point lookup
+         * fails or a segment has no nested scope, we fall back to the
+         * opaque-type behavior the parser always had. */
         Token *first = parser_advance(p);
+        Declaration *resolved = lookup_unqualified(p, first->loc, first->len);
+        DeclarativeRegion *scope = NULL;
+        if (resolved) {
+            if (resolved->entity == ENTITY_NAMESPACE)
+                scope = resolved->ns_region;
+            else if (resolved->type && resolved->type->class_region)
+                scope = resolved->type->class_region;
+        }
+        Token *last_seg = first;
         while (parser_consume(p, TK_SCOPE)) {
             parser_consume(p, TK_KW_TEMPLATE);
             if (parser_at(p, TK_IDENT)) {
                 Token *seg = parser_advance(p);
+                last_seg = seg;
                 /* Speculative template-id on each segment: A::B<int>::C.
-                 * In a qualified-name within a type position, '<' after a
-                 * name is overwhelmingly a template-argument-list rather
-                 * than a less-than operator. */
-                if (parser_at(p, TK_LT))
+                 * Template arguments make the segment's type opaque from
+                 * lookup's perspective — drop scope. */
+                if (parser_at(p, TK_LT)) {
                     parse_template_id(p, seg);
+                    resolved = NULL;
+                    scope = NULL;
+                    continue;
+                }
+                /* Look up this segment in the current scope. If we still
+                 * have a scope, use it; if not, we're walking blindly. */
+                Declaration *next = scope
+                    ? lookup_in_scope(scope, seg->loc, seg->len)
+                    : NULL;
+                resolved = next;
+                if (next && next->entity == ENTITY_NAMESPACE)
+                    scope = next->ns_region;
+                else if (next && next->type && next->type->class_region)
+                    scope = next->type->class_region;
+                else
+                    scope = NULL;
             } else {
                 break;
             }
@@ -556,10 +585,21 @@ DeclSpec parse_type_specifiers(Parser *p) {
             if (parser_consume(p, TK_KW_CONST))    is_const = true;
             if (parser_consume(p, TK_KW_VOLATILE)) is_volatile = true;
         }
+        /* If the chain resolved cleanly to a known type, return THAT
+         * type with its tag and class_region intact. Otherwise opaque. */
+        if (resolved && resolved->type &&
+            (resolved->entity == ENTITY_TYPE ||
+             resolved->entity == ENTITY_TAG)) {
+            Type *copy = arena_alloc(p->arena, sizeof(Type));
+            *copy = *resolved->type;
+            copy->is_const = is_const;
+            copy->is_volatile = is_volatile;
+            result.type = copy; return result;
+        }
         Type *ty = new_type(p, TY_STRUCT);  /* opaque — sema resolves */
         ty->is_const = is_const;
         ty->is_volatile = is_volatile;
-        ty->tag = first;
+        ty->tag = last_seg;
         result.type = ty; return result;
     }
     /* GCC/Clang type intrinsics: __underlying_type(T), __remove_cv(T), etc.
