@@ -994,6 +994,18 @@ Node *parse_declaration(Parser *p) {
             else if (parser_consume(p, TK_LPAREN)) {
                 next_decl->var_decl.init = parse_expr(p);
                 parser_expect(p, TK_RPAREN);
+            } else if (parser_at(p, TK_LBRACE)) {
+                /* Braced-init-list 'T x{...}' — depth-counted skip,
+                 * matches the single-decl path. */
+                int depth = 0;
+                while (!parser_at_eof(p)) {
+                    if (parser_at(p, TK_LBRACE)) depth++;
+                    if (parser_at(p, TK_RBRACE)) {
+                        depth--;
+                        if (depth <= 0) { parser_advance(p); break; }
+                    }
+                    parser_advance(p);
+                }
             }
 
             if (next_decl->var_decl.name)
