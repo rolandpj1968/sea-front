@@ -396,6 +396,12 @@ struct Node {
             int nparams;
             Node *body;     /* ND_BLOCK (compound-statement) */
             DeclarativeRegion *param_scope;  /* sema; prototype-scope region */
+            /* For an out-of-class method definition 'int Foo::bar() {}',
+             * this is the resolved class type (Foo). NULL for free
+             * functions and in-class method definitions. Codegen uses
+             * the tag for name mangling and the type for the 'this'
+             * parameter. */
+            Type *class_type;
         } func;
 
         /* ND_PARAM — N4659 §11.3.5 [dcl.fct]

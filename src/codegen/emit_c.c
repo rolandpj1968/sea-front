@@ -500,12 +500,32 @@ static void emit_class_def(Node *n) {
     fputs("};\n", stdout);
 
     /* Forward-declare every method first, so they can call each
-     * other regardless of source order inside the class body. */
+     * other regardless of source order inside the class body, and so
+     * out-of-class definitions ('int Foo::bar() {}') see a prior
+     * declaration of the mangled name. Both in-class definitions
+     * (ND_FUNC_DEF) and pure declarations (ND_VAR_DECL with TY_FUNC)
+     * count. */
     for (int i = 0; i < n->class_def.nmembers; i++) {
         Node *m = n->class_def.members[i];
-        if (m && m->kind == ND_FUNC_DEF) {
+        if (!m) continue;
+        if (m->kind == ND_FUNC_DEF) {
             emit_method_signature(m, n->class_def.tag);
             fputs(";\n", stdout);
+        } else if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
+                   m->var_decl.ty->kind == TY_FUNC && m->var_decl.name) {
+            /* Synthesise an emit_method_signature-like header from the
+             * var-decl's type. */
+            Type *fty = m->var_decl.ty;
+            emit_type(fty->ret);
+            fprintf(stdout, " %.*s_%.*s(struct %.*s *this",
+                    n->class_def.tag->len, n->class_def.tag->loc,
+                    m->var_decl.name->len, m->var_decl.name->loc,
+                    n->class_def.tag->len, n->class_def.tag->loc);
+            for (int k = 0; k < fty->nparams; k++) {
+                fputs(", ", stdout);
+                emit_type(fty->params[k]);
+            }
+            fputs(");\n", stdout);
         }
     }
 
@@ -521,7 +541,16 @@ static void emit_class_def(Node *n) {
 static void emit_top_level(Node *n) {
     if (!n) return;
     switch (n->kind) {
-    case ND_FUNC_DEF: emit_func_def(n); return;
+    case ND_FUNC_DEF:
+        /* Out-of-class method definition 'int Foo::bar() {}' was
+         * tagged by the parser with the resolved class type. Emit
+         * it as a mangled free function with the 'this' parameter
+         * prepended. */
+        if (n->func.class_type && n->func.class_type->tag)
+            emit_method_as_free_fn(n, n->func.class_type->tag);
+        else
+            emit_func_def(n);
+        return;
     case ND_CLASS_DEF: emit_class_def(n); return;
     case ND_VAR_DECL:
         emit_var_decl_inner(n);

@@ -849,6 +849,7 @@ Node *parse_declaration(Parser *p) {
         func->func.nparams = decl->func.nparams;
         func->func.body = NULL;
         func->func.param_scope = NULL;
+        func->func.class_type = NULL;
 
         /* Register the function name in the enclosing scope */
         if (func->func.name)
@@ -864,8 +865,14 @@ Node *parse_declaration(Parser *p) {
         DeclarativeRegion *qscope = p->qualified_decl_scope;
         p->qualified_decl_scope = NULL;
         DeclarativeRegion *saved_region = p->region;
-        if (qscope && !p->tentative)
+        if (qscope && !p->tentative) {
             p->region = qscope;
+            /* Tag this function definition as a method of the class
+             * the qualifier resolved to, so codegen can mangle the
+             * name and inject a 'this' parameter. */
+            if (qscope->kind == REGION_CLASS && qscope->owner_type)
+                func->func.class_type = qscope->owner_type;
+        }
 
         /* Push prototype scope and register parameter names */
         region_push(p, REGION_PROTOTYPE, /*name=*/NULL);
