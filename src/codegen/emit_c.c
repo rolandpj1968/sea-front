@@ -32,6 +32,48 @@ static void emit_indent(void) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Name mangling                                                       */
+/* ------------------------------------------------------------------ */
+
+/* Walk a class type's class_region enclosing chain to find namespaces
+ * and emit them as a prefix. Result: 'ns1_ns2_'. Empty string for a
+ * class at global scope. The trailing underscore is included so
+ * callers can append the class tag directly. */
+static void emit_ns_prefix(Type *class_type) {
+    if (!class_type || !class_type->class_region) return;
+    /* Walk OUT from the class to collect namespace names. */
+    enum { MAX_NS = 8 };
+    Token *names[MAX_NS];
+    int n = 0;
+    DeclarativeRegion *r = class_type->class_region->enclosing;
+    while (r && n < MAX_NS) {
+        if (r->kind == REGION_NAMESPACE && r->name)
+            names[n++] = r->name;
+        r = r->enclosing;
+    }
+    /* Emit outermost first. */
+    for (int i = n - 1; i >= 0; i--)
+        fprintf(stdout, "%.*s_", names[i]->len, names[i]->loc);
+}
+
+/* Emit the mangled struct/class tag for a class type:
+ *   global   — 'Tag'
+ *   ns::Tag  — 'ns_Tag'
+ *   a::b::T  — 'a_b_T'
+ * Used both for the C struct tag (so two classes named the same in
+ * different namespaces don't collide in the single C tag namespace)
+ * and as the prefix for method mangling. */
+static void emit_mangled_class_tag(Type *class_type) {
+    if (!class_type || !class_type->tag) {
+        fputs("?", stdout);
+        return;
+    }
+    emit_ns_prefix(class_type);
+    fprintf(stdout, "%.*s",
+            class_type->tag->len, class_type->tag->loc);
+}
+
+/* ------------------------------------------------------------------ */
 /* Type emission                                                       */
 /* ------------------------------------------------------------------ */
 
@@ -62,11 +104,11 @@ static void emit_type(Type *ty) {
     case TY_ARRAY:   emit_type(ty->base); fputs("*", stdout); return;
     case TY_STRUCT:
         fputs("struct ", stdout);
-        if (ty->tag) fprintf(stdout, "%.*s", ty->tag->len, ty->tag->loc);
+        emit_mangled_class_tag(ty);
         return;
     case TY_UNION:
         fputs("union ", stdout);
-        if (ty->tag) fprintf(stdout, "%.*s", ty->tag->len, ty->tag->loc);
+        emit_mangled_class_tag(ty);
         return;
     case TY_ENUM:
         fputs("enum ", stdout);
@@ -224,10 +266,10 @@ static void emit_expr(Node *n) {
             callee->ident.resolved_decl->home &&
             callee->ident.resolved_decl->home->owner_type &&
             callee->ident.resolved_decl->home->owner_type->tag) {
-            Token *class_tag = callee->ident.resolved_decl->home->owner_type->tag;
+            Type *class_type = callee->ident.resolved_decl->home->owner_type;
             Token *mname = callee->ident.name;
-            fprintf(stdout, "%.*s_%.*s(this",
-                    class_tag->len, class_tag->loc,
+            emit_mangled_class_tag(class_type);
+            fprintf(stdout, "_%.*s(this",
                     mname->len, mname->loc);
             for (int i = 0; i < n->call.nargs; i++) {
                 fputs(", ", stdout);
@@ -243,8 +285,8 @@ static void emit_expr(Node *n) {
             if (obj_is_ptr) ot = ot->base;
             if (ot && (ot->kind == TY_STRUCT || ot->kind == TY_UNION) &&
                 ot->tag && callee->member.member) {
-                fprintf(stdout, "%.*s_%.*s(",
-                        ot->tag->len, ot->tag->loc,
+                emit_mangled_class_tag(ot);
+                fprintf(stdout, "_%.*s(",
                         callee->member.member->len, callee->member.member->loc);
                 /* this argument: address-of for value, as-is for pointer. */
                 if (obj_is_ptr) {
@@ -429,18 +471,24 @@ static void emit_func_def(Node *n) {
 
 /* Emit just the signature of a method as a mangled free function.
  * Used for forward declarations so methods can call each other in
- * any order regardless of source ordering inside the class body. */
-static void emit_method_signature(Node *func, Token *class_tag) {
+ * any order regardless of source ordering inside the class body.
+ *
+ * 'class_type' carries class_region for namespace walking; the bare
+ * tag alone is not enough because two classes named the same in
+ * different namespaces would collide. */
+static void emit_method_signature(Node *func, Type *class_type) {
     if (!func || func->kind != ND_FUNC_DEF) return;
-    if (!class_tag || !func->func.name) return;
+    if (!class_type || !class_type->tag || !func->func.name) return;
 
     emit_type(func->func.ret_ty);
     fputc(' ', stdout);
-    fprintf(stdout, "%.*s_%.*s",
-            class_tag->len, class_tag->loc,
+    emit_mangled_class_tag(class_type);
+    fprintf(stdout, "_%.*s",
             func->func.name->len, func->func.name->loc);
     fputc('(', stdout);
-    fprintf(stdout, "struct %.*s *this", class_tag->len, class_tag->loc);
+    fputs("struct ", stdout);
+    emit_mangled_class_tag(class_type);
+    fputs(" *this", stdout);
     for (int i = 0; i < func->func.nparams; i++) {
         fputs(", ", stdout);
         Node *p = func->func.params[i];
@@ -462,11 +510,11 @@ static void emit_method_signature(Node *func, Token *class_tag) {
  * The 'this->' rewrite happens at the ident level — visit_ident set
  * implicit_this on each member reference, and emit_expr emits the
  * prefix when it sees the flag. */
-static void emit_method_as_free_fn(Node *func, Token *class_tag) {
+static void emit_method_as_free_fn(Node *func, Type *class_type) {
     if (!func || func->kind != ND_FUNC_DEF) return;
-    if (!class_tag || !func->func.name) return;
+    if (!class_type || !class_type->tag || !func->func.name) return;
 
-    emit_method_signature(func, class_tag);
+    emit_method_signature(func, class_type);
     fputc(' ', stdout);
     if (func->func.body)
         emit_block(func->func.body);
@@ -480,10 +528,14 @@ static void emit_class_def(Node *n) {
      * Skipped INSIDE the struct: methods (lowered to free functions
      * after the struct definition).
      * Other members (nested types, access specifiers) ignored. */
+    Type *class_type = n->class_def.ty;
     fputs("struct ", stdout);
-    if (n->class_def.tag)
-        fprintf(stdout, "%.*s ",
+    if (class_type)
+        emit_mangled_class_tag(class_type);
+    else if (n->class_def.tag)
+        fprintf(stdout, "%.*s",
                 n->class_def.tag->len, n->class_def.tag->loc);
+    fputc(' ', stdout);
     fputs("{\n", stdout);
     g_indent++;
     for (int i = 0; i < n->class_def.nmembers; i++) {
@@ -508,19 +560,22 @@ static void emit_class_def(Node *n) {
     for (int i = 0; i < n->class_def.nmembers; i++) {
         Node *m = n->class_def.members[i];
         if (!m) continue;
-        if (m->kind == ND_FUNC_DEF) {
-            emit_method_signature(m, n->class_def.tag);
+        if (m->kind == ND_FUNC_DEF && class_type) {
+            emit_method_signature(m, class_type);
             fputs(";\n", stdout);
         } else if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
-                   m->var_decl.ty->kind == TY_FUNC && m->var_decl.name) {
+                   m->var_decl.ty->kind == TY_FUNC && m->var_decl.name &&
+                   class_type) {
             /* Synthesise an emit_method_signature-like header from the
              * var-decl's type. */
             Type *fty = m->var_decl.ty;
             emit_type(fty->ret);
-            fprintf(stdout, " %.*s_%.*s(struct %.*s *this",
-                    n->class_def.tag->len, n->class_def.tag->loc,
-                    m->var_decl.name->len, m->var_decl.name->loc,
-                    n->class_def.tag->len, n->class_def.tag->loc);
+            fputc(' ', stdout);
+            emit_mangled_class_tag(class_type);
+            fprintf(stdout, "_%.*s(struct ",
+                    m->var_decl.name->len, m->var_decl.name->loc);
+            emit_mangled_class_tag(class_type);
+            fputs(" *this", stdout);
             for (int k = 0; k < fty->nparams; k++) {
                 fputs(", ", stdout);
                 emit_type(fty->params[k]);
@@ -533,8 +588,8 @@ static void emit_class_def(Node *n) {
      * separate free function. */
     for (int i = 0; i < n->class_def.nmembers; i++) {
         Node *m = n->class_def.members[i];
-        if (m && m->kind == ND_FUNC_DEF)
-            emit_method_as_free_fn(m, n->class_def.tag);
+        if (m && m->kind == ND_FUNC_DEF && class_type)
+            emit_method_as_free_fn(m, class_type);
     }
 }
 
@@ -547,7 +602,7 @@ static void emit_top_level(Node *n) {
          * it as a mangled free function with the 'this' parameter
          * prepended. */
         if (n->func.class_type && n->func.class_type->tag)
-            emit_method_as_free_fn(n, n->func.class_type->tag);
+            emit_method_as_free_fn(n, n->func.class_type);
         else
             emit_func_def(n);
         return;
@@ -555,6 +610,15 @@ static void emit_top_level(Node *n) {
     case ND_VAR_DECL:
         emit_var_decl_inner(n);
         fputs(";\n", stdout);
+        return;
+    case ND_BLOCK:
+        /* The parser packs namespace contents (and extern "C" blocks)
+         * into ND_BLOCK at top level. Recurse into the inner decls. */
+        for (int i = 0; i < n->block.nstmts; i++)
+            emit_top_level(n->block.stmts[i]);
+        return;
+    case ND_TEMPLATE_DECL:
+        /* Templates aren't lowered yet — silently skip. */
         return;
     default:
         fputs("/* unsupported top-level */\n", stdout);
