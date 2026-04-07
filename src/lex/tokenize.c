@@ -145,6 +145,9 @@ typedef struct {
  * representations (mapped to their operator token kinds).
  */
 static const Keyword kw_table[] = {
+    /* C11 alternate spellings (sort first because '_' < 'a' in ASCII). */
+    {"_Bool",            TK_KW_BOOL},
+    {"_Static_assert",   TK_KW_STATIC_ASSERT},
     {"alignas",          TK_KW_ALIGNAS},
     {"alignof",          TK_KW_ALIGNOF},
     {"and",              TK_LAND},
