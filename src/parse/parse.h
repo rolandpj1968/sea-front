@@ -400,6 +400,7 @@ struct Node {
          * C++20: no structural changes. C++23: deducing this. */
         struct {
             Token  *tag;        /* class/struct name (may be NULL for anonymous) */
+            Type   *ty;         /* class type, with class_region; may be NULL */
             Node  **members;    /* member-specification as array of nodes */
             int     nmembers;
             /* Future: base classes, class-key (struct vs class) */

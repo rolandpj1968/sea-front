@@ -319,8 +319,18 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
          * For 'void Foo::bar(...)', this ends up pointing at Foo's
          * class_region so the method body can resolve members via
          * lookup. Reset to NULL on template-id segments (instantiation-
-         * dependent, no resolved scope). */
-        Declaration *qres = lookup_unqualified(p, name->loc, name->len);
+         * dependent, no resolved scope).
+         *
+         * Use kind-specific lookups: a class template has BOTH an
+         * ENTITY_TEMPLATE entry (type=NULL) and ENTITY_TYPE/TAG
+         * entries (with class_region). Plain lookup_unqualified
+         * returns the most-recent insertion, which is usually the
+         * TEMPLATE entry — wrong for our purposes. */
+        Declaration *qres = lookup_unqualified_kind(p, name->loc, name->len, ENTITY_TYPE);
+        if (!qres)
+            qres = lookup_unqualified_kind(p, name->loc, name->len, ENTITY_TAG);
+        if (!qres)
+            qres = lookup_unqualified_kind(p, name->loc, name->len, ENTITY_NAMESPACE);
         DeclarativeRegion *qscope = NULL;
         if (qres) {
             if (qres->entity == ENTITY_NAMESPACE)
@@ -1483,9 +1493,32 @@ Node *parse_template_declaration(Parser *p) {
             break;
         }
     }
+    /* For a class template, also extract the underlying Type so we
+     * can register it as ENTITY_TYPE in the enclosing scope. The
+     * Type carries class_region, which lets out-of-class method
+     * definitions ('void Foo<T>::bar() { ... }') walk into the
+     * class scope at parse time. */
+    Type *tmpl_class_type = NULL;
+    if (decl) {
+        if (decl->kind == ND_CLASS_DEF)
+            tmpl_class_type = decl->class_def.ty;
+        else if (decl->kind == ND_VAR_DECL && decl->var_decl.ty &&
+                 (decl->var_decl.ty->kind == TY_STRUCT ||
+                  decl->var_decl.ty->kind == TY_UNION) &&
+                 decl->var_decl.ty->tag == tmpl_name)
+            tmpl_class_type = decl->var_decl.ty;
+    }
     if (tmpl_name) {
         region_declare(p, tmpl_name->loc, tmpl_name->len,
                       ENTITY_TEMPLATE, /*type=*/NULL);
+        /* Also register the class type so out-of-class qualifier
+         * lookups ('void Foo<T>::bar') can reach the class_region. */
+        if (tmpl_class_type) {
+            region_declare(p, tmpl_name->loc, tmpl_name->len,
+                          ENTITY_TYPE, tmpl_class_type);
+            region_declare(p, tmpl_name->loc, tmpl_name->len,
+                          ENTITY_TAG, tmpl_class_type);
+        }
 
         /* N4659 §14.3/11 [class.friend]: strictly, a friend-declared
          * name is NOT found by lookup until a matching declaration

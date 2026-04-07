@@ -331,6 +331,7 @@ Node *new_class_def_node(Parser *p, Token *tag, Node **members, int nmembers,
                          Token *tok) {
     Node *node = new_node(p, ND_CLASS_DEF, tok);
     node->class_def.tag = tag;
+    node->class_def.ty = NULL;
     node->class_def.members = members;
     node->class_def.nmembers = nmembers;
     return node;

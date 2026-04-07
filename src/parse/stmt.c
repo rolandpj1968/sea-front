@@ -441,7 +441,12 @@ Node *parse_stmt(Parser *p) {
      * base class we can't resolve. Per §9.8 try a declaration first. */
     bool might_be_decl_ident = false;
     if (parser_peek(p)->kind == TK_IDENT &&
-        !parser_at_type_specifier(p)) {
+        !parser_at_type_specifier(p) &&
+        /* Tightened: only fire the heuristic when the leading ident
+         * is NOT in lookup at all. If lookup found it as a non-type
+         * (variable, function, enumerator), the statement is an
+         * expression, not a declaration. */
+        lookup_unqualified(p, parser_peek(p)->loc, parser_peek(p)->len) == NULL) {
         Token *t1 = parser_peek_ahead(p, 1);
         Token *t2 = parser_peek_ahead(p, 2);
         if (t1->kind == TK_IDENT &&
@@ -459,8 +464,7 @@ Node *parse_stmt(Parser *p) {
          * (e.g. __decltype(x)) used as a declaration type. */
         Token *first = parser_peek(p);
         if (t1->kind == TK_LPAREN &&
-            first->len >= 2 && first->loc[0] == '_' && first->loc[1] == '_' &&
-            !lookup_unqualified(p, first->loc, first->len)) {
+            first->len >= 2 && first->loc[0] == '_' && first->loc[1] == '_') {
             might_be_decl_ident = true;
         }
     }

@@ -482,6 +482,7 @@ DeclSpec parse_type_specifiers(Parser *p) {
                 result.class_def = new_class_def_node(p, ty->tag,
                     (Node **)members.data, members.len,
                     ty->tag ? ty->tag : parser_peek(p));
+                result.class_def->class_def.ty = ty;
             }
 
             result.type = ty; return result;
@@ -541,7 +542,14 @@ DeclSpec parse_type_specifiers(Parser *p) {
          * fails or a segment has no nested scope, we fall back to the
          * opaque-type behavior the parser always had. */
         Token *first = parser_advance(p);
-        Declaration *resolved = lookup_unqualified(p, first->loc, first->len);
+        /* Kind-specific lookup so a class template's ENTITY_TYPE entry
+         * (which carries class_region) wins over its ENTITY_TEMPLATE
+         * entry (which has type=NULL). */
+        Declaration *resolved = lookup_unqualified_kind(p, first->loc, first->len, ENTITY_TYPE);
+        if (!resolved)
+            resolved = lookup_unqualified_kind(p, first->loc, first->len, ENTITY_TAG);
+        if (!resolved)
+            resolved = lookup_unqualified_kind(p, first->loc, first->len, ENTITY_NAMESPACE);
         DeclarativeRegion *scope = NULL;
         if (resolved) {
             if (resolved->entity == ENTITY_NAMESPACE)
@@ -777,13 +785,19 @@ DeclSpec parse_type_specifiers(Parser *p) {
         }
     }
 
-    /* Heuristic fallback: an unknown identifier in a type-position
+    /* Heuristic fallback: an UNRESOLVED identifier in a type-position
      * context — accept it as an opaque type-name when followed by a
      * token that can't begin/continue an expression but CAN follow a
      * type-name (another ident, '*'/'&'/'&&', or template-arg/cast
      * delimiters '>' / ')' / ','). This handles inherited member
-     * typedefs and templated-namespace types we don't yet resolve. */
-    if (!seen_any && parser_peek(p)->kind == TK_IDENT) {
+     * typedefs and templated-namespace types we don't yet resolve.
+     *
+     * Tightened: only fires when the leading identifier is NOT in
+     * lookup at all. If lookup found something non-type-like (e.g.
+     * an enumerator or a variable), we leave the type-spec parse
+     * empty so the caller falls back to the expression branch. */
+    if (!seen_any && parser_peek(p)->kind == TK_IDENT &&
+        lookup_unqualified(p, parser_peek(p)->loc, parser_peek(p)->len) == NULL) {
         Token *t1 = parser_peek_ahead(p, 1);
         bool decl_shape =
             t1->kind == TK_IDENT ||
@@ -904,7 +918,13 @@ bool parser_at_type_specifier(Parser *p) {
          * current heuristic: assume a qualified name is a type. */
         if (parser_peek_ahead(p, 1)->kind == TK_SCOPE) {
             Token *first = parser_peek(p);
-            Declaration *qres = lookup_unqualified(p, first->loc, first->len);
+            /* Kind-specific so a class template's TYPE entry wins over
+             * its TEMPLATE entry. */
+            Declaration *qres = lookup_unqualified_kind(p, first->loc, first->len, ENTITY_TYPE);
+            if (!qres)
+                qres = lookup_unqualified_kind(p, first->loc, first->len, ENTITY_TAG);
+            if (!qres)
+                qres = lookup_unqualified_kind(p, first->loc, first->len, ENTITY_NAMESPACE);
             DeclarativeRegion *qscope = NULL;
             if (qres) {
                 if (qres->entity == ENTITY_NAMESPACE)
