@@ -272,12 +272,46 @@ static void visit_for(Sema *s, Node *n) {
     if (n->for_.body) visit(s, n->for_.body);
 }
 
+static void visit_member(Sema *s, Node *n) {
+    visit(s, n->member.obj);
+    /* For p->member, the obj's type is a pointer to a struct/union;
+     * for s.member it's the struct/union directly. */
+    Type *ot = n->member.obj->resolved_type;
+    if (!ot) return;
+    if (ot->kind == TY_PTR && ot->base) ot = ot->base;
+    if (ot->kind != TY_STRUCT && ot->kind != TY_UNION) return;
+    if (!ot->class_region) return;
+    Token *m = n->member.member;
+    if (!m || m->kind != TK_IDENT) return;
+    /* Lookup in just this class scope (no enclosing walk) — qualified
+     * lookup, not unqualified. lookup_in_scope is the right primitive
+     * but it isn't exposed; lookup_unqualified_from would walk
+     * 'enclosing' which we don't want for member lookup. For now do a
+     * targeted search via lookup_in_scope (declared in parse.h). */
+    Declaration *d = lookup_in_scope(ot->class_region, m->loc, m->len);
+    if (d && d->type)
+        n->resolved_type = d->type;
+}
+
+static void visit_subscript(Sema *s, Node *n) {
+    visit(s, n->subscript.base);
+    visit(s, n->subscript.index);
+    /* arr[i] / p[i] — element type. */
+    Type *bt = n->subscript.base->resolved_type;
+    if (bt && (bt->kind == TY_ARRAY || bt->kind == TY_PTR) && bt->base)
+        n->resolved_type = bt->base;
+}
+
 static void visit_call(Sema *s, Node *n) {
     visit(s, n->call.callee);
     for (int i = 0; i < n->call.nargs; i++)
         visit(s, n->call.args[i]);
-    /* Result type would come from the callee's TY_FUNC. For now leave
-     * NULL — codegen falls back to source-form. */
+    /* Result type comes from the callee's TY_FUNC.ret. The callee may
+     * be a function pointer (TY_PTR → TY_FUNC); handle that too. */
+    Type *ct = n->call.callee->resolved_type;
+    if (ct && ct->kind == TY_PTR && ct->base) ct = ct->base;
+    if (ct && ct->kind == TY_FUNC && ct->ret)
+        n->resolved_type = ct->ret;
 }
 
 /* ------------------------------------------------------------------ */
@@ -310,6 +344,8 @@ static void visit(Sema *s, Node *n) {
     case ND_DO:        visit_do(s, n);        return;
     case ND_FOR:       visit_for(s, n);       return;
     case ND_CALL:      visit_call(s, n);      return;
+    case ND_SUBSCRIPT: visit_subscript(s, n); return;
+    case ND_MEMBER:    visit_member(s, n);    return;
 
     /* Declarations */
     case ND_VAR_DECL:  visit_var_decl(s, n);  return;

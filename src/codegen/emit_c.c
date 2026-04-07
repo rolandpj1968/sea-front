@@ -60,6 +60,18 @@ static void emit_type(Type *ty) {
     case TY_REF:     emit_type(ty->base); fputs("*", stdout); return;
     case TY_RVALREF: emit_type(ty->base); fputs("*", stdout); return;
     case TY_ARRAY:   emit_type(ty->base); fputs("*", stdout); return;
+    case TY_STRUCT:
+        fputs("struct ", stdout);
+        if (ty->tag) fprintf(stdout, "%.*s", ty->tag->len, ty->tag->loc);
+        return;
+    case TY_UNION:
+        fputs("union ", stdout);
+        if (ty->tag) fprintf(stdout, "%.*s", ty->tag->len, ty->tag->loc);
+        return;
+    case TY_ENUM:
+        fputs("enum ", stdout);
+        if (ty->tag) fprintf(stdout, "%.*s", ty->tag->len, ty->tag->loc);
+        return;
     default:
         fputs("/*?*/ int", stdout);
         return;
@@ -205,6 +217,19 @@ static void emit_expr(Node *n) {
         fputc(')', stdout);
         emit_expr(n->cast.operand);
         return;
+    case ND_MEMBER:
+        emit_expr(n->member.obj);
+        fputs(n->member.op == TK_ARROW ? "->" : ".", stdout);
+        if (n->member.member)
+            fprintf(stdout, "%.*s",
+                    n->member.member->len, n->member.member->loc);
+        return;
+    case ND_SUBSCRIPT:
+        emit_expr(n->subscript.base);
+        fputc('[', stdout);
+        emit_expr(n->subscript.index);
+        fputc(']', stdout);
+        return;
     default:
         fputs("/* expr */", stdout);
         return;
@@ -343,10 +368,36 @@ static void emit_func_def(Node *n) {
         fputs(";\n", stdout);
 }
 
+static void emit_class_def(Node *n) {
+    /* Emit a C struct from the parsed class definition.
+     * Members handled: data members (ND_VAR_DECL with no init).
+     * Skipped: nested types, methods, access specifiers — for the
+     * first slice we only model plain data structs. */
+    fputs("struct ", stdout);
+    if (n->class_def.tag)
+        fprintf(stdout, "%.*s ",
+                n->class_def.tag->len, n->class_def.tag->loc);
+    fputs("{\n", stdout);
+    g_indent++;
+    for (int i = 0; i < n->class_def.nmembers; i++) {
+        Node *m = n->class_def.members[i];
+        if (!m) continue;
+        if (m->kind != ND_VAR_DECL) continue;
+        /* Skip member functions: ND_VAR_DECL with TY_FUNC type. */
+        if (m->var_decl.ty && m->var_decl.ty->kind == TY_FUNC) continue;
+        emit_indent();
+        emit_var_decl_inner(m);
+        fputs(";\n", stdout);
+    }
+    g_indent--;
+    fputs("};\n", stdout);
+}
+
 static void emit_top_level(Node *n) {
     if (!n) return;
     switch (n->kind) {
     case ND_FUNC_DEF: emit_func_def(n); return;
+    case ND_CLASS_DEF: emit_class_def(n); return;
     case ND_VAR_DECL:
         emit_var_decl_inner(n);
         fputs(";\n", stdout);
