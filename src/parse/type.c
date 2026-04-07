@@ -259,7 +259,9 @@ DeclSpec parse_type_specifiers(Parser *p) {
             ty->is_const = is_const;
             ty->is_volatile = is_volatile;
 
-            /* GCC attributes between 'class'/'struct' and the tag name. */
+            /* C++ / GCC attributes between 'class'/'struct'/'union' and
+             * the tag name (e.g. 'union [[gnu::may_alias]] X'). */
+            parser_skip_cxx_attributes(p);
             parser_skip_gnu_attributes(p);
 
             /* Optional tag name. May be qualified — 'class A::B { ... }'
@@ -1054,7 +1056,110 @@ Type *parse_type_name(Parser *p) {
             parser_expect(p, TK_RPAREN);
         }
     }
+    /* Grouped abstract pointer-to-member-function:
+     *   '(C::*)(args)' or '(C::B::*)(args)'
+     * Used in template specialisations like
+     *   _Mem_fn_traits<R(C::*)(Args...) const noexcept>
+     * Detect '(' IDENT ('::' IDENT)* '::' '*' ')'. */
+    else if (parser_at(p, TK_LPAREN) &&
+             parser_peek_ahead(p, 1)->kind == TK_IDENT &&
+             parser_peek_ahead(p, 2)->kind == TK_SCOPE) {
+        int n = 1;
+        while (parser_peek_ahead(p, n)->kind == TK_IDENT &&
+               parser_peek_ahead(p, n + 1)->kind == TK_SCOPE)
+            n += 2;
+        if (parser_peek_ahead(p, n)->kind == TK_STAR &&
+            parser_peek_ahead(p, n + 1)->kind == TK_RPAREN) {
+            /* Consume '(' ident::ident::...::* — n more tokens after '('. */
+            parser_advance(p);  /* ( */
+            for (int i = 0; i < n; i++) parser_advance(p);
+            parser_expect(p, TK_RPAREN);
+            base = new_ptr_type(p, base);
+            /* Function parameter list (any contents — opaque). */
+            if (parser_consume(p, TK_LPAREN)) {
+                int depth = 1;
+                while (depth > 0 && !parser_at_eof(p)) {
+                    if (parser_at(p, TK_LPAREN)) depth++;
+                    else if (parser_at(p, TK_RPAREN)) {
+                        depth--;
+                        if (depth == 0) break;
+                    }
+                    parser_advance(p);
+                }
+                parser_expect(p, TK_RPAREN);
+            }
+            /* Trailing cv / ref / noexcept on the pointed-to function. */
+            for (;;) {
+                if (parser_consume(p, TK_KW_CONST))    continue;
+                if (parser_consume(p, TK_KW_VOLATILE)) continue;
+                if (parser_consume(p, TK_AMP))         continue;
+                if (parser_consume(p, TK_LAND))        continue;
+                if (parser_consume(p, TK_KW_NOEXCEPT)) {
+                    if (parser_consume(p, TK_LPAREN)) {
+                        int depth = 1;
+                        while (depth > 0 && !parser_at_eof(p)) {
+                            if (parser_at(p, TK_LPAREN)) depth++;
+                            else if (parser_at(p, TK_RPAREN)) {
+                                depth--;
+                                if (depth == 0) break;
+                            }
+                            parser_advance(p);
+                        }
+                        parser_expect(p, TK_RPAREN);
+                    }
+                    continue;
+                }
+                break;
+            }
+        }
+    }
 no_grouped_abstract:;
+
+    /* Abstract function type 'R(args)' — used in template arguments
+     * like _Weak_result_type_impl<_Res(_ArgTypes...)> and as a
+     * grammatical primitive 'function returning R taking args'.
+     * Distinct from 'R(*)(args)' (pointer-to-function) above and from
+     * 'R(name)(args)' (named function declarator). In type-name
+     * context the only valid interpretation of 'R(' is a function
+     * type. We just balance the parens and call it opaque-func. */
+    if (parser_at(p, TK_LPAREN)) {
+        parser_advance(p);
+        int depth = 1;
+        while (depth > 0 && !parser_at_eof(p)) {
+            if (parser_at(p, TK_LPAREN)) depth++;
+            else if (parser_at(p, TK_RPAREN)) {
+                depth--;
+                if (depth == 0) break;
+            }
+            parser_advance(p);
+        }
+        parser_expect(p, TK_RPAREN);
+        /* Trailing cv / ref / noexcept on the function type. */
+        for (;;) {
+            if (parser_consume(p, TK_KW_CONST))    continue;
+            if (parser_consume(p, TK_KW_VOLATILE)) continue;
+            if (parser_consume(p, TK_AMP))         continue;
+            if (parser_consume(p, TK_LAND))        continue;
+            if (parser_consume(p, TK_KW_NOEXCEPT)) {
+                if (parser_consume(p, TK_LPAREN)) {
+                    int d = 1;
+                    while (d > 0 && !parser_at_eof(p)) {
+                        if (parser_at(p, TK_LPAREN)) d++;
+                        else if (parser_at(p, TK_RPAREN)) {
+                            d--;
+                            if (d == 0) break;
+                        }
+                        parser_advance(p);
+                    }
+                    parser_expect(p, TK_RPAREN);
+                }
+                continue;
+            }
+            break;
+        }
+        base = new_func_type(p, base, /*params=*/NULL, /*nparams=*/0,
+                             /*variadic=*/false);
+    }
 
     /* Pointer-to-member — N4659 §11.3.3 [dcl.mptr]
      *   ptr-operator: nested-name-specifier * cv-qualifier-seq(opt)

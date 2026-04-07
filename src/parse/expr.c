@@ -710,6 +710,33 @@ static Node *postfix_expr(Parser *p) {
                 member = parser_expect(p, TK_IDENT);
             } else {
                 member = parser_expect(p, TK_IDENT);
+                /* Member template-id: 'obj.method<T>(args)'. The
+                 * 'template' disambiguator was already consumed above
+                 * if present; here we speculatively parse '<args>' if
+                 * what follows looks like a template-arg-list. */
+                if (parser_at(p, TK_LT)) {
+                    Token *after = parser_peek_ahead(p, 1);
+                    bool looks_template = false;
+                    switch (after->kind) {
+                    case TK_KW_VOID: case TK_KW_BOOL: case TK_KW_CHAR:
+                    case TK_KW_SHORT: case TK_KW_INT: case TK_KW_LONG:
+                    case TK_KW_FLOAT: case TK_KW_DOUBLE:
+                    case TK_KW_SIGNED: case TK_KW_UNSIGNED:
+                    case TK_KW_WCHAR_T: case TK_KW_CHAR16_T: case TK_KW_CHAR32_T:
+                    case TK_KW_CONST: case TK_KW_VOLATILE:
+                    case TK_KW_TYPENAME: case TK_KW_DECLTYPE:
+                    case TK_KW_AUTO:
+                        looks_template = true; break;
+                    case TK_IDENT:
+                        if (lookup_is_type_name(p, after) ||
+                            lookup_is_template_name(p, after))
+                            looks_template = true;
+                        break;
+                    default: break;
+                    }
+                    if (looks_template)
+                        parse_template_id(p, member);
+                }
             }
 
             node = new_member_node(p, node, member, op, tok);
