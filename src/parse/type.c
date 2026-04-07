@@ -587,12 +587,22 @@ DeclSpec parse_type_specifiers(Parser *p) {
                 }
             }
 
-            /* Trailing cv-qualifiers — N4659 §10.1.7.1 [dcl.type.cv]
-             * 'T const' and 'T volatile' are equivalent to 'const T' /
-             * 'volatile T' for any type-name. */
-            while (parser_at(p, TK_KW_CONST) || parser_at(p, TK_KW_VOLATILE)) {
-                if (parser_consume(p, TK_KW_CONST))    is_const = true;
-                if (parser_consume(p, TK_KW_VOLATILE)) is_volatile = true;
+            /* Trailing decl-specifiers: cv-qualifiers (§10.1.7.1) and
+             * storage-class / function-specifier keywords that may
+             * appear in any order with the type-specifier (§10.1). */
+            for (;;) {
+                if (parser_consume(p, TK_KW_CONST))    { is_const = true;    continue; }
+                if (parser_consume(p, TK_KW_VOLATILE)) { is_volatile = true; continue; }
+                if (parser_consume(p, TK_KW_INLINE) ||
+                    parser_consume(p, TK_KW_STATIC) ||
+                    parser_consume(p, TK_KW_EXTERN) ||
+                    parser_consume(p, TK_KW_REGISTER) ||
+                    parser_consume(p, TK_KW_CONSTEXPR) ||
+                    parser_consume(p, TK_KW_VIRTUAL) ||
+                    parser_consume(p, TK_KW_EXPLICIT) ||
+                    parser_consume(p, TK_KW_MUTABLE))
+                    continue;
+                break;
             }
 
             Type *ty = d->type;

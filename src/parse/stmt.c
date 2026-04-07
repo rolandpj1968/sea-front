@@ -181,7 +181,16 @@ static Node *parse_for_stmt(Parser *p) {
     /* init-statement: declaration or expression-statement */
     Node *init = NULL;
     if (!parser_at(p, TK_SEMI)) {
-        if (parser_at_type_specifier(p))
+        /* Same heuristic as parse_stmt: 'IDENT IDENT' looks like a
+         * declaration with an unresolved member typedef. */
+        bool ident_decl = false;
+        if (parser_peek(p)->kind == TK_IDENT && !parser_at_type_specifier(p)) {
+            Token *t1 = parser_peek_ahead(p, 1);
+            if (t1->kind == TK_IDENT &&
+                !lookup_unqualified(p, t1->loc, t1->len))
+                ident_decl = true;
+        }
+        if (parser_at_type_specifier(p) || ident_decl)
             init = parse_declaration(p);  /* includes trailing ; */
         else {
             init = new_node(p, ND_EXPR_STMT, parser_peek(p));
@@ -389,6 +398,14 @@ Node *parse_stmt(Parser *p) {
         Token *t1 = parser_peek_ahead(p, 1);
         if (t1->kind == TK_IDENT &&
             !lookup_unqualified(p, t1->loc, t1->len)) {
+            might_be_decl_ident = true;
+        }
+        /* '__name(...)' followed by IDENT is a GCC type intrinsic
+         * (e.g. __decltype(x)) used as a declaration type. */
+        Token *first = parser_peek(p);
+        if (t1->kind == TK_LPAREN &&
+            first->len >= 2 && first->loc[0] == '_' && first->loc[1] == '_' &&
+            !lookup_unqualified(p, first->loc, first->len)) {
             might_be_decl_ident = true;
         }
     }
