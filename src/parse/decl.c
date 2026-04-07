@@ -885,11 +885,27 @@ Node *parse_declaration(Parser *p) {
             /* Terminates: each iteration consumes one mem-initializer; loop
              * exits when no comma follows. */
             for (;;) {
-                /* Skip the (possibly qualified or template) member name. */
-                while (parser_at(p, TK_IDENT) || parser_at(p, TK_SCOPE) ||
-                       parser_at(p, TK_LT) || parser_at(p, TK_GT) ||
-                       parser_at(p, TK_SHR))
+                /* Skip the (possibly qualified or template) member name.
+                 * Track angle-bracket depth so commas inside template
+                 * arguments don't terminate the mem-initializer name. */
+                int angle = 0;
+                while (!parser_at_eof(p)) {
+                    TokenKind k = parser_peek(p)->kind;
+                    if (k == TK_LT) angle++;
+                    else if (k == TK_GT) {
+                        if (angle == 0) break;
+                        angle--;
+                    } else if (k == TK_SHR) {
+                        if (angle == 0) break;
+                        angle -= 2;
+                        if (angle < 0) angle = 0;
+                    } else if (k == TK_COMMA) {
+                        if (angle == 0) break;  /* mem-init separator */
+                    } else if (k == TK_LPAREN || k == TK_LBRACE) {
+                        break;
+                    }
                     parser_advance(p);
+                }
                 if (parser_consume(p, TK_LPAREN)) {
                     int depth = 1;
                     while (depth > 0 && !parser_at_eof(p)) {
