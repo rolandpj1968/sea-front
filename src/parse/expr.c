@@ -287,6 +287,43 @@ static Node *primary_expr(Parser *p) {
      * N4659 §17.2/3 [temp.names] — Rule 4: template-name followed by
      * < opens a template-argument-list.
      */
+    /* throw-expression — N4659 §8.17 [expr.throw]
+     *   throw assignment-expression(opt)
+     * Yields a void prvalue. We parse and discard the operand. */
+    if (tok->kind == TK_KW_THROW) {
+        parser_advance(p);
+        /* Operand is optional — 'throw;' alone is a re-throw. */
+        if (parser_peek(p)->kind != TK_SEMI &&
+            parser_peek(p)->kind != TK_RPAREN &&
+            parser_peek(p)->kind != TK_COMMA &&
+            parser_peek(p)->kind != TK_RBRACE)
+            unary_expr(p);  /* parse, discard */
+        return new_node(p, ND_NULLPTR, tok);
+    }
+
+    /* Bare 'operator OP' as an id-expression — N4659 §16.5 [over.oper].
+     * E.g. 'return !operator==(__arg)' calls the member operator==
+     * explicitly. Consume 'operator' + symbol and treat as a plain
+     * identifier; postfix '(' will then parse it as a call. */
+    if (tok->kind == TK_KW_OPERATOR) {
+        Token *op_tok = parser_advance(p);
+        if (parser_at(p, TK_KW_NEW) || parser_at(p, TK_KW_DELETE)) {
+            parser_advance(p);
+            if (parser_consume(p, TK_LBRACKET))
+                parser_expect(p, TK_RBRACKET);
+        } else if (parser_consume(p, TK_LPAREN)) {
+            parser_expect(p, TK_RPAREN);
+        } else if (parser_consume(p, TK_LBRACKET)) {
+            parser_expect(p, TK_RBRACKET);
+        } else if (parser_peek(p)->kind >= TK_LPAREN &&
+                   parser_peek(p)->kind <= TK_HASHHASH) {
+            parser_advance(p);
+        }
+        Node *node = new_node(p, ND_IDENT, op_tok);
+        node->ident.name = op_tok;
+        return node;
+    }
+
     if (tok->kind == TK_IDENT || tok->kind == TK_SCOPE) {
         bool global_scope = false;
         Vec parts = vec_new(p->arena);

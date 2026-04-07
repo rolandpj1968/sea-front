@@ -670,8 +670,7 @@ DeclSpec parse_type_specifiers(Parser *p) {
     if (!seen_any && parser_peek(p)->kind == TK_IDENT) {
         Token *t1 = parser_peek_ahead(p, 1);
         bool decl_shape =
-            (t1->kind == TK_IDENT &&
-             !lookup_unqualified(p, t1->loc, t1->len)) ||
+            t1->kind == TK_IDENT ||
             t1->kind == TK_STAR || t1->kind == TK_AMP || t1->kind == TK_LAND ||
             t1->kind == TK_GT || t1->kind == TK_SHR ||
             t1->kind == TK_COMMA || t1->kind == TK_RPAREN ||
