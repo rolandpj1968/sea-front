@@ -274,8 +274,11 @@ static Node *primary_expr(Parser *p) {
                 if (parser_at(p, TK_IDENT)) {
                     name = parser_advance(p);
                     vec_push(&parts, name);
-                    /* Template-id in the chain: A::B<int>::C */
-                    if (parser_at(p, TK_LT) && lookup_is_template_name(p, name)) {
+                    /* Template-id in the chain: A::B<int>::C.
+                     * In a qualified-name, '<' after a segment is
+                     * overwhelmingly a template-argument-list — we can't
+                     * do qualified lookup, so accept it speculatively. */
+                    if (parser_at(p, TK_LT)) {
                         parse_template_id(p, name);
                     }
                 } else if (parser_at(p, TK_TILDE)) {
@@ -359,12 +362,23 @@ static Node *primary_expr(Parser *p) {
 
         /* Try C-style cast: (type)expr — §8.4 [expr.cast]
          * cast-expression: unary-expression | ( type-id ) cast-expression
-         * First-pass approximation: check for built-in type keyword. */
+         *
+         * Tentative: parse_type_name may succeed on a qualified-id like
+         * 'std::__are_same<T,U>::__value' that is actually an expression.
+         * If the token after the type-name isn't ')', restore and parse
+         * as a parenthesized expression instead. */
         if (parser_at_type_specifier(p)) {
+            ParseState saved = parser_save(p);
+            p->tentative = true;
             Type *ty = parse_type_name(p);
-            parser_expect(p, TK_RPAREN);
-            Node *operand = unary_expr(p);
-            return new_cast_node(p, ty, operand, tok);
+            bool ok = (ty != NULL) && parser_at(p, TK_RPAREN);
+            p->tentative = false;
+            if (ok) {
+                parser_advance(p);  /* ) */
+                Node *operand = unary_expr(p);
+                return new_cast_node(p, ty, operand, tok);
+            }
+            parser_restore(p, saved);
         }
 
         Node *node = parse_expr(p);

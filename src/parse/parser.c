@@ -337,8 +337,24 @@ Node *new_template_id_node(Parser *p, Token *name, Node **args, int nargs,
  */
 Node *parse(TokenArray tokens, Arena *arena, CppStandard std) {
     Parser p;
-    p.tokens = tokens.tokens;
-    p.ntokens = tokens.len;
+    /* Filter preprocessor leftovers (#line directives) once, up front.
+     * mcpp emits '#line N "file"' tokens that can appear anywhere — we
+     * drop entire #-prefixed lines so the parser never has to think
+     * about them. */
+    Token *filtered = arena_alloc(arena, sizeof(Token) * tokens.len);
+    int n = 0;
+    for (int i = 0; i < tokens.len; ) {
+        if (tokens.tokens[i].kind == TK_HASH) {
+            int line = tokens.tokens[i].line;
+            while (i < tokens.len && tokens.tokens[i].line == line &&
+                   tokens.tokens[i].kind != TK_EOF)
+                i++;
+            continue;
+        }
+        filtered[n++] = tokens.tokens[i++];
+    }
+    p.tokens = filtered;
+    p.ntokens = n;
     p.pos = 0;
     p.file = tokens.tokens[0].file;
     p.arena = arena;

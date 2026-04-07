@@ -430,19 +430,18 @@ DeclSpec parse_type_specifiers(Parser *p) {
          * Terminates: each iteration consumes ident + ::, or breaks. */
         Token *first = parser_advance(p);
         while (parser_consume(p, TK_SCOPE)) {
-            if (parser_at(p, TK_IDENT))
-                parser_advance(p);
-            else
+            parser_consume(p, TK_KW_TEMPLATE);
+            if (parser_at(p, TK_IDENT)) {
+                Token *seg = parser_advance(p);
+                /* Speculative template-id on each segment: A::B<int>::C.
+                 * In a qualified-name within a type position, '<' after a
+                 * name is overwhelmingly a template-argument-list rather
+                 * than a less-than operator. */
+                if (parser_at(p, TK_LT))
+                    parse_template_id(p, seg);
+            } else {
                 break;
-        }
-        /* Consume trailing template-id if present: A::B<int> */
-        if (parser_at(p, TK_LT)) {
-            /* Try to parse as template-id — may or may not be one.
-             * For qualified names we speculatively consume < args >.
-             * If it's actually less-than, sema will catch it. */
-            Token *last = &p->tokens[p->pos > 0 ? p->pos - 1 : 0];
-            if (lookup_is_template_name(p, last))
-                parse_template_id(p, last);
+            }
         }
         Type *ty = new_type(p, TY_STRUCT);  /* opaque — sema resolves */
         ty->is_const = is_const;
