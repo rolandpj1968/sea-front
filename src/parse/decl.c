@@ -411,10 +411,16 @@ parse_suffixes:
         } else if (after_paren->kind == TK_IDENT) {
             /* A qualified-name (ident::...) is treated as a potential type
              * — qualified lookup isn't resolved here, but the leading
-             * segment is overwhelmingly a namespace or class scope. */
+             * segment is overwhelmingly a namespace or class scope.
+             * Also: 'IDENT IDENT' inside parens (after a function name)
+             * looks like a parameter declaration with an inherited
+             * member typedef we can't resolve. */
+            Token *t2 = parser_peek_ahead(p, 2);
             looks_like_params = lookup_is_type_name(p, after_paren) ||
                                 lookup_is_template_name(p, after_paren) ||
-                                parser_peek_ahead(p, 2)->kind == TK_SCOPE;
+                                t2->kind == TK_SCOPE ||
+                                (t2->kind == TK_IDENT &&
+                                 !lookup_unqualified(p, t2->loc, t2->len));
         } else if (after_paren->kind == TK_SCOPE) {
             /* '::Foo::Bar' — fully qualified type at start of param list. */
             looks_like_params = true;
@@ -488,6 +494,7 @@ parse_suffixes:
         Token *after = parser_peek_ahead(p, 1);
         bool plausible =
             after->kind == TK_RPAREN || after->kind == TK_ELLIPSIS ||
+            after->kind == TK_SCOPE ||
             (after->kind >= TK_KW_ALIGNAS && after->kind <= TK_KW_WHILE) ||
             (after->kind == TK_IDENT &&
              (lookup_is_type_name(p, after) ||
@@ -652,8 +659,13 @@ Node *parse_declaration(Parser *p) {
     DeclSpec spec = parse_type_specifiers(p);
     Type *base_ty = spec.type;
     Node *class_def = spec.class_def;
-    if (!base_ty)
+    if (!base_ty) {
+        if (p->tentative) {
+            p->tentative_failed = true;
+            return NULL;
+        }
         error_tok(start_tok, "expected declaration");
+    }
 
     /* Bare type with no declarator: 'struct Foo { ... };' */
     if (parser_at(p, TK_SEMI)) {
@@ -1051,6 +1063,14 @@ Node *parse_top_level_decl(Parser *p) {
      * overload resolution (C linkage prohibits overloading).
      *
      * C++20/23: unchanged. */
+    /* extern template explicit instantiation declaration — N4659 §17.7.2
+     *   extern template declaration */
+    if (parser_at(p, TK_KW_EXTERN) &&
+        parser_peek_ahead(p, 1)->kind == TK_KW_TEMPLATE) {
+        parser_advance(p);  /* consume 'extern' */
+        return parse_template_declaration(p);
+    }
+
     if (parser_at(p, TK_KW_EXTERN) &&
         parser_peek_ahead(p, 1)->kind == TK_STR) {
         parser_advance(p);  /* consume 'extern' */
@@ -1218,6 +1238,15 @@ Node *parse_template_declaration(Parser *p) {
         parser_advance(p);  /* < */
         parser_advance(p);  /* > */
         /* Parse the specialized declaration */
+        Node *decl = parse_declaration(p);
+        return new_template_decl_node(p, /*params=*/NULL, /*nparams=*/0,
+                                      decl, tok);
+    }
+
+    /* explicit instantiation — N4659 §17.7.2 [temp.explicit]
+     *   template declaration       (no template-parameter-list)
+     * E.g. 'template class allocator<char>;'. */
+    if (!parser_at(p, TK_LT)) {
         Node *decl = parse_declaration(p);
         return new_template_decl_node(p, /*params=*/NULL, /*nparams=*/0,
                                       decl, tok);

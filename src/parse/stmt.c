@@ -379,7 +379,21 @@ Node *parse_stmt(Parser *p) {
      *   (c) Not a type at all — expression-statement.
      */
 
-    if (parser_at_type_specifier(p)) {
+    /* Heuristic: 'IDENT IDENT' (or 'IDENT * IDENT', 'IDENT & IDENT')
+     * looks like a declaration even when the first ident isn't in our
+     * lookup as a type — typically a member typedef inherited from a
+     * base class we can't resolve. Per §9.8 try a declaration first. */
+    bool might_be_decl_ident = false;
+    if (parser_peek(p)->kind == TK_IDENT &&
+        !parser_at_type_specifier(p)) {
+        Token *t1 = parser_peek_ahead(p, 1);
+        if (t1->kind == TK_IDENT &&
+            !lookup_unqualified(p, t1->loc, t1->len)) {
+            might_be_decl_ident = true;
+        }
+    }
+
+    if (parser_at_type_specifier(p) || might_be_decl_ident) {
         /* Case (a): built-in type keyword — definitely a declaration */
         if (parser_peek(p)->kind != TK_IDENT)
             return parse_declaration(p);
@@ -397,12 +411,17 @@ Node *parse_stmt(Parser *p) {
          * If not, restore and parse as expression-statement. */
         ParseState saved = parser_save(p);
         p->tentative = true;
+        bool saved_failed = p->tentative_failed;
+        p->tentative_failed = false;
         parse_declaration(p);
-        /* Check: did the tentative parse consume through a ';'?
-         * If so, the token just before current pos is ';'. */
+        /* Check: did the tentative parse consume through a ';' WITHOUT
+         * any silenced errors? Both conditions are needed — a clean
+         * advance to ';' could still mask intermediate failures. */
         bool decl_ok = (p->pos > saved.pos &&
-                        p->tokens[p->pos - 1].kind == TK_SEMI);
+                        p->tokens[p->pos - 1].kind == TK_SEMI &&
+                        !p->tentative_failed);
         p->tentative = false;
+        p->tentative_failed = saved_failed;
         parser_restore(p, saved);
 
         if (decl_ok)

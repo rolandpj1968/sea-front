@@ -74,15 +74,19 @@ Token *parser_expect(Parser *p, TokenKind k) {
             p->split_shr = false;
             return &synthetic_gt;
         }
-        if (p->tentative)
+        if (p->tentative) {
+            p->tentative_failed = true;
             return NULL;
+        }
         error_tok(&p->tokens[p->pos], "expected '%s', got '>'",
                   token_kind_name(k));
     }
     if (p->tokens[p->pos].kind == k)
         return parser_advance(p);
-    if (p->tentative)
+    if (p->tentative) {
+        p->tentative_failed = true;
         return NULL;
+    }
     error_tok(&p->tokens[p->pos], "expected '%s', got '%s'",
               token_kind_name(k), token_kind_name(p->tokens[p->pos].kind));
 }
@@ -360,6 +364,7 @@ Node *parse(TokenArray tokens, Arena *arena, CppStandard std) {
     p.arena = arena;
     p.std = std;
     p.tentative = false;
+    p.tentative_failed = false;
     p.region = NULL;
     p.template_depth = 0;
     p.split_shr = false;

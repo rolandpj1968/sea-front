@@ -662,6 +662,7 @@ struct Parser {
     Arena *arena;              /* all AST/Type allocations come from here */
     CppStandard std;           /* C++17 baseline; 20/23 gated behind this flag */
     bool tentative;            /* when true, return NULL on error instead of aborting */
+    bool tentative_failed;     /* set when a silenced error occurred during tentative parse */
     DeclarativeRegion *region; /* current innermost declarative region (§6.3) */
     int template_depth;        /* nesting depth of template-argument-lists being parsed.
                                 * When > 0, TK_SHR (>>) is treated as two '>' tokens

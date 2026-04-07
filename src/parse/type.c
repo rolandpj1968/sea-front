@@ -326,6 +326,17 @@ DeclSpec parse_type_specifiers(Parser *p) {
                 /* N4659 §6.3.7 [basic.scope.class]: push class scope */
                 region_push(p, REGION_CLASS, /*name=*/NULL);
 
+                /* N4659 §9.2/2 [class]: the class-name is also inserted
+                 * into the scope of the class itself ("injected class
+                 * name"). This makes the bare name usable inside the body
+                 * even when it would otherwise be shadowed. */
+                if (ty->tag) {
+                    region_declare(p, ty->tag->loc, ty->tag->len,
+                                   ENTITY_TYPE, ty);
+                    region_declare(p, ty->tag->loc, ty->tag->len,
+                                   ENTITY_TAG, ty);
+                }
+
                 Vec members = vec_new(p->arena);
 
                 /* Terminates: each iteration consumes at least one token
@@ -512,9 +523,17 @@ DeclSpec parse_type_specifiers(Parser *p) {
     }
 
     if (!seen_any && parser_peek(p)->kind == TK_IDENT) {
-        Declaration *d = lookup_unqualified(p, parser_peek(p)->loc, parser_peek(p)->len);
-        if (d && (d->entity == ENTITY_TYPE || d->entity == ENTITY_TAG ||
-                  d->entity == ENTITY_TEMPLATE)) {
+        /* Kind-specific lookup: a name may be ambiguously registered as
+         * both a type and (e.g.) a constructor function. We want to find
+         * any type-like declaration in the chain even when a same-named
+         * variable shadows it. */
+        Declaration *d =
+            lookup_unqualified_kind(p, parser_peek(p)->loc, parser_peek(p)->len, ENTITY_TYPE);
+        if (!d)
+            d = lookup_unqualified_kind(p, parser_peek(p)->loc, parser_peek(p)->len, ENTITY_TAG);
+        if (!d)
+            d = lookup_unqualified_kind(p, parser_peek(p)->loc, parser_peek(p)->len, ENTITY_TEMPLATE);
+        if (d) {
             Token *name_tok = parser_advance(p);
 
             /* N4659 §17.2 [temp.names]: if the name is (also) a template-name
@@ -587,6 +606,30 @@ DeclSpec parse_type_specifiers(Parser *p) {
         }
     }
 
+    /* Heuristic fallback: an unknown identifier followed immediately by
+     * another identifier (or '*'/'&' then an identifier) looks like a
+     * declaration with an inherited member typedef we can't resolve.
+     * Accept the leading ident as an opaque type-name. */
+    if (!seen_any && parser_peek(p)->kind == TK_IDENT) {
+        Token *t1 = parser_peek_ahead(p, 1);
+        bool decl_shape =
+            (t1->kind == TK_IDENT &&
+             !lookup_unqualified(p, t1->loc, t1->len)) ||
+            ((t1->kind == TK_STAR || t1->kind == TK_AMP || t1->kind == TK_LAND) &&
+             parser_peek_ahead(p, 2)->kind == TK_IDENT &&
+             !lookup_unqualified(p, parser_peek_ahead(p, 2)->loc,
+                                 parser_peek_ahead(p, 2)->len));
+        if (decl_shape) {
+            Token *name = parser_advance(p);
+            Type *ty = new_type(p, TY_INT);
+            ty->is_const = is_const;
+            ty->is_volatile = is_volatile;
+            ty->tag = name;
+            result.type = ty;
+            return result;
+        }
+    }
+
     if (!seen_any) {
         /* Conversion function (operator T()), constructor (ClassName()),
          * or destructor (~ClassName()) — none of these have a return type
@@ -598,7 +641,10 @@ DeclSpec parse_type_specifiers(Parser *p) {
             result.type = ty;
             return result;
         }
-        if (p->tentative) return result; /* type is NULL — failure */
+        if (p->tentative) {
+            p->tentative_failed = true;
+            return result;  /* type is NULL — failure */
+        }
         error_tok(parser_peek(p), "expected type specifier");
     }
 

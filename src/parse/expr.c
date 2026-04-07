@@ -219,7 +219,10 @@ static Node *primary_expr(Parser *p) {
         (parser_at_type_specifier(p) && tok->kind != TK_IDENT &&
          (parser_peek_ahead(p, 1)->kind == TK_LPAREN ||
           parser_peek_ahead(p, 1)->kind == TK_LBRACE))) {
-        Type *ty = parse_type_name(p);
+        /* Just the simple-type-specifier — no abstract declarator. The
+         * '(' / '{' that follows is the init expression-list, NOT a
+         * pointer or array suffix on the type. */
+        Type *ty = parse_type_specifiers(p).type;
         TokenKind open  = parser_at(p, TK_LBRACE) ? TK_LBRACE : TK_LPAREN;
         TokenKind close = (open == TK_LBRACE)     ? TK_RBRACE : TK_RPAREN;
         parser_expect(p, open);
@@ -234,6 +237,31 @@ static Node *primary_expr(Parser *p) {
         }
         parser_expect(p, close);
         return new_cast_node(p, ty, /*operand=*/NULL, tok);
+    }
+
+    /* GCC/Clang type-trait intrinsics in expression context:
+     *   __is_trivial(T), __is_assignable(T, U), __is_same(T, U), etc.
+     * These are bool-valued built-ins whose arguments are TYPES, not
+     * expressions, so we can't let parse_assign_expr try to evaluate
+     * 'T&' as bitwise-and. Detect '__name (' for any unknown leading-
+     * underscore identifier and skip the balanced parens. */
+    if (tok->kind == TK_IDENT && tok->len >= 2 &&
+        tok->loc[0] == '_' && tok->loc[1] == '_' &&
+        parser_peek_ahead(p, 1)->kind == TK_LPAREN &&
+        lookup_unqualified(p, tok->loc, tok->len) == NULL) {
+        Token *name_tok = parser_advance(p);
+        parser_advance(p);  /* ( */
+        int depth = 1;
+        while (depth > 0 && !parser_at_eof(p)) {
+            if (parser_at(p, TK_LPAREN)) depth++;
+            else if (parser_at(p, TK_RPAREN)) {
+                depth--;
+                if (depth == 0) break;
+            }
+            parser_advance(p);
+        }
+        parser_expect(p, TK_RPAREN);
+        return new_node(p, ND_BOOL_LIT, name_tok);  /* opaque bool */
     }
 
     /* Identifier / qualified-id — N4659 §8.1.4 [expr.prim.id]
