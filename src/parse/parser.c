@@ -141,6 +141,31 @@ void parser_restore(Parser *p, ParseState saved) {
  * no impact on the parser's understanding of the type system, so we drop
  * them entirely.
  */
+/* Skip C++11 attributes: [[ ... ]] (possibly multiple).
+ * The lexer doesn't have a TK_LBRACKETBRACKET token; we recognise the
+ * pair '[' '[' and balance toward the matching ']' ']'. */
+void parser_skip_cxx_attributes(Parser *p) {
+    while (parser_at(p, TK_LBRACKET) &&
+           parser_peek_ahead(p, 1)->kind == TK_LBRACKET) {
+        parser_advance(p);  /* [ */
+        parser_advance(p);  /* [ */
+        int depth = 1;
+        while (depth > 0 && !parser_at_eof(p)) {
+            if (parser_at(p, TK_LBRACKET)) depth++;
+            else if (parser_at(p, TK_RBRACKET)) {
+                depth--;
+                if (depth == 0) break;
+            }
+            parser_advance(p);
+        }
+        parser_expect(p, TK_RBRACKET);
+        /* Outer ']' — must be followed by another ']' to close the
+         * attribute-specifier. */
+        if (parser_at(p, TK_RBRACKET))
+            parser_advance(p);
+    }
+}
+
 void parser_skip_gnu_attributes(Parser *p) {
     while (parser_at(p, TK_IDENT) &&
            (token_equal(parser_peek(p), "__attribute__") ||

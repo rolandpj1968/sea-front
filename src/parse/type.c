@@ -318,6 +318,7 @@ DeclSpec parse_type_specifiers(Parser *p) {
                  * expression like 'integral_constant<int, T{}>' doesn't
                  * fool us into starting the class body early. */
                 int paren = 0, angle = 0;
+                TokenKind prev = TK_EOF;
                 while (!parser_at_eof(p)) {
                     if (paren == 0 && angle == 0 && parser_at(p, TK_LBRACE))
                         break;
@@ -334,9 +335,22 @@ DeclSpec parse_type_specifiers(Parser *p) {
                     }
                     if (parser_at(p, TK_LPAREN)) paren++;
                     else if (parser_at(p, TK_RPAREN)) paren--;
-                    else if (parser_at(p, TK_LT))    angle++;
-                    else if (parser_at(p, TK_GT))    angle--;
-                    else if (parser_at(p, TK_SHR))   angle -= 2;
+                    /* '<'/'>' inside parens is a relational operator;
+                     * also after a ')' or NUM at angle level (it's
+                     * comparing the result of an expression):
+                     *   integral_constant<bool, T(-1) < T(0)>
+                     * Don't count those as template-arg delimiters. */
+                    else if (parser_at(p, TK_LT)) {
+                        if (paren == 0 && prev != TK_RPAREN && prev != TK_NUM)
+                            angle++;
+                    }
+                    else if (parser_at(p, TK_GT)) {
+                        if (paren == 0) angle--;
+                    }
+                    else if (parser_at(p, TK_SHR)) {
+                        if (paren == 0) angle -= 2;
+                    }
+                    prev = parser_peek(p)->kind;
                     parser_advance(p);
                 }
             }
@@ -388,7 +402,8 @@ DeclSpec parse_type_specifiers(Parser *p) {
                         continue;
                     }
 
-                    /* GCC attributes before any member declaration. */
+                    /* C++11 / GCC attributes before any member declaration. */
+                    parser_skip_cxx_attributes(p);
                     parser_skip_gnu_attributes(p);
 
                     /* template-declaration inside class */

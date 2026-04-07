@@ -129,10 +129,28 @@ static void skip_template_default(Parser *p) {
 }
 
 static void consume_trailing_qualifiers(Parser *p) {
-    while (parser_consume(p, TK_KW_CONST) ||
-           parser_consume(p, TK_KW_VOLATILE) ||
-           parser_consume(p, TK_KW_NOEXCEPT))
-        ;
+    for (;;) {
+        if (parser_consume(p, TK_KW_CONST))    continue;
+        if (parser_consume(p, TK_KW_VOLATILE)) continue;
+        if (parser_consume(p, TK_KW_NOEXCEPT)) {
+            /* noexcept(expr) — N4659 §15.4 [except.spec]. Skip balanced
+             * parens; the boolean expression is consumed and discarded. */
+            if (parser_consume(p, TK_LPAREN)) {
+                int depth = 1;
+                while (depth > 0 && !parser_at_eof(p)) {
+                    if (parser_at(p, TK_LPAREN)) depth++;
+                    else if (parser_at(p, TK_RPAREN)) {
+                        depth--;
+                        if (depth == 0) break;
+                    }
+                    parser_advance(p);
+                }
+                parser_expect(p, TK_RPAREN);
+            }
+            continue;
+        }
+        break;
+    }
     /* throw(type-id-list(opt)) — N4659 §15.4 [except.spec], deprecated in
      * C++17 but still pervasive in libstdc++ headers (e.g. throw()). */
     if (parser_consume(p, TK_KW_THROW)) {
@@ -227,6 +245,11 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
             break;
         }
     }
+
+    /* Pack expansion '...' between ptr-operators and declarator-id —
+     * 'T&&... args'. Consume so the rest of parse_declarator sees the
+     * name as the next token. */
+    parser_consume(p, TK_ELLIPSIS);
 
     Token *name = NULL;
     Type *ty = base_ty;
@@ -544,6 +567,14 @@ parse_suffixes:
                !lookup_unqualified(p, after2->loc, after2->len))));
         if (!plausible)
             return new_var_decl_node(p, ty, name, parser_peek(p));
+        /* Tentatively parse the parameter list — same fallback as the
+         * named-decl path. If anything fails, restore and treat '(' as
+         * direct-init. */
+        ParseState saved = parser_save(p);
+        bool saved_failed = p->tentative_failed;
+        p->tentative_failed = false;
+        bool prev_tentative = p->tentative;
+        p->tentative = true;
         parser_advance(p);  /* consume ( */
         Vec params = vec_new(p->arena);
         Vec param_types = vec_new(p->arena);
@@ -559,17 +590,29 @@ parse_suffixes:
                     if (parser_consume(p, TK_ELLIPSIS)) { variadic = true; break; }
                     Type *param_base = parse_type_specifiers(p).type;
                     Node *param_decl = parse_declarator(p, param_base);
-                    param_decl->kind = ND_PARAM;
+                    if (param_decl) param_decl->kind = ND_PARAM;
                     if (parser_consume(p, TK_ASSIGN))
                         parse_assign_expr(p);  /* default arg — §11.3.6 */
-                    vec_push(&params, param_decl);
-                    vec_push(&param_types, param_decl->var_decl.ty);
+                    if (param_decl) {
+                        vec_push(&params, param_decl);
+                        vec_push(&param_types, param_decl->var_decl.ty);
+                    }
                     if (!parser_consume(p, TK_COMMA)) break;
                     if (parser_at(p, TK_ELLIPSIS)) { parser_advance(p); variadic = true; break; }
                 }
             }
         }
         parser_expect(p, TK_RPAREN);
+
+        bool inner_failed = p->tentative_failed;
+        p->tentative = prev_tentative;
+        p->tentative_failed = saved_failed || (prev_tentative && inner_failed);
+
+        if (inner_failed) {
+            parser_restore(p, saved);
+            p->tentative_failed = saved_failed;
+            return new_var_decl_node(p, ty, name, parser_peek(p));
+        }
 
         consume_trailing_qualifiers(p);
 
@@ -628,6 +671,10 @@ parse_suffixes:
  *       braced-init-list               (deferred)
  */
 Node *parse_declaration(Parser *p) {
+    /* Leading C++11 attributes: '[[nodiscard]] T f(...)' etc. */
+    parser_skip_cxx_attributes(p);
+    parser_skip_gnu_attributes(p);
+
     Token *start_tok = parser_peek(p);
 
     /* using-declaration / using-directive / alias-declaration may appear
@@ -835,8 +882,17 @@ Node *parse_declaration(Parser *p) {
             decl->var_decl.init = parse_assign_expr(p);
         }
     } else if (parser_consume(p, TK_LPAREN)) {
-        /* Direct-initialization: T x(expr, ...) — N4659 §11.6/16 */
-        decl->var_decl.init = parse_expr(p);
+        /* Direct-initialization: T x(arg-list) — N4659 §11.6/16
+         * Parse comma-separated args, allowing trailing '...' pack
+         * expansion after each. */
+        if (!parser_at(p, TK_RPAREN)) {
+            decl->var_decl.init = parse_assign_expr(p);
+            parser_consume(p, TK_ELLIPSIS);
+            while (parser_consume(p, TK_COMMA)) {
+                parse_assign_expr(p);
+                parser_consume(p, TK_ELLIPSIS);
+            }
+        }
         parser_expect(p, TK_RPAREN);
     } else if (parser_at(p, TK_LBRACE)) {
         /* Braced-init-list without = : T x{ ... } — N4659 §11.6.4
@@ -1178,10 +1234,17 @@ static Node *parse_template_parameter(Parser *p) {
          * and 'class X' (type param) vs elaborated-type-specifier.
          * Heuristic: if next token is ident, comma, >, >>, =, or ..., it's a type param. */
         Token *next = parser_peek_ahead(p, 1);
-        if (next->kind == TK_IDENT || next->kind == TK_COMMA ||
-            next->kind == TK_GT || next->kind == TK_SHR ||
-            next->kind == TK_ASSIGN || next->kind == TK_ELLIPSIS ||
-            next->kind == TK_EOF) {
+        Token *next2 = parser_peek_ahead(p, 2);
+        /* 'typename T<...>' or 'typename T::U' is a dependent-type
+         * non-type template parameter, not a type-parameter declaration. */
+        bool is_dependent_type =
+            next->kind == TK_IDENT &&
+            (next2->kind == TK_LT || next2->kind == TK_SCOPE);
+        if (!is_dependent_type &&
+            (next->kind == TK_IDENT || next->kind == TK_COMMA ||
+             next->kind == TK_GT || next->kind == TK_SHR ||
+             next->kind == TK_ASSIGN || next->kind == TK_ELLIPSIS ||
+             next->kind == TK_EOF)) {
 
             parser_advance(p);  /* consume class/typename */
 
@@ -1244,8 +1307,11 @@ static Node *parse_template_parameter(Parser *p) {
     }
 
     /* Non-type template parameter: parsed as a parameter-declaration
-     * e.g., 'int N', 'bool B = true', 'auto V' */
+     * e.g., 'int N', 'bool B = true', 'auto V', 'size_t... Idx' */
     Type *ty = parse_type_specifiers(p).type;
+    /* Pack expansion '...' between the type and the name —
+     * 'template<size_t... _Idx>'. */
+    parser_consume(p, TK_ELLIPSIS);
     Node *param = parse_declarator(p, ty);
     param->kind = ND_PARAM;
 

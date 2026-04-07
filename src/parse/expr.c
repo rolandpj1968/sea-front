@@ -319,6 +319,10 @@ static Node *primary_expr(Parser *p) {
             while (parser_at(p, TK_SCOPE)) {
                 parser_advance(p);  /* consume :: */
 
+                /* N4659 §17.2/4 [temp.names]: 'template' disambiguator
+                 * for a dependent member template-id, e.g. 'T::template f<X>()'. */
+                parser_consume(p, TK_KW_TEMPLATE);
+
                 if (parser_at(p, TK_IDENT)) {
                     name = parser_advance(p);
                     vec_push(&parts, name);
@@ -463,6 +467,16 @@ static Node *primary_expr(Parser *p) {
     if (tok->kind == TK_KW_SIZEOF) {
         parser_advance(p);
         Node *node = new_node(p, ND_SIZEOF, tok);
+
+        /* C++11 sizeof... pack — N4659 §8.3.3 [expr.sizeof]/5
+         *   sizeof ... ( identifier ) */
+        if (parser_consume(p, TK_ELLIPSIS)) {
+            parser_expect(p, TK_LPAREN);
+            if (parser_at(p, TK_IDENT)) parser_advance(p);
+            parser_expect(p, TK_RPAREN);
+            node->sizeof_.is_type = false;
+            return node;
+        }
 
         if (parser_consume(p, TK_LPAREN)) {
             if (parser_at_type_specifier(p)) {
@@ -675,8 +689,16 @@ static Node *unary_expr(Parser *p) {
 
         /* Optional initializer: (args) or {} */
         if (parser_consume(p, TK_LPAREN)) {
-            if (!parser_at(p, TK_RPAREN))
-                parse_expr(p);
+            if (!parser_at(p, TK_RPAREN)) {
+                /* Parse comma-separated args; consume optional '...' pack
+                 * expansion after each. */
+                parse_assign_expr(p);
+                parser_consume(p, TK_ELLIPSIS);
+                while (parser_consume(p, TK_COMMA)) {
+                    parse_assign_expr(p);
+                    parser_consume(p, TK_ELLIPSIS);
+                }
+            }
             parser_expect(p, TK_RPAREN);
         }
 
@@ -685,7 +707,20 @@ static Node *unary_expr(Parser *p) {
 
     /* delete-expression — N4659 §8.3.5 [expr.delete]
      *   ::opt delete cast-expression
-     *   ::opt delete [] cast-expression */
+     *   ::opt delete [] cast-expression
+     *
+     * Special case: '= delete' / '= default' as a function-body
+     * substitute (N4659 §10.1.6 [dcl.fct.def.delete] /
+     * §10.1.6.4 [dcl.fct.def.default]). When parsed in an expression
+     * context where the next token is ';' (or ',' for init-declarators),
+     * treat 'delete' / 'default' as an opaque marker rather than a
+     * delete-expression with no operand. */
+    if ((tok->kind == TK_KW_DELETE || tok->kind == TK_KW_DEFAULT) &&
+        (parser_peek_ahead(p, 1)->kind == TK_SEMI ||
+         parser_peek_ahead(p, 1)->kind == TK_COMMA)) {
+        parser_advance(p);
+        return new_node(p, ND_NULLPTR, tok);
+    }
     if (tok->kind == TK_KW_DELETE ||
         (tok->kind == TK_SCOPE && parser_peek_ahead(p, 1)->kind == TK_KW_DELETE)) {
         if (tok->kind == TK_SCOPE) parser_advance(p);
