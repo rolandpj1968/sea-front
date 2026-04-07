@@ -1506,15 +1506,23 @@ Node *parse_template_id(Parser *p, Token *name) {
 
             /* template-argument: type-id or constant-expression or id-expression.
              * N4659 §17.3/2 [temp.arg] Rule 5: "type-id always wins."
-             * For the first pass, try type first if at a type specifier. */
-            if (parser_at_type_specifier(p)) {
+             * Try type-id first whenever the leading token COULD start
+             * one — including unknown identifiers (which our heuristic
+             * accepts as opaque types). */
+            bool try_type =
+                parser_at_type_specifier(p) ||
+                parser_peek(p)->kind == TK_IDENT;
+            if (try_type) {
                 /* Tentative: try type-id */
                 ParseState saved = parser_save(p);
                 bool prev_tentative = p->tentative;
                 p->tentative = true;
+                bool saved_failed = p->tentative_failed;
+                p->tentative_failed = false;
                 Type *ty = parse_type_name(p);
-                bool ty_ok = (ty != NULL);
+                bool ty_ok = (ty != NULL) && !p->tentative_failed;
                 p->tentative = prev_tentative;
+                p->tentative_failed = saved_failed;
 
                 /* Skip any #line directives before the , or > follows. */
                 while (parser_at(p, TK_HASH)) {

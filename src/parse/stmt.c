@@ -76,13 +76,27 @@ static Node *parse_if_stmt(Parser *p) {
 
     parser_expect(p, TK_LPAREN);
 
+    /* N4659 §9.4.1 [stmt.select]: a declaration in an if-condition is
+     * scoped to the if-statement. Push a block region so the name
+     * doesn't leak into the enclosing function. */
+    region_push(p, REGION_BLOCK, /*name=*/NULL);
+
     /* Declaration in condition — N4659 §9.4.1 [stmt.select]
      *   condition: expression
      *            | attribute-specifier-seq(opt) decl-specifier-seq declarator
      *              brace-or-equal-initializer
      * Used as e.g. 'if (T x = expr)'. We tentatively try a declaration; if
      * it doesn't end at ')', restore and parse as expression. */
-    if (parser_at_type_specifier(p)) {
+    /* Same IDENT-IDENT heuristic as parse_stmt — recognise an
+     * inherited member typedef even when we can't resolve it. */
+    bool if_decl_ident = false;
+    if (parser_peek(p)->kind == TK_IDENT && !parser_at_type_specifier(p)) {
+        Token *t1 = parser_peek_ahead(p, 1);
+        if (t1->kind == TK_IDENT &&
+            !lookup_unqualified(p, t1->loc, t1->len))
+            if_decl_ident = true;
+    }
+    if (parser_at_type_specifier(p) || if_decl_ident) {
         ParseState saved = parser_save(p);
         bool prev_tentative = p->tentative;
         p->tentative = true;
@@ -118,6 +132,7 @@ static Node *parse_if_stmt(Parser *p) {
     if (parser_consume(p, TK_KW_ELSE))
         node->if_.else_ = parse_stmt(p);
 
+    region_pop(p);  /* pop if-statement scope */
     return node;
 }
 
