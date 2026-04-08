@@ -326,15 +326,13 @@ static void hoist_stmt_temps(Node *s) {
     case ND_RETURN:
         hoist_temps_in_expr(s->ret.expr);
         return;
-    case ND_IF:
-        hoist_temps_in_expr(s->if_.cond);
-        return;
-    case ND_WHILE:
-        hoist_temps_in_expr(s->while_.cond);
-        return;
-    case ND_DO:
-        hoist_temps_in_expr(s->do_.cond);
-        return;
+    /* ND_IF/WHILE/DO/FOR conditions are NOT hoisted at the outer
+     * block level — that would put the temp in extended-lifetime
+     * scope, observing the wrong dtor timing. Instead, the
+     * per-statement handler in emit_stmt does a structural rewrite:
+     * synth int outside, mini-block around the cond evaluation,
+     * temp dtors fire before the branch runs. See ND_IF case in
+     * emit_stmt. */
     default:
         return;
     }
@@ -1148,6 +1146,76 @@ static void emit_stmt(Node *n) {
         }
         return;
     case ND_IF:
+        if (expr_has_class_temp(n->if_.cond)) {
+            /* Slice D-cond: condition contains a class temp that
+             * must be destroyed BEFORE the then/else branches run
+             * (N4659 §6.7.7 [class.temporary]/4 — temps die at end
+             * of full-expression, which here is the cond).
+             *
+             * Lowering: declare a synthetic int OUTSIDE the if,
+             * compute the cond into it inside a mini-block, fire
+             * temp dtors via the cleanup chain, then emit the
+             * actual 'if (synth)' using the captured value.
+             *
+             *   int __SF_cond_N;
+             *   {
+             *       struct T __SF_temp_M;
+             *       T_ctor(&__SF_temp_M, ...);
+             *       __SF_cond_N = (__SF_temp_M.v == 7);
+             *   __SF_cleanup_M: ;
+             *       T_dtor(&__SF_temp_M);
+             *       __SF_CHAIN_ANY(<parent>);
+             *   }
+             *   if (__SF_cond_N) ... else ...
+             */
+            int cond_id = g_cf.next_label_id++;
+            char cond_name[24];
+            snprintf(cond_name, sizeof(cond_name), "__SF_cond_%d", cond_id);
+
+            /* Synth decl at the current indent (emit_block already
+             * emitted indent for us). Type is int — cond is
+             * implicitly converted to bool/int for the test, and
+             * int is always assignable from any scalar cond. */
+            fprintf(stdout, "int %s;\n", cond_name);
+
+            /* Open mini-block */
+            emit_indent();
+            fputs("{\n", stdout);
+            g_indent++;
+            int saved_nlive = g_cf.nlive;
+
+            /* Hoist temps from the cond (inside the mini-block,
+             * so their decls are emitted at the mini-block's
+             * indent level). */
+            hoist_temps_in_expr(n->if_.cond);
+
+            /* Assign the cond into the synthetic. */
+            emit_indent();
+            fprintf(stdout, "%s = ", cond_name);
+            emit_expr(n->if_.cond);
+            fputs(";\n", stdout);
+
+            /* Cleanup chain — fires temp dtors before exiting
+             * the mini-block. No-op if no CL_VARs were pushed
+             * (trivially-destructible temp). */
+            emit_cleanup_chain_for_added(saved_nlive);
+            g_cf.nlive = saved_nlive;
+
+            g_indent--;
+            emit_indent();
+            fputs("}\n", stdout);
+
+            /* Now emit the actual if using the synthetic. */
+            emit_indent();
+            fprintf(stdout, "if (%s) ", cond_name);
+            emit_stmt(n->if_.then_);
+            if (n->if_.else_) {
+                emit_indent();
+                fputs("else ", stdout);
+                emit_stmt(n->if_.else_);
+            }
+            return;
+        }
         fputs("if (", stdout);
         emit_expr(n->if_.cond);
         fputs(") ", stdout);
