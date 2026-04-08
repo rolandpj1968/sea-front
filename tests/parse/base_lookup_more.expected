@@ -1,0 +1,46 @@
+(translation-unit
+  (class-def "B1"
+    (func-def void "m" (params)
+      (block)))
+  (class-def "D1"
+    (func-def void "f" (params)
+      (block
+        (call (qualified "B1" "m")))))
+  (class-def "B2"
+    (typedef))
+  (class-def "D2"
+    (typedef)
+    (func-def void "f" (params)
+      (block
+        (var-decl long "x" (num 0))
+        (cast void (ident "x")))))
+  (class-def "B3"
+    (typedef)
+    (func-def void "m" (params)
+      (block)))
+  (class-def "D3"
+    (func-def void "f" (params)
+      (block
+        (var-decl int "x" (num 0))
+        (call (ident "m"))
+        (cast void (ident "x")))))
+  (class-def "A4"
+    (func-def void "m" (params)
+      (block)))
+  (class-def "B4"
+    (func-def void "m" (params)
+      (block)))
+  (class-def "D4"
+    (func-def void "f" (params)
+      (block
+        (call (qualified "A4" "m"))
+        (call (qualified "B4" "m")))))
+  (class-def "Base5"
+    (typedef))
+  (class-def "Mid5"
+    (typedef))
+  (class-def "Leaf5"
+    (func-def void "f" (params)
+      (block
+        (var-decl long "x" (num 0))
+        (cast void (ident "x"))))))
