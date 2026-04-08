@@ -45,29 +45,40 @@ static void emit_indent(void) {
 /* global is fine — codegen is single-threaded and not reentrant.      */
 /* ------------------------------------------------------------------ */
 
-typedef struct CleanupFrame {
-    int   label_id;     /* unique within the function; -1 if no cleanups */
-    bool  has_dtors;    /* this block actually emits at least one dtor */
-} CleanupFrame;
+/* Per-var cleanup tracking. Each dtor-bearing local gets its own
+ * unique label and dtor call site. The 'live' list is a flat stack
+ * of currently-constructed vars in declaration order, across all
+ * enclosing blocks of the current emission point. emit_block saves
+ * the count on entry and restores on exit, so block scoping is just
+ * a stack-trim. innermost_cleanup_label() looks at the top, which
+ * is always the most recently constructed live var — exactly what
+ * a return at this point should target.
+ *
+ * This shape fixes the partial-construction bug from Slice B: a
+ * return mid-block jumps to the label of the most recent live var,
+ * skipping any later var in the same block whose dtor would have
+ * been called on uninitialized storage. */
 
-#define CLEANUP_STACK_MAX 32
+typedef struct CleanupVar {
+    int   label_id;   /* unique within the function */
+    Node *var_decl;   /* ND_VAR_DECL — name + type for the dtor call */
+} CleanupVar;
+
+#define CLEANUP_LIVE_MAX 64
 
 static struct {
-    bool          func_has_cleanups;  /* function-wide flag, set by pre-scan */
-    int           next_label_id;      /* fresh-id counter for __cleanup_<n> */
-    CleanupFrame  stack[CLEANUP_STACK_MAX];
-    int           depth;              /* number of frames currently pushed */
+    bool        func_has_cleanups;  /* function-wide flag, set by pre-scan */
+    int         next_label_id;      /* fresh-id counter */
+    CleanupVar  live[CLEANUP_LIVE_MAX];
+    int         nlive;              /* number of live vars currently */
 } g_cf;
 
-/* Find the innermost cleanup frame that has dtors, walking outward.
- * Returns its label_id, or -1 if none — in which case 'return' jumps
- * directly to __epilogue. */
+/* The innermost (most recent) live var's cleanup label, or -1 when
+ * nothing is live — in which case 'return' jumps straight to
+ * __SF_epilogue. */
 static int innermost_cleanup_label(void) {
-    for (int i = g_cf.depth - 1; i >= 0; i--) {
-        if (g_cf.stack[i].has_dtors)
-            return g_cf.stack[i].label_id;
-    }
-    return -1;
+    if (g_cf.nlive == 0) return -1;
+    return g_cf.live[g_cf.nlive - 1].label_id;
 }
 
 /* Pre-scan: does any block in this subtree declare a class instance
@@ -425,71 +436,57 @@ static void emit_block(Node *n) {
     fputs("{\n", stdout);
     g_indent++;
 
-    /* Dtor lowering — Slice B (single-call-site goto chain).
-     *
-     * Pass 1: scan the block's statements for class locals with a
-     * non-trivial dtor. If we find any, allocate a fresh cleanup
-     * label id for this block; otherwise the block doesn't appear
-     * in the chain and a 'return' inside it will jump straight to
-     * the next ancestor (or __epilogue).
-     *
-     * Pass 2: emit user statements with the frame on the stack —
-     * that way nested ND_RETURN can consult innermost_cleanup_label().
-     *
-     * Pass 3: at the closing brace, emit the cleanup label, run
-     * dtors in reverse declaration order, and chain outward via
-     * 'if (__unwind) goto <parent>' / __epilogue. */
-    enum { CLEANUP_MAX = 64 };
-    Node *cleanup_var[CLEANUP_MAX];
-    int   ncleanup = 0;
+    /* Per-var cleanup label refactor. We walk statements in order
+     * and PUSH onto g_cf.live exactly when we see a dtor-bearing
+     * var-decl — so at every point during emission innermost-
+     * cleanup-label reflects construction state, not block topology.
+     * That means a return after var k jumps to var k's label, and
+     * a return before any var in the block jumps to the most
+     * recent live var in an enclosing block (or __SF_epilogue). */
+    int saved_nlive = g_cf.nlive;
 
     for (int i = 0; i < n->block.nstmts; i++) {
         Node *s = n->block.stmts[i];
-        if (s && s->kind == ND_VAR_DECL && s->var_decl.ty &&
+        emit_indent();
+        emit_stmt(s);
+        if (g_cf.func_has_cleanups && s &&
+            s->kind == ND_VAR_DECL && s->var_decl.ty &&
             s->var_decl.ty->kind == TY_STRUCT && s->var_decl.ty->has_dtor &&
-            s->var_decl.name && ncleanup < CLEANUP_MAX) {
-            cleanup_var[ncleanup++] = s;
+            s->var_decl.name && g_cf.nlive < CLEANUP_LIVE_MAX) {
+            g_cf.live[g_cf.nlive].label_id = g_cf.next_label_id++;
+            g_cf.live[g_cf.nlive].var_decl = s;
+            g_cf.nlive++;
         }
     }
 
-    CleanupFrame frame;
-    frame.has_dtors = (ncleanup > 0) && g_cf.func_has_cleanups;
-    frame.label_id  = frame.has_dtors ? g_cf.next_label_id++ : -1;
-    if (g_cf.depth < CLEANUP_STACK_MAX)
-        g_cf.stack[g_cf.depth++] = frame;
-
-    for (int i = 0; i < n->block.nstmts; i++) {
-        emit_indent();
-        emit_stmt(n->block.stmts[i]);
-    }
-
-    if (frame.has_dtors) {
-        /* The label sits at the bottom of the block and is reached
-         * by both normal fall-through and 'goto' from a nested
-         * return-with-cleanup. ';' after the label keeps it a valid
-         * statement when the next thing is a declaration. */
-        emit_indent();
-        fprintf(stdout, "__SF_cleanup_%d: ;\n", frame.label_id);
-        for (int i = ncleanup - 1; i >= 0; i--) {
-            Node *v = cleanup_var[i];
+    /* Cleanup chain for vars introduced by THIS block. Emit one
+     * (label, dtor) pair per var in reverse declaration order; the
+     * outermost (oldest) one carries the unwind chain-out. Labels
+     * not actually targeted by any goto are still emitted — the
+     * prelude pragma silences -Wunused-label. */
+    int added = g_cf.nlive - saved_nlive;
+    if (added > 0) {
+        for (int i = g_cf.nlive - 1; i >= saved_nlive; i--) {
+            CleanupVar *cv = &g_cf.live[i];
+            Node *v = cv->var_decl;
+            emit_indent();
+            fprintf(stdout, "__SF_cleanup_%d: ;\n", cv->label_id);
             emit_indent();
             emit_mangled_class_tag(v->var_decl.ty);
             fprintf(stdout, "_dtor(&%.*s);\n",
                     v->var_decl.name->len, v->var_decl.name->loc);
         }
-        /* Chain outward when unwinding. We have to look at the
-         * stack BELOW our own frame, since 'depth' still includes
-         * us at this point. */
-        g_cf.depth--;
-        int parent = innermost_cleanup_label();
         emit_indent();
-        if (parent >= 0)
-            fprintf(stdout, "if (__SF_unwind) goto __SF_cleanup_%d;\n", parent);
-        else
+        if (saved_nlive > 0)
+            fprintf(stdout, "if (__SF_unwind) goto __SF_cleanup_%d;\n",
+                    g_cf.live[saved_nlive - 1].label_id);
+        else if (g_cf.func_has_cleanups)
             fputs("if (__SF_unwind) goto __SF_epilogue;\n", stdout);
-    } else {
-        if (g_cf.depth > 0) g_cf.depth--;
     }
+
+    /* Restore live count — the vars introduced by this block are
+     * out of scope past the closing brace. */
+    g_cf.nlive = saved_nlive;
 
     g_indent--;
     emit_indent();
@@ -603,7 +600,7 @@ static void emit_stmt(Node *n) {
  * to every function/method emission. */
 static void cf_begin_function(Node *func) {
     g_cf.next_label_id = 0;
-    g_cf.depth = 0;
+    g_cf.nlive = 0;
     g_cf.func_has_cleanups = func && func->func.body &&
                              subtree_has_cleanups(func->func.body);
 }
