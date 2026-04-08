@@ -1289,8 +1289,9 @@ static Node *g_current_class_def = NULL;
 /* For a ctor with mem-initializers and/or class members needing
  * default construction, emit member ctor calls at the top of the
  * body — N4659 §15.6.2/13.3, in DECLARATION order. Members listed
- * in the mem-init-list use the user's args; members not listed but
- * with non-trivial default ctors get the default ctor call. */
+ * in the mem-init-list use the user's args; class members not
+ * listed but with non-trivial default ctors get the default ctor
+ * call; non-class members listed get a plain assignment. */
 static void emit_ctor_member_inits(Node *func) {
     if (!func->func.is_constructor) return;
     if (!g_current_class_def) return;
@@ -1299,8 +1300,10 @@ static void emit_ctor_member_inits(Node *func) {
         Node *m = cdef->class_def.members[i];
         if (!m || m->kind != ND_VAR_DECL) continue;
         Type *mty = m->var_decl.ty;
-        if (!mty || mty->kind != TY_STRUCT) continue;
+        if (!mty) continue;
         if (!m->var_decl.name) continue;
+        /* Skip member functions. */
+        if (mty->kind == TY_FUNC) continue;
 
         /* Look up this member in the user's mem-init-list. */
         MemInit *found = NULL;
@@ -1314,23 +1317,42 @@ static void emit_ctor_member_inits(Node *func) {
             }
         }
 
-        if (found) {
-            emit_indent();
-            emit_mangled_class_tag(mty);
-            fprintf(stdout, "_ctor(&this->%.*s",
-                    m->var_decl.name->len, m->var_decl.name->loc);
-            for (int a = 0; a < found->nargs; a++) {
-                fputs(", ", stdout);
-                emit_expr(found->args[a]);
+        if (mty->kind == TY_STRUCT) {
+            /* Class member: ctor call with the user's args, or
+             * default ctor if not listed. */
+            if (found) {
+                emit_indent();
+                emit_mangled_class_tag(mty);
+                fprintf(stdout, "_ctor(&this->%.*s",
+                        m->var_decl.name->len, m->var_decl.name->loc);
+                for (int a = 0; a < found->nargs; a++) {
+                    fputs(", ", stdout);
+                    emit_expr(found->args[a]);
+                }
+                fputs(");\n", stdout);
+            } else if (mty->has_default_ctor) {
+                emit_indent();
+                emit_mangled_class_tag(mty);
+                fprintf(stdout, "_ctor(&this->%.*s);\n",
+                        m->var_decl.name->len, m->var_decl.name->loc);
             }
-            fputs(");\n", stdout);
-        } else if (mty->has_default_ctor) {
-            emit_indent();
-            emit_mangled_class_tag(mty);
-            fprintf(stdout, "_ctor(&this->%.*s);\n",
-                    m->var_decl.name->len, m->var_decl.name->loc);
+            /* else: trivially-default-constructible member, nothing to do. */
+        } else {
+            /* Non-class member (scalar / pointer / array): a listed
+             * entry like ': x(7)' lowers to a plain assignment
+             * 'this->x = 7;'. Multi-arg forms are not meaningful for
+             * a scalar and would be a parse error in C++; we ignore
+             * the second-and-later args. Non-listed scalar members
+             * are left default-initialized (= uninitialized) per C
+             * semantics. */
+            if (found && found->nargs >= 1) {
+                emit_indent();
+                fprintf(stdout, "this->%.*s = ",
+                        m->var_decl.name->len, m->var_decl.name->loc);
+                emit_expr(found->args[0]);
+                fputs(";\n", stdout);
+            }
         }
-        /* else: trivially-default-constructible member, nothing to do. */
     }
 }
 
