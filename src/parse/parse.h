@@ -391,7 +391,15 @@ struct Node {
         struct {
             Type *ty;
             Token *name;
-            Node *init;     /* initializer expression, or NULL */
+            Node *init;             /* '= expr' initializer, or NULL */
+            /* Direct-initialization 'T x(args)' — N4659 §11.6/16.
+             * Filled when the parser sees '(' after the declarator.
+             * Codegen lowers this as 'struct T x; T_ctor(&x, args);'.
+             * has_ctor_init distinguishes 'T x()' (zero args, default
+             * ctor) from no parens at all. */
+            Node **ctor_args;
+            int    ctor_nargs;
+            bool   has_ctor_init;
         } var_decl;
 
         /* ND_FUNC_DEF — N4659 §11.4 [dcl.fct.def]

@@ -1,9 +1,9 @@
 (translation-unit
   (typedef)
-  (var-decl int "a" (num 1))
-  (var-decl int "b" (+ (num 2) (num 3)))
+  (var-decl int "a" (ctor-args (num 1)))
+  (var-decl int "b" (ctor-args (+ (num 2) (num 3))))
   (func-def int "main" (params)
     (block
-      (var-decl int "c" (num 42))
-      (var-decl int "d" (+ (ident "a") (ident "b")))
+      (var-decl int "c" (ctor-args (num 42)))
+      (var-decl int "d" (ctor-args (+ (ident "a") (ident "b"))))
       (return (+ (ident "c") (ident "d"))))))

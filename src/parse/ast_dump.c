@@ -353,6 +353,14 @@ static void dump(Node *node, int depth) {
             printf(" ");
             dump(node->var_decl.init, depth + 1);
         }
+        if (node->var_decl.has_ctor_init) {
+            printf(" (ctor-args");
+            for (int i = 0; i < node->var_decl.ctor_nargs; i++) {
+                printf(" ");
+                dump(node->var_decl.ctor_args[i], depth + 1);
+            }
+            printf(")");
+        }
         printf(")");
         break;
 

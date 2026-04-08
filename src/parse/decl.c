@@ -994,16 +994,23 @@ Node *parse_declaration(Parser *p) {
         }
     } else if (parser_consume(p, TK_LPAREN)) {
         /* Direct-initialization: T x(arg-list) — N4659 §11.6/16
-         * Parse comma-separated args, allowing trailing '...' pack
-         * expansion after each. */
+         * Collect ALL the args. Codegen lowers this as
+         *   struct T x;
+         *   T_ctor(&x, args...);
+         * The trailing '...' pack expansion is consumed but not
+         * yet propagated. */
+        decl->var_decl.has_ctor_init = true;
+        Vec args = vec_new(p->arena);
         if (!parser_at(p, TK_RPAREN)) {
-            decl->var_decl.init = parse_assign_expr(p);
+            vec_push(&args, parse_assign_expr(p));
             parser_consume(p, TK_ELLIPSIS);
             while (parser_consume(p, TK_COMMA)) {
-                parse_assign_expr(p);
+                vec_push(&args, parse_assign_expr(p));
                 parser_consume(p, TK_ELLIPSIS);
             }
         }
+        decl->var_decl.ctor_args  = (Node **)args.data;
+        decl->var_decl.ctor_nargs = args.len;
         parser_expect(p, TK_RPAREN);
     } else if (parser_at(p, TK_LBRACE)) {
         /* Braced-init-list without = : T x{ ... } — N4659 §11.6.4

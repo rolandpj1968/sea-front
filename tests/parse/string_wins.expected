@@ -29,7 +29,7 @@
           (func-def void "Guard" (params (param (ptr int) "o"))
             (block
               (cast void (ident "o")))))
-        (var-decl struct Guard "g" (num 0))
+        (var-decl struct Guard "g" (ctor-args (num 0)))
         (cast void (ident "g"))
         (cast void (ident "x")))))
   (template (params (param ? "T"))

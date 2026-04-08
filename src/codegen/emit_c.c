@@ -1056,6 +1056,22 @@ static void emit_stmt(Node *n) {
     case ND_VAR_DECL:
         emit_var_decl_inner(n);
         fputs(";\n", stdout);
+        /* Direct-init 'T x(args)' lowers to a ctor call right
+         * after the declaration. The class type's tag determines
+         * the mangled name (Class_ctor); first arg is &name, the
+         * rest are the user args. */
+        if (n->var_decl.has_ctor_init && n->var_decl.ty &&
+            n->var_decl.ty->kind == TY_STRUCT && n->var_decl.name) {
+            emit_indent();
+            emit_mangled_class_tag(n->var_decl.ty);
+            fprintf(stdout, "_ctor(&%.*s",
+                    n->var_decl.name->len, n->var_decl.name->loc);
+            for (int i = 0; i < n->var_decl.ctor_nargs; i++) {
+                fputs(", ", stdout);
+                emit_expr(n->var_decl.ctor_args[i]);
+            }
+            fputs(");\n", stdout);
+        }
         return;
     case ND_IF:
         fputs("if (", stdout);
