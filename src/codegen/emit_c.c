@@ -857,32 +857,24 @@ static void emit_func_body(Node *func) {
         emit_block(func->func.body);
         return;
     }
-    /* Wrap: open a brace, declare locals, emit the user body
-     * (which is itself a ND_BLOCK and will print its own { }),
-     * then the epilogue. */
+    /* Wrap: open a brace, expand __SF_PROLOGUE (declares __SF_retval
+     * and __SF_unwind), emit the user body (its own ND_BLOCK prints
+     * its { }), then __SF_EPILOGUE (label + return). */
     fputs("{\n", stdout);
     g_indent++;
     emit_indent();
-    /* __SF_retval is typed as the function's return type. For void
-     * returns we skip __SF_retval entirely (no value to forward). */
     bool void_ret = func->func.ret_ty && func->func.ret_ty->kind == TY_VOID;
-    if (!void_ret) {
+    if (void_ret) {
+        fputs("__SF_PROLOGUE_VOID;\n", stdout);
+    } else {
+        fputs("__SF_PROLOGUE(", stdout);
         emit_type(func->func.ret_ty);
-        fputs(" __SF_retval = 0;\n", stdout);
-        emit_indent();
+        fputs(");\n", stdout);
     }
-    fputs("__SF_unwind_t __SF_unwind = __SF_UNWIND_NONE;\n", stdout);
-    emit_indent();
-    fputs("(void)__SF_unwind;\n", stdout);  /* silence unused if no return */
     emit_indent();
     emit_block(func->func.body);
     emit_indent();
-    fputs("__SF_epilogue: ;\n", stdout);
-    emit_indent();
-    if (void_ret)
-        fputs("return;\n", stdout);
-    else
-        fputs("return __SF_retval;\n", stdout);
+    fputs(void_ret ? "__SF_EPILOGUE_VOID;\n" : "__SF_EPILOGUE;\n", stdout);
     g_indent--;
     emit_indent();
     fputs("}\n", stdout);
@@ -1121,6 +1113,23 @@ static void emit_prelude(void) {
     fputs("#define __SF_CONT(lbl) "
           "do { __SF_unwind = __SF_UNWIND_CONT; goto lbl; } while (0)\n",
           stdout);
+    /* Function prologue/epilogue. PROLOGUE declares __SF_retval and
+     * __SF_unwind for functions whose body has any non-trivial local;
+     * the void variant skips __SF_retval. EPILOGUE emits the
+     * __SF_epilogue: label and the actual C return. No do-while
+     * wrapping — these emit declarations/labels, which can't sit
+     * inside a statement expression. */
+    fputs("#define __SF_PROLOGUE(ret_type) "
+          "ret_type __SF_retval = 0; "
+          "__SF_unwind_t __SF_unwind = __SF_UNWIND_NONE; "
+          "(void)__SF_unwind\n",
+          stdout);
+    fputs("#define __SF_PROLOGUE_VOID "
+          "__SF_unwind_t __SF_unwind = __SF_UNWIND_NONE; "
+          "(void)__SF_unwind\n",
+          stdout);
+    fputs("#define __SF_EPILOGUE __SF_epilogue: ; return __SF_retval\n", stdout);
+    fputs("#define __SF_EPILOGUE_VOID __SF_epilogue: ; return\n", stdout);
     /* Chain macros — used at the bottom of each block-with-cleanups
      * after the dtor calls. ANY collapses to a single check when all
      * three unwind kinds target the same place; otherwise the three
