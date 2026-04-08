@@ -161,6 +161,13 @@ struct Node {
      * "type of the node" doesn't apply. */
     Type *resolved_type;
 
+    /* Codegen-only: when emit_c hoists a class-typed expression
+     * into a synthesized local (Slice D temp materialization), the
+     * original expression node is tagged with the local's name.
+     * emit_expr then substitutes the name verbatim instead of
+     * re-emitting the expression. NULL when no hoisting happened. */
+    const char *codegen_temp_name;
+
     union {
         /* ND_NUM — N4659 §5.13.2 [lex.icon]
          * 128-bit binary representation with sign flag.

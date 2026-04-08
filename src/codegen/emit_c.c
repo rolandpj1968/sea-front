@@ -124,6 +124,173 @@ static int return_target(void) { return find_return_target_from(g_cf.nlive); }
 static int break_target(void)  { return find_break_target_from(g_cf.nlive); }
 static int cont_target(void)   { return find_cont_target_from(g_cf.nlive); }
 
+/* Forward decls for the hoist helpers below — both call into the
+ * regular emitters, which appear later in the file. */
+static void emit_expr(Node *n);
+static void emit_type(Type *ty);
+
+/* Slice D-Hoist temp materialization.
+ *
+ * Walks an expression tree post-order, looking for ND_CALL nodes
+ * whose return type is a class with a non-trivial dtor. For each
+ * such call, emits a synthesized local declaration of the form
+ *     struct T __SF_temp_<n> = <call>;
+ * before the enclosing statement, tags the call node with its
+ * temp name, and pushes the temp onto g_cf.live[] so its dtor
+ * fires through the cleanup chain at end of block.
+ *
+ * The post-order walk means inner temps are hoisted first; by
+ * the time we emit the outer temp's initializer the inner
+ * sub-expressions already have codegen_temp_name set, so emit_expr
+ * substitutes the local name verbatim.
+ *
+ * Lifetime divergence from C++: temps are scoped to the enclosing
+ * BLOCK rather than to the full-expression. Their dtors fire in
+ * the right relative order (most-recently-constructed first), but
+ * later than the C++ standard requires. Observable only when a
+ * temp's dtor has a side effect that the next user statement
+ * reads back. Documented; mini-block isolation per full-expression
+ * is a possible future refinement. */
+
+static bool is_class_temp_call(Node *n) {
+    return n && n->kind == ND_CALL && n->resolved_type &&
+           n->resolved_type->kind == TY_STRUCT &&
+           n->resolved_type->has_dtor &&
+           !n->codegen_temp_name;
+}
+
+static void hoist_emit_decl(Node *call) {
+    int id = g_cf.next_label_id++;
+    /* The temp name lives in a small static buffer pool — one per
+     * temp, since multiple temps can be live in the same statement
+     * and codegen_temp_name is just a borrowed pointer. */
+    static char name_pool[CLEANUP_LIVE_MAX][24];
+    static int name_idx = 0;
+    if (name_idx >= CLEANUP_LIVE_MAX) name_idx = 0;  /* wrap */
+    char *name = name_pool[name_idx++];
+    snprintf(name, 24, "__SF_temp_%d", id);
+
+    /* Emit the synthesized declaration on its own line, indented
+     * with the current statement. */
+    emit_indent();
+    emit_type(call->resolved_type);
+    fprintf(stdout, " %s = ", name);
+    emit_expr(call);  /* call's children may already be substituted */
+    fputs(";\n", stdout);
+
+    /* Tag the call so emit_expr now substitutes the temp name. */
+    call->codegen_temp_name = name;
+
+    /* Push as a CL_VAR onto the live stack so the cleanup chain
+     * runs the dtor at end of block. We synthesize a tiny ND_VAR_DECL
+     * just to carry the type and name token for the chain emitter
+     * — but a Token is overkill; instead, smuggle the name via the
+     * codegen_temp_name field on a fresh dummy node? Simpler: store
+     * the call node itself with a flag, and have the dtor emitter
+     * check codegen_temp_name on it. */
+    if (g_cf.nlive < CLEANUP_LIVE_MAX) {
+        g_cf.live[g_cf.nlive].kind = CL_VAR;
+        g_cf.live[g_cf.nlive].label_id = id;
+        g_cf.live[g_cf.nlive].cont_label_id = -1;
+        g_cf.live[g_cf.nlive].var_decl = call;  /* not an ND_VAR_DECL — flagged via codegen_temp_name */
+        g_cf.nlive++;
+    }
+}
+
+static void hoist_temps_in_expr(Node *n) {
+    if (!n) return;
+    switch (n->kind) {
+    case ND_CALL:
+        if (n->call.callee) hoist_temps_in_expr(n->call.callee);
+        for (int i = 0; i < n->call.nargs; i++)
+            hoist_temps_in_expr(n->call.args[i]);
+        if (is_class_temp_call(n)) hoist_emit_decl(n);
+        return;
+    case ND_BINARY:
+    case ND_ASSIGN:
+        /* Both share the 'binary' member layout. */
+        hoist_temps_in_expr(n->binary.lhs);
+        hoist_temps_in_expr(n->binary.rhs);
+        return;
+    case ND_UNARY:
+    case ND_POSTFIX:
+        /* Both share the 'unary' member layout. */
+        hoist_temps_in_expr(n->unary.operand);
+        return;
+    case ND_TERNARY:
+        hoist_temps_in_expr(n->ternary.cond);
+        hoist_temps_in_expr(n->ternary.then_);
+        hoist_temps_in_expr(n->ternary.else_);
+        return;
+    case ND_MEMBER:
+        hoist_temps_in_expr(n->member.obj);
+        return;
+    case ND_SUBSCRIPT:
+        hoist_temps_in_expr(n->subscript.base);
+        hoist_temps_in_expr(n->subscript.index);
+        return;
+    case ND_CAST:
+        hoist_temps_in_expr(n->cast.operand);
+        return;
+    case ND_COMMA:
+        hoist_temps_in_expr(n->comma.lhs);
+        hoist_temps_in_expr(n->comma.rhs);
+        return;
+    default:
+        return;
+    }
+}
+
+/* Hoist any class temps from the expressions belonging to a single
+ * statement. Called by emit_block before emit_indent for each
+ * statement, so synthesized declarations land at the same indent
+ * level as the user statement.
+ *
+ * Special case: 'T x = make();' is direct-init from a class call
+ * — the call's return value IS x via struct copy in C, no separate
+ * temp needed. We skip hoisting the top-level call but still
+ * recurse into its arguments (which may carry their own temps). */
+static void hoist_stmt_temps(Node *s) {
+    if (!s || !g_cf.func_has_cleanups) return;
+    switch (s->kind) {
+    case ND_VAR_DECL: {
+        Node *init = s->var_decl.init;
+        if (!init) return;
+        bool direct_init =
+            init->kind == ND_CALL && init->resolved_type &&
+            init->resolved_type->kind == TY_STRUCT &&
+            s->var_decl.ty && s->var_decl.ty->kind == TY_STRUCT;
+        if (direct_init) {
+            /* Recurse into the call's children only — don't hoist
+             * the call itself. */
+            if (init->call.callee) hoist_temps_in_expr(init->call.callee);
+            for (int i = 0; i < init->call.nargs; i++)
+                hoist_temps_in_expr(init->call.args[i]);
+        } else {
+            hoist_temps_in_expr(init);
+        }
+        return;
+    }
+    case ND_EXPR_STMT:
+        hoist_temps_in_expr(s->expr_stmt.expr);
+        return;
+    case ND_RETURN:
+        hoist_temps_in_expr(s->ret.expr);
+        return;
+    case ND_IF:
+        hoist_temps_in_expr(s->if_.cond);
+        return;
+    case ND_WHILE:
+        hoist_temps_in_expr(s->while_.cond);
+        return;
+    case ND_DO:
+        hoist_temps_in_expr(s->do_.cond);
+        return;
+    default:
+        return;
+    }
+}
+
 /* Are we currently inside any enclosing loop? Used to decide
  * whether ND_BREAK/CONTINUE need the cleanup-aware rewrite or
  * can be lowered as a plain C break/continue. */
@@ -138,28 +305,72 @@ static bool break_needs_cleanup(void) {
 }
 
 /* Pre-scan: does any block in this subtree declare a class instance
- * with a non-trivial dtor? If yes, the function needs the cleanup
- * machinery (locals __retval/__unwind, __epilogue label, return rewrite). */
+ * with a non-trivial dtor, OR contain an expression that creates a
+ * class temporary (call returning class with has_dtor)? Either case
+ * needs the cleanup machinery (locals __retval/__unwind, __epilogue
+ * label, return rewrite, per-block cleanup chain). */
 static bool subtree_has_cleanups(Node *n) {
     if (!n) return false;
+    /* First: a call returning a non-trivially destructible class
+     * is a temporary site that Slice D-Hoist will materialize. */
+    if (n->kind == ND_CALL && n->resolved_type &&
+        n->resolved_type->kind == TY_STRUCT && n->resolved_type->has_dtor)
+        return true;
     switch (n->kind) {
     case ND_VAR_DECL:
-        return n->var_decl.ty && n->var_decl.ty->kind == TY_STRUCT &&
-               n->var_decl.ty->has_dtor;
+        if (n->var_decl.ty && n->var_decl.ty->kind == TY_STRUCT &&
+            n->var_decl.ty->has_dtor) return true;
+        return subtree_has_cleanups(n->var_decl.init);
     case ND_BLOCK:
         for (int i = 0; i < n->block.nstmts; i++)
             if (subtree_has_cleanups(n->block.stmts[i])) return true;
         return false;
     case ND_IF:
-        return subtree_has_cleanups(n->if_.then_) ||
+        return subtree_has_cleanups(n->if_.cond) ||
+               subtree_has_cleanups(n->if_.then_) ||
                subtree_has_cleanups(n->if_.else_);
     case ND_WHILE:
-        return subtree_has_cleanups(n->while_.body);
+        return subtree_has_cleanups(n->while_.cond) ||
+               subtree_has_cleanups(n->while_.body);
     case ND_DO:
-        return subtree_has_cleanups(n->do_.body);
+        return subtree_has_cleanups(n->do_.cond) ||
+               subtree_has_cleanups(n->do_.body);
     case ND_FOR:
         return subtree_has_cleanups(n->for_.init) ||
+               subtree_has_cleanups(n->for_.cond) ||
+               subtree_has_cleanups(n->for_.inc) ||
                subtree_has_cleanups(n->for_.body);
+    case ND_RETURN:
+        return subtree_has_cleanups(n->ret.expr);
+    case ND_EXPR_STMT:
+        return subtree_has_cleanups(n->expr_stmt.expr);
+    /* Expression nodes — recurse into children. */
+    case ND_BINARY:
+    case ND_ASSIGN:
+        return subtree_has_cleanups(n->binary.lhs) ||
+               subtree_has_cleanups(n->binary.rhs);
+    case ND_UNARY:
+    case ND_POSTFIX:
+        return subtree_has_cleanups(n->unary.operand);
+    case ND_TERNARY:
+        return subtree_has_cleanups(n->ternary.cond) ||
+               subtree_has_cleanups(n->ternary.then_) ||
+               subtree_has_cleanups(n->ternary.else_);
+    case ND_CALL:
+        if (subtree_has_cleanups(n->call.callee)) return true;
+        for (int i = 0; i < n->call.nargs; i++)
+            if (subtree_has_cleanups(n->call.args[i])) return true;
+        return false;
+    case ND_MEMBER:
+        return subtree_has_cleanups(n->member.obj);
+    case ND_SUBSCRIPT:
+        return subtree_has_cleanups(n->subscript.base) ||
+               subtree_has_cleanups(n->subscript.index);
+    case ND_CAST:
+        return subtree_has_cleanups(n->cast.operand);
+    case ND_COMMA:
+        return subtree_has_cleanups(n->comma.lhs) ||
+               subtree_has_cleanups(n->comma.rhs);
     default:
         return false;
     }
@@ -380,6 +591,14 @@ static void emit_expr(Node *n) {
         fputc(')', stdout);
         return;
     case ND_CALL: {
+        /* Slice D-Hoist: if this call has been hoisted to a synthesized
+         * temp local, just emit the local's name and skip the rest of
+         * call emission. The temp's initializer (which IS this call)
+         * was already emitted ahead of the current statement. */
+        if (n->codegen_temp_name) {
+            fputs(n->codegen_temp_name, stdout);
+            return;
+        }
         /* Method call lowering: 'obj.method(args)' / 'p->method(args)'
          * becomes 'Class_method(&obj, args)' / 'Class_method(p, args)'.
          *
@@ -503,6 +722,12 @@ static void emit_block(Node *n) {
 
     for (int i = 0; i < n->block.nstmts; i++) {
         Node *s = n->block.stmts[i];
+        /* Slice D-Hoist: emit any synthesized temp declarations
+         * BEFORE the user statement, at the same indent level.
+         * The hoist helper does its own emit_indent per decl and
+         * pushes each temp onto g_cf.live so the cleanup chain
+         * picks it up at end of block. */
+        hoist_stmt_temps(s);
         emit_indent();
         emit_stmt(s);
         if (g_cf.func_has_cleanups && s &&
@@ -533,9 +758,19 @@ static void emit_block(Node *n) {
             emit_indent();
             fprintf(stdout, "__SF_cleanup_%d: ;\n", e->label_id);
             emit_indent();
-            emit_mangled_class_tag(v->var_decl.ty);
-            fprintf(stdout, "_dtor(&%.*s);\n",
-                    v->var_decl.name->len, v->var_decl.name->loc);
+            if (v->codegen_temp_name) {
+                /* Slice D-Hoist temp: 'var_decl' is actually the
+                 * original ND_CALL whose result was hoisted to the
+                 * synthesized local. Use the call's resolved_type
+                 * for the class tag and the codegen_temp_name for
+                 * the address. */
+                emit_mangled_class_tag(v->resolved_type);
+                fprintf(stdout, "_dtor(&%s);\n", v->codegen_temp_name);
+            } else {
+                emit_mangled_class_tag(v->var_decl.ty);
+                fprintf(stdout, "_dtor(&%.*s);\n",
+                        v->var_decl.name->len, v->var_decl.name->loc);
+            }
         }
         /* Three-way chain-out. Walks below saved_nlive to find the
          * next outward target for each unwind kind, and formats each
