@@ -1,0 +1,32 @@
+(translation-unit
+  (class-def "B1"
+    (var-decl int "x")
+    (func-def void "inc" (params)
+      (block
+        (= (ident "x") (+ (ident "x") (num 1))))))
+  (class-def "D1"
+    (func-def void "f" (params)
+      (block
+        (call (ident "inc")))))
+  (class-def "B2"
+    (var-decl const int "N" (num 4)))
+  (class-def "D2"
+    (var-decl (array int) "arr"))
+  (class-def "B3"
+    (typedef)
+    (func-def void "take" (params (param int "v"))
+      (block
+        (cast void (ident "v")))))
+  (class-def "D3"
+    (func-def void "caller" (params)
+      (block
+        (call (ident "take") (num 7)))))
+  (class-def "Top"
+    (typedef))
+  (class-def "M1")
+  (class-def "M2")
+  (class-def "Bot"
+    (func-def void "use" (params)
+      (block
+        (var-decl long "t" (num 0))
+        (cast void (ident "t"))))))
