@@ -8,8 +8,8 @@
 #include "parse.h"
 
 /* ------------------------------------------------------------------ */
-/* Token stream operations — index-based cursor into contiguous array  */
-/*                                                                     */
+/* Token stream operations — index-based cursor into contiguous array */
+/*                                                                    */
 /* '>>' splitting per N4659 §17.2/3 [temp.names]: "the first non-     */
 /* nested >> is treated as two consecutive but distinct > tokens".    */
 /* The lexer produces a single TK_SHR token. When the inner template- */
@@ -31,7 +31,45 @@ Token *parser_peek(Parser *p) {
     return &p->tokens[p->pos];
 }
 
+/*
+ * parser_peek_ahead — return a token at lookahead distance N.
+ *
+ * Contract:
+ *   N == 0 — equivalent to parser_peek (current token).
+ *   N > 0  — token at position N ahead, IF that position is in
+ *            range; otherwise the EOF sentinel (NOT a NULL).
+ *   N < 0  — clamped to 0 as a defensive guard. No current
+ *            caller passes a negative value.
+ *
+ * --- IMPORTANT past-EOF behaviour ---
+ *
+ * When N is large enough to go past the end of the token array,
+ * this function does NOT signal failure: it returns
+ * &p->tokens[ntokens-1], which by invariant is the EOF sentinel.
+ * That is fine for the typical use ("is the token 2 ahead a
+ * '('?") because EOF is never '(' so the check correctly returns
+ * false. It is WRONG for any pattern that distinguishes between
+ * "different positions" without checking kind != TK_EOF — e.g.
+ * peek_ahead(3) and peek_ahead(5) near EOF return the SAME
+ * pointer (the EOF sentinel), not different tokens at different
+ * positions. Callers must treat a returned TK_EOF as "no token
+ * here" rather than "the token here happens to be EOF".
+ *
+ * --- split_shr quirk ---
+ *
+ * When p->split_shr is true, a synthetic TK_GT occupies slot 0
+ * (it's the virtual second '>' from a split '>>'). peek_ahead(0)
+ * returns that synthetic; peek_ahead(N) for N >= 1 returns
+ * tokens[p->pos + N - 1] (i.e. the N-1th real token after the
+ * cursor, because the synthetic took slot 0).
+ *
+ * TODO(seafront#peek-ahead-eof): a stricter API would return
+ * NULL on past-EOF peek so callers can't accidentally treat
+ * clamped EOFs as real tokens. Defer until a bug actually
+ * surfaces from the current behavior — none has so far.
+ */
 Token *parser_peek_ahead(Parser *p, int n) {
+    if (n < 0) n = 0;  /* defensive — see contract above */
     if (p->split_shr) {
         if (n == 0) return &synthetic_gt;
         n--;  /* the virtual > occupies slot 0 */

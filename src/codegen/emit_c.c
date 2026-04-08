@@ -1,24 +1,49 @@
 /*
- * emit_c.c — AST → C codegen (first slice).
+ * emit_c.c — AST → C codegen.
  *
- * Walks the AST and emits C. Currently handles:
- *   - Function definitions and parameter lists with built-in types
- *   - Variable declarations with optional init
- *   - Return, if/else, while, for, do-while, break/continue
- *   - Compound statements
- *   - Arithmetic, relational, logical, assignment binary expressions
- *   - Unary expressions, postfix ++/--, ternary
- *   - Integer / float / char / bool literals
- *   - Identifiers and member access (best-effort, source-form)
- *   - Function calls with positional args
+ * Walks a parsed (and sema'd) translation unit and emits C source
+ * to stdout. The lowering targets a fixed C subset that any C99
+ * compiler can build (notably tcc-from-mescc — sea-front's whole
+ * point is to be the C/C++ bridge in the bootstrappable.org chain;
+ * see memory project_bootstrap_north_star).
  *
- * Out of scope (skipped or emitted as a comment):
- *   - Classes, member functions, templates
- *   - References (we emit '*' instead — fine for the first slice
- *     since we're targeting built-in types)
- *   - Operator overloads, casts beyond C-style
+ * Currently emits:
+ *   - Free functions, parameters with all built-in and pointer types
+ *   - References (TY_REF / TY_RVALREF) lowered to plain C pointers
+ *   - Variable declarations with init or direct-init (T x(args))
+ *   - All flow control: return, if/else, while, for, do-while,
+ *     break/continue, switch/case/default, goto/label
+ *   - Compound statements with cleanup-aware destructor unwinding
+ *     (the Slice A-D dtor lowering — see below)
+ *   - Full binary/unary/ternary/assignment expressions
+ *   - All literals (int, float, char, bool, string, nullptr)
+ *   - Identifiers (with this-> rewriting for class members and
+ *     __sf_base.<...> walking for inherited members)
+ *   - Function calls including method calls (direct dispatch via
+ *     mangled name) and virtual calls (indirect dispatch via vptr)
+ *   - Class definitions: struct layout, ctors, dtors, ctor/dtor
+ *     synthesis, member-initializer lists, vptr install + vtable
+ *     emission, base-subobject embedding for non-virtual inheritance
  *
- * The output is intentionally minimal — no formatting cleverness.
+ * Mangling: every emitted symbol routes through src/codegen/mangle.c
+ * and the Mangler vtable (default scheme: human-readable 'sf__' form;
+ * see docs/mangling.md). Direct fputs of unmangled forms is
+ * deliberately avoided so a future Itanium adapter is a one-vtable
+ * change.
+ *
+ * NOT YET EMITTED (gaps that need their own slice):
+ *   - Operator overloading (parsed, but not lowered to op_* calls)
+ *   - Templates beyond opaque parse (no instantiation)
+ *   - Exceptions (try/throw/catch — the cleanup chain is the
+ *     substrate but the THROW unwind variant isn't wired up)
+ *   - Virtual inheritance, virtual destructors in vtable slots
+ *   - RTTI / dynamic_cast / typeid
+ *   - Coroutines / modules / concepts (C++20+)
+ *
+ * The output is intentionally minimal — no formatting cleverness,
+ * no register allocation, no optimisation. The trust story is
+ * "read the lowered C and verify it matches the source", so
+ * readability beats brevity.
  */
 
 #include <stdio.h>
@@ -168,8 +193,9 @@ static bool is_class_temp_call(Node *n) {
     if (n->resolved_type->has_dtor) return true;
     /* Ctor-call shape: 'Foo(args)' where the callee is a type-name
      * needs hoisting even when Foo has no dtor — there's no Foo()
-     * function in the lowered C, only Foo_ctor(struct Foo *, ...).
-     * The temp gets a slot but no cleanup-chain registration. */
+     * function in the lowered C, only the mangled
+     * sf__Foo__ctor(struct sf__Foo *, ...). The temp gets a slot
+     * but no cleanup-chain registration. */
     if (n->call.callee && n->call.callee->kind == ND_IDENT) {
         Declaration *d = n->call.callee->ident.resolved_decl;
         if (d && (d->entity == ENTITY_TYPE || d->entity == ENTITY_TAG))
@@ -192,12 +218,12 @@ static void hoist_emit_decl(Node *call) {
     /* Detect ctor-call shape: callee is an ND_IDENT whose
      * resolved_decl is a type-name (ENTITY_TYPE). For these we
      * emit the two-line construction form
-     *     struct T __SF_temp_<n>;
-     *     T_ctor(&__SF_temp_<n>, args);
+     *     struct sf__T __SF_temp_<n>;
+     *     sf__T__ctor(&__SF_temp_<n>, args);
      * instead of the single-line assignment-init form
-     *     struct T __SF_temp_<n> = T_call();
+     *     struct sf__T __SF_temp_<n> = some_call();
      * because Foo(args) isn't a function call in C — there's no
-     * symbol named 'Foo' (only Foo_ctor). */
+     * symbol named 'Foo' (only the mangled sf__Foo__ctor). */
     bool is_ctor_call = false;
     if (call->call.callee && call->call.callee->kind == ND_IDENT) {
         Declaration *d = call->call.callee->ident.resolved_decl;
@@ -303,10 +329,10 @@ static void hoist_stmt_temps(Node *s) {
      * Even functions without any non-trivial dtors may contain
      * ctor-call expressions ('Foo(7)') that need to be materialized
      * to a synthesized local — the lowered C has no symbol named
-     * 'Foo', only 'Foo_ctor'. The hoist fires; the cleanup-chain
-     * registration in hoist_emit_decl is what's gated on has_dtor,
-     * so a trivially-destructible temp gets a local but no CL_VAR
-     * entry. */
+     * 'Foo', only the mangled sf__Foo__ctor. The hoist fires; the
+     * cleanup-chain registration in hoist_emit_decl is what's
+     * gated on has_dtor, so a trivially-destructible temp gets a
+     * local but no CL_VAR entry. */
     switch (s->kind) {
     case ND_VAR_DECL: {
         Node *init = s->var_decl.init;
@@ -433,17 +459,17 @@ static bool subtree_has_cleanups(Node *n) {
 /* Name mangling                                                       */
 /* ------------------------------------------------------------------ */
 
-/* Emit the mangled struct/class tag for a class type. Routes
- * through the mangling framework — see src/codegen/mangle.c. */
+/* Emit the mangled struct/class tag for a class type via the
+ * Mangler framework (see docs/mangling.md and mangle.c). With the
+ * default human scheme this produces 'sf__<NS>__<Class>' where
+ * the namespace prefix walks the class's enclosing chain. The
+ * '?' fallback is for class types whose tag wasn't recorded
+ * (anonymous structs, currently). */
 static void emit_mangled_class_tag(Type *class_type) {
     if (!class_type || !class_type->tag) {
         fputs("?", stdout);
         return;
     }
-    /* Routes through the mangling framework — see docs/mangling.md
-     * and src/codegen/mangle.c. The output prefix is 'sf__' and
-     * namespace separator is '__', so 'std::vector' lowers to
-     * 'sf__std__vector'. */
     mangle_class_tag(class_type);
 }
 
@@ -1245,8 +1271,9 @@ static void emit_stmt(Node *n) {
         fputs(";\n", stdout);
         /* Direct-init 'T x(args)' lowers to a ctor call right
          * after the declaration. The class type's tag determines
-         * the mangled name (Class_ctor); first arg is &name, the
-         * rest are the user args. */
+         * the mangled name (mangle_class_ctor → sf__T__ctor under
+         * the human scheme); first arg is &name, the rest are the
+         * user args. */
         if (n->var_decl.has_ctor_init && n->var_decl.ty &&
             n->var_decl.ty->kind == TY_STRUCT && n->var_decl.name) {
             emit_indent();
@@ -2136,12 +2163,14 @@ static void emit_class_def(Node *n) {
      * count.
      *
      * Dtor handling: a user-declared dtor with non-empty body lowers
-     * to Class_dtor_body (forward-declared and emitted by the normal
-     * method path). The Class_dtor wrapper (synthesized below) is
-     * forward-declared separately when class_type->has_dtor is true
-     * — that flag may be set by either a user dtor OR by a
-     * non-trivially-destructible member, so the wrapper exists even
-     * when no user dtor was written. */
+     * to mangle_class_dtor_body (sf__Class__dtor_body), forward-
+     * declared and emitted by the normal method path. The
+     * mangle_class_dtor wrapper (sf__Class__dtor, synthesized
+     * below) is forward-declared separately when
+     * class_type->has_dtor is true — that flag may be set by a
+     * user dtor, by a non-trivially-destructible member, OR by a
+     * non-trivially-destructible direct base — so the wrapper
+     * exists even when no user dtor was written. */
     for (int i = 0; i < n->class_def.nmembers; i++) {
         Node *m = n->class_def.members[i];
         if (!m) continue;
@@ -2162,17 +2191,18 @@ static void emit_class_def(Node *n) {
         } else if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
                    m->var_decl.ty->kind == TY_FUNC && m->var_decl.name &&
                    class_type) {
-            /* Synthesise an emit_method_signature-like header from the
-             * var-decl's type. Ctor/dtor declarations get the
-             * Class_ctor / Class_dtor mangling instead of the
-             * regular Class_<methodname> form. */
+            /* Synthesise an emit_method_signature-like header from
+             * the var-decl's type. Ctor/dtor declarations route
+             * through mangle_class_ctor / mangle_class_dtor_body
+             * instead of the regular mangle_class_method form. */
             Type *fty = m->var_decl.ty;
             if (m->var_decl.is_destructor) {
                 /* In-class declaration of a dtor whose body is
                  * defined out-of-class (Foo::~Foo() { ... }). The
-                 * Class_dtor wrapper (synthesized below) is forward-
-                 * declared separately, but we DO need a forward decl
-                 * for Class_dtor_body so the wrapper can call it. */
+                 * sf__Class__dtor wrapper (synthesized below) is
+                 * forward-declared separately, but we DO need a
+                 * forward decl for sf__Class__dtor_body so the
+                 * wrapper can call it. */
                 fputs("__SF_INLINE void ", stdout);
                 mangle_class_dtor_body(class_type);
                 fputs("(struct ", stdout);
@@ -2199,9 +2229,9 @@ static void emit_class_def(Node *n) {
         }
     }
 
-    /* Forward-declare and (later) emit the Class_dtor wrapper when
-     * the class is non-trivially-destructible. The wrapper exists
-     * whether or not a user dtor was written. */
+    /* Forward-declare and (later) emit the sf__Class__dtor wrapper
+     * when the class is non-trivially-destructible. The wrapper
+     * exists whether or not a user dtor was written. */
     Node *user_dtor = NULL;
     bool user_dtor_out_of_class = false;
     if (class_type && class_type->has_dtor) {
@@ -2335,12 +2365,12 @@ static void emit_class_def(Node *n) {
     }
     g_current_class_def = saved_cdef;
 
-    /* Synthesize the Class_dtor wrapper. Calls Class_dtor_body
-     * (if a user dtor existed) FIRST, then chains into each
-     * non-trivially-destructible member's dtor in REVERSE
-     * declaration order — N4659 §15.4 [class.dtor]/9. After the
-     * members, chains into each base subobject's dtor, also in
-     * REVERSE declaration order. */
+    /* Synthesize the sf__Class__dtor wrapper. Calls
+     * sf__Class__dtor_body (if a user dtor existed) FIRST, then
+     * chains into each non-trivially-destructible member's dtor in
+     * REVERSE declaration order — N4659 §15.4 [class.dtor]/9.
+     * After the members, chains into each base subobject's dtor,
+     * also in REVERSE declaration order. */
     if (class_type && class_type->has_dtor) {
         fputs("__SF_INLINE void ", stdout);
         mangle_class_dtor(class_type);
