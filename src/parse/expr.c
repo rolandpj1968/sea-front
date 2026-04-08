@@ -20,7 +20,7 @@
  *   shift    shift-expression             §8.8  [expr.shift]
  *   add      additive-expression          §8.7  [expr.add]
  *   mul      multiplicative-expression    §8.6  [expr.mul]
- *            (pointer-to-member §8.5 [expr.mptr.oper] — deferred)
+ *   mptr     pointer-to-member            §8.5  [expr.mptr.oper] (.* ->*)
  *   unary    unary-expression             §8.3  [expr.unary]
  *   postfix  postfix-expression           §8.2  [expr.post]
  *   primary  primary-expression           §8.1  [expr.prim]
@@ -108,15 +108,20 @@ static int get_binop_prec(Parser *p, TokenKind k) {
 
 /* ------------------------------------------------------------------ */
 /* Primary expression — N4659 §8.1 [expr.prim]                        */
-/*                                                                     */
-/*   primary-expression:                                               */
-/*       literal                                                       */
-/*       this                     (deferred — classes)                  */
-/*       ( expression )                                                */
-/*       id-expression                                                 */
-/*       lambda-expression        (deferred — C++11 §8.1.5)            */
-/*       fold-expression          (deferred — C++17 §8.1.6)            */
-/*       requires-expression      (deferred — C++20 §8.1.7.3)         */
+/*                                                                    */
+/*   primary-expression:                                              */
+/*       literal                  — implemented (num/fnum/str/char/   */
+/*                                  bool/nullptr)                     */
+/*       this                     — implemented (§8.1.3)              */
+/*       ( expression )           — implemented                       */
+/*       id-expression            — implemented (incl. qualified-id)  */
+/*       lambda-expression        — parsed-and-discarded (§8.1.5);    */
+/*                                  the brace-balanced skip in this   */
+/*                                  function recognises the shape so  */
+/*                                  surrounding code parses, but the  */
+/*                                  body isn't built into an AST node */
+/*       fold-expression          — implemented (§8.1.6, C++17)       */
+/*       requires-expression      — NOT YET (§8.1.7.3, C++20)         */
 /* ------------------------------------------------------------------ */
 
 static Node *primary_expr(Parser *p) {
@@ -710,7 +715,9 @@ static Node *primary_expr(Parser *p) {
     /* sizeof — N4659 §8.3.3 [expr.sizeof]
      *   sizeof unary-expression
      *   sizeof ( type-id )
-     *   sizeof ... ( identifier )  (C++11 parameter pack — deferred) */
+     *   sizeof ... ( identifier )    — C++11 parameter pack (handled
+     *                                   below: consumed but the pack
+     *                                   identity is discarded) */
     if (tok->kind == TK_KW_SIZEOF) {
         parser_advance(p);
         Node *node = new_node(p, ND_SIZEOF, tok);
@@ -982,9 +989,9 @@ static Node *postfix_expr(Parser *p) {
 /*       sizeof unary-expression                                       */
 /*       sizeof ( type-id )                                            */
 /*       alignof ( type-id )                                           */
-/*       noexcept-expression         (deferred)                        */
-/*       new-expression              (deferred — §8.3.4)               */
-/*       delete-expression           (deferred — §8.3.5)               */
+/*       noexcept-expression         — implemented in primary_expr    */
+/*       new-expression              — implemented (§8.3.4)            */
+/*       delete-expression           — implemented (§8.3.5)            */
 /*       // C++20: co_await cast-expression (§8.3.8 [expr.await])      */
 /*                                                                     */
 /*   unary-operator: * & + - ! ~                                       */
@@ -1228,8 +1235,10 @@ static Node *ternary_expr(Parser *p) {
 /*   assignment-expression:                                            */
 /*       conditional-expression                                        */
 /*       logical-or-expression assignment-operator initializer-clause  */
-/*       throw-expression               (deferred — no exceptions)     */
-/*       // C++20: yield-expression (co_yield — deferred)              */
+/*       throw-expression — parsed in primary_expr; lowered as an     */
+/*                          opaque NULLPTR placeholder until           */
+/*                          exceptions land (no try/catch yet)         */
+/*       // C++20: yield-expression (co_yield — NOT YET)               */
 /*                                                                     */
 /*   assignment-operator: = *= /= %= += -= >>= <<= &= ^= |=          */
 /*                                                                     */

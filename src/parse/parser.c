@@ -175,19 +175,16 @@ void parser_restore(Parser *p, ParseState saved) {
 /* ------------------------------------------------------------------ */
 
 /*
- * Skip a sequence of __attribute__((...)) GNU attribute specifiers.
- * Lexer treats __attribute__ as a plain identifier; recognise by name.
+ * parser_skip_cxx_attributes — skip a sequence of '[[ ... ]]'
+ * C++11 attribute-specifiers (N4659 §10.6 [dcl.attr]). Possibly
+ * multiple in a row. The lexer doesn't have a TK_LBRACKETBRACKET
+ * token; we recognise the pair '[' '[' and balance toward the
+ * matching ']' ']'.
  *
- * Grammar (informal): __attribute__ ( ( attribute-list ) )
- * The body is balanced parens, so we just count.
- *
- * Ubiquitous in libstdc++/glibc headers; not part of ISO C++. They have
- * no impact on the parser's understanding of the type system, so we drop
- * them entirely.
+ * Attributes affect linker / optimiser hints in real C++ but
+ * have no impact on the parser's understanding of the type
+ * system, so we recognise them and drop them on the floor.
  */
-/* Skip C++11 attributes: [[ ... ]] (possibly multiple).
- * The lexer doesn't have a TK_LBRACKETBRACKET token; we recognise the
- * pair '[' '[' and balance toward the matching ']' ']'. */
 void parser_skip_cxx_attributes(Parser *p) {
     while (parser_at(p, TK_LBRACKET) &&
            parser_peek_ahead(p, 1)->kind == TK_LBRACKET) {
@@ -210,6 +207,19 @@ void parser_skip_cxx_attributes(Parser *p) {
     }
 }
 
+/*
+ * parser_skip_gnu_attributes — skip a sequence of
+ * __attribute__((...)) GNU attribute specifiers.
+ *
+ * The lexer treats __attribute__ / __attribute as plain
+ * identifiers; we recognise the spelling here. Grammar
+ * (informal): __attribute__ ( ( attribute-list ) )
+ *   — note the doubled parentheses are part of the syntax.
+ *
+ * Ubiquitous in libstdc++/glibc headers; not part of ISO C++.
+ * They have no impact on the parser's understanding of the
+ * type system, so we drop them entirely.
+ */
 void parser_skip_gnu_attributes(Parser *p) {
     while (parser_at(p, TK_IDENT) &&
            (token_equal(parser_peek(p), "__attribute__") ||
