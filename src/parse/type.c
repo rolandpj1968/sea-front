@@ -502,6 +502,8 @@ DeclSpec parse_type_specifiers(Parser *p) {
                  * the chicken/egg case never arises — by the time we
                  * see a member of class type by value, that class type
                  * has already been fully parsed and has_dtor set. */
+                bool any_user_ctor = false;
+                bool any_member_needs_default = false;
                 for (int mi = 0; mi < members.len; mi++) {
                     Node *m = ((Node **)members.data)[mi];
                     if (!m) continue;
@@ -510,20 +512,34 @@ DeclSpec parse_type_specifiers(Parser *p) {
                         bool empty = body && body->kind == ND_BLOCK &&
                                      body->block.nstmts == 0;
                         if (!empty) ty->has_dtor = true;
-                    } else if (m->kind == ND_FUNC_DEF && m->func.is_constructor &&
-                               m->func.nparams == 0) {
-                        /* User-declared zero-arg ctor → default ctor.
-                         * Codegen uses this to decide whether 'Foo a;'
-                         * should auto-invoke Foo_ctor(&a). */
-                        ty->has_default_ctor = true;
+                    } else if (m->kind == ND_FUNC_DEF && m->func.is_constructor) {
+                        any_user_ctor = true;
+                        if (m->func.nparams == 0) {
+                            /* User-declared zero-arg ctor. */
+                            ty->has_default_ctor = true;
+                        }
                     } else if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
-                               m->var_decl.ty->kind == TY_STRUCT &&
-                               m->var_decl.ty->has_dtor) {
-                        /* By-value class member with non-trivial dtor —
-                         * the containing class needs a synthesized dtor
-                         * to chain into the member's. */
-                        ty->has_dtor = true;
+                               m->var_decl.ty->kind == TY_STRUCT) {
+                        if (m->var_decl.ty->has_dtor) {
+                            /* By-value class member with non-trivial dtor —
+                             * the containing class needs a synthesized dtor
+                             * to chain into the member's. */
+                            ty->has_dtor = true;
+                        }
+                        if (m->var_decl.ty->has_default_ctor) {
+                            any_member_needs_default = true;
+                        }
                     }
+                }
+                /* Implicit default ctor — N4659 §15.1 [class.ctor]/4:
+                 * if no user-declared ctors at all, the implicit default
+                 * ctor is implicitly declared. We treat it as needing
+                 * synthesis only when at least one member actually
+                 * requires construction; trivially-default-constructible
+                 * member-only classes stay flag-free and the C declaration
+                 * leaves storage uninitialized (matching C semantics). */
+                if (!any_user_ctor && any_member_needs_default) {
+                    ty->has_default_ctor = true;
                 }
             }
 

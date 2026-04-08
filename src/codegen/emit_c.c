@@ -1620,6 +1620,48 @@ static void emit_class_def(Node *n) {
         g_indent--;
         fputs("}\n", stdout);
     }
+
+    /* Synthesize a default ctor when the class has has_default_ctor
+     * set but no user-declared ctor exists — N4659 §15.1 [class.ctor]/4.
+     * Body just chains into each member's default ctor in declaration
+     * order. Trivially-default-constructible members contribute
+     * nothing (no call). */
+    bool any_user_ctor = false;
+    for (int i = 0; i < n->class_def.nmembers; i++) {
+        Node *m = n->class_def.members[i];
+        if (m && m->kind == ND_FUNC_DEF && m->func.is_constructor) {
+            any_user_ctor = true;
+            break;
+        }
+    }
+    if (class_type && class_type->has_default_ctor && !any_user_ctor) {
+        /* Forward decl + body for the synthesized ctor. */
+        fputs("void ", stdout);
+        emit_mangled_class_tag(class_type);
+        fputs("_ctor(struct ", stdout);
+        emit_mangled_class_tag(class_type);
+        fputs(" *this);\n", stdout);
+
+        fputs("void ", stdout);
+        emit_mangled_class_tag(class_type);
+        fputs("_ctor(struct ", stdout);
+        emit_mangled_class_tag(class_type);
+        fputs(" *this) {\n", stdout);
+        g_indent++;
+        for (int i = 0; i < n->class_def.nmembers; i++) {
+            Node *m = n->class_def.members[i];
+            if (!m || m->kind != ND_VAR_DECL) continue;
+            if (!m->var_decl.ty || m->var_decl.ty->kind != TY_STRUCT) continue;
+            if (!m->var_decl.ty->has_default_ctor) continue;
+            if (!m->var_decl.name) continue;
+            emit_indent();
+            emit_mangled_class_tag(m->var_decl.ty);
+            fprintf(stdout, "_ctor(&this->%.*s);\n",
+                    m->var_decl.name->len, m->var_decl.name->loc);
+        }
+        g_indent--;
+        fputs("}\n", stdout);
+    }
 }
 
 static void emit_top_level(Node *n) {
