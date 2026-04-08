@@ -327,6 +327,20 @@ static void visit_call(Sema *s, Node *n) {
     visit(s, n->call.callee);
     for (int i = 0; i < n->call.nargs; i++)
         visit(s, n->call.args[i]);
+    /* Functional-cast / ctor temp construction: 'Foo(args)' where
+     * Foo is a type-name. The callee is an ND_IDENT whose resolved
+     * declaration is either ENTITY_TYPE or ENTITY_TAG (a class tag
+     * may be registered as both). The expression's value is a
+     * temporary of that type — codegen materializes it via D-Hoist
+     * when the type has a non-trivial dtor. */
+    if (n->call.callee && n->call.callee->kind == ND_IDENT) {
+        Declaration *d = n->call.callee->ident.resolved_decl;
+        if (d && (d->entity == ENTITY_TYPE || d->entity == ENTITY_TAG) &&
+            d->type && d->type->kind == TY_STRUCT) {
+            n->resolved_type = d->type;
+            return;
+        }
+    }
     /* Result type comes from the callee's TY_FUNC.ret. The callee may
      * be a function pointer (TY_PTR → TY_FUNC); handle that too. */
     Type *ct = n->call.callee->resolved_type;

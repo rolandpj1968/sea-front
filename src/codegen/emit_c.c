@@ -128,6 +128,7 @@ static int cont_target(void)   { return find_cont_target_from(g_cf.nlive); }
  * regular emitters, which appear later in the file. */
 static void emit_expr(Node *n);
 static void emit_type(Type *ty);
+static void emit_mangled_class_tag(Type *class_type);
 
 /* Slice D-Hoist temp materialization.
  *
@@ -170,13 +171,42 @@ static void hoist_emit_decl(Node *call) {
     char *name = name_pool[name_idx++];
     snprintf(name, 24, "__SF_temp_%d", id);
 
-    /* Emit the synthesized declaration on its own line, indented
-     * with the current statement. */
-    emit_indent();
-    emit_type(call->resolved_type);
-    fprintf(stdout, " %s = ", name);
-    emit_expr(call);  /* call's children may already be substituted */
-    fputs(";\n", stdout);
+    /* Detect ctor-call shape: callee is an ND_IDENT whose
+     * resolved_decl is a type-name (ENTITY_TYPE). For these we
+     * emit the two-line construction form
+     *     struct T __SF_temp_<n>;
+     *     T_ctor(&__SF_temp_<n>, args);
+     * instead of the single-line assignment-init form
+     *     struct T __SF_temp_<n> = T_call();
+     * because Foo(args) isn't a function call in C — there's no
+     * symbol named 'Foo' (only Foo_ctor). */
+    bool is_ctor_call = false;
+    if (call->call.callee && call->call.callee->kind == ND_IDENT) {
+        Declaration *d = call->call.callee->ident.resolved_decl;
+        if (d && (d->entity == ENTITY_TYPE || d->entity == ENTITY_TAG))
+            is_ctor_call = true;
+    }
+
+    if (is_ctor_call) {
+        emit_indent();
+        emit_type(call->resolved_type);
+        fprintf(stdout, " %s;\n", name);
+        emit_indent();
+        emit_mangled_class_tag(call->resolved_type);
+        fprintf(stdout, "_ctor(&%s", name);
+        for (int i = 0; i < call->call.nargs; i++) {
+            fputs(", ", stdout);
+            emit_expr(call->call.args[i]);
+        }
+        fputs(");\n", stdout);
+    } else {
+        /* Function call returning a class — direct copy form. */
+        emit_indent();
+        emit_type(call->resolved_type);
+        fprintf(stdout, " %s = ", name);
+        emit_expr(call);  /* call's children may already be substituted */
+        fputs(";\n", stdout);
+    }
 
     /* Tag the call so emit_expr now substitutes the temp name. */
     call->codegen_temp_name = name;
