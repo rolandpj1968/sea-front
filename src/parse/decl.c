@@ -854,6 +854,8 @@ Node *parse_declaration(Parser *p) {
         func->func.class_type = NULL;
         func->func.is_destructor = p->pending_is_destructor;
         p->pending_is_destructor = false;
+        func->func.is_constructor = p->pending_is_constructor;
+        p->pending_is_constructor = false;
 
         /* Register the function name in the enclosing scope */
         if (func->func.name)

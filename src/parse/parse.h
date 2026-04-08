@@ -414,6 +414,10 @@ struct Node {
              * so codegen needs this flag to distinguish a dtor from a
              * same-named ctor. Mangled as Class_dtor. */
             bool is_destructor;
+            /* True for constructors (parsed from 'ClassName(...)' inside
+             * class ClassName). Like dtors, the declared name token is
+             * the class name. Mangled as Class_ctor. */
+            bool is_constructor;
         } func;
 
         /* ND_PARAM — N4659 §11.3.5 [dcl.fct]
@@ -760,6 +764,11 @@ struct Parser {
      * when the declarator-id is '~Name' (destructor). Read by the
      * function-def branch and cleared after each declaration. */
     bool pending_is_destructor;
+    /* Side channel from parse_type_specifiers → parse_declaration:
+     * set true when we recognize a constructor pattern at class body
+     * scope (class-name followed by '('). The class name is then
+     * consumed as the declarator-id. */
+    bool pending_is_constructor;
     DeclarativeRegion *region; /* current innermost declarative region (§6.3) */
     int template_depth;        /* nesting depth of template-argument-lists being parsed.
                                 * When > 0, TK_SHR (>>) is treated as two '>' tokens

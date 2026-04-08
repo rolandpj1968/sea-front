@@ -1329,6 +1329,13 @@ static void emit_method_signature(Node *func, Type *class_type) {
          * unsuffixed Class_dtor name — they hit the wrapper, not
          * the body function directly. */
         fputs("_dtor_body", stdout);
+    } else if (func->func.is_constructor) {
+        /* Constructors mangle as Class_ctor. Single-overload only
+         * for now — multiple ctors of the same class would collide
+         * here and need a per-overload disambiguator (Itanium uses
+         * a parameter-type-encoded suffix; we'll add something
+         * similar when we tackle overloading). */
+        fputs("_ctor", stdout);
     } else {
         fprintf(stdout, "_%.*s",
                 func->func.name->len, func->func.name->loc);

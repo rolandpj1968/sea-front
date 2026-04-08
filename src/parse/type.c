@@ -710,6 +710,23 @@ DeclSpec parse_type_specifiers(Parser *p) {
     }
 
     if (!seen_any && parser_peek(p)->kind == TK_IDENT) {
+        /* Constructor: 'ClassName(...)' at the start of a member
+         * declaration, inside class ClassName. There's no return
+         * type — just like dtors and conversion operators, we
+         * return a void placeholder and leave the class name to
+         * parse_declarator. The pending_is_constructor flag is
+         * picked up by parse_declaration's function-def branch. */
+        if (p->region && p->region->kind == REGION_CLASS &&
+            p->region->owner_type && p->region->owner_type->tag &&
+            parser_peek(p)->len == p->region->owner_type->tag->len &&
+            memcmp(parser_peek(p)->loc, p->region->owner_type->tag->loc,
+                   parser_peek(p)->len) == 0 &&
+            parser_peek_ahead(p, 1)->kind == TK_LPAREN) {
+            p->pending_is_constructor = true;
+            Type *vty = new_type(p, TY_VOID);
+            result.type = vty;
+            return result;
+        }
         /* Kind-specific lookup: a name may be ambiguously registered as
          * both a type and (e.g.) a constructor function. We want to find
          * any type-like declaration in the chain even when a same-named

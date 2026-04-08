@@ -1,7 +1,7 @@
 (translation-unit
   (template (params (param ? "_Ret") (param ? "_Tp"))
     (class-def "mem_fun"
-      (func-def struct mem_fun (params (param (func-type (ptr int) ()) "pf"))
+      (func-def void "mem_fun" (params (param (func-type (ptr int) ()) "pf"))
         (block))
       (func-def int "operator" (params (param (ptr int) "p"))
         (block
@@ -26,7 +26,7 @@
       (block
         (class-def "Guard"
           (var-decl (ptr int) "y")
-          (func-def struct Guard (params (param (ptr int) "o"))
+          (func-def void "Guard" (params (param (ptr int) "o"))
             (block
               (cast void (ident "o")))))
         (var-decl struct Guard "g" (num 0))
