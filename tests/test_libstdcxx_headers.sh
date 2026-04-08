@@ -83,7 +83,15 @@ run_one() {
     src="$GEN_DIR/${header}.cpp"
     pre="$GEN_DIR/${header}.i"
     err="$GEN_DIR/${header}.err"
-    echo "#include <$header>" > "$src"
+    # Pre-include <stdint.h> so the C-side typedefs (uint32_t, etc.)
+    # are available. libstdc++'s <cstdint> wrapper relies on
+    # __has_include(<stdint.h>) which mcpp doesn't support; without
+    # this preinclude the typedefs never get registered and any
+    # '(uint32_t)x' cast in the header fails to parse.
+    {
+        echo "#include <stdint.h>"
+        echo "#include <$header>"
+    } > "$src"
     if ! "$MCPP" -+ -W0 -V201103L $INCS $GCC_TYPE_DEFS "$src" > "$pre" 2>"$err.mcpp"; then
         printf "  %-20s SKIP   (mcpp failed)\n" "$header"
         return 1
