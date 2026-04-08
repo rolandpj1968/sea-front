@@ -707,6 +707,240 @@ static void emit_var_decl_inner(Node *n) {
     }
 }
 
+/* Emit the cleanup chain for entries that were pushed onto live[]
+ * after 'saved_nlive'. Emits one (label, dtor) pair per CL_VAR in
+ * reverse-declaration order followed by the three-way chain-out.
+ *
+ * Used by both emit_block (end-of-block cleanup) and the mini-block
+ * wrapper (per-full-expression temp cleanup). The shape is identical;
+ * the difference is just where it's invoked. */
+static void emit_cleanup_chain_for_added(int saved_nlive) {
+    int added = 0;
+    for (int i = saved_nlive; i < g_cf.nlive; i++)
+        if (g_cf.live[i].kind == CL_VAR) added++;
+    if (added == 0) return;
+
+    for (int i = g_cf.nlive - 1; i >= saved_nlive; i--) {
+        CleanupEntry *e = &g_cf.live[i];
+        if (e->kind != CL_VAR) continue;
+        Node *v = e->var_decl;
+        emit_indent();
+        fprintf(stdout, "__SF_cleanup_%d: ;\n", e->label_id);
+        emit_indent();
+        if (v->codegen_temp_name) {
+            /* Slice D-Hoist temp: 'var_decl' is actually the
+             * original ND_CALL whose result was hoisted to the
+             * synthesized local. Use the call's resolved_type
+             * for the class tag and the codegen_temp_name for
+             * the address. */
+            emit_mangled_class_tag(v->resolved_type);
+            fprintf(stdout, "_dtor(&%s);\n", v->codegen_temp_name);
+        } else {
+            emit_mangled_class_tag(v->var_decl.ty);
+            fprintf(stdout, "_dtor(&%.*s);\n",
+                    v->var_decl.name->len, v->var_decl.name->loc);
+        }
+    }
+    /* Three-way chain-out. See the comment in emit_block where this
+     * was originally written. */
+    char rt_buf[40], bt_buf[40], ct_buf[40];
+    bool have_break = false, have_cont = false;
+    bool top_is_loop = (saved_nlive > 0 &&
+                        g_cf.live[saved_nlive - 1].kind == CL_LOOP);
+
+    int rt = find_return_target_from(saved_nlive);
+    if (rt >= 0)
+        snprintf(rt_buf, sizeof(rt_buf), "__SF_cleanup_%d", rt);
+    else
+        snprintf(rt_buf, sizeof(rt_buf), "__SF_epilogue");
+
+    int bt = find_break_target_from(saved_nlive);
+    if (bt >= 0) {
+        have_break = true;
+        if (top_is_loop)
+            snprintf(bt_buf, sizeof(bt_buf), "__SF_loop_break_%d", bt);
+        else
+            snprintf(bt_buf, sizeof(bt_buf), "__SF_cleanup_%d", bt);
+    }
+
+    int ct = find_cont_target_from(saved_nlive);
+    if (ct >= 0) {
+        have_cont = true;
+        if (top_is_loop)
+            snprintf(ct_buf, sizeof(ct_buf), "__SF_loop_cont_%d", ct);
+        else
+            snprintf(ct_buf, sizeof(ct_buf), "__SF_cleanup_%d", ct);
+    }
+
+    bool collapse = have_break && have_cont &&
+                    strcmp(rt_buf, bt_buf) == 0 &&
+                    strcmp(rt_buf, ct_buf) == 0;
+    if (collapse || (!have_break && !have_cont)) {
+        emit_indent();
+        fprintf(stdout, "__SF_CHAIN_ANY(%s);\n", rt_buf);
+    } else {
+        emit_indent();
+        fprintf(stdout, "__SF_CHAIN_RETURN(%s);\n", rt_buf);
+        if (have_break) {
+            emit_indent();
+            fprintf(stdout, "__SF_CHAIN_BREAK(%s);\n", bt_buf);
+        }
+        if (have_cont) {
+            emit_indent();
+            fprintf(stdout, "__SF_CHAIN_CONT(%s);\n", ct_buf);
+        }
+    }
+}
+
+/* Predicate: does an expression contain any class-typed temp
+ * (an ND_CALL whose return type is a non-trivially-destructible
+ * class)? Used by stmt_has_class_temp to decide whether a
+ * statement should be wrapped in a per-full-expression mini-block. */
+static bool expr_has_class_temp(Node *e) {
+    if (!e) return false;
+    if (is_class_temp_call(e)) return true;
+    switch (e->kind) {
+    case ND_CALL:
+        if (expr_has_class_temp(e->call.callee)) return true;
+        for (int i = 0; i < e->call.nargs; i++)
+            if (expr_has_class_temp(e->call.args[i])) return true;
+        return false;
+    case ND_BINARY:
+    case ND_ASSIGN:
+        return expr_has_class_temp(e->binary.lhs) ||
+               expr_has_class_temp(e->binary.rhs);
+    case ND_UNARY:
+    case ND_POSTFIX:
+        return expr_has_class_temp(e->unary.operand);
+    case ND_TERNARY:
+        return expr_has_class_temp(e->ternary.cond) ||
+               expr_has_class_temp(e->ternary.then_) ||
+               expr_has_class_temp(e->ternary.else_);
+    case ND_MEMBER:
+        return expr_has_class_temp(e->member.obj);
+    case ND_SUBSCRIPT:
+        return expr_has_class_temp(e->subscript.base) ||
+               expr_has_class_temp(e->subscript.index);
+    case ND_CAST:
+        return expr_has_class_temp(e->cast.operand);
+    case ND_COMMA:
+        return expr_has_class_temp(e->comma.lhs) ||
+               expr_has_class_temp(e->comma.rhs);
+    default:
+        return false;
+    }
+}
+
+/* Predicate: would hoist_stmt_temps actually hoist anything for
+ * this statement? Used to decide whether to wrap the statement in
+ * a mini-block for per-full-expression temp scoping. */
+static bool stmt_has_class_temp(Node *s) {
+    if (!s) return false;
+    switch (s->kind) {
+    case ND_VAR_DECL: {
+        Node *init = s->var_decl.init;
+        if (!init) return false;
+        bool direct_init =
+            init->kind == ND_CALL && init->resolved_type &&
+            init->resolved_type->kind == TY_STRUCT &&
+            s->var_decl.ty && s->var_decl.ty->kind == TY_STRUCT;
+        if (direct_init) {
+            if (expr_has_class_temp(init->call.callee)) return true;
+            for (int i = 0; i < init->call.nargs; i++)
+                if (expr_has_class_temp(init->call.args[i])) return true;
+            return false;
+        }
+        return expr_has_class_temp(init);
+    }
+    case ND_EXPR_STMT:
+        return expr_has_class_temp(s->expr_stmt.expr);
+    case ND_RETURN:
+        return expr_has_class_temp(s->ret.expr);
+    default:
+        return false;
+    }
+}
+
+/* Push a CL_VAR for a user-declared class local onto the live stack.
+ * Pulled out so emit_block and the mini-block path share it. */
+static void push_user_var_cleanup(Node *s) {
+    if (!g_cf.func_has_cleanups || !s ||
+        s->kind != ND_VAR_DECL || !s->var_decl.ty ||
+        s->var_decl.ty->kind != TY_STRUCT || !s->var_decl.ty->has_dtor ||
+        !s->var_decl.name || g_cf.nlive >= CLEANUP_LIVE_MAX)
+        return;
+    g_cf.live[g_cf.nlive].kind = CL_VAR;
+    g_cf.live[g_cf.nlive].label_id = g_cf.next_label_id++;
+    g_cf.live[g_cf.nlive].cont_label_id = -1;
+    g_cf.live[g_cf.nlive].var_decl = s;
+    g_cf.nlive++;
+}
+
+/* Slice D-MiniBlock: emit one statement with per-full-expression
+ * temp scoping. The statement is wrapped in a synthesized C block
+ * so any hoisted temps from its expressions die at the end of the
+ * full-expression rather than at the end of the surrounding user
+ * block.
+ *
+ * For ND_VAR_DECL the user-declared variable must outlive the
+ * mini-block (subsequent statements need to see it), so we split:
+ *   <type> name;       (uninitialized, OUTSIDE mini-block)
+ *   { hoisted temps; name = init; cleanup chain; }
+ *
+ * For ND_EXPR_STMT and ND_RETURN no splitting is needed; just
+ * wrap the whole statement.
+ *
+ * For other statement kinds (ND_IF/WHILE/FOR conditions etc.)
+ * we currently fall back to the non-mini-block path; per-cond
+ * mini-blocking is a future refinement. */
+static void emit_stmt_with_miniblock(Node *s) {
+    /* For var-decl: declare the user var OUTSIDE the mini-block,
+     * register its cleanup BEFORE opening the mini-block (so the
+     * temps inside chain to it correctly), then assign inside. */
+    bool is_var_decl = (s->kind == ND_VAR_DECL && s->var_decl.name &&
+                        s->var_decl.ty);
+    if (is_var_decl) {
+        emit_indent();
+        emit_type(s->var_decl.ty);
+        fprintf(stdout, " %.*s;\n",
+                s->var_decl.name->len, s->var_decl.name->loc);
+        push_user_var_cleanup(s);
+    }
+
+    emit_indent();
+    fputs("{\n", stdout);
+    g_indent++;
+    int saved_nlive = g_cf.nlive;
+
+    /* Hoist temps inside the mini-block. They get pushed onto live[]
+     * above saved_nlive, so the cleanup chain at the bottom of this
+     * mini-block fires their dtors before control leaves. */
+    hoist_stmt_temps(s);
+
+    emit_indent();
+    if (is_var_decl) {
+        /* Emit assignment instead of declaration: 'name = init;'.
+         * The init expression has been processed by hoist_temps so
+         * any inner calls have been substituted with __SF_temp_<n>. */
+        if (s->var_decl.init) {
+            fprintf(stdout, "%.*s = ",
+                    s->var_decl.name->len, s->var_decl.name->loc);
+            emit_expr(s->var_decl.init);
+            fputs(";\n", stdout);
+        } else {
+            fputs(";\n", stdout);
+        }
+    } else {
+        emit_stmt(s);
+    }
+
+    emit_cleanup_chain_for_added(saved_nlive);
+    g_cf.nlive = saved_nlive;
+    g_indent--;
+    emit_indent();
+    fputs("}\n", stdout);
+}
+
 static void emit_block(Node *n) {
     fputs("{\n", stdout);
     g_indent++;
@@ -714,125 +948,27 @@ static void emit_block(Node *n) {
     /* Per-var cleanup label refactor. We walk statements in order
      * and PUSH onto g_cf.live exactly when we see a dtor-bearing
      * var-decl — so at every point during emission innermost-
-     * cleanup-label reflects construction state, not block topology.
-     * That means a return after var k jumps to var k's label, and
-     * a return before any var in the block jumps to the most
-     * recent live var in an enclosing block (or __SF_epilogue). */
+     * cleanup-label reflects construction state, not block topology. */
     int saved_nlive = g_cf.nlive;
 
     for (int i = 0; i < n->block.nstmts; i++) {
         Node *s = n->block.stmts[i];
-        /* Slice D-Hoist: emit any synthesized temp declarations
-         * BEFORE the user statement, at the same indent level.
-         * The hoist helper does its own emit_indent per decl and
-         * pushes each temp onto g_cf.live so the cleanup chain
-         * picks it up at end of block. */
-        hoist_stmt_temps(s);
-        emit_indent();
-        emit_stmt(s);
-        if (g_cf.func_has_cleanups && s &&
-            s->kind == ND_VAR_DECL && s->var_decl.ty &&
-            s->var_decl.ty->kind == TY_STRUCT && s->var_decl.ty->has_dtor &&
-            s->var_decl.name && g_cf.nlive < CLEANUP_LIVE_MAX) {
-            g_cf.live[g_cf.nlive].kind = CL_VAR;
-            g_cf.live[g_cf.nlive].label_id = g_cf.next_label_id++;
-            g_cf.live[g_cf.nlive].cont_label_id = -1;
-            g_cf.live[g_cf.nlive].var_decl = s;
-            g_cf.nlive++;
-        }
-    }
-
-    /* Cleanup chain for vars introduced by THIS block. Emit one
-     * (label, dtor) pair per var in reverse declaration order; the
-     * outermost (oldest) one carries the unwind chain-out. Labels
-     * not actually targeted by any goto are still emitted — the
-     * prelude pragma silences -Wunused-label. */
-    int added = 0;
-    for (int i = saved_nlive; i < g_cf.nlive; i++)
-        if (g_cf.live[i].kind == CL_VAR) added++;
-    if (added > 0) {
-        for (int i = g_cf.nlive - 1; i >= saved_nlive; i--) {
-            CleanupEntry *e = &g_cf.live[i];
-            if (e->kind != CL_VAR) continue;
-            Node *v = e->var_decl;
-            emit_indent();
-            fprintf(stdout, "__SF_cleanup_%d: ;\n", e->label_id);
-            emit_indent();
-            if (v->codegen_temp_name) {
-                /* Slice D-Hoist temp: 'var_decl' is actually the
-                 * original ND_CALL whose result was hoisted to the
-                 * synthesized local. Use the call's resolved_type
-                 * for the class tag and the codegen_temp_name for
-                 * the address. */
-                emit_mangled_class_tag(v->resolved_type);
-                fprintf(stdout, "_dtor(&%s);\n", v->codegen_temp_name);
-            } else {
-                emit_mangled_class_tag(v->var_decl.ty);
-                fprintf(stdout, "_dtor(&%.*s);\n",
-                        v->var_decl.name->len, v->var_decl.name->loc);
-            }
-        }
-        /* Three-way chain-out. Walks below saved_nlive to find the
-         * next outward target for each unwind kind, and formats each
-         * as a label string. When all three coincide we collapse to
-         * a single 'if (__SF_unwind) goto X' (the common case).
-         *
-         * Targets come from two distinct label spaces:
-         *   __SF_cleanup_<n>     — produced by CL_VAR entries
-         *   __SF_loop_break_<n>  — produced by CL_LOOP markers (break)
-         *   __SF_loop_cont_<n>   — produced by CL_LOOP markers (cont)
-         *   __SF_epilogue        — fall-off-the-bottom for return */
-        char rt_buf[40], bt_buf[40], ct_buf[40];
-        bool have_break = false, have_cont = false;
-        bool top_is_loop = (saved_nlive > 0 &&
-                            g_cf.live[saved_nlive - 1].kind == CL_LOOP);
-
-        int rt = find_return_target_from(saved_nlive);
-        if (rt >= 0)
-            snprintf(rt_buf, sizeof(rt_buf), "__SF_cleanup_%d", rt);
-        else
-            snprintf(rt_buf, sizeof(rt_buf), "__SF_epilogue");
-
-        int bt = find_break_target_from(saved_nlive);
-        if (bt >= 0) {
-            have_break = true;
-            if (top_is_loop)
-                snprintf(bt_buf, sizeof(bt_buf), "__SF_loop_break_%d", bt);
-            else
-                snprintf(bt_buf, sizeof(bt_buf), "__SF_cleanup_%d", bt);
-        }
-
-        int ct = find_cont_target_from(saved_nlive);
-        if (ct >= 0) {
-            have_cont = true;
-            if (top_is_loop)
-                snprintf(ct_buf, sizeof(ct_buf), "__SF_loop_cont_%d", ct);
-            else
-                snprintf(ct_buf, sizeof(ct_buf), "__SF_cleanup_%d", ct);
-        }
-
-        bool collapse = have_break && have_cont &&
-                        strcmp(rt_buf, bt_buf) == 0 &&
-                        strcmp(rt_buf, ct_buf) == 0;
-        if (collapse || (!have_break && !have_cont)) {
-            emit_indent();
-            fprintf(stdout, "__SF_CHAIN_ANY(%s);\n", rt_buf);
+        if (g_cf.func_has_cleanups && stmt_has_class_temp(s)) {
+            /* Slice D-MiniBlock: wrap statement so its temps die
+             * at end of full-expression, not end of outer block. */
+            emit_stmt_with_miniblock(s);
         } else {
+            /* Regular path: hoist (no-op if no temps), emit, then
+             * register the user var as a CL_VAR if it's a class
+             * local with a dtor. */
+            hoist_stmt_temps(s);
             emit_indent();
-            fprintf(stdout, "__SF_CHAIN_RETURN(%s);\n", rt_buf);
-            if (have_break) {
-                emit_indent();
-                fprintf(stdout, "__SF_CHAIN_BREAK(%s);\n", bt_buf);
-            }
-            if (have_cont) {
-                emit_indent();
-                fprintf(stdout, "__SF_CHAIN_CONT(%s);\n", ct_buf);
-            }
+            emit_stmt(s);
+            push_user_var_cleanup(s);
         }
     }
 
-    /* Restore live count — the vars introduced by this block are
-     * out of scope past the closing brace. */
+    emit_cleanup_chain_for_added(saved_nlive);
     g_cf.nlive = saved_nlive;
 
     g_indent--;
