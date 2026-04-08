@@ -57,6 +57,7 @@ test: $(LEX_TEST_TARGET) $(TARGET)
 	@if [ -x tests/test.sh ]; then ./tests/test.sh $(TARGET); fi
 	@if [ -x tests/test_parse.sh ]; then ./tests/test_parse.sh $(TARGET); fi
 	@if [ -x tests/test_emit_c.sh ]; then ./tests/test_emit_c.sh $(TARGET); fi
+	@if [ -x tests/test_multi_tu.sh ]; then ./tests/test_multi_tu.sh $(TARGET); fi
 
 # Smoke tests against GCC/Clang test suites — not gated (has expected failures).
 # Tracks progress toward the ultimate bootstrap goal.

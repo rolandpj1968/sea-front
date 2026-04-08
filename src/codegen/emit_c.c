@@ -1817,6 +1817,10 @@ static void emit_method_signature(Node *func, Type *class_type) {
     if (!func || func->kind != ND_FUNC_DEF) return;
     if (!class_type || !class_type->tag || !func->func.name) return;
 
+    /* Class methods (in-class definitions are implicitly inline)
+     * and dtor body functions get __SF_INLINE so multi-TU compilation
+     * dedupes via weak symbols. See docs/inline_and_dedup.md. */
+    fputs("__SF_INLINE ", stdout);
     emit_type(func->func.ret_ty);
     fputc(' ', stdout);
     emit_mangled_class_tag(class_type);
@@ -1950,13 +1954,14 @@ static void emit_class_def(Node *n) {
                  * Class_dtor wrapper (synthesized below) is forward-
                  * declared separately, but we DO need a forward decl
                  * for Class_dtor_body so the wrapper can call it. */
-                fputs("void ", stdout);
+                fputs("__SF_INLINE void ", stdout);
                 emit_mangled_class_tag(class_type);
                 fputs("_dtor_body(struct ", stdout);
                 emit_mangled_class_tag(class_type);
                 fputs(" *this);\n", stdout);
                 continue;
             }
+            fputs("__SF_INLINE ", stdout);
             emit_type(fty->ret);
             fputc(' ', stdout);
             emit_mangled_class_tag(class_type);
@@ -2003,7 +2008,7 @@ static void emit_class_def(Node *n) {
                 break;
             }
         }
-        fputs("void ", stdout);
+        fputs("__SF_INLINE void ", stdout);
         emit_mangled_class_tag(class_type);
         fputs("_dtor(struct ", stdout);
         emit_mangled_class_tag(class_type);
@@ -2035,7 +2040,7 @@ static void emit_class_def(Node *n) {
      * non-trivially-destructible member's dtor in REVERSE
      * declaration order — N4659 §15.4 [class.dtor]/9. */
     if (class_type && class_type->has_dtor) {
-        fputs("void ", stdout);
+        fputs("__SF_INLINE void ", stdout);
         emit_mangled_class_tag(class_type);
         fputs("_dtor(struct ", stdout);
         emit_mangled_class_tag(class_type);
@@ -2079,13 +2084,13 @@ static void emit_class_def(Node *n) {
     }
     if (class_type && class_type->has_default_ctor && !any_user_ctor) {
         /* Forward decl + body for the synthesized ctor. */
-        fputs("void ", stdout);
+        fputs("__SF_INLINE void ", stdout);
         emit_mangled_class_tag(class_type);
         fputs("_ctor(struct ", stdout);
         emit_mangled_class_tag(class_type);
         fputs(" *this);\n", stdout);
 
-        fputs("void ", stdout);
+        fputs("__SF_INLINE void ", stdout);
         emit_mangled_class_tag(class_type);
         fputs("_ctor(struct ", stdout);
         emit_mangled_class_tag(class_type);
@@ -2132,6 +2137,27 @@ static void emit_top_level(Node *n) {
         return;
     case ND_CLASS_DEF: emit_class_def(n); return;
     case ND_VAR_DECL:
+        /* Top-level free function declaration: 'int foo();' parses
+         * as ND_VAR_DECL with TY_FUNC. emit_var_decl_inner doesn't
+         * know how to print TY_FUNC (emit_type falls back to int),
+         * so we synthesize the C declaration shape directly here. */
+        if (n->var_decl.ty && n->var_decl.ty->kind == TY_FUNC &&
+            n->var_decl.name) {
+            Type *fty = n->var_decl.ty;
+            emit_type(fty->ret);
+            fprintf(stdout, " %.*s(",
+                    n->var_decl.name->len, n->var_decl.name->loc);
+            if (fty->nparams == 0) {
+                fputs("void", stdout);
+            } else {
+                for (int i = 0; i < fty->nparams; i++) {
+                    if (i > 0) fputs(", ", stdout);
+                    emit_type(fty->params[i]);
+                }
+            }
+            fputs(");\n", stdout);
+            return;
+        }
         emit_var_decl_inner(n);
         fputs(";\n", stdout);
         return;
@@ -2225,6 +2251,21 @@ static void emit_prelude(void) {
     fputs("#define __SF_CHAIN_CONT(lbl) "
           "do { if (__SF_unwind == __SF_UNWIND_CONT)   goto lbl; } while (0)\n",
           stdout);
+    /* __SF_INLINE — multi-TU dedup for inline-eligible functions
+     * (in-class methods, synthesized ctor/dtor wrappers, dtor body
+     * functions, eventually template instantiations). Expands to a
+     * weak-symbol attribute so the linker picks one survivor when
+     * the same function is emitted in multiple TUs. See
+     * docs/inline_and_dedup.md for the design rationale and full
+     * trade-off analysis. */
+    fputs("#if defined(__GNUC__) || defined(__clang__)\n", stdout);
+    fputs("#  define __SF_INLINE __attribute__((weak))\n", stdout);
+    fputs("#elif defined(_MSC_VER)\n", stdout);
+    fputs("#  define __SF_INLINE __declspec(selectany)\n", stdout);
+    fputs("#else\n", stdout);
+    fputs("#  define __SF_INLINE   /* fall back: each TU has its own copy */\n",
+          stdout);
+    fputs("#endif\n", stdout);
     fputs("\n", stdout);
 }
 
