@@ -1,9 +1,26 @@
 /*
  * tokenize.c — C++17 lexer core.
  *
- * Produces a singly-linked list of tokens from preprocessed C++ source.
- * Follows chibicc's structural patterns: pointer-into-source tokens,
- * dummy-head-node list construction, two-phase keyword conversion.
+ * Produces a contiguous TokenArray from preprocessed C++ source.
+ *
+ * Structural patterns (loosely chibicc-inspired but not identical):
+ *   - Tokens point INTO the source buffer (no string copies for ident
+ *     / literal text — Token.loc + Token.len carry the spelling).
+ *     This requires the source buffer to outlive the tokens.
+ *   - Lex builds a growable Token* pointer list (TokList), then
+ *     flattens to a contiguous Token[] at the end of tokenize().
+ *     The contiguous array lets the parser address tokens by index
+ *     and supports cheap save/restore for tentative parsing.
+ *   - Two-phase keyword conversion: identifiers are first lexed
+ *     uniformly as TK_IDENT, then a second pass over the array
+ *     promotes any whose spelling matches a keyword (bsearch over
+ *     a sorted table). The two-phase approach keeps the per-character
+ *     hot loop small.
+ *
+ * Source buffer invariant (set up by sf_read_file in util.c): the
+ * lexer requires READ_PADDING (32) NUL bytes past the file's logical
+ * end so that lookaheads of up to 17 bytes (raw-string delimiter +
+ * closing quote) are always safe.
  */
 
 #include "../sea-front.h"
@@ -297,10 +314,18 @@ static Token *read_punct(LexCtx *ctx) {
         return new_token(TK_ELLIPSIS, p, 3, ctx);
     }
 
-    /* Digraph special case: <:: (§5.4/3) */
+    /* Digraph special case for '<::'.
+     *
+     * N4659 §5.5/3 [lex.digraph]: "if the next three characters are
+     * <:: and the subsequent character is neither : nor >, the < is
+     * treated as a preprocessor token by itself and not as the
+     * first character of the alternative token <:."
+     *
+     * So '<:::' / '<::>' / '<::' at end of input → '<:' as '[';
+     * '<::name' → '<' alone, leaving '::name' for the next token
+     * (this is what makes 'vec<::std::string>' parse). */
     if (p[0] == '<' && p[1] == ':') {
         if (p[2] == ':' && p[3] != ':' && p[3] != '>') {
-            /* Exception: <:: not followed by : or > — emit < only */
             ctx->p += 1;
             return new_token(TK_LT, p, 1, ctx);
         }
@@ -421,15 +446,19 @@ static void consume_decimal_digits(LexCtx *ctx) {
 }
 
 /*
- * Read a numeric literal.  Handles:
- *   - decimal, octal, hex, binary integers
- *   - digit separators (')
- *   - decimal and hex floating point
+ * read_number — N4659 §5.13.2 [lex.icon] / §5.13.4 [lex.fcon].
+ * Handles:
+ *   - decimal, octal, hex, binary integer-literals
+ *   - digit separators (')                  — §5.13.2/2
+ *   - decimal and hex floating-point literals
  *   - integer and float suffixes
- *   - user-defined literal suffixes
+ *   - user-defined literal suffixes (§5.13.8)
  *
- * Does NOT compute the numeric value — that is deferred to a conversion
- * function that strips separators and calls strtol/strtod.
+ * Computes Token.ival or Token.fval into the returned token using
+ * strtoull / strtod after stripping digit separators into a temp
+ * buffer. UDL-suffixed literals leave ival/fval unset — sema is
+ * expected to call the user-defined literal operator with the raw
+ * spelling instead.
  */
 static Token *read_number(LexCtx *ctx) {
     char *start = ctx->p;
@@ -517,9 +546,14 @@ static Token *read_number(LexCtx *ctx) {
             *ctx->p == 'l' || *ctx->p == 'L')
             ctx->p++;
     } else {
-        /* Integer suffix: u/U, l/L, ll/LL, and combinations.
-         * Terminates: at most 3 iterations (u + ll), then breaks.
-         * Each branch sets a flag preventing re-entry. */
+        /* Integer suffix — N4659 §5.13.2/3 [lex.icon]: an
+         * integer-literal may carry an unsigned-suffix (u or U)
+         * and/or a long-suffix (l, L, ll, or LL) in either order.
+         * Terminates: each branch sets a flag, so at most one
+         * iteration of each branch can fire (i.e. at most 2
+         * value-consuming iterations + 1 break iteration). The
+         * 'll'/'LL' double-letter is consumed within a single l
+         * iteration via the inner check. */
         bool had_u = false, had_l = false;
         for (;;) {
             if (!had_u && (*ctx->p == 'u' || *ctx->p == 'U')) {
@@ -582,11 +616,20 @@ static Token *read_number(LexCtx *ctx) {
 /* ------------------------------------------------------------------ */
 
 /*
- * Check if p starts a string or character literal (including encoding prefix).
- * Returns:
- *   0 — not a string/char literal
- *   positive — number of bytes in the prefix (before the quote)
- * Sets *enc, *is_raw, *quote.
+ * string_prefix_len — recognise the optional encoding prefix on a
+ * string or character literal (N4659 §5.13.5/§5.13.3).
+ *
+ * On entry, 'p' may point at any character. On return:
+ *   *quote   — '"' or '\'' if a literal starts here, '\0' otherwise.
+ *              **The caller must check *quote, NOT the return value,
+ *              to detect a literal** — return value 0 also means
+ *              "literal with no encoding prefix" (e.g. plain "..."
+ *              or '...').
+ *   *enc     — ENC_NONE / ENC_L / ENC_U8 / ENC_LITTLE_U / ENC_BIG_U.
+ *   *is_raw  — true for the R"..." form.
+ *   return   — number of prefix bytes BEFORE the opening quote
+ *              (0 for unprefixed, 1 for L/u/U/R, 2 for u8/LR/uR/UR,
+ *              3 for u8R).
  */
 static int string_prefix_len(const char *p, int *enc, bool *is_raw, char *quote) {
     *enc = ENC_NONE;
@@ -787,7 +830,11 @@ static Token *read_string_literal(LexCtx *ctx, int prefix_len, int enc) {
 /* ------------------------------------------------------------------ */
 
 static bool is_raw_dchar(char c) {
-    /* d-char is any basic-source-char except space, (, ), \, \t, \v, \f, \n */
+    /* N4659 §5.13.5/2 [lex.string]: a d-char is any member of the
+     * basic source character set except: space, the left and right
+     * parentheses, the backslash, and the control characters
+     * representing horizontal tab, vertical tab, form feed, and
+     * newline. NUL is added because we treat it as end-of-input. */
     if (c == ' ' || c == '(' || c == ')' || c == '\\' ||
         c == '\t' || c == '\v' || c == '\f' || c == '\n' || c == '\0')
         return false;
