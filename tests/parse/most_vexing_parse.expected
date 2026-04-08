@@ -1,0 +1,8 @@
+(translation-unit
+  (template (params (param bool) (param bool))
+    (var-decl (func-type void ()) "g"))
+  (class-def "C"
+    (func-def void "f" (params)
+      (block
+        (call (ident "g"))
+        (call (ident "g") (num 42))))))

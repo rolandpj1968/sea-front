@@ -558,13 +558,23 @@ Node *parse_stmt(Parser *p) {
         p->tentative = true;
         bool saved_failed = p->tentative_failed;
         p->tentative_failed = false;
-        parse_declaration(p);
+        Node *trial = parse_declaration(p);
         /* Check: did the tentative parse consume through a ';' WITHOUT
          * any silenced errors? Both conditions are needed — a clean
          * advance to ';' could still mask intermediate failures. */
         bool decl_ok = (p->pos > saved.pos &&
                         p->tokens[p->pos - 1].kind == TK_SEMI &&
                         !p->tentative_failed);
+        /* Most-vexing-parse guard — N4659 §9.8/3 [stmt.ambig]:
+         * the rule "any statement that could be a declaration IS a
+         * declaration" only applies when the statement is *actually*
+         * a valid declaration. A var-decl with no declarator-id
+         * (e.g. 'g<true,false>()' parsed as type 'g<true,false>'
+         * with empty abstract declarator '()') is not a valid
+         * declaration — fall back to expression-statement. */
+        if (decl_ok && trial && trial->kind == ND_VAR_DECL &&
+            trial->var_decl.name == NULL)
+            decl_ok = false;
         p->tentative = false;
         p->tentative_failed = saved_failed;
         parser_restore(p, saved);
