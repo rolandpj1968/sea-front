@@ -32,6 +32,73 @@ static void emit_indent(void) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Per-function codegen state for destructor lowering (Slice B)        */
+/*                                                                     */
+/* When the function body contains any local with a non-trivial dtor   */
+/* we lower 'return expr' as:                                          */
+/*     __retval = expr; __unwind = 1; goto __cleanup_<innermost>;      */
+/* Each block carrying cleanups emits a label, runs its dtors, and     */
+/* conditionally chains outward via 'if (__unwind) goto <parent>'.    */
+/* The function epilogue runs 'return __retval;'.                      */
+/*                                                                     */
+/* This is per-function state, not nested blocks, so a flat module     */
+/* global is fine — codegen is single-threaded and not reentrant.      */
+/* ------------------------------------------------------------------ */
+
+typedef struct CleanupFrame {
+    int   label_id;     /* unique within the function; -1 if no cleanups */
+    bool  has_dtors;    /* this block actually emits at least one dtor */
+} CleanupFrame;
+
+#define CLEANUP_STACK_MAX 32
+
+static struct {
+    bool          func_has_cleanups;  /* function-wide flag, set by pre-scan */
+    int           next_label_id;      /* fresh-id counter for __cleanup_<n> */
+    CleanupFrame  stack[CLEANUP_STACK_MAX];
+    int           depth;              /* number of frames currently pushed */
+} g_cf;
+
+/* Find the innermost cleanup frame that has dtors, walking outward.
+ * Returns its label_id, or -1 if none — in which case 'return' jumps
+ * directly to __epilogue. */
+static int innermost_cleanup_label(void) {
+    for (int i = g_cf.depth - 1; i >= 0; i--) {
+        if (g_cf.stack[i].has_dtors)
+            return g_cf.stack[i].label_id;
+    }
+    return -1;
+}
+
+/* Pre-scan: does any block in this subtree declare a class instance
+ * with a non-trivial dtor? If yes, the function needs the cleanup
+ * machinery (locals __retval/__unwind, __epilogue label, return rewrite). */
+static bool subtree_has_cleanups(Node *n) {
+    if (!n) return false;
+    switch (n->kind) {
+    case ND_VAR_DECL:
+        return n->var_decl.ty && n->var_decl.ty->kind == TY_STRUCT &&
+               n->var_decl.ty->has_dtor;
+    case ND_BLOCK:
+        for (int i = 0; i < n->block.nstmts; i++)
+            if (subtree_has_cleanups(n->block.stmts[i])) return true;
+        return false;
+    case ND_IF:
+        return subtree_has_cleanups(n->if_.then_) ||
+               subtree_has_cleanups(n->if_.else_);
+    case ND_WHILE:
+        return subtree_has_cleanups(n->while_.body);
+    case ND_DO:
+        return subtree_has_cleanups(n->do_.body);
+    case ND_FOR:
+        return subtree_has_cleanups(n->for_.init) ||
+               subtree_has_cleanups(n->for_.body);
+    default:
+        return false;
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /* Name mangling                                                       */
 /* ------------------------------------------------------------------ */
 
@@ -358,20 +425,26 @@ static void emit_block(Node *n) {
     fputs("{\n", stdout);
     g_indent++;
 
-    /* Slice A of dtor lowering: collect class instances declared in
-     * this block whose type has a non-trivial destructor, then at
-     * the closing brace emit Class_dtor(&v); calls in reverse
-     * declaration order (N4659 §15.4 [class.dtor]/8). No handling
-     * of early exits (return/break/continue past these vars) yet —
-     * those are slices B/C. */
+    /* Dtor lowering — Slice B (single-call-site goto chain).
+     *
+     * Pass 1: scan the block's statements for class locals with a
+     * non-trivial dtor. If we find any, allocate a fresh cleanup
+     * label id for this block; otherwise the block doesn't appear
+     * in the chain and a 'return' inside it will jump straight to
+     * the next ancestor (or __epilogue).
+     *
+     * Pass 2: emit user statements with the frame on the stack —
+     * that way nested ND_RETURN can consult innermost_cleanup_label().
+     *
+     * Pass 3: at the closing brace, emit the cleanup label, run
+     * dtors in reverse declaration order, and chain outward via
+     * 'if (__unwind) goto <parent>' / __epilogue. */
     enum { CLEANUP_MAX = 64 };
     Node *cleanup_var[CLEANUP_MAX];
     int   ncleanup = 0;
 
     for (int i = 0; i < n->block.nstmts; i++) {
         Node *s = n->block.stmts[i];
-        emit_indent();
-        emit_stmt(s);
         if (s && s->kind == ND_VAR_DECL && s->var_decl.ty &&
             s->var_decl.ty->kind == TY_STRUCT && s->var_decl.ty->has_dtor &&
             s->var_decl.name && ncleanup < CLEANUP_MAX) {
@@ -379,12 +452,43 @@ static void emit_block(Node *n) {
         }
     }
 
-    for (int i = ncleanup - 1; i >= 0; i--) {
-        Node *v = cleanup_var[i];
+    CleanupFrame frame;
+    frame.has_dtors = (ncleanup > 0) && g_cf.func_has_cleanups;
+    frame.label_id  = frame.has_dtors ? g_cf.next_label_id++ : -1;
+    if (g_cf.depth < CLEANUP_STACK_MAX)
+        g_cf.stack[g_cf.depth++] = frame;
+
+    for (int i = 0; i < n->block.nstmts; i++) {
         emit_indent();
-        emit_mangled_class_tag(v->var_decl.ty);
-        fprintf(stdout, "_dtor(&%.*s);\n",
-                v->var_decl.name->len, v->var_decl.name->loc);
+        emit_stmt(n->block.stmts[i]);
+    }
+
+    if (frame.has_dtors) {
+        /* The label sits at the bottom of the block and is reached
+         * by both normal fall-through and 'goto' from a nested
+         * return-with-cleanup. ';' after the label keeps it a valid
+         * statement when the next thing is a declaration. */
+        emit_indent();
+        fprintf(stdout, "__cleanup_%d: ;\n", frame.label_id);
+        for (int i = ncleanup - 1; i >= 0; i--) {
+            Node *v = cleanup_var[i];
+            emit_indent();
+            emit_mangled_class_tag(v->var_decl.ty);
+            fprintf(stdout, "_dtor(&%.*s);\n",
+                    v->var_decl.name->len, v->var_decl.name->loc);
+        }
+        /* Chain outward when unwinding. We have to look at the
+         * stack BELOW our own frame, since 'depth' still includes
+         * us at this point. */
+        g_cf.depth--;
+        int parent = innermost_cleanup_label();
+        emit_indent();
+        if (parent >= 0)
+            fprintf(stdout, "if (__unwind) goto __cleanup_%d;\n", parent);
+        else
+            fputs("if (__unwind) goto __epilogue;\n", stdout);
+    } else {
+        if (g_cf.depth > 0) g_cf.depth--;
     }
 
     g_indent--;
@@ -399,12 +503,33 @@ static void emit_stmt(Node *n) {
         emit_block(n);
         return;
     case ND_RETURN:
-        fputs("return", stdout);
-        if (n->ret.expr) {
-            fputc(' ', stdout);
-            emit_expr(n->ret.expr);
+        if (g_cf.func_has_cleanups) {
+            /* Slice B: 'return expr' becomes a compound statement
+             *     { __retval = expr; __unwind = 1; goto __cleanup_<n>; }
+             * (or '__epilogue' when no enclosing dtor scope).
+             * The braces matter — without them an unbraced
+             * 'if (cond) return;' would only guard the first
+             * statement and the goto would run unconditionally. */
+            fputc('{', stdout);
+            if (n->ret.expr) {
+                fputs(" __retval = ", stdout);
+                emit_expr(n->ret.expr);
+                fputc(';', stdout);
+            }
+            fputs(" __unwind = 1; ", stdout);
+            int target = innermost_cleanup_label();
+            if (target >= 0)
+                fprintf(stdout, "goto __cleanup_%d; }\n", target);
+            else
+                fputs("goto __epilogue; }\n", stdout);
+        } else {
+            fputs("return", stdout);
+            if (n->ret.expr) {
+                fputc(' ', stdout);
+                emit_expr(n->ret.expr);
+            }
+            fputs(";\n", stdout);
         }
-        fputs(";\n", stdout);
         return;
     case ND_EXPR_STMT:
         if (n->expr_stmt.expr)
@@ -470,7 +595,58 @@ static void emit_stmt(Node *n) {
 /* Top-level emission                                                  */
 /* ------------------------------------------------------------------ */
 
+/* Reset the per-function dtor lowering state and decide whether the
+ * function needs the cleanup machinery at all. Called at the entry
+ * to every function/method emission. */
+static void cf_begin_function(Node *func) {
+    g_cf.next_label_id = 0;
+    g_cf.depth = 0;
+    g_cf.func_has_cleanups = func && func->func.body &&
+                             subtree_has_cleanups(func->func.body);
+}
+
+/* Emit the body of a function with cleanup-aware wrapping when the
+ * function has any non-trivial locals: declare __retval/__unwind at
+ * the top, run the body, then __epilogue: return __retval; */
+static void emit_func_body(Node *func) {
+    if (!func->func.body) { fputs(";\n", stdout); return; }
+    if (!g_cf.func_has_cleanups) {
+        emit_block(func->func.body);
+        return;
+    }
+    /* Wrap: open a brace, declare locals, emit the user body
+     * (which is itself a ND_BLOCK and will print its own { }),
+     * then the epilogue. */
+    fputs("{\n", stdout);
+    g_indent++;
+    emit_indent();
+    /* __retval is typed as the function's return type. For void
+     * returns we skip __retval entirely (no value to forward). */
+    bool void_ret = func->func.ret_ty && func->func.ret_ty->kind == TY_VOID;
+    if (!void_ret) {
+        emit_type(func->func.ret_ty);
+        fputs(" __retval = 0;\n", stdout);
+        emit_indent();
+    }
+    fputs("int __unwind = 0;\n", stdout);
+    emit_indent();
+    fputs("(void)__unwind;\n", stdout);  /* silence unused if no return */
+    emit_indent();
+    emit_block(func->func.body);
+    emit_indent();
+    fputs("__epilogue: ;\n", stdout);
+    emit_indent();
+    if (void_ret)
+        fputs("return;\n", stdout);
+    else
+        fputs("return __retval;\n", stdout);
+    g_indent--;
+    emit_indent();
+    fputs("}\n", stdout);
+}
+
 static void emit_func_def(Node *n) {
+    cf_begin_function(n);
     emit_type(n->func.ret_ty);
     fputc(' ', stdout);
     if (n->func.name)
@@ -489,10 +665,7 @@ static void emit_func_def(Node *n) {
         }
     }
     fputs(") ", stdout);
-    if (n->func.body)
-        emit_block(n->func.body);
-    else
-        fputs(";\n", stdout);
+    emit_func_body(n);
 }
 
 /* Emit just the signature of a method as a mangled free function.
@@ -547,12 +720,10 @@ static void emit_method_as_free_fn(Node *func, Type *class_type) {
     if (!func || func->kind != ND_FUNC_DEF) return;
     if (!class_type || !class_type->tag || !func->func.name) return;
 
+    cf_begin_function(func);
     emit_method_signature(func, class_type);
     fputc(' ', stdout);
-    if (func->func.body)
-        emit_block(func->func.body);
-    else
-        fputs(";\n", stdout);
+    emit_func_body(func);
 }
 
 static void emit_class_def(Node *n) {
