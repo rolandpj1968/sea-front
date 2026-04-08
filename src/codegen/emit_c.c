@@ -1119,8 +1119,11 @@ static void emit_prelude(void) {
      * __SF_epilogue: label and the actual C return. No do-while
      * wrapping — these emit declarations/labels, which can't sit
      * inside a statement expression. */
+    /* '= {0}' is the universal C initializer — works for scalars
+     * AND structs/unions/arrays. The bare '= 0' we used initially
+     * blew up for struct return types. */
     fputs("#define __SF_PROLOGUE(ret_type) "
-          "ret_type __SF_retval = 0; "
+          "ret_type __SF_retval = {0}; "
           "__SF_unwind_t __SF_unwind = __SF_UNWIND_NONE; "
           "(void)__SF_unwind\n",
           stdout);
