@@ -50,11 +50,14 @@ void region_push(Parser *p, RegionKind kind, Token *name) {
 }
 
 /*
- * Pop the current declarative region.
- * The region struct remains in the arena — just restore the enclosing pointer.
+ * Pop the current declarative region. Restores the enclosing
+ * pointer; the region struct itself remains in the arena.
  *
- * N4659 §6.3.3/1 [basic.scope.block]: "A name declared in a block
- * is local to that block."
+ * The "name is local to its region" property is general — N4659
+ * §6.3 [basic.scope] frames it for declarative regions of all
+ * kinds, with §6.3.3 [basic.scope.block] / §6.3.4
+ * [basic.scope.proto] / §6.3.6 [basic.scope.namespace] etc.
+ * specialising it per region.
  */
 void region_pop(Parser *p) {
     p->region = p->region->enclosing;
@@ -111,11 +114,21 @@ Declaration *region_declare(Parser *p, const char *name, int name_len,
 /* ------------------------------------------------------------------ */
 
 /*
- * Search outward through enclosing declarative regions.
+ * Look up a name in a SINGLE region (no outward walk). Searches the
+ * region's hash buckets first, then — for class scopes — the base-
+ * class regions per N4659 §6.4.2 [class.member.lookup].
  *
- * N4659 §6.4.1/1: "the scopes are searched for a declaration in
- * the order listed in each of the respective categories; name lookup
- * ends as soon as a declaration is found for the name."
+ * The outward walk through enclosing scopes is in
+ * lookup_unqualified_from below.
+ *
+ * --- SHORTCUT (our implementation, not the standard's algorithm):
+ * The base-class search is depth-first, first-match-wins. The
+ * standard's §6.4.2/3-7 algorithm would diagnose certain
+ * ambiguous-base lookups as ill-formed (when the same name is
+ * found via two non-overlapping paths through distinct subobjects).
+ * We silently take the first match. TODO(seafront#mi-ambig): when
+ * sema needs accurate diagnostics, replace with the
+ * §6.4.2 algorithm proper.
  */
 static Declaration *lookup_in_region(DeclarativeRegion *r,
                                      const char *name, int name_len) {
@@ -124,10 +137,6 @@ static Declaration *lookup_in_region(DeclarativeRegion *r,
         if (d->name_len == name_len && memcmp(d->name, name, name_len) == 0)
             return d;
     }
-    /* N4659 §6.4.2 [class.member.lookup]: in a class scope, also search
-     * the class's base-class subobjects. Depth-first; doesn't yet handle
-     * diamond ambiguity (the spec says ambiguous lookup is ill-formed,
-     * but for our purposes the first match is fine). */
     if (r->kind == REGION_CLASS) {
         for (int i = 0; i < r->nbases; i++) {
             Declaration *d = lookup_in_region(r->bases[i], name, name_len);
@@ -137,8 +146,22 @@ static Declaration *lookup_in_region(DeclarativeRegion *r,
     return NULL;
 }
 
-/* Underlying walker — takes a starting region directly so it can be
- * used outside the parser (e.g. by sema with no Parser handle). */
+/*
+ * lookup_unqualified_from — outward walk through the chain of
+ * enclosing declarative regions starting at 'start'.
+ *
+ * N4659 §6.4.1/1 [basic.lookup.unqual]: "the scopes are searched
+ * for a declaration in the order listed in each of the respective
+ * categories; name lookup ends as soon as a declaration is found
+ * for the name."
+ *
+ * Each step searches the region itself (lookup_in_region, which
+ * also walks base classes for a class scope) and then any
+ * using-directive regions attached to that step.
+ *
+ * Takes a starting region by value so callers without a Parser
+ * handle (sema, future tooling) can use the same walker.
+ */
 Declaration *lookup_unqualified_from(DeclarativeRegion *start,
                                      const char *name, int name_len) {
     for (DeclarativeRegion *r = start; r; r = r->enclosing) {
@@ -189,6 +212,18 @@ static Declaration *lookup_kind_in_region(DeclarativeRegion *r,
     return NULL;
 }
 
+/*
+ * lookup_unqualified_kind — like lookup_unqualified, but only
+ * returns a Declaration whose entity kind matches 'kind'. Lets
+ * callers ask "is this an ENTITY_TYPE in scope" without being
+ * confused by a same-named ENTITY_VARIABLE that hides it (per the
+ * §6.3.10 hiding rule, which is asymmetric: variables hide
+ * type-names but not vice versa).
+ *
+ * Walks the same enclosing-scope chain + using-directive list as
+ * lookup_unqualified_from, but uses lookup_kind_in_region at each
+ * step to filter by kind.
+ */
 Declaration *lookup_unqualified_kind(Parser *p, const char *name,
                                      int name_len, EntityKind kind) {
     for (DeclarativeRegion *r = p->region; r; r = r->enclosing) {
@@ -240,10 +275,12 @@ bool lookup_is_type_name(Parser *p, Token *tok) {
  *
  * N4659 §17.1 [temp]: template-name is the name of a template.
  *
- * Used by disambiguation rule:
- *   §17.2/3 [temp.names] — '<' as template-argument-list vs less-than
- *
- * Deferred to Stage 3 (no templates yet), but the oracle is ready.
+ * Used by the disambiguation rule in N4659 §17.2/2 [temp.names]:
+ * "After name lookup finds that a name is a template-name ...
+ * this name, when followed by <, is always taken as the [start of
+ * a] template-id." Sea-front consults this oracle from
+ * primary_expr (and a few other call sites) to decide whether to
+ * route into parse_template_id.
  */
 bool lookup_is_template_name(Parser *p, Token *tok) {
     if (tok->kind != TK_IDENT)
@@ -318,19 +355,13 @@ void region_add_base(Parser *p, DeclarativeRegion *base) {
 }
 
 /*
- * Find a named namespace's declarative region via name lookup.
- * The namespace name is declared as ENTITY_NAMESPACE with the
- * region pointer stored on the Declaration (ns_region field).
+ * lookup_in_scope — qualified-name lookup: 'A::B'.
  *
- * N4659 §6.3.6 [basic.scope.namespace].
- */
-/*
- * Qualified-name lookup: 'A::B'.
- * 'scope' is the region of A; we look up B in it (walking bases for
- * a class scope, but NOT walking enclosing scopes — qualified names
- * are scope-restricted, N4659 §6.4.3 [basic.lookup.qual]).
- *
- * Returns NULL if scope is NULL or B isn't found.
+ * 'scope' is the region of A; we look up B in it (walking bases
+ * for a class scope, but NOT walking enclosing scopes — qualified
+ * names are scope-restricted per N4659 §6.4.3
+ * [basic.lookup.qual]). Returns NULL if scope is NULL or B isn't
+ * found.
  */
 Declaration *lookup_in_scope(DeclarativeRegion *scope,
                              const char *name, int name_len) {
@@ -338,6 +369,16 @@ Declaration *lookup_in_scope(DeclarativeRegion *scope,
     return lookup_in_region(scope, name, name_len);
 }
 
+/*
+ * region_find_namespace — find a named namespace's declarative
+ * region via name lookup. The namespace name is declared as
+ * ENTITY_NAMESPACE with the region pointer stored on the
+ * Declaration (ns_region field).
+ *
+ * N4659 §6.3.6 [basic.scope.namespace] / §10.3 [basic.namespace].
+ * Used by 'using namespace' to find the region the directive
+ * names so it can be added to the current region's using-list.
+ */
 DeclarativeRegion *region_find_namespace(Parser *p, const char *name,
                                          int name_len) {
     Declaration *d = lookup_unqualified_kind(p, name, name_len,
