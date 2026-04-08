@@ -16,7 +16,7 @@
 #include "../sea-front.h"
 
 /* ================================================================== */
-/* AST Node Kinds                                                      */
+/* AST Node Kinds                                                     */
 /* ================================================================== */
 
 /* Forward declarations — Node fields reference DeclarativeRegion and
@@ -148,7 +148,7 @@ typedef enum {
 } NodeKind;
 
 /* ================================================================== */
-/* AST Node                                                            */
+/* AST Node                                                           */
 /* ================================================================== */
 
 /*
@@ -542,7 +542,7 @@ struct Node {
 };
 
 /* ================================================================== */
-/* Declaration specifier flags — N4659 §10.1 [dcl.spec]                */
+/* Declaration specifier flags — N4659 §10.1 [dcl.spec]               */
 /* ================================================================== */
 
 /*
@@ -563,7 +563,7 @@ enum {
 };
 
 /* ================================================================== */
-/* Type System                                                         */
+/* Type System                                                        */
 /* ================================================================== */
 
 /*
@@ -688,13 +688,13 @@ struct Type {
 };
 
 /* ================================================================== */
-/* Name Lookup — N4659 §6.3-§6.4 [basic.scope, basic.lookup]           */
-/*               N4861 §6.4-§6.5 (C++20, renumbered)                   */
-/*               N4950 §6.4-§6.5 (C++23, unchanged)                    */
-/*                                                                     */
-/* "The name lookup rules apply uniformly to all names (including      */
-/*  typedef-names, namespace-names, and class-names) wherever the      */
-/*  grammar allows such names." — N4659 §6.4/1                         */
+/* Name Lookup — N4659 §6.3-§6.4 [basic.scope, basic.lookup]          */
+/*               N4861 §6.4-§6.5 (C++20, renumbered)                  */
+/*               N4950 §6.4-§6.5 (C++23, unchanged)                   */
+/*                                                                    */
+/* "The name lookup rules apply uniformly to all names (including     */
+/*  typedef-names, namespace-names, and class-names) wherever the     */
+/*  grammar allows such names." — N4659 §6.4/1                        */
 /* ================================================================== */
 
 /*
@@ -830,7 +830,7 @@ typedef struct {
 } ParseState;
 
 /* ================================================================== */
-/* Parser State                                                        */
+/* Parser State                                                       */
 /* ================================================================== */
 
 typedef struct Parser Parser;
@@ -883,7 +883,7 @@ struct Parser {
 };
 
 /* ================================================================== */
-/* Parser operations — parser.c                                        */
+/* Parser operations — parser.c                                       */
 /* ================================================================== */
 
 /* Token stream — index-based cursor into contiguous array */
@@ -926,7 +926,7 @@ Node *new_template_decl_node(Parser *p, Node **params, int nparams, Node *decl, 
 Node *new_template_id_node(Parser *p, Token *name, Node **args, int nargs, Token *tok);
 
 /* ================================================================== */
-/* Expression parser — expr.c                                          */
+/* Expression parser — expr.c                                         */
 /* ================================================================== */
 
 /*
@@ -954,7 +954,7 @@ Node *parse_expr(Parser *p);
 Node *parse_assign_expr(Parser *p);
 
 /* ================================================================== */
-/* Statement parser — stmt.c                                           */
+/* Statement parser — stmt.c                                          */
 /* ================================================================== */
 
 /*
@@ -977,7 +977,7 @@ Node *parse_stmt(Parser *p);
 Node *parse_compound_stmt(Parser *p);
 
 /* ================================================================== */
-/* Declaration parser — decl.c                                         */
+/* Declaration parser — decl.c                                        */
 /* ================================================================== */
 
 /*
@@ -1048,7 +1048,7 @@ Node *parse_template_id(Parser *p, Token *name);
 void parse_deferred_func_body(Parser *p, Node *func);
 
 /* ================================================================== */
-/* Type construction — type.c                                          */
+/* Type construction — type.c                                         */
 /* ================================================================== */
 
 /*
@@ -1121,7 +1121,7 @@ Type *new_func_type(Parser *p, Type *ret, Type **params, int nparams, bool varia
 bool parser_at_type_specifier(Parser *p);
 
 /* ================================================================== */
-/* Name lookup — lookup.c                                              */
+/* Name lookup — lookup.c                                             */
 /* ================================================================== */
 
 /*
@@ -1190,7 +1190,7 @@ Declaration *lookup_in_scope(DeclarativeRegion *scope,
 DeclarativeRegion *region_find_namespace(Parser *p, const char *name, int name_len);
 
 /* ================================================================== */
-/* AST dump — ast_dump.c                                               */
+/* AST dump — ast_dump.c                                              */
 /* ================================================================== */
 
 /* Print an S-expression representation of the AST for debugging.

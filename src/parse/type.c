@@ -293,12 +293,21 @@ DeclSpec parse_type_specifiers(Parser *p) {
             }
 
             /* N4659 §17.2 [temp.names]: struct/class followed by a
-             * template-id (e.g., 'struct Foo<int>') */
+             * template-id (e.g., 'struct Foo<int>').
+             *
+             * Standard rule (§17.2/2): after name lookup finds the
+             * name is a template-name, '<' is taken as the start of
+             * a template-argument-list.
+             *
+             * SHORTCUT (ours, not the standard): in elaborated-
+             * type-specifier position the tag is unambiguously a
+             * type, so we treat '<' as template-args without
+             * consulting lookup. This silently accepts ill-formed
+             * input (e.g. 'struct NotATemplate<int>') that a real
+             * compiler would diagnose.
+             * TODO(seafront#elab-tmpl-id): consult lookup when we
+             * need accurate diagnostics. */
             if (ty->tag && parser_at(p, TK_LT)) {
-                /* Speculative — in 'class Foo<...>' position '<' is
-                 * always a template-argument-list. Don't require lookup,
-                 * since the template name may live in an inline namespace
-                 * we don't yet model. */
                 parse_template_id(p, ty->tag);
             }
 
@@ -911,10 +920,15 @@ DeclSpec parse_type_specifiers(Parser *p) {
              * A name can be both a type and a template (e.g., after explicit
              * specialization registers the name as ENTITY_TYPE while the
              * primary template registered it as ENTITY_TEMPLATE). */
-            /* Speculative — '<' after a user-defined type-name in a type
-             * position is overwhelmingly a template-argument-list, not
-             * less-than. Our lookup may not find the template entity if
-             * it lives in an inline namespace we don't model. */
+            /* SHORTCUT (ours, not the standard): §17.2/2 says lookup
+             * must find the name as a template-name before '<' is
+             * taken as template-argument-list. We accept '<' here
+             * unconditionally because (a) we're in type-specifier
+             * position where less-than cannot occur, and (b) our
+             * lookup may miss templates declared in inline namespaces
+             * we don't model. Silently accepts ill-formed input.
+             * TODO(seafront#type-tmpl-id): consult lookup once inline
+             * namespaces are modelled. */
             if (parser_at(p, TK_LT)) {
                 parse_template_id(p, name_tok);  /* consumes <args> */
                 /* Trailing nested-name: enable_if<...>::type, possibly chained.
@@ -1014,17 +1028,25 @@ DeclSpec parse_type_specifiers(Parser *p) {
         }
     }
 
-    /* Heuristic fallback: an UNRESOLVED identifier in a type-position
-     * context — accept it as an opaque type-name when followed by a
-     * token that can't begin/continue an expression but CAN follow a
-     * type-name (another ident, '*'/'&'/'&&', or template-arg/cast
-     * delimiters '>' / ')' / ','). This handles inherited member
-     * typedefs and templated-namespace types we don't yet resolve.
+    /* SHORTCUT (ours, not the standard): an UNRESOLVED identifier in
+     * a type-position context — accept it as an opaque type-name
+     * when followed by a token that can't begin/continue an
+     * expression but CAN follow a type-name (another ident,
+     * '*'/'&'/'&&', or template-arg/cast delimiters '>' / ')' / ',').
+     * This papers over inherited member typedefs and templated-
+     * namespace types our lookup doesn't yet resolve.
+     *
+     * The standard's algorithm (§6.4 [basic.lookup] + §10.1.7.1
+     * [dcl.type.simple]) requires a type-name to actually resolve;
+     * an unknown identifier should be a hard error. We accept it
+     * silently when the syntactic shape is unambiguous.
      *
      * Tightened: only fires when the leading identifier is NOT in
      * lookup at all. If lookup found something non-type-like (e.g.
      * an enumerator or a variable), we leave the type-spec parse
-     * empty so the caller falls back to the expression branch. */
+     * empty so the caller falls back to the expression branch.
+     * TODO(seafront#unresolved-type): remove once member-typedef
+     * lookup through bases and inline namespaces are modelled. */
     if (!seen_any && parser_peek(p)->kind == TK_IDENT &&
         lookup_unqualified(p, parser_peek(p)->loc, parser_peek(p)->len) == NULL) {
         Token *t1 = parser_peek_ahead(p, 1);
@@ -1145,8 +1167,14 @@ bool parser_at_type_specifier(Parser *p) {
          * lookup. If the chain resolves END-TO-END to a declaration, the
          * answer is precise: type-like declarations → true, others →
          * false ('std::cout' as an expression is NOT a type-specifier).
-         * If lookup runs out of scope partway, fall back to the
-         * current heuristic: assume a qualified name is a type. */
+         * If lookup runs out of scope partway, fall back to a
+         * SHORTCUT (ours, not the standard): assume a qualified
+         * name is a type. The standard's algorithm (§6.4.3
+         * [basic.lookup.qual]) requires every segment to resolve;
+         * we silently accept unresolved tails because our scope
+         * model misses inherited typedefs and inline namespaces.
+         * TODO(seafront#qual-type): tighten once lookup is
+         * complete. */
         if (parser_peek_ahead(p, 1)->kind == TK_SCOPE) {
             Token *first = parser_peek(p);
             /* Kind-specific so a class template's TYPE entry wins over
