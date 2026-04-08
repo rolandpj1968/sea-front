@@ -469,7 +469,7 @@ static void emit_block(Node *n) {
          * return-with-cleanup. ';' after the label keeps it a valid
          * statement when the next thing is a declaration. */
         emit_indent();
-        fprintf(stdout, "__cleanup_%d: ;\n", frame.label_id);
+        fprintf(stdout, "__SF_cleanup_%d: ;\n", frame.label_id);
         for (int i = ncleanup - 1; i >= 0; i--) {
             Node *v = cleanup_var[i];
             emit_indent();
@@ -484,9 +484,9 @@ static void emit_block(Node *n) {
         int parent = innermost_cleanup_label();
         emit_indent();
         if (parent >= 0)
-            fprintf(stdout, "if (__unwind) goto __cleanup_%d;\n", parent);
+            fprintf(stdout, "if (__SF_unwind) goto __SF_cleanup_%d;\n", parent);
         else
-            fputs("if (__unwind) goto __epilogue;\n", stdout);
+            fputs("if (__SF_unwind) goto __SF_epilogue;\n", stdout);
     } else {
         if (g_cf.depth > 0) g_cf.depth--;
     }
@@ -504,24 +504,27 @@ static void emit_stmt(Node *n) {
         return;
     case ND_RETURN:
         if (g_cf.func_has_cleanups) {
-            /* Slice B: 'return expr' becomes a compound statement
-             *     { __retval = expr; __unwind = 1; goto __cleanup_<n>; }
-             * (or '__epilogue' when no enclosing dtor scope).
-             * The braces matter — without them an unbraced
-             * 'if (cond) return;' would only guard the first
-             * statement and the goto would run unconditionally. */
-            fputc('{', stdout);
-            if (n->ret.expr) {
-                fputs(" __retval = ", stdout);
-                emit_expr(n->ret.expr);
-                fputc(';', stdout);
-            }
-            fputs(" __unwind = 1; ", stdout);
+            /* Slice B: 'return expr' lowers to one of the __SF_RETURN
+             * macros from the prelude. Picking the macro form keeps
+             * the emitted C readable, drives the protocol from one
+             * place, and means an unbraced 'if (cond) return;' stays
+             * safe (the macro wraps a do-while). */
             int target = innermost_cleanup_label();
-            if (target >= 0)
-                fprintf(stdout, "goto __cleanup_%d; }\n", target);
-            else
-                fputs("goto __epilogue; }\n", stdout);
+            const char *target_str_buf = NULL;
+            char buf[32];
+            if (target >= 0) {
+                snprintf(buf, sizeof(buf), "__SF_cleanup_%d", target);
+                target_str_buf = buf;
+            } else {
+                target_str_buf = "__SF_epilogue";
+            }
+            if (n->ret.expr) {
+                fputs("__SF_RETURN(", stdout);
+                emit_expr(n->ret.expr);
+                fprintf(stdout, ", %s);\n", target_str_buf);
+            } else {
+                fprintf(stdout, "__SF_RETURN_VOID(%s);\n", target_str_buf);
+            }
         } else {
             fputs("return", stdout);
             if (n->ret.expr) {
@@ -620,26 +623,26 @@ static void emit_func_body(Node *func) {
     fputs("{\n", stdout);
     g_indent++;
     emit_indent();
-    /* __retval is typed as the function's return type. For void
-     * returns we skip __retval entirely (no value to forward). */
+    /* __SF_retval is typed as the function's return type. For void
+     * returns we skip __SF_retval entirely (no value to forward). */
     bool void_ret = func->func.ret_ty && func->func.ret_ty->kind == TY_VOID;
     if (!void_ret) {
         emit_type(func->func.ret_ty);
-        fputs(" __retval = 0;\n", stdout);
+        fputs(" __SF_retval = 0;\n", stdout);
         emit_indent();
     }
-    fputs("int __unwind = 0;\n", stdout);
+    fputs("int __SF_unwind = 0;\n", stdout);
     emit_indent();
-    fputs("(void)__unwind;\n", stdout);  /* silence unused if no return */
+    fputs("(void)__SF_unwind;\n", stdout);  /* silence unused if no return */
     emit_indent();
     emit_block(func->func.body);
     emit_indent();
-    fputs("__epilogue: ;\n", stdout);
+    fputs("__SF_epilogue: ;\n", stdout);
     emit_indent();
     if (void_ret)
         fputs("return;\n", stdout);
     else
-        fputs("return __retval;\n", stdout);
+        fputs("return __SF_retval;\n", stdout);
     g_indent--;
     emit_indent();
     fputs("}\n", stdout);
@@ -830,11 +833,36 @@ static void emit_top_level(Node *n) {
     }
 }
 
-void emit_c(Node *tu) {
-    if (!tu || tu->kind != ND_TRANSLATION_UNIT) return;
+/* Sea-front cleanup-protocol prelude. Emitted at the top of every
+ * translation unit. Identifiers are __SF_-prefixed: ISO C reserves
+ * leading-double-underscore for the implementation, which we are.
+ *
+ * The unused-label pragma is needed because per-var cleanup labels
+ * (one per dtor-bearing local) are not always referenced — only the
+ * labels that some return/break/continue actually targets are reached
+ * via goto; the others are walked only by fall-through. Suppressing
+ * the warning is much cheaper than tracking per-label reference
+ * counts at codegen time. */
+static void emit_prelude(void) {
     fputs("/* generated by sea-front --emit-c */\n", stdout);
     fputs("#include <stdint.h>\n", stdout);
     fputs("\n", stdout);
+    fputs("/* sea-front cleanup protocol — see emit_c.c */\n", stdout);
+    fputs("#if defined(__GNUC__) || defined(__clang__)\n", stdout);
+    fputs("#  pragma GCC diagnostic ignored \"-Wunused-label\"\n", stdout);
+    fputs("#endif\n", stdout);
+    fputs("#define __SF_RETURN(v, lbl) "
+          "do { __SF_retval = (v); __SF_unwind = 1; goto lbl; } while (0)\n",
+          stdout);
+    fputs("#define __SF_RETURN_VOID(lbl) "
+          "do { __SF_unwind = 1; goto lbl; } while (0)\n",
+          stdout);
+    fputs("\n", stdout);
+}
+
+void emit_c(Node *tu) {
+    if (!tu || tu->kind != ND_TRANSLATION_UNIT) return;
+    emit_prelude();
     for (int i = 0; i < tu->tu.ndecls; i++)
         emit_top_level(tu->tu.decls[i]);
 }
