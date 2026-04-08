@@ -485,6 +485,17 @@ DeclSpec parse_type_specifiers(Parser *p) {
                     (Node **)members.data, members.len,
                     ty->tag ? ty->tag : parser_peek(p));
                 result.class_def->class_def.ty = ty;
+
+                /* Scan members for a destructor and tag the class type.
+                 * Codegen uses ty->has_dtor to decide whether to emit a
+                 * Class_dtor call at end of scope for instances. */
+                for (int mi = 0; mi < members.len; mi++) {
+                    Node *m = ((Node **)members.data)[mi];
+                    if (m && m->kind == ND_FUNC_DEF && m->func.is_destructor) {
+                        ty->has_dtor = true;
+                        break;
+                    }
+                }
             }
 
             /* Trailing cv-qualifiers between the struct body and the

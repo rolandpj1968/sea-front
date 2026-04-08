@@ -380,6 +380,7 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
                 parser_advance(p);  /* ~ */
                 if (parser_at(p, TK_IDENT))
                     name = parser_advance(p);
+                p->pending_is_destructor = true;
                 break;
             } else if (after->kind == TK_KW_OPERATOR) {
                 /* Qualified operator: Foo::operator[] */
@@ -398,6 +399,7 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
     if (!name && parser_at(p, TK_TILDE) && parser_peek_ahead(p, 1)->kind == TK_IDENT) {
         parser_advance(p);  /* ~ */
         name = parser_advance(p);
+        p->pending_is_destructor = true;
     }
     /* operator-function-id — N4659 §16.5 [over.oper]
      *   operator-function-id: operator operator-symbol
@@ -850,6 +852,8 @@ Node *parse_declaration(Parser *p) {
         func->func.body = NULL;
         func->func.param_scope = NULL;
         func->func.class_type = NULL;
+        func->func.is_destructor = p->pending_is_destructor;
+        p->pending_is_destructor = false;
 
         /* Register the function name in the enclosing scope */
         if (func->func.name)

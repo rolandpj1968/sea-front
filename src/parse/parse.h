@@ -402,6 +402,11 @@ struct Node {
              * the tag for name mangling and the type for the 'this'
              * parameter. */
             Type *class_type;
+            /* True for destructors (parsed from '~ClassName'). The
+             * declared name token still points at 'ClassName' (no tilde),
+             * so codegen needs this flag to distinguish a dtor from a
+             * same-named ctor. Mangled as Class_dtor. */
+            bool is_destructor;
         } func;
 
         /* ND_PARAM — N4659 §11.3.5 [dcl.fct]
@@ -574,6 +579,12 @@ struct Type {
      * Used for qualified-name lookup: 'Foo::bar' resolves 'bar' in
      * Foo's class region (and walks its base-class chain). */
     DeclarativeRegion *class_region;
+
+    /* TY_STRUCT, TY_UNION: true if the class defines a destructor.
+     * Set when the class body is parsed by scanning the member list
+     * for an ND_FUNC_DEF marked is_destructor. Codegen consults this
+     * to decide whether to emit a Class_dtor call at end of scope. */
+    bool has_dtor;
 };
 
 /* ================================================================== */
@@ -738,6 +749,10 @@ struct Parser {
      * the method body can resolve Foo's members via lookup. Cleared
      * after each top-level declaration. */
     DeclarativeRegion *qualified_decl_scope;
+    /* Side channel from parse_declarator → parse_declaration: set true
+     * when the declarator-id is '~Name' (destructor). Read by the
+     * function-def branch and cleared after each declaration. */
+    bool pending_is_destructor;
     DeclarativeRegion *region; /* current innermost declarative region (§6.3) */
     int template_depth;        /* nesting depth of template-argument-lists being parsed.
                                 * When > 0, TK_SHR (>>) is treated as two '>' tokens

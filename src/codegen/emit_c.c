@@ -357,10 +357,36 @@ static void emit_var_decl_inner(Node *n) {
 static void emit_block(Node *n) {
     fputs("{\n", stdout);
     g_indent++;
+
+    /* Slice A of dtor lowering: collect class instances declared in
+     * this block whose type has a non-trivial destructor, then at
+     * the closing brace emit Class_dtor(&v); calls in reverse
+     * declaration order (N4659 §15.4 [class.dtor]/8). No handling
+     * of early exits (return/break/continue past these vars) yet —
+     * those are slices B/C. */
+    enum { CLEANUP_MAX = 64 };
+    Node *cleanup_var[CLEANUP_MAX];
+    int   ncleanup = 0;
+
     for (int i = 0; i < n->block.nstmts; i++) {
+        Node *s = n->block.stmts[i];
         emit_indent();
-        emit_stmt(n->block.stmts[i]);
+        emit_stmt(s);
+        if (s && s->kind == ND_VAR_DECL && s->var_decl.ty &&
+            s->var_decl.ty->kind == TY_STRUCT && s->var_decl.ty->has_dtor &&
+            s->var_decl.name && ncleanup < CLEANUP_MAX) {
+            cleanup_var[ncleanup++] = s;
+        }
     }
+
+    for (int i = ncleanup - 1; i >= 0; i--) {
+        Node *v = cleanup_var[i];
+        emit_indent();
+        emit_mangled_class_tag(v->var_decl.ty);
+        fprintf(stdout, "_dtor(&%.*s);\n",
+                v->var_decl.name->len, v->var_decl.name->loc);
+    }
+
     g_indent--;
     emit_indent();
     fputs("}\n", stdout);
@@ -483,8 +509,15 @@ static void emit_method_signature(Node *func, Type *class_type) {
     emit_type(func->func.ret_ty);
     fputc(' ', stdout);
     emit_mangled_class_tag(class_type);
-    fprintf(stdout, "_%.*s",
-            func->func.name->len, func->func.name->loc);
+    if (func->func.is_destructor) {
+        /* Mangle dtors as Class_dtor so they don't collide with a
+         * same-named ctor (Class::Class). The name token still points
+         * at the class identifier — we ignore it for dtors. */
+        fputs("_dtor", stdout);
+    } else {
+        fprintf(stdout, "_%.*s",
+                func->func.name->len, func->func.name->loc);
+    }
     fputc('(', stdout);
     fputs("struct ", stdout);
     emit_mangled_class_tag(class_type);
