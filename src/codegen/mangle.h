@@ -55,11 +55,11 @@ extern Mangler g_mangler_human;
 extern Mangler *g_mangler;
 
 /* ---------------------------------------------------------------- */
-/* High-level helpers — these are what codegen calls.                */
-/*                                                                    */
-/* Each writes the full mangled name for the entity directly to       */
-/* stdout. They're built on the framework + active vtable so adding   */
-/* a new scheme means writing one new vtable, not changing callers.   */
+/* High-level helpers — these are what codegen calls.               */
+/*                                                                  */
+/* Each writes the full mangled name for the entity directly to     */
+/* stdout. They're built on the framework + active vtable so adding */
+/* a new scheme means writing one new vtable, not changing callers. */
 /* ---------------------------------------------------------------- */
 
 /* Just the class tag (with namespace prefix), e.g. for the C struct

@@ -36,7 +36,7 @@ typedef struct {
 } Sema;
 
 /* ------------------------------------------------------------------ */
-/* Type construction (sema-side, no Parser)                            */
+/* Type construction (sema-side, no Parser)                           */
 /* ------------------------------------------------------------------ */
 
 static Type *sema_new_type(Sema *s, TypeKind kind) {
@@ -60,7 +60,7 @@ static Type *ty_double(Sema *s) { return sema_new_type(s, TY_DOUBLE); }
 static Type *ty_char(Sema *s) { return sema_new_type(s, TY_CHAR); }
 
 /* ------------------------------------------------------------------ */
-/* Type predicates                                                     */
+/* Type predicates                                                    */
 /* ------------------------------------------------------------------ */
 
 static bool is_integer(const Type *t) {
@@ -115,13 +115,13 @@ static Type *common_arith_type(Sema *s, const Type *a, const Type *b) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Forward declaration                                                 */
+/* Forward declaration                                                */
 /* ------------------------------------------------------------------ */
 
 static void visit(Sema *s, Node *n);
 
 /* ------------------------------------------------------------------ */
-/* Expression visitors                                                 */
+/* Expression visitors                                                */
 /* ------------------------------------------------------------------ */
 
 static void visit_num(Sema *s, Node *n) {
@@ -240,7 +240,7 @@ static void visit_ternary(Sema *s, Node *n) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Statement / declaration visitors                                    */
+/* Statement / declaration visitors                                   */
 /* ------------------------------------------------------------------ */
 
 static void visit_var_decl(Sema *s, Node *n) {
@@ -372,7 +372,7 @@ static void visit_call(Sema *s, Node *n) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Dispatch                                                            */
+/* Dispatch                                                           */
 /* ------------------------------------------------------------------ */
 
 static void visit(Sema *s, Node *n) {
@@ -423,7 +423,7 @@ static void visit(Sema *s, Node *n) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Public entry point                                                  */
+/* Public entry point                                                 */
 /* ------------------------------------------------------------------ */
 
 void sema_run(Node *tu, Arena *arena) {

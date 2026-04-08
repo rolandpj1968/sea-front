@@ -22,7 +22,7 @@
 #include <stdbool.h>
 
 /* ------------------------------------------------------------------ */
-/* Human vtable                                                        */
+/* Human vtable                                                       */
 /* ------------------------------------------------------------------ */
 
 static void hum_start(Mangler *m) {
@@ -140,7 +140,7 @@ static void emit_class_close(void) {
 }
 
 /* ------------------------------------------------------------------ */
-/* High-level helpers                                                  */
+/* High-level helpers                                                 */
 /* ------------------------------------------------------------------ */
 
 void mangle_class_tag(Type *class_type) {

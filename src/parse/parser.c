@@ -142,13 +142,13 @@ bool parser_at_eof(Parser *p) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Tentative parsing — save/restore                                    */
-/*                                                                     */
-/* The token stream is a contiguous array. Saving position is just     */
-/* capturing the current index; restoring is setting it back.          */
-/* No copies, no pointer chasing, no allocator state to unwind.        */
-/*                                                                     */
-/* Used for disambiguation rules:                                      */
+/* Tentative parsing — save/restore                                   */
+/*                                                                    */
+/* The token stream is a contiguous array. Saving position is just    */
+/* capturing the current index; restoring is setting it back.         */
+/* No copies, no pointer chasing, no allocator state to unwind.       */
+/*                                                                    */
+/* Used for disambiguation rules:                                     */
 /*   Rule 1 (N4659 §9.8): stmt vs decl                                */
 /*   Rule 2 (N4659 §11.2): declarator ambiguities                     */
 /*   Rule 5 (N4659 §17.3/2): type-id vs expression in template args   */
@@ -171,7 +171,7 @@ void parser_restore(Parser *p, ParseState saved) {
 }
 
 /* ------------------------------------------------------------------ */
-/* GCC extensions                                                      */
+/* GCC extensions                                                     */
 /* ------------------------------------------------------------------ */
 
 /*
@@ -231,7 +231,7 @@ void parser_skip_gnu_attributes(Parser *p) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Node constructors (arena-allocated)                                 */
+/* Node constructors (arena-allocated)                                */
 /* ------------------------------------------------------------------ */
 
 Node *new_node(Parser *p, NodeKind kind, Token *tok) {
@@ -402,7 +402,7 @@ Node *new_template_id_node(Parser *p, Token *name, Node **args, int nargs,
 }
 
 /* ------------------------------------------------------------------ */
-/* Top-level entry point                                               */
+/* Top-level entry point                                              */
 /* ------------------------------------------------------------------ */
 
 /*

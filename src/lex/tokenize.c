@@ -26,7 +26,7 @@
 #include "../sea-front.h"
 
 /* ------------------------------------------------------------------ */
-/* Token construction                                                  */
+/* Token construction                                                 */
 /* ------------------------------------------------------------------ */
 
 static Token *new_token(TokenKind kind, char *start, int len, LexCtx *ctx) {
@@ -41,7 +41,7 @@ static Token *new_token(TokenKind kind, char *start, int len, LexCtx *ctx) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Whitespace and comment skipping                                     */
+/* Whitespace and comment skipping                                    */
 /* ------------------------------------------------------------------ */
 
 static void skip_whitespace(LexCtx *ctx) {
@@ -99,7 +99,7 @@ static void skip_whitespace(LexCtx *ctx) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Identifier and keyword support                                      */
+/* Identifier and keyword support                                     */
 /* ------------------------------------------------------------------ */
 
 /*
@@ -148,7 +148,7 @@ static Token *read_ident(LexCtx *ctx) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Keyword conversion (two-phase, chibicc pattern)                     */
+/* Keyword conversion (two-phase, chibicc pattern)                    */
 /* ------------------------------------------------------------------ */
 
 typedef struct {
@@ -286,7 +286,7 @@ static TokenKind lookup_keyword(const char *name, int len) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Punctuator / operator reading                                       */
+/* Punctuator / operator reading                                      */
 /* ------------------------------------------------------------------ */
 
 static Token *read_punct(LexCtx *ctx) {
@@ -414,7 +414,7 @@ static Token *read_punct(LexCtx *ctx) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Numeric literals                                                    */
+/* Numeric literals                                                   */
 /* ------------------------------------------------------------------ */
 
 static bool is_hex_digit(char c) {
@@ -612,7 +612,7 @@ static Token *read_number(LexCtx *ctx) {
 }
 
 /* ------------------------------------------------------------------ */
-/* String and character literal prefix detection                       */
+/* String and character literal prefix detection                      */
 /* ------------------------------------------------------------------ */
 
 /*
@@ -682,7 +682,7 @@ static int string_prefix_len(const char *p, int *enc, bool *is_raw, char *quote)
 }
 
 /* ------------------------------------------------------------------ */
-/* Escape sequence reading                                             */
+/* Escape sequence reading                                            */
 /* ------------------------------------------------------------------ */
 
 /*
@@ -791,7 +791,7 @@ static char *skip_escape(char *p, LexCtx *ctx) {
 }
 
 /* ------------------------------------------------------------------ */
-/* String literals                                                     */
+/* String literals                                                    */
 /* ------------------------------------------------------------------ */
 
 static Token *read_string_literal(LexCtx *ctx, int prefix_len, int enc) {
@@ -826,7 +826,7 @@ static Token *read_string_literal(LexCtx *ctx, int prefix_len, int enc) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Raw string literals                                                 */
+/* Raw string literals                                                */
 /* ------------------------------------------------------------------ */
 
 static bool is_raw_dchar(char c) {
@@ -916,7 +916,7 @@ static Token *read_raw_string_literal(LexCtx *ctx, int prefix_len, int enc) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Character literals                                                  */
+/* Character literals                                                 */
 /* ------------------------------------------------------------------ */
 
 static Token *read_char_literal(LexCtx *ctx, int prefix_len, int enc) {
@@ -1002,7 +1002,7 @@ static Token *read_char_literal(LexCtx *ctx, int prefix_len, int enc) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Token kind names (for --dump-tokens)                                */
+/* Token kind names (for --dump-tokens)                               */
 /* ------------------------------------------------------------------ */
 
 const char *token_kind_name(TokenKind kind) {
@@ -1144,7 +1144,7 @@ const char *token_kind_name(TokenKind kind) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Token helpers                                                       */
+/* Token helpers                                                      */
 /* ------------------------------------------------------------------ */
 
 bool token_equal(Token *tok, const char *s) {
@@ -1153,7 +1153,7 @@ bool token_equal(Token *tok, const char *s) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Main tokenization loop                                              */
+/* Main tokenization loop                                             */
 /* ------------------------------------------------------------------ */
 
 /*

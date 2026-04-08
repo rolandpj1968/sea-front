@@ -64,17 +64,17 @@ static void emit_indent(void) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Per-function codegen state for destructor lowering (Slice B)        */
-/*                                                                     */
-/* When the function body contains any local with a non-trivial dtor   */
-/* we lower 'return expr' as:                                          */
-/*     __retval = expr; __unwind = 1; goto __cleanup_<innermost>;      */
-/* Each block carrying cleanups emits a label, runs its dtors, and     */
+/* Per-function codegen state for destructor lowering (Slice B)       */
+/*                                                                    */
+/* When the function body contains any local with a non-trivial dtor  */
+/* we lower 'return expr' as:                                         */
+/*     __retval = expr; __unwind = 1; goto __cleanup_<innermost>;     */
+/* Each block carrying cleanups emits a label, runs its dtors, and    */
 /* conditionally chains outward via 'if (__unwind) goto <parent>'.    */
-/* The function epilogue runs 'return __retval;'.                      */
-/*                                                                     */
-/* This is per-function state, not nested blocks, so a flat module     */
-/* global is fine — codegen is single-threaded and not reentrant.      */
+/* The function epilogue runs 'return __retval;'.                     */
+/*                                                                    */
+/* This is per-function state, not nested blocks, so a flat module    */
+/* global is fine — codegen is single-threaded and not reentrant.     */
 /* ------------------------------------------------------------------ */
 
 /* Per-var cleanup tracking — Slice C extension.
@@ -456,7 +456,7 @@ static bool subtree_has_cleanups(Node *n) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Name mangling                                                       */
+/* Name mangling                                                      */
 /* ------------------------------------------------------------------ */
 
 /* Emit the mangled struct/class tag for a class type via the
@@ -557,7 +557,7 @@ static bool method_is_virtual(Type *class_type, Token *method_name) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Type emission                                                       */
+/* Type emission                                                      */
 /* ------------------------------------------------------------------ */
 
 static void emit_type(Type *ty) {
@@ -604,7 +604,7 @@ static void emit_type(Type *ty) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Expression emission                                                 */
+/* Expression emission                                                */
 /* ------------------------------------------------------------------ */
 
 static void emit_expr(Node *n);
@@ -892,7 +892,7 @@ static void emit_expr(Node *n) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Statement emission                                                  */
+/* Statement emission                                                 */
 /* ------------------------------------------------------------------ */
 
 static void emit_stmt(Node *n);
@@ -1799,7 +1799,7 @@ static void emit_stmt(Node *n) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Top-level emission                                                  */
+/* Top-level emission                                                 */
 /* ------------------------------------------------------------------ */
 
 /* Reset the per-function dtor lowering state and decide whether the

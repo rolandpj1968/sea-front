@@ -18,7 +18,7 @@
 #include "parse.h"
 
 /* ------------------------------------------------------------------ */
-/* Hash function — FNV-1a                                              */
+/* Hash function — FNV-1a                                             */
 /* ------------------------------------------------------------------ */
 
 static uint32_t hash_name(const char *name, int len) {
@@ -31,7 +31,7 @@ static uint32_t hash_name(const char *name, int len) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Declarative region management — N4659 §6.3 [basic.scope]            */
+/* Declarative region management — N4659 §6.3 [basic.scope]           */
 /* ------------------------------------------------------------------ */
 
 /*
@@ -108,9 +108,9 @@ Declaration *region_declare(Parser *p, const char *name, int name_len,
 }
 
 /* ------------------------------------------------------------------ */
-/* Unqualified name lookup — N4659 §6.4.1 [basic.lookup.unqual]        */
-/*                           N4861 §6.5.1 (C++20)                      */
-/*                           N4950 §6.5.1 (C++23)                      */
+/* Unqualified name lookup — N4659 §6.4.1 [basic.lookup.unqual]       */
+/*                           N4861 §6.5.1 (C++20)                     */
+/*                           N4950 §6.5.1 (C++23)                     */
 /* ------------------------------------------------------------------ */
 
 /*
@@ -241,7 +241,7 @@ Declaration *lookup_unqualified_kind(Parser *p, const char *name,
 }
 
 /* ------------------------------------------------------------------ */
-/* Disambiguation oracles                                              */
+/* Disambiguation oracles                                             */
 /*                                                                    */
 /* These are the "two semantic oracles" identified in                 */
 /* doc/disambiguation-rules.md. They are convenience wrappers around  */
@@ -294,7 +294,7 @@ bool lookup_is_template_name(Parser *p, Token *tok) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Using directives — N4659 §10.3.4 [namespace.udir]                   */
+/* Using directives — N4659 §10.3.4 [namespace.udir]                  */
 /* ------------------------------------------------------------------ */
 
 /*
