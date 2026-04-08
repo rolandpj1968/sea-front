@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "emit_c.h"
+#include "mangle.h"
 #include "../sea-front.h"
 
 static int g_indent = 0;
@@ -204,8 +205,8 @@ static void hoist_emit_decl(Node *call) {
         emit_type(call->resolved_type);
         fprintf(stdout, " %s;\n", name);
         emit_indent();
-        emit_mangled_class_tag(call->resolved_type);
-        fprintf(stdout, "_ctor(&%s", name);
+        mangle_class_ctor(call->resolved_type);
+        fprintf(stdout, "(&%s", name);
         for (int i = 0; i < call->call.nargs; i++) {
             fputs(", ", stdout);
             emit_expr(call->call.args[i]);
@@ -460,9 +461,11 @@ static void emit_mangled_class_tag(Type *class_type) {
         fputs("?", stdout);
         return;
     }
-    emit_ns_prefix(class_type);
-    fprintf(stdout, "%.*s",
-            class_type->tag->len, class_type->tag->loc);
+    /* Routes through the mangling framework — see docs/mangling.md
+     * and src/codegen/mangle.c. The output prefix is 'sf__' and
+     * namespace separator is '__', so 'std::vector' lowers to
+     * 'sf__std__vector'. */
+    mangle_class_tag(class_type);
 }
 
 /* ------------------------------------------------------------------ */
@@ -668,9 +671,8 @@ static void emit_expr(Node *n) {
             callee->ident.resolved_decl->home->owner_type->tag) {
             Type *class_type = callee->ident.resolved_decl->home->owner_type;
             Token *mname = callee->ident.name;
-            emit_mangled_class_tag(class_type);
-            fprintf(stdout, "_%.*s(this",
-                    mname->len, mname->loc);
+            mangle_class_method(class_type, mname);
+            fputs("(this", stdout);
             for (int i = 0; i < n->call.nargs; i++) {
                 fputs(", ", stdout);
                 emit_expr(n->call.args[i]);
@@ -685,9 +687,8 @@ static void emit_expr(Node *n) {
             if (obj_is_ptr) ot = ot->base;
             if (ot && (ot->kind == TY_STRUCT || ot->kind == TY_UNION) &&
                 ot->tag && callee->member.member) {
-                emit_mangled_class_tag(ot);
-                fprintf(stdout, "_%.*s(",
-                        callee->member.member->len, callee->member.member->loc);
+                mangle_class_method(ot, callee->member.member);
+                fputc('(', stdout);
                 /* this argument: address-of for value, as-is for pointer. */
                 if (obj_is_ptr) {
                     emit_expr(obj);
@@ -792,11 +793,11 @@ static void emit_cleanup_chain_for_added(int saved_nlive) {
              * synthesized local. Use the call's resolved_type
              * for the class tag and the codegen_temp_name for
              * the address. */
-            emit_mangled_class_tag(v->resolved_type);
-            fprintf(stdout, "_dtor(&%s);\n", v->codegen_temp_name);
+            mangle_class_dtor(v->resolved_type);
+            fprintf(stdout, "(&%s);\n", v->codegen_temp_name);
         } else {
-            emit_mangled_class_tag(v->var_decl.ty);
-            fprintf(stdout, "_dtor(&%.*s);\n",
+            mangle_class_dtor(v->var_decl.ty);
+            fprintf(stdout, "(&%.*s);\n",
                     v->var_decl.name->len, v->var_decl.name->loc);
         }
     }
@@ -1122,8 +1123,8 @@ static void emit_stmt(Node *n) {
         if (n->var_decl.has_ctor_init && n->var_decl.ty &&
             n->var_decl.ty->kind == TY_STRUCT && n->var_decl.name) {
             emit_indent();
-            emit_mangled_class_tag(n->var_decl.ty);
-            fprintf(stdout, "_ctor(&%.*s",
+            mangle_class_ctor(n->var_decl.ty);
+            fprintf(stdout, "(&%.*s",
                     n->var_decl.name->len, n->var_decl.name->loc);
             for (int i = 0; i < n->var_decl.ctor_nargs; i++) {
                 fputs(", ", stdout);
@@ -1140,8 +1141,8 @@ static void emit_stmt(Node *n) {
                  n->var_decl.ty && n->var_decl.ty->kind == TY_STRUCT &&
                  n->var_decl.ty->has_default_ctor && n->var_decl.name) {
             emit_indent();
-            emit_mangled_class_tag(n->var_decl.ty);
-            fprintf(stdout, "_ctor(&%.*s);\n",
+            mangle_class_ctor(n->var_decl.ty);
+            fprintf(stdout, "(&%.*s);\n",
                     n->var_decl.name->len, n->var_decl.name->loc);
         }
         return;
@@ -1585,11 +1586,11 @@ static void emit_stmt(Node *n) {
             Node *v = e->var_decl;
             fputc(' ', stdout);
             if (v->codegen_temp_name) {
-                emit_mangled_class_tag(v->resolved_type);
-                fprintf(stdout, "_dtor(&%s);", v->codegen_temp_name);
+                mangle_class_dtor(v->resolved_type);
+                fprintf(stdout, "(&%s);", v->codegen_temp_name);
             } else {
-                emit_mangled_class_tag(v->var_decl.ty);
-                fprintf(stdout, "_dtor(&%.*s);",
+                mangle_class_dtor(v->var_decl.ty);
+                fprintf(stdout, "(&%.*s);",
                         v->var_decl.name->len, v->var_decl.name->loc);
             }
         }
@@ -1700,8 +1701,8 @@ static void emit_ctor_member_inits(Node *func) {
              * default ctor if not listed. */
             if (found) {
                 emit_indent();
-                emit_mangled_class_tag(mty);
-                fprintf(stdout, "_ctor(&this->%.*s",
+                mangle_class_ctor(mty);
+                fprintf(stdout, "(&this->%.*s",
                         m->var_decl.name->len, m->var_decl.name->loc);
                 for (int a = 0; a < found->nargs; a++) {
                     fputs(", ", stdout);
@@ -1710,8 +1711,8 @@ static void emit_ctor_member_inits(Node *func) {
                 fputs(");\n", stdout);
             } else if (mty->has_default_ctor) {
                 emit_indent();
-                emit_mangled_class_tag(mty);
-                fprintf(stdout, "_ctor(&this->%.*s);\n",
+                mangle_class_ctor(mty);
+                fprintf(stdout, "(&this->%.*s);\n",
                         m->var_decl.name->len, m->var_decl.name->loc);
             }
             /* else: trivially-default-constructible member, nothing to do. */
@@ -1823,31 +1824,29 @@ static void emit_method_signature(Node *func, Type *class_type) {
     fputs("__SF_INLINE ", stdout);
     emit_type(func->func.ret_ty);
     fputc(' ', stdout);
-    emit_mangled_class_tag(class_type);
     if (func->func.is_destructor) {
-        /* The user's dtor body is emitted as Class_dtor_body — the
+        /* The user's dtor body is emitted as Class__dtor_body — the
          * '_body' suffix names what it actually contains: just the
          * user-written body, with no member-dtor chain. The
-         * synthesized Class_dtor wrapper (built by emit_class_def)
-         * calls Class_dtor_body first and then chains into member
+         * synthesized Class__dtor wrapper (built by emit_class_def)
+         * calls Class__dtor_body first and then chains into member
          * dtor calls. Every CALLER of a class dtor still emits the
-         * unsuffixed Class_dtor name — they hit the wrapper, not
+         * unsuffixed Class__dtor name — they hit the wrapper, not
          * the body function directly. */
-        fputs("_dtor_body", stdout);
+        mangle_class_dtor_body(class_type);
     } else if (func->func.is_constructor) {
-        /* Constructors mangle as Class_ctor. Single-overload only
+        /* Constructors mangle as Class__ctor. Single-overload only
          * for now — multiple ctors of the same class would collide
          * here and need a per-overload disambiguator (Itanium uses
          * a parameter-type-encoded suffix; we'll add something
          * similar when we tackle overloading). */
-        fputs("_ctor", stdout);
+        mangle_class_ctor(class_type);
     } else {
-        fprintf(stdout, "_%.*s",
-                func->func.name->len, func->func.name->loc);
+        mangle_class_method(class_type, func->func.name);
     }
     fputc('(', stdout);
     fputs("struct ", stdout);
-    emit_mangled_class_tag(class_type);
+    mangle_class_tag(class_type);
     fputs(" *this", stdout);
     for (int i = 0; i < func->func.nparams; i++) {
         fputs(", ", stdout);
@@ -1955,23 +1954,22 @@ static void emit_class_def(Node *n) {
                  * declared separately, but we DO need a forward decl
                  * for Class_dtor_body so the wrapper can call it. */
                 fputs("__SF_INLINE void ", stdout);
-                emit_mangled_class_tag(class_type);
-                fputs("_dtor_body(struct ", stdout);
-                emit_mangled_class_tag(class_type);
+                mangle_class_dtor_body(class_type);
+                fputs("(struct ", stdout);
+                mangle_class_tag(class_type);
                 fputs(" *this);\n", stdout);
                 continue;
             }
             fputs("__SF_INLINE ", stdout);
             emit_type(fty->ret);
             fputc(' ', stdout);
-            emit_mangled_class_tag(class_type);
             if (m->var_decl.is_constructor) {
-                fputs("_ctor(struct ", stdout);
+                mangle_class_ctor(class_type);
             } else {
-                fprintf(stdout, "_%.*s(struct ",
-                        m->var_decl.name->len, m->var_decl.name->loc);
+                mangle_class_method(class_type, m->var_decl.name);
             }
-            emit_mangled_class_tag(class_type);
+            fputs("(struct ", stdout);
+            mangle_class_tag(class_type);
             fputs(" *this", stdout);
             for (int k = 0; k < fty->nparams; k++) {
                 fputs(", ", stdout);
@@ -2009,9 +2007,9 @@ static void emit_class_def(Node *n) {
             }
         }
         fputs("__SF_INLINE void ", stdout);
-        emit_mangled_class_tag(class_type);
-        fputs("_dtor(struct ", stdout);
-        emit_mangled_class_tag(class_type);
+        mangle_class_dtor(class_type);
+        fputs("(struct ", stdout);
+        mangle_class_tag(class_type);
         fputs(" *this);\n", stdout);
     }
 
@@ -2041,15 +2039,15 @@ static void emit_class_def(Node *n) {
      * declaration order — N4659 §15.4 [class.dtor]/9. */
     if (class_type && class_type->has_dtor) {
         fputs("__SF_INLINE void ", stdout);
-        emit_mangled_class_tag(class_type);
-        fputs("_dtor(struct ", stdout);
-        emit_mangled_class_tag(class_type);
+        mangle_class_dtor(class_type);
+        fputs("(struct ", stdout);
+        mangle_class_tag(class_type);
         fputs(" *this) {\n", stdout);
         g_indent++;
         if (user_dtor || user_dtor_out_of_class) {
             emit_indent();
-            emit_mangled_class_tag(class_type);
-            fputs("_dtor_body(this);\n", stdout);
+            mangle_class_dtor_body(class_type);
+            fputs("(this);\n", stdout);
         }
         for (int i = n->class_def.nmembers - 1; i >= 0; i--) {
             Node *m = n->class_def.members[i];
@@ -2058,8 +2056,8 @@ static void emit_class_def(Node *n) {
             if (!m->var_decl.ty->has_dtor) continue;
             if (!m->var_decl.name) continue;
             emit_indent();
-            emit_mangled_class_tag(m->var_decl.ty);
-            fprintf(stdout, "_dtor(&this->%.*s);\n",
+            mangle_class_dtor(m->var_decl.ty);
+            fprintf(stdout, "(&this->%.*s);\n",
                     m->var_decl.name->len, m->var_decl.name->loc);
         }
         g_indent--;
@@ -2085,15 +2083,15 @@ static void emit_class_def(Node *n) {
     if (class_type && class_type->has_default_ctor && !any_user_ctor) {
         /* Forward decl + body for the synthesized ctor. */
         fputs("__SF_INLINE void ", stdout);
-        emit_mangled_class_tag(class_type);
-        fputs("_ctor(struct ", stdout);
-        emit_mangled_class_tag(class_type);
+        mangle_class_ctor(class_type);
+        fputs("(struct ", stdout);
+        mangle_class_tag(class_type);
         fputs(" *this);\n", stdout);
 
         fputs("__SF_INLINE void ", stdout);
-        emit_mangled_class_tag(class_type);
-        fputs("_ctor(struct ", stdout);
-        emit_mangled_class_tag(class_type);
+        mangle_class_ctor(class_type);
+        fputs("(struct ", stdout);
+        mangle_class_tag(class_type);
         fputs(" *this) {\n", stdout);
         g_indent++;
         for (int i = 0; i < n->class_def.nmembers; i++) {
@@ -2103,8 +2101,8 @@ static void emit_class_def(Node *n) {
             if (!m->var_decl.ty->has_default_ctor) continue;
             if (!m->var_decl.name) continue;
             emit_indent();
-            emit_mangled_class_tag(m->var_decl.ty);
-            fprintf(stdout, "_ctor(&this->%.*s);\n",
+            mangle_class_ctor(m->var_decl.ty);
+            fprintf(stdout, "(&this->%.*s);\n",
                     m->var_decl.name->len, m->var_decl.name->loc);
         }
         g_indent--;
