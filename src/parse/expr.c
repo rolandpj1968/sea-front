@@ -779,6 +779,41 @@ static Node *postfix_expr(Parser *p) {
                     if (looks_template)
                         parse_template_id(p, member);
                 }
+                /* Qualified continuation through a class-template-id
+                 * member access:
+                 *   this->Base<T>::operator=(...)
+                 *   this->Inner::method()
+                 * After the (possibly templated) member name, allow
+                 * '::id' or '::operator <op>' segments. The resulting
+                 * call is opaque to sema/codegen — we just need to
+                 * walk the tokens so the call's argument list gets
+                 * picked up by the postfix loop's '(' suffix. */
+                while (parser_consume(p, TK_SCOPE)) {
+                    parser_consume(p, TK_KW_TEMPLATE);
+                    if (parser_consume(p, TK_KW_OPERATOR)) {
+                        /* operator-function-id: consume the operator
+                         * symbol(s). Special cases: () and []. */
+                        if (parser_consume(p, TK_LPAREN))
+                            parser_expect(p, TK_RPAREN);
+                        else if (parser_consume(p, TK_LBRACKET))
+                            parser_expect(p, TK_RBRACKET);
+                        else if (parser_at(p, TK_KW_NEW) ||
+                                 parser_at(p, TK_KW_DELETE)) {
+                            parser_advance(p);
+                            if (parser_consume(p, TK_LBRACKET))
+                                parser_expect(p, TK_RBRACKET);
+                        } else if (parser_peek(p)->kind >= TK_LPAREN &&
+                                   parser_peek(p)->kind <= TK_HASHHASH) {
+                            parser_advance(p);
+                        }
+                    } else if (parser_at(p, TK_IDENT)) {
+                        member = parser_advance(p);
+                        if (parser_at(p, TK_LT))
+                            parse_template_id(p, member);
+                    } else {
+                        break;
+                    }
+                }
             }
 
             node = new_member_node(p, node, member, op, tok);

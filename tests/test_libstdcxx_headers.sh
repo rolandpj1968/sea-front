@@ -54,19 +54,16 @@ rm -rf "$GEN_DIR"
 mkdir -p "$GEN_DIR"
 
 # Gated headers — must always parse cleanly with -V201103L (C++11).
-# Original target was 12 from the early parser-grind era; map and
-# set rejoin the gated set now that explicit-dtor-via-template-id
-# parses ('p->~Class<args>()').
-#
-# memory is the only original-12 still in stretch — it has a known
-# corner case ('this->Class<T>::operator=(...)') that's a focused
-# parser fix for a future session.
-PASS_HEADERS="vector string map set algorithm iostream unordered_map tuple thread chrono sstream fstream"
+# All 12 of the original baseline plus 'set' (which had the same
+# explicit-dtor-via-template-id pattern as map). Memory rejoined
+# after the qualified-base-member-call ('this->Base<T>::method()')
+# parser fix.
+PASS_HEADERS="vector string map set algorithm memory iostream unordered_map tuple thread chrono sstream fstream"
 
 # Stretch headers — currently failing or unverified. We track these
 # separately so we can see when one moves from FAIL to OK without
 # the gated suite turning red.
-STRETCH_HEADERS="memory mutex functional deque list array bitset queue stack iomanip iterator type_traits utility numeric optional variant"
+STRETCH_HEADERS="mutex functional deque list array bitset queue stack iomanip iterator type_traits utility numeric optional variant"
 
 PASS=0
 FAIL=0
