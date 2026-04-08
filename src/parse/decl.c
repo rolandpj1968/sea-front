@@ -43,6 +43,12 @@
 
 #include "parse.h"
 
+/* Forward declaration. consume_trailing_qualifiers is a helper of
+ * parse_declarator and lives immediately below it (per the
+ * "general above helpers" convention). The forward decl is needed
+ * because parse_declarator calls it from within its body. */
+static void consume_trailing_qualifiers(Parser *p);
+
 /*
  * parse_declarator — N4659 §11.3 [dcl.meaning]
  *
@@ -77,125 +83,11 @@
  * The "inside-out" reading rule: pointer operators wrap from the left,
  * while array/function suffixes wrap from the right, and parentheses
  * override the default grouping. We handle this recursively.
+ *
+ * Helpers (consume_trailing_qualifiers and the template-default
+ * pair) are defined below this function in the file, immediately
+ * below the general parsers they support.
  */
-
-/*
- * Consume trailing function qualifiers after the closing ')' of a
- * function parameter list.
- *
- * N4659 §11.3.5 [dcl.fct]: parameters-and-qualifiers includes
- *   cv-qualifier-seq(opt) ref-qualifier(opt) noexcept-specifier(opt)
- *
- * Also consumes virt-specifiers (override, final) per §12.3 [class.virtual].
- * Terminates: each iteration consumes a qualifier token or breaks.
- */
-/*
- * Skip a template-parameter default value.
- *
- * Used by all three forms of template-parameter (typename, template
- * template, non-type) to consume the right-hand side of '= ...' until
- * we reach the next ',' or the closing '>' of the template-parameter-list.
- *
- * Tracks both angle-bracket and parenthesis depth so that things like
- *   bool = __or_<X, Y<Z>>::value
- *   typename _D = decltype(swap(declval<T&>(), declval<T&>()))
- * don't terminate on a stray comma or > inside the default expression.
- *
- * Handles >> at depth 1: consumes the SHR, sets split_shr so the outer
- * template-parameter-list parser sees a virtual '>'.
- */
-/*
- * parse_template_value_default — non-type / template-template
- * template-parameter default value (a constant-expression).
- *
- * N4659 §17.1/8 [temp.param]: a non-type template-parameter default
- * is an assignment-expression. §17.2/3 [temp.names]: inside a
- * template-argument-list (and, by extension, a template-parameter
- * default value), the first non-nested > is the closing delimiter
- * rather than greater-than; >> splits into two >'s.
- *
- * We bump template_depth so the binary-operator parser stops at the
- * top-level >, then call parse_assign_expr. Result is currently
- * discarded (sema doesn't yet substitute defaults).
- */
-static void parse_template_value_default(Parser *p) {
-    p->template_depth++;
-    (void)parse_assign_expr(p);
-    p->template_depth--;
-}
-
-/*
- * parse_template_type_default — type-parameter default (a type-id).
- *
- * 'template<typename T = int*>' / 'template<typename T = vector<int>>'.
- * The default is a type-id, not an expression. Same > / >> rules apply.
- */
-static void parse_template_type_default(Parser *p) {
-    p->template_depth++;
-    (void)parse_type_name(p);
-    p->template_depth--;
-}
-
-static void consume_trailing_qualifiers(Parser *p) {
-    for (;;) {
-        if (parser_consume(p, TK_KW_CONST))    continue;
-        if (parser_consume(p, TK_KW_VOLATILE)) continue;
-        if (parser_consume(p, TK_KW_NOEXCEPT)) {
-            /* noexcept(expr) — N4659 §15.4 [except.spec]. Skip balanced
-             * parens; the boolean expression is consumed and discarded. */
-            if (parser_consume(p, TK_LPAREN)) {
-                int depth = 1;
-                while (depth > 0 && !parser_at_eof(p)) {
-                    if (parser_at(p, TK_LPAREN)) depth++;
-                    else if (parser_at(p, TK_RPAREN)) {
-                        depth--;
-                        if (depth == 0) break;
-                    }
-                    parser_advance(p);
-                }
-                parser_expect(p, TK_RPAREN);
-            }
-            continue;
-        }
-        break;
-    }
-    /* throw(type-id-list(opt)) — N4659 §15.4 [except.spec], deprecated in
-     * C++17 but still pervasive in libstdc++ headers (e.g. throw()). */
-    if (parser_consume(p, TK_KW_THROW)) {
-        parser_expect(p, TK_LPAREN);
-        int depth = 1;
-        while (depth > 0 && !parser_at_eof(p)) {
-            if (parser_at(p, TK_LPAREN)) depth++;
-            else if (parser_at(p, TK_RPAREN)) { depth--; if (depth == 0) break; }
-            parser_advance(p);
-        }
-        parser_expect(p, TK_RPAREN);
-    }
-    parser_skip_gnu_attributes(p);
-    while (parser_at(p, TK_IDENT) &&
-           (token_equal(parser_peek(p), "override") ||
-            token_equal(parser_peek(p), "final")))
-        parser_advance(p);
-    parser_consume(p, TK_AMP);
-    parser_consume(p, TK_LAND);
-    if (parser_consume(p, TK_KW_NOEXCEPT)) {
-        if (parser_consume(p, TK_LPAREN)) {
-            parse_expr(p);
-            parser_expect(p, TK_RPAREN);
-        }
-    }
-    /* pure-specifier: = 0 (for virtual methods) */
-    if (parser_at(p, TK_ASSIGN) && parser_peek_ahead(p, 1)->kind == TK_NUM) {
-        parser_advance(p);
-        parser_advance(p);
-    }
-    /* trailing-return-type — N4659 §11.3.5 [dcl.fct]
-     *   parameters-and-qualifiers trailing-return-type
-     *   trailing-return-type: -> type-id
-     * Parse and discard; the return type isn't propagated yet. */
-    if (parser_consume(p, TK_ARROW))
-        parse_type_name(p);
-}
 Node *parse_declarator(Parser *p, Type *base_ty) {
     /* ptr-operator — N4659 §11.3 [dcl.meaning]
      *   ptr-operator:
@@ -803,6 +695,88 @@ parse_suffixes:
  */
 
 /*
+ * consume_trailing_qualifiers — helper used by parse_declarator's
+ * parameter-list path to consume the qualifiers that may follow
+ * the closing ')' of a function declarator.
+ *
+ * N4659 §11.3.5 [dcl.fct]: parameters-and-qualifiers includes
+ *   cv-qualifier-seq(opt) ref-qualifier(opt) noexcept-specifier(opt)
+ *
+ * Also consumes virt-specifiers (override, final) per N4659 §13.3
+ * [class.virtual] (renumbered from §12.3 in older drafts), the
+ * deprecated-but-still-pervasive throw-spec from §15.4 [except.spec],
+ * the pure-specifier '= 0', and the C++11 trailing-return-type
+ * arrow.
+ *
+ * Terminates: each iteration consumes a qualifier token or breaks.
+ */
+static void consume_trailing_qualifiers(Parser *p) {
+    for (;;) {
+        if (parser_consume(p, TK_KW_CONST))    continue;
+        if (parser_consume(p, TK_KW_VOLATILE)) continue;
+        if (parser_consume(p, TK_KW_NOEXCEPT)) {
+            /* noexcept(expr) — N4659 §15.4 [except.spec]. Skip
+             * balanced parens; the expression is consumed and
+             * discarded. */
+            if (parser_consume(p, TK_LPAREN)) {
+                int depth = 1;
+                while (depth > 0 && !parser_at_eof(p)) {
+                    if (parser_at(p, TK_LPAREN)) depth++;
+                    else if (parser_at(p, TK_RPAREN)) {
+                        depth--;
+                        if (depth == 0) break;
+                    }
+                    parser_advance(p);
+                }
+                parser_expect(p, TK_RPAREN);
+            }
+            continue;
+        }
+        break;
+    }
+    /* throw(type-id-list(opt)) — N4659 §15.4 [except.spec], deprecated
+     * in C++17 but still pervasive in libstdc++ headers. */
+    if (parser_consume(p, TK_KW_THROW)) {
+        parser_expect(p, TK_LPAREN);
+        int depth = 1;
+        while (depth > 0 && !parser_at_eof(p)) {
+            if (parser_at(p, TK_LPAREN)) depth++;
+            else if (parser_at(p, TK_RPAREN)) { depth--; if (depth == 0) break; }
+            parser_advance(p);
+        }
+        parser_expect(p, TK_RPAREN);
+    }
+    parser_skip_gnu_attributes(p);
+    /* override / final — N4659 §13.3 [class.virtual]. Contextual
+     * keywords (not reserved); we recognise by name. */
+    while (parser_at(p, TK_IDENT) &&
+           (token_equal(parser_peek(p), "override") ||
+            token_equal(parser_peek(p), "final")))
+        parser_advance(p);
+    parser_consume(p, TK_AMP);
+    parser_consume(p, TK_LAND);
+    if (parser_consume(p, TK_KW_NOEXCEPT)) {
+        if (parser_consume(p, TK_LPAREN)) {
+            parse_expr(p);
+            parser_expect(p, TK_RPAREN);
+        }
+    }
+    /* pure-specifier '= 0' — N4659 §13.3/2 [class.virtual]. Marks
+     * a virtual method as pure (abstract). We consume the tokens
+     * but don't yet propagate the abstractness flag. */
+    if (parser_at(p, TK_ASSIGN) && parser_peek_ahead(p, 1)->kind == TK_NUM) {
+        parser_advance(p);
+        parser_advance(p);
+    }
+    /* trailing-return-type — N4659 §11.3.5 [dcl.fct]
+     *   parameters-and-qualifiers trailing-return-type
+     *   trailing-return-type: -> type-id
+     * Parse and discard; the return type isn't propagated yet. */
+    if (parser_consume(p, TK_ARROW))
+        parse_type_name(p);
+}
+
+/*
  * parse_func_body — push prototype scope, register parameters, parse
  * the optional ctor-initializer list and the function-body compound
  * statement, then pop the prototype scope. Used by both the eager
@@ -1063,6 +1037,7 @@ Node *parse_declaration(Parser *p) {
         p->pending_is_destructor = false;
         func->func.is_constructor = p->pending_is_constructor;
         p->pending_is_constructor = false;
+        func->func.is_virtual = (spec.flags & DECL_VIRTUAL) != 0;
         func->func.body_start_pos = -1;
         func->func.body_end_pos = -1;
         func->func.deferred_class_region = NULL;
@@ -1318,6 +1293,9 @@ Node *parse_declaration(Parser *p) {
             decl->var_decl.is_destructor = true;
             p->pending_is_destructor = false;
         }
+        if ((spec.flags & DECL_VIRTUAL) &&
+            decl->var_decl.ty && decl->var_decl.ty->kind == TY_FUNC)
+            decl->var_decl.is_virtual = true;
     }
     return decl;
 }
@@ -1592,7 +1570,45 @@ Node *parse_top_level_decl(Parser *p) {
 /* ------------------------------------------------------------------ */
 
 /*
- * Parse a single template parameter.
+ * parse_template_value_default — non-type / template-template
+ * template-parameter default value (an assignment-expression).
+ *
+ * Helper for parse_template_parameter (the call sites are
+ * immediately below). N4659 §17.1/8 [temp.param]: a non-type
+ * template-parameter default is an assignment-expression.
+ * §17.2/3 [temp.names]: inside a template-argument-list (and, by
+ * extension, a template-parameter default value), the first non-
+ * nested > is the closing delimiter rather than the greater-than
+ * operator; >> splits into two >'s.
+ *
+ * We bump template_depth so the binary-operator parser stops at
+ * the top-level >, then call parse_assign_expr. The result is
+ * currently discarded — sema doesn't yet substitute defaults at
+ * instantiation sites.
+ */
+static void parse_template_value_default(Parser *p) {
+    p->template_depth++;
+    (void)parse_assign_expr(p);
+    p->template_depth--;
+}
+
+/*
+ * parse_template_type_default — type-parameter default (a type-id).
+ *
+ * 'template<typename T = int*>' / 'template<typename T = vector<int>>'.
+ * N4659 §17.1/8 [temp.param] applies the same > / >> termination
+ * rules as parse_template_value_default. The default is a type-id,
+ * not an expression, so this calls parse_type_name instead of
+ * parse_assign_expr.
+ */
+static void parse_template_type_default(Parser *p) {
+    p->template_depth++;
+    (void)parse_type_name(p);
+    p->template_depth--;
+}
+
+/*
+ * parse_template_parameter — parse one template parameter.
  *
  * N4659 §17.1 [temp] (Annex A.12):
  *   template-parameter:

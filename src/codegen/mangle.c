@@ -165,3 +165,19 @@ void mangle_class_dtor_body(Type *class_type) {
     g_mangler->append_dtor_body(g_mangler);
     emit_class_close();
 }
+
+void mangle_class_vtable_type(Type *class_type) {
+    /* The vtable suffix is sea-front-specific (no Itanium analogue
+     * uses this exact form), so we hardcode the leaf rather than
+     * route through the vtable for now. When/if an Itanium scheme
+     * lands, it'll add proper vtable hooks. */
+    emit_class_open(class_type);
+    fputs("__vtable", stdout);
+    emit_class_close();
+}
+
+void mangle_class_vtable_instance(Type *class_type) {
+    emit_class_open(class_type);
+    fputs("__vtable_instance", stdout);
+    emit_class_close();
+}

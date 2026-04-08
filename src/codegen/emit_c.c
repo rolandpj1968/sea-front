@@ -428,34 +428,8 @@ static bool subtree_has_cleanups(Node *n) {
 /* Name mangling                                                       */
 /* ------------------------------------------------------------------ */
 
-/* Walk a class type's class_region enclosing chain to find namespaces
- * and emit them as a prefix. Result: 'ns1_ns2_'. Empty string for a
- * class at global scope. The trailing underscore is included so
- * callers can append the class tag directly. */
-static void emit_ns_prefix(Type *class_type) {
-    if (!class_type || !class_type->class_region) return;
-    /* Walk OUT from the class to collect namespace names. */
-    enum { MAX_NS = 8 };
-    Token *names[MAX_NS];
-    int n = 0;
-    DeclarativeRegion *r = class_type->class_region->enclosing;
-    while (r && n < MAX_NS) {
-        if (r->kind == REGION_NAMESPACE && r->name)
-            names[n++] = r->name;
-        r = r->enclosing;
-    }
-    /* Emit outermost first. */
-    for (int i = n - 1; i >= 0; i--)
-        fprintf(stdout, "%.*s_", names[i]->len, names[i]->loc);
-}
-
-/* Emit the mangled struct/class tag for a class type:
- *   global   — 'Tag'
- *   ns::Tag  — 'ns_Tag'
- *   a::b::T  — 'a_b_T'
- * Used both for the C struct tag (so two classes named the same in
- * different namespaces don't collide in the single C tag namespace)
- * and as the prefix for method mangling. */
+/* Emit the mangled struct/class tag for a class type. Routes
+ * through the mangling framework — see src/codegen/mangle.c. */
 static void emit_mangled_class_tag(Type *class_type) {
     if (!class_type || !class_type->tag) {
         fputs("?", stdout);
@@ -466,6 +440,29 @@ static void emit_mangled_class_tag(Type *class_type) {
      * namespace separator is '__', so 'std::vector' lowers to
      * 'sf__std__vector'. */
     mangle_class_tag(class_type);
+}
+
+/* Walk a class's member list to find a method by name and report
+ * whether it's virtual. Used by call-site emission to decide
+ * between direct dispatch (sf__Class__m(&obj, args)) and indirect
+ * dispatch (obj.__sf_vptr->m(&obj, args)). */
+static bool method_is_virtual(Type *class_type, Token *method_name) {
+    if (!class_type || !class_type->class_def || !method_name) return false;
+    Node *cdef = class_type->class_def;
+    for (int i = 0; i < cdef->class_def.nmembers; i++) {
+        Node *m = cdef->class_def.members[i];
+        if (!m) continue;
+        if (m->kind == ND_FUNC_DEF && m->func.name &&
+            m->func.name->len == method_name->len &&
+            memcmp(m->func.name->loc, method_name->loc, method_name->len) == 0)
+            return m->func.is_virtual;
+        if (m->kind == ND_VAR_DECL && m->var_decl.name &&
+            m->var_decl.ty && m->var_decl.ty->kind == TY_FUNC &&
+            m->var_decl.name->len == method_name->len &&
+            memcmp(m->var_decl.name->loc, method_name->loc, method_name->len) == 0)
+            return m->var_decl.is_virtual;
+    }
+    return false;
 }
 
 /* ------------------------------------------------------------------ */
@@ -671,8 +668,14 @@ static void emit_expr(Node *n) {
             callee->ident.resolved_decl->home->owner_type->tag) {
             Type *class_type = callee->ident.resolved_decl->home->owner_type;
             Token *mname = callee->ident.name;
-            mangle_class_method(class_type, mname);
-            fputs("(this", stdout);
+            if (method_is_virtual(class_type, mname)) {
+                /* Virtual dispatch: this->__sf_vptr->m(this, args) */
+                fprintf(stdout, "this->__sf_vptr->%.*s(this",
+                        mname->len, mname->loc);
+            } else {
+                mangle_class_method(class_type, mname);
+                fputs("(this", stdout);
+            }
             for (int i = 0; i < n->call.nargs; i++) {
                 fputs(", ", stdout);
                 emit_expr(n->call.args[i]);
@@ -687,8 +690,29 @@ static void emit_expr(Node *n) {
             if (obj_is_ptr) ot = ot->base;
             if (ot && (ot->kind == TY_STRUCT || ot->kind == TY_UNION) &&
                 ot->tag && callee->member.member) {
-                mangle_class_method(ot, callee->member.member);
-                fputc('(', stdout);
+                bool virt = method_is_virtual(ot, callee->member.member);
+                if (virt) {
+                    /* Virtual dispatch: load __sf_vptr then call slot.
+                     * Emit the receiver expression once into the slot
+                     * and once as the first arg (no temporary —
+                     * sufficient for the lvalue/pointer cases we
+                     * support). */
+                    if (obj_is_ptr) {
+                        fputc('(', stdout);
+                        emit_expr(obj);
+                        fputs(")->__sf_vptr->", stdout);
+                    } else {
+                        fputc('(', stdout);
+                        emit_expr(obj);
+                        fputs(").__sf_vptr->", stdout);
+                    }
+                    fprintf(stdout, "%.*s(",
+                            callee->member.member->len,
+                            callee->member.member->loc);
+                } else {
+                    mangle_class_method(ot, callee->member.member);
+                    fputc('(', stdout);
+                }
                 /* this argument: address-of for value, as-is for pointer. */
                 if (obj_is_ptr) {
                     emit_expr(obj);
@@ -1675,6 +1699,19 @@ static void emit_ctor_member_inits(Node *func) {
     if (!func->func.is_constructor) return;
     if (!g_current_class_def) return;
     Node *cdef = g_current_class_def;
+    /* Vptr install — N4659 §15.6.2/1 [class.base.init]: a polymorphic
+     * class's virtual functions become callable through the object
+     * once construction is *complete*. We approximate by setting the
+     * vptr at the *start* of the ctor (before member inits and the
+     * user body). For our subset (no virtual base call from a base
+     * ctor body, no override of virtual call from constructor) this
+     * is observationally equivalent to the standard behavior. */
+    if (cdef->class_def.ty && cdef->class_def.ty->has_virtual_methods) {
+        emit_indent();
+        fputs("this->__sf_vptr = &", stdout);
+        mangle_class_vtable_instance(cdef->class_def.ty);
+        fputs(";\n", stdout);
+    }
     for (int i = 0; i < cdef->class_def.nmembers; i++) {
         Node *m = cdef->class_def.members[i];
         if (!m || m->kind != ND_VAR_DECL) continue;
@@ -1740,6 +1777,9 @@ static void emit_ctor_member_inits(Node *func) {
  * the top, run the body, then __epilogue: return __retval; */
 static void emit_func_body(Node *func) {
     if (!func->func.body) { fputs(";\n", stdout); return; }
+    /* Ctors in any class need the wrapped form so emit_ctor_member_inits
+     * can run — that's where mem-init list AND vptr install live.
+     * Non-ctors only need the wrap when they have cleanups. */
     bool has_member_inits = func->func.is_constructor &&
                             g_current_class_def != NULL;
     if (!g_cf.func_has_cleanups && !has_member_inits) {
@@ -1886,6 +1926,19 @@ static void emit_class_def(Node *n) {
      * after the struct definition).
      * Other members (nested types, access specifiers) ignored. */
     Type *class_type = n->class_def.ty;
+
+    /* For polymorphic classes (any virtual method), forward-declare
+     * the vtable struct so we can place a vptr field at offset 0 of
+     * the layout. The vtable struct itself is defined later, after
+     * all method forward-declarations are out, so it can name them
+     * in its function-pointer slots. */
+    bool poly = class_type && class_type->has_virtual_methods;
+    if (poly) {
+        fputs("struct ", stdout);
+        mangle_class_vtable_type(class_type);
+        fputs(";\n", stdout);
+    }
+
     fputs("struct ", stdout);
     if (class_type)
         emit_mangled_class_tag(class_type);
@@ -1895,6 +1948,15 @@ static void emit_class_def(Node *n) {
     fputc(' ', stdout);
     fputs("{\n", stdout);
     g_indent++;
+    /* Vptr at offset 0 — N4659 §13.3 [class.virtual]. The standard
+     * doesn't mandate offset 0 but every Itanium-style ABI puts it
+     * there for the simple non-multi-inheritance case, and so do we. */
+    if (poly) {
+        emit_indent();
+        fputs("const struct ", stdout);
+        mangle_class_vtable_type(class_type);
+        fputs(" *__sf_vptr;\n", stdout);
+    }
     for (int i = 0; i < n->class_def.nmembers; i++) {
         Node *m = n->class_def.members[i];
         if (!m) continue;
@@ -2013,6 +2075,88 @@ static void emit_class_def(Node *n) {
         fputs(" *this);\n", stdout);
     }
 
+    /* Vtable struct + static instance — N4659 §13.3 [class.virtual].
+     *
+     * The struct has one function-pointer slot per virtual method,
+     * in declaration order. The static instance is filled with the
+     * mangled method addresses; ctors install '&instance' into the
+     * object's __sf_vptr field, and call sites dispatch through it.
+     *
+     * First-slice limitation: virtual destructors aren't yet given
+     * a vtable slot — they'd require slot-routing for the dtor wrapper
+     * which we'll add when we tackle delete-through-base. */
+    if (class_type && class_type->has_virtual_methods) {
+        /* The struct definition. */
+        fputs("struct ", stdout);
+        mangle_class_vtable_type(class_type);
+        fputs(" {\n", stdout);
+        g_indent++;
+        for (int i = 0; i < n->class_def.nmembers; i++) {
+            Node *m = n->class_def.members[i];
+            if (!m) continue;
+            bool is_virt_funcdef = (m->kind == ND_FUNC_DEF && m->func.is_virtual);
+            bool is_virt_decl = (m->kind == ND_VAR_DECL && m->var_decl.is_virtual &&
+                                 m->var_decl.ty && m->var_decl.ty->kind == TY_FUNC);
+            if (!is_virt_funcdef && !is_virt_decl) continue;
+            /* Skip virtual destructors for the first slice (see above). */
+            if (is_virt_funcdef && m->func.is_destructor) continue;
+            if (is_virt_decl && m->var_decl.is_destructor) continue;
+
+            Type *ret_ty = is_virt_funcdef ? m->func.ret_ty
+                                           : m->var_decl.ty->ret;
+            Token *mname = is_virt_funcdef ? m->func.name : m->var_decl.name;
+            int nparams = is_virt_funcdef ? m->func.nparams
+                                          : m->var_decl.ty->nparams;
+
+            emit_indent();
+            emit_type(ret_ty);
+            fprintf(stdout, " (*%.*s)(struct ",
+                    mname->len, mname->loc);
+            mangle_class_tag(class_type);
+            fputs(" *", stdout);
+            if (is_virt_funcdef) {
+                for (int k = 0; k < nparams; k++) {
+                    fputs(", ", stdout);
+                    emit_type(m->func.params[k]->param.ty);
+                }
+            } else {
+                for (int k = 0; k < nparams; k++) {
+                    fputs(", ", stdout);
+                    emit_type(m->var_decl.ty->params[k]);
+                }
+            }
+            fputs(");\n", stdout);
+        }
+        g_indent--;
+        fputs("};\n", stdout);
+
+        /* The static instance. Each slot points at the method's
+         * mangled free-function form. The forward decls for these
+         * methods were emitted above, so the names are visible here. */
+        fputs("static const struct ", stdout);
+        mangle_class_vtable_type(class_type);
+        fputc(' ', stdout);
+        mangle_class_vtable_instance(class_type);
+        fputs(" = {\n", stdout);
+        g_indent++;
+        for (int i = 0; i < n->class_def.nmembers; i++) {
+            Node *m = n->class_def.members[i];
+            if (!m) continue;
+            bool is_virt_funcdef = (m->kind == ND_FUNC_DEF && m->func.is_virtual);
+            bool is_virt_decl = (m->kind == ND_VAR_DECL && m->var_decl.is_virtual &&
+                                 m->var_decl.ty && m->var_decl.ty->kind == TY_FUNC);
+            if (!is_virt_funcdef && !is_virt_decl) continue;
+            if (is_virt_funcdef && m->func.is_destructor) continue;
+            if (is_virt_decl && m->var_decl.is_destructor) continue;
+            Token *mname = is_virt_funcdef ? m->func.name : m->var_decl.name;
+            emit_indent();
+            mangle_class_method(class_type, mname);
+            fputs(",\n", stdout);
+        }
+        g_indent--;
+        fputs("};\n", stdout);
+    }
+
     /* Now emit each method (ND_FUNC_DEF in the member list) as a
      * separate free function. Trivial dtors are skipped to match
      * the forward-decl loop above. g_current_class_def is set so
@@ -2094,6 +2238,14 @@ static void emit_class_def(Node *n) {
         mangle_class_tag(class_type);
         fputs(" *this) {\n", stdout);
         g_indent++;
+        /* Install vptr first for polymorphic classes — see the
+         * matching emit_ctor_member_inits path for the rationale. */
+        if (class_type->has_virtual_methods) {
+            emit_indent();
+            fputs("this->__sf_vptr = &", stdout);
+            mangle_class_vtable_instance(class_type);
+            fputs(";\n", stdout);
+        }
         for (int i = 0; i < n->class_def.nmembers; i++) {
             Node *m = n->class_def.members[i];
             if (!m || m->kind != ND_VAR_DECL) continue;

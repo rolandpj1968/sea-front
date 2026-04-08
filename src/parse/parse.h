@@ -416,6 +416,7 @@ struct Node {
              * the right way. Mirrors the same flags on ND_FUNC_DEF. */
             bool   is_constructor;
             bool   is_destructor;
+            bool   is_virtual;
         } var_decl;
 
         /* ND_FUNC_DEF — N4659 §11.4 [dcl.fct.def]
@@ -447,6 +448,11 @@ struct Node {
              * class ClassName). Like dtors, the declared name token is
              * the class name. Mangled as Class_ctor. */
             bool is_constructor;
+            /* Virtual method — N4659 §13.3 [class.virtual]. The
+             * 'virtual' specifier was seen in the decl-specifier-seq.
+             * Codegen emits a vtable for the class, places a vptr
+             * field at offset 0, and dispatches calls through it. */
+            bool is_virtual;
             /* Deferred body parsing — N4659 §6.4.7/1 [class.mem]/6.
              * For an inline member function defined inside a class
              * body, the function body (and ctor-initializer list) are
@@ -541,7 +547,8 @@ enum {
     DECL_EXTERN    = 1 << 1,  /* §10.1.1 */
     DECL_INLINE    = 1 << 2,  /* §10.1.6 [dcl.inline] */
     DECL_CONSTEXPR = 1 << 3,  /* §10.1.5 [dcl.constexpr] */
-    DECL_VIRTUAL   = 1 << 4,  /* §10.1.2 — but really §12.3 [class.virtual] */
+    DECL_VIRTUAL   = 1 << 4,  /* N4659 §10.1.2 [dcl.fct.spec] (grammar);
+                               *        §13.3   [class.virtual] (semantics) */
     DECL_EXPLICIT  = 1 << 5,  /* §10.1.1 [dcl.stc] — constructors */
     DECL_MUTABLE   = 1 << 6,  /* §10.1.1 [dcl.stc] — data members */
     DECL_REGISTER  = 1 << 7,  /* §10.1.1 [dcl.stc] — deprecated in C++17 */
@@ -644,6 +651,13 @@ struct Type {
      * call. Synthesized default ctors (for classes with non-trivial
      * members but no user ctor) also set this. */
     bool has_default_ctor;
+
+    /* TY_STRUCT, TY_UNION: true if any member function (own or
+     * inherited) is virtual. When set, codegen emits a per-class
+     * vtable struct, places a vptr at offset 0 of the layout, and
+     * dispatches matching method calls through it. Pay-only-when-
+     * used: classes without virtual methods get no vptr. */
+    bool has_virtual_methods;
 
     /* TY_STRUCT, TY_UNION: back-pointer to the ND_CLASS_DEF node
      * that defined this type. Set when the class body is parsed.

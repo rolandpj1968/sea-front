@@ -542,6 +542,13 @@ DeclSpec parse_type_specifiers(Parser *p) {
                 for (int mi = 0; mi < members.len; mi++) {
                     Node *m = ((Node **)members.data)[mi];
                     if (!m) continue;
+                    /* N4659 §13.3 [class.virtual]: any virtual method
+                     * makes the class polymorphic and forces a vptr. */
+                    if (m->kind == ND_FUNC_DEF && m->func.is_virtual)
+                        ty->has_virtual_methods = true;
+                    if (m->kind == ND_VAR_DECL && m->var_decl.is_virtual &&
+                        m->var_decl.ty && m->var_decl.ty->kind == TY_FUNC)
+                        ty->has_virtual_methods = true;
                     if (m->kind == ND_FUNC_DEF && m->func.is_destructor) {
                         Node *body = m->func.body;
                         bool empty = body && body->kind == ND_BLOCK &&
@@ -593,6 +600,14 @@ DeclSpec parse_type_specifiers(Parser *p) {
                  * member-only classes stay flag-free and the C declaration
                  * leaves storage uninitialized (matching C semantics). */
                 if (!any_user_ctor && any_member_needs_default) {
+                    ty->has_default_ctor = true;
+                }
+                /* Polymorphic classes always need a default ctor even
+                 * if every member is trivially-default-constructible —
+                 * the ctor is what installs the vptr. Without it, an
+                 * uninitialized object would have a stale/zero vptr
+                 * and the first virtual call would be undefined. */
+                if (!any_user_ctor && ty->has_virtual_methods) {
                     ty->has_default_ctor = true;
                 }
             }

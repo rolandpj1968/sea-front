@@ -82,4 +82,12 @@ void mangle_class_dtor(Type *class_type);
  *   class vec → sf__vec__dtor_body */
 void mangle_class_dtor_body(Type *class_type);
 
+/* The vtable struct type for a polymorphic class:
+ *   class vec → sf__vec__vtable */
+void mangle_class_vtable_type(Type *class_type);
+
+/* The static vtable instance (one per class with virtual methods):
+ *   class vec → sf__vec__vtable_instance */
+void mangle_class_vtable_instance(Type *class_type);
+
 #endif /* SF_CODEGEN_MANGLE_H */
