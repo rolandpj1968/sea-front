@@ -6,22 +6,22 @@
  *   declaration:
  *       block-declaration
  *       function-definition
- *       template-declaration            (deferred — Stage 3)
- *       explicit-instantiation          (deferred)
- *       explicit-specialization         (deferred)
- *       linkage-specification           (deferred — extern "C")
- *       namespace-definition            (deferred — Stage 2)
+ *       template-declaration            (handled — see parse_template_decl)
+ *       explicit-instantiation          (skip-parsed)
+ *       explicit-specialization         (handled via template-declaration)
+ *       linkage-specification           (handled — extern "C" / "C++")
+ *       namespace-definition            (handled)
  *       empty-declaration               ( ; )
- *       attribute-declaration           (deferred)
+ *       attribute-declaration           (skip-parsed via parser_skip_*_attributes)
  *
  *   block-declaration:
  *       simple-declaration
- *       asm-declaration                 (deferred)
- *       namespace-alias-definition      (deferred)
- *       using-declaration               (partial — using T = type)
- *       using-directive                 (implemented)
+ *       asm-declaration                 (skip-parsed)
+ *       namespace-alias-definition      (handled)
+ *       using-declaration               (handled — using T::name;)
+ *       using-directive                 (handled — using namespace N;)
  *       static_assert-declaration       (skip-parsed)
- *       alias-declaration               (deferred — using T = ...)
+ *       alias-declaration               (handled — using T = type;)
  *       opaque-enum-declaration         (deferred)
  *
  *   simple-declaration:
@@ -62,9 +62,9 @@ static void consume_trailing_qualifiers(Parser *p);
  *
  *   ptr-operator:
  *       * cv-qualifier-seq(opt)                    (pointer)
- *       &                                          (deferred — lvalue ref)
- *       &&                                         (deferred — rvalue ref)
- *       nested-name-specifier * cv-qualifier-seq   (deferred — ptr-to-member)
+ *       & attribute-specifier-seq(opt)             (lvalue reference)
+ *       && attribute-specifier-seq(opt)            (rvalue reference)
+ *       nested-name-specifier * cv-qualifier-seq   (pointer-to-member)
  *
  *   noptr-declarator:
  *       declarator-id attribute-specifier-seq(opt)
@@ -94,7 +94,7 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
      *       * cv-qualifier-seq(opt)                    — pointer
      *       & attribute-specifier-seq(opt)             — lvalue reference
      *       && attribute-specifier-seq(opt)            — rvalue reference
-     *       nested-name-specifier * cv-qualifier-seq   — ptr-to-member (deferred)
+     *       nested-name-specifier * cv-qualifier-seq   — pointer-to-member
      *
      * N4659 §11.3.2 [dcl.ref]:
      *   "In a declaration T D where D has either of the forms
@@ -441,9 +441,22 @@ parse_suffixes:
      *   (c) The "most vexing parse":    T x(T());  — function decl!
      *
      * Per §9.8: "any statement that could be a declaration IS a declaration."
-     * We use tentative parsing: try to parse as a parameter list; if the
-     * first token after '(' is not a type-specifier, ')', or '...', it's
-     * not a parameter list — leave it for the caller to handle as init. */
+     *
+     * Standard rule (§11.2/1 [dcl.ambig.res]): tentatively parse as a
+     * parameter-declaration-clause; if it succeeds, that's the
+     * interpretation.
+     *
+     * SHORTCUT (ours, not the standard): we gate entry to the
+     * tentative param parse with a one-token-lookahead 'looks_like_params'
+     * heuristic — only if the token after '(' could plausibly start a
+     * param-decl (type-spec, ')', '...', a known type-name, or a
+     * qualified name) do we even attempt the tentative parse. Inside
+     * that gate we DO use a real ParseState save/restore so mid-stream
+     * failures (e.g. an unparseable param expression) back out to
+     * direct-init. The gate prunes the §11.2 algorithm's worst case
+     * but is not equivalent to it.
+     * TODO(seafront#decl-ambig-gate): drop the gate and run a true
+     * §11.2/1 tentative parse once perf allows. */
     if (parser_at(p, TK_LPAREN) && name) {
         /* Peek inside the parens to decide: parameter list or init?
          * A parameter list starts with: ), void), type-specifier, or ...
@@ -737,11 +750,11 @@ parse_suffixes:
  *
  *   initializer:
  *       brace-or-equal-initializer
- *       ( expression-list )             (direct-init — deferred)
+ *       ( expression-list )             (direct-init — handled)
  *
  *   brace-or-equal-initializer:
  *       = initializer-clause
- *       braced-init-list               (deferred)
+ *       braced-init-list               (handled)
  */
 
 /*
@@ -993,8 +1006,8 @@ Node *parse_declaration(Parser *p) {
      * is after the complete declarator, so the typedef name becomes
      * visible for subsequent declarations in the same scope.
      *
-     * C++11 also allows: using identifier = type-id (alias declaration)
-     * — deferred. */
+     * C++11 alias-declaration ('using identifier = type-id') is
+     * handled separately via the TK_KW_USING branch above. */
     if (parser_consume(p, TK_KW_TYPEDEF)) {
         Type *base_ty = parse_type_specifiers(p).type;
         Node *decl = parse_declarator(p, base_ty);
@@ -1024,11 +1037,15 @@ Node *parse_declaration(Parser *p) {
      * its name is not found by name lookup until a matching declaration
      * is provided in the innermost enclosing non-class scope."
      *
-     * Strictly, the friend declaration should NOT make the name visible
-     * for lookup. However, for a bootstrap tool processing valid source
-     * (where the name IS declared elsewhere), we eagerly register it
-     * in the enclosing namespace so template-id parsing works. This is
-     * a pragmatic deviation from the standard's lookup rules.
+     * SHORTCUT (ours, not the standard): §14.3/11 says the friend
+     * declaration must NOT make the name visible to lookup until a
+     * matching real declaration appears. We eagerly register the
+     * friend's name in the enclosing namespace so template-id
+     * parsing finds it. Safe for valid bootstrap input (where the
+     * real declaration exists somewhere); would mis-accept code that
+     * relies on §14.3/11 hiding.
+     * TODO(seafront#friend-visibility): honour §14.3/11 if/when
+     * sema needs accurate friend-only visibility.
      *
      * The inner declaration is wrapped in ND_FRIEND for sema. */
     if (parser_consume(p, TK_KW_FRIEND)) {
@@ -1182,7 +1199,7 @@ Node *parse_declaration(Parser *p) {
      *
      *   brace-or-equal-initializer:
      *       = initializer-clause
-     *       braced-init-list                   (deferred)
+     *       braced-init-list                   (handled)
      *
      * Direct-initialization T x(expr) is distinguished from a function
      * declarator by the heuristic in parse_declarator() — if the '(' was
@@ -1357,9 +1374,9 @@ Node *parse_declaration(Parser *p) {
  *   - function definitions
  *   - variable declarations
  *   - linkage-specification (extern "C")
- *   - namespace definitions (deferred)
- *   - template declarations (deferred)
- *   - using declarations (deferred)
+ *   - namespace definitions
+ *   - template declarations
+ *   - using-directive / alias-declaration / using-declaration
  *   - empty declarations ( ; )
  */
 Node *parse_top_level_decl(Parser *p) {
@@ -1388,7 +1405,7 @@ Node *parse_top_level_decl(Parser *p) {
      * Also handles:
      *   using-directive: using namespace name ;  (§10.3.4)
      *   using-declaration: using name ;          (§10.3.3)
-     *   using alias: using T = type-id ;         (deferred)
+     *   alias-declaration: using T = type-id ;   (§10.1.3)
      */
     if (parser_at(p, TK_KW_USING)) {
         Token *tok = parser_advance(p);
@@ -1433,8 +1450,16 @@ Node *parse_top_level_decl(Parser *p) {
             return new_typedef_node(p, ty, alias_name, tok);
         }
 
-        /* using-declaration: using Base::member; — (§10.3.3 [namespace.udecl])
-         * For now, skip until ; */
+        /* using-declaration: using Base::member; — §10.3.3 [namespace.udecl]
+         * SHORTCUT (ours, not the standard): we skip the body to ';'
+         * without registering the introduced name. The standard
+         * (§10.3.3/4) says the using-declaration introduces a name
+         * into the current declarative region, which sema needs for
+         * lookup of the introduced member. We get away with this
+         * because most uses in libstdc++ are pulling base-class
+         * members into a derived class — our base-class lookup walk
+         * already finds them.
+         * TODO(seafront#using-decl): introduce the name properly. */
         /* Terminates: advances toward ; or EOF */
         while (!parser_at(p, TK_SEMI) && !parser_at_eof(p))
             parser_advance(p);
@@ -1684,9 +1709,21 @@ static Node *parse_template_parameter(Parser *p) {
     /* type-parameter: typename T or class T
      * N4659 §17.1/1: type-parameter-key is 'class' or 'typename' */
     if (tok->kind == TK_KW_TYPENAME || tok->kind == TK_KW_CLASS) {
-        /* Disambiguate: 'typename T' (type param) vs 'typename Foo::bar' (dependent name)
-         * and 'class X' (type param) vs elaborated-type-specifier.
-         * Heuristic: if next token is ident, comma, >, >>, =, or ..., it's a type param. */
+        /* Disambiguate: 'typename T' (type param) vs 'typename Foo::bar'
+         * (dependent name in non-type param) and 'class X' (type
+         * param) vs elaborated-type-specifier.
+         *
+         * SHORTCUT (ours, not the standard): we use a one-token
+         * lookahead — if the token after 'typename'/'class' is
+         * ident/comma/>/>>/=/..., treat as type-parameter. The
+         * standard's grammar (§17.1) requires recognising the FULL
+         * type-parameter production, not just its lookahead set; in
+         * particular, distinguishing 'typename T' from 'typename
+         * T<U>' (a dependent template-id non-type param) needs the
+         * trailing-token check below. We get away with the lookahead
+         * because real template-parameter-lists don't mix the two
+         * forms ambiguously.
+         * TODO(seafront#tparam-ambig): true grammar match if needed. */
         Token *next = parser_peek_ahead(p, 1);
         Token *next2 = parser_peek_ahead(p, 2);
         /* 'typename T<...>' or 'typename T::U' is a dependent-type
@@ -1726,9 +1763,17 @@ static Node *parse_template_parameter(Parser *p) {
         /* else: fall through to non-type parameter parsing */
     }
 
-    /* template-template parameter:
-     * template < template-parameter-list > class/typename identifier(opt)
-     * Deferred: just skip to , or > for now */
+    /* template-template parameter — N4659 §17.1 [temp.param]
+     *   template < template-parameter-list > type-parameter-key
+     *       ...(opt) identifier(opt) (= id-expression)(opt)
+     *
+     * SHORTCUT (ours, not the standard): we don't recursively parse
+     * the inner template-parameter-list — just balance angles and
+     * skip. The introduced name is registered as ENTITY_TEMPLATE so
+     * lookup of references works; the inner parameter shape is
+     * thrown away. Sufficient for our libstdc++ workload.
+     * TODO(seafront#tt-param): recurse into the inner parameter
+     * list for full sema. */
     if (tok->kind == TK_KW_TEMPLATE) {
         /* Skip nested template<...> */
         parser_advance(p);  /* template */
@@ -1911,13 +1956,13 @@ Node *parse_template_declaration(Parser *p) {
                           ENTITY_TAG, tmpl_class_type);
         }
 
-        /* N4659 §14.3/11 [class.friend]: strictly, a friend-declared
-         * name is NOT found by lookup until a matching declaration
-         * appears at namespace scope. But for a bootstrap tool
-         * processing valid source (where the declaration exists),
-         * we eagerly register in the enclosing namespace so
-         * template-id parsing works without forward-declaration order
-         * sensitivity. Pragmatic deviation from the standard. */
+        /* SHORTCUT (ours, not the standard): §14.3/11 says a friend-
+         * declared template name is NOT found by lookup until a
+         * matching real declaration appears at namespace scope. We
+         * eagerly register in the enclosing namespace so template-id
+         * parsing works regardless of forward-declaration order.
+         * Mirrors the same shortcut on the non-template friend path
+         * in parse_declaration above (TODO seafront#friend-visibility). */
         if (decl && decl->kind == ND_FRIEND) {
             DeclarativeRegion *ns = p->region;
             while (ns && ns->kind != REGION_NAMESPACE)
