@@ -1,0 +1,25 @@
+(translation-unit
+  (class-def "A"
+    (func-def void "f" (params)
+      (block
+        (call (ident "g"))
+        (call (ident "h") (num 0))))
+    (func-def void "g" (params)
+      (block))
+    (func-def void "h" (params (param int))
+      (block)))
+  (class-def "B"
+    (func-def void "f" (params)
+      (block
+        (var-decl (ptr struct Inner) "p" (cast struct Inner (null)))
+        (cast void (ident "p"))))
+    (class-def "Inner"
+      (var-decl int "v")))
+  (template (params (param ? "T"))
+    (class-def "C"
+      (var-decl (func-type void ()) "g")
+      (var-decl (func-type void ()) "f")))
+  (template (params (param ? "T"))
+    (func-def void "f" (params)
+      (block
+        (call (ident "g"))))))

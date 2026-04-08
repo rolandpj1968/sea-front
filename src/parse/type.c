@@ -495,6 +495,22 @@ DeclSpec parse_type_specifiers(Parser *p) {
                 parser_expect(p, TK_RBRACE);
                 region_pop(p);
 
+                /* Replay deferred member function bodies — N4659
+                 * §6.4.7/1 [class.mem]/6 (complete-class context).
+                 * Inline member function bodies were captured as
+                 * token ranges during the eager pass; now that the
+                 * class is fully populated we replay them with the
+                 * class scope on the lookup chain. */
+                for (int mi = 0; mi < members.len; mi++) {
+                    Node *m = ((Node **)members.data)[mi];
+                    if (!m) continue;
+                    Node *fn = (m->kind == ND_TEMPLATE_DECL)
+                                  ? m->template_decl.decl : m;
+                    if (fn && fn->kind == ND_FUNC_DEF &&
+                        fn->func.body_start_pos >= 0)
+                        parse_deferred_func_body(p, fn);
+                }
+
                 /* Record class definition on the result */
                 result.class_def = new_class_def_node(p, ty->tag,
                     (Node **)members.data, members.len,

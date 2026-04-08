@@ -359,7 +359,10 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
          * enclosing namespace). */
         if (parser_at(p, TK_LT)) {
             parse_template_id(p, name);
-            qscope = NULL;  /* template-id — opaque */
+            /* Keep qscope: 'C<T>::f' should still resolve into C's
+             * class_region for member visibility (an instantiation
+             * may differ in dependent details, but member names
+             * declared in the primary template are visible). */
         }
         /* Consume qualified-id: ident(opt <args>) :: ident :: ... :: ident
          * Terminates: each iteration consumes :: + ident/operator, or breaks. */
@@ -370,11 +373,16 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
                 parser_advance(p);  /* :: */
                 name = parser_advance(p);
                 /* Speculative template-id at intermediate segments —
-                 * 'std::basic_streambuf<C, T>::operator=' style. The
-                 * '<' here is overwhelmingly a template-argument-list. */
+                 * 'std::basic_streambuf<C, T>::operator=' style. */
                 if (parser_at(p, TK_LT)) {
                     parse_template_id(p, name);
-                    qscope = NULL;  /* opaque template-id segment */
+                    /* Resolve template-id segment via lookup in current
+                     * qscope and refine. */
+                    if (qscope) {
+                        Declaration *next = lookup_in_scope(qscope, name->loc, name->len);
+                        if (next && next->type && next->type->class_region)
+                            qscope = next->type->class_region;
+                    }
                 }
                 /* Resolve this segment in the previous scope. The LAST
                  * segment is the declarator-id name itself; we don't
@@ -793,6 +801,150 @@ parse_suffixes:
  *       = initializer-clause
  *       braced-init-list               (deferred)
  */
+
+/*
+ * parse_func_body — push prototype scope, register parameters, parse
+ * the optional ctor-initializer list and the function-body compound
+ * statement, then pop the prototype scope. Used by both the eager
+ * function-definition path in parse_declaration and the deferred
+ * replay path in parse_class_body (for inline member functions
+ * defined inside a class — N4659 §6.4.7/1 [class.mem]/6).
+ *
+ * Pre: parser is positioned at the ':' (ctor-initializer) or '{'
+ * (function body).
+ * Post: parser is just past the closing '}' of the body.
+ */
+static void parse_func_body(Parser *p, Node *func) {
+    /* N4659 §6.3.4 [basic.scope.proto]: function parameters have
+     * function prototype scope. The compound-statement pushes its
+     * own REGION_BLOCK as a child. */
+    region_push(p, REGION_PROTOTYPE, /*name=*/NULL);
+    func->func.param_scope = p->region;
+    for (int i = 0; i < func->func.nparams; i++) {
+        Node *param = func->func.params[i];
+        if (param->param.name)
+            region_declare(p, param->param.name->loc,
+                          param->param.name->len, ENTITY_VARIABLE,
+                          param->param.ty);
+    }
+
+    /* ctor-initializer — N4659 §15.6.2 [class.base.init]
+     *   ': ' mem-initializer-list
+     *   mem-initializer: identifier ( expression-list(opt) )
+     *                  | identifier braced-init-list
+     *                  | identifier ... (pack expansion)
+     * Captures simple 'name(args)' entries. Templates, base-class
+     * inits with template arguments, and braced-init-lists fall
+     * through to a skip path that discards them — these will get
+     * proper parsing once we need them. */
+    if (parser_consume(p, TK_COLON)) {
+        Vec inits = vec_new(p->arena);
+        for (;;) {
+            bool simple = parser_at(p, TK_IDENT) &&
+                          parser_peek_ahead(p, 1)->kind == TK_LPAREN;
+            if (simple) {
+                Token *member_name = parser_advance(p);
+                parser_advance(p);  /* '(' */
+                Vec args = vec_new(p->arena);
+                if (!parser_at(p, TK_RPAREN)) {
+                    vec_push(&args, parse_assign_expr(p));
+                    parser_consume(p, TK_ELLIPSIS);
+                    while (parser_consume(p, TK_COMMA)) {
+                        vec_push(&args, parse_assign_expr(p));
+                        parser_consume(p, TK_ELLIPSIS);
+                    }
+                }
+                parser_expect(p, TK_RPAREN);
+
+                MemInit *mi = arena_alloc(p->arena, sizeof(MemInit));
+                mi->name = member_name;
+                mi->args = (Node **)args.data;
+                mi->nargs = args.len;
+                vec_push(&inits, mi);
+            } else {
+                int angle = 0;
+                while (!parser_at_eof(p)) {
+                    TokenKind k = parser_peek(p)->kind;
+                    if (k == TK_LT) angle++;
+                    else if (k == TK_GT) {
+                        if (angle == 0) break;
+                        angle--;
+                    } else if (k == TK_SHR) {
+                        if (angle == 0) break;
+                        angle -= 2;
+                        if (angle < 0) angle = 0;
+                    } else if (k == TK_COMMA) {
+                        if (angle == 0) break;
+                    } else if (k == TK_LPAREN || k == TK_LBRACE) {
+                        if (angle == 0) break;
+                    }
+                    parser_advance(p);
+                }
+                if (parser_consume(p, TK_LPAREN)) {
+                    int depth = 1;
+                    while (depth > 0 && !parser_at_eof(p)) {
+                        if (parser_at(p, TK_LPAREN)) depth++;
+                        else if (parser_at(p, TK_RPAREN)) {
+                            depth--;
+                            if (depth == 0) break;
+                        }
+                        parser_advance(p);
+                    }
+                    parser_expect(p, TK_RPAREN);
+                } else if (parser_consume(p, TK_LBRACE)) {
+                    int depth = 1;
+                    while (depth > 0 && !parser_at_eof(p)) {
+                        if (parser_at(p, TK_LBRACE)) depth++;
+                        else if (parser_at(p, TK_RBRACE)) {
+                            depth--;
+                            if (depth == 0) break;
+                        }
+                        parser_advance(p);
+                    }
+                    parser_expect(p, TK_RBRACE);
+                }
+            }
+            parser_consume(p, TK_ELLIPSIS);
+            if (!parser_consume(p, TK_COMMA)) break;
+        }
+        int n = inits.len;
+        if (n > 0) {
+            MemInit *arr = arena_alloc(p->arena, sizeof(MemInit) * n);
+            for (int i = 0; i < n; i++)
+                arr[i] = *((MemInit **)inits.data)[i];
+            func->func.mem_inits = arr;
+            func->func.n_mem_inits = n;
+        }
+    }
+
+    func->func.body = parse_compound_stmt(p);
+    region_pop(p);  /* pop prototype scope */
+}
+
+/*
+ * parse_deferred_func_body — replay a captured in-class member
+ * function body. The class scope is pushed back onto the lookup
+ * chain so that members declared *after* this function in the
+ * class body are visible to its body's name lookups (the
+ * complete-class context rule). Pre: func->func.body_start_pos
+ * captured by the eager pass.
+ */
+void parse_deferred_func_body(Parser *p, Node *func) {
+    int saved_pos = p->pos;
+    DeclarativeRegion *saved_region = p->region;
+    bool saved_split_shr = p->split_shr;
+    p->split_shr = false;
+    p->pos = func->func.body_start_pos;
+    p->region = func->func.deferred_class_region;
+    parse_func_body(p, func);
+    /* Sanity: we should be at or just past body_end_pos. */
+    p->pos = saved_pos;
+    p->region = saved_region;
+    p->split_shr = saved_split_shr;
+    /* Mark as no longer deferred (in case anything walks twice). */
+    func->func.body_start_pos = -1;
+}
+
 Node *parse_declaration(Parser *p) {
     /* Leading C++11 attributes: '[[nodiscard]] T f(...)' etc. */
     parser_skip_cxx_attributes(p);
@@ -911,6 +1063,9 @@ Node *parse_declaration(Parser *p) {
         p->pending_is_destructor = false;
         func->func.is_constructor = p->pending_is_constructor;
         p->pending_is_constructor = false;
+        func->func.body_start_pos = -1;
+        func->func.body_end_pos = -1;
+        func->func.deferred_class_region = NULL;
 
         /* Register the function name in the enclosing scope */
         if (func->func.name)
@@ -935,121 +1090,65 @@ Node *parse_declaration(Parser *p) {
                 func->func.class_type = qscope->owner_type;
         }
 
-        /* Push prototype scope and register parameter names */
-        region_push(p, REGION_PROTOTYPE, /*name=*/NULL);
-        func->func.param_scope = p->region;
-        for (int i = 0; i < func->func.nparams; i++) {
-            Node *param = func->func.params[i];
-            if (param->param.name)
-                region_declare(p, param->param.name->loc,
-                              param->param.name->len, ENTITY_VARIABLE,
-                              param->param.ty);
-        }
-
-        /* ctor-initializer — N4659 §15.6.2 [class.base.init]
-         *   ': ' mem-initializer-list
-         *   mem-initializer: identifier ( expression-list(opt) )
-         *                  | identifier braced-init-list
-         *                  | identifier ... (pack expansion)
-         * Captures simple 'name(args)' entries. Templates, base-class
-         * inits with template arguments, and braced-init-lists fall
-         * through to a skip path that discards them — these will get
-         * proper parsing once we need them. */
-        if (parser_consume(p, TK_COLON)) {
-            Vec inits = vec_new(p->arena);
-            for (;;) {
-                /* Common case: a bare member identifier followed by
-                 * '(args)'. Anything more elaborate (qualified name,
-                 * template-id, base-class init) takes the skip path. */
-                bool simple = parser_at(p, TK_IDENT) &&
-                              parser_peek_ahead(p, 1)->kind == TK_LPAREN;
-                if (simple) {
-                    Token *member_name = parser_advance(p);
-                    parser_advance(p);  /* '(' */
-                    Vec args = vec_new(p->arena);
-                    if (!parser_at(p, TK_RPAREN)) {
-                        vec_push(&args, parse_assign_expr(p));
-                        parser_consume(p, TK_ELLIPSIS); /* pack expansion */
-                        while (parser_consume(p, TK_COMMA)) {
-                            vec_push(&args, parse_assign_expr(p));
-                            parser_consume(p, TK_ELLIPSIS);
-                        }
-                    }
-                    parser_expect(p, TK_RPAREN);
-
-                    MemInit *mi = arena_alloc(p->arena, sizeof(MemInit));
-                    mi->name = member_name;
-                    mi->args = (Node **)args.data;
-                    mi->nargs = args.len;
-                    vec_push(&inits, mi);
-                } else {
-                    /* Skip path for forms we don't yet capture
-                     * (qualified base, template-id, brace-init). */
-                    int angle = 0;
-                    while (!parser_at_eof(p)) {
-                        TokenKind k = parser_peek(p)->kind;
-                        if (k == TK_LT) angle++;
-                        else if (k == TK_GT) {
-                            if (angle == 0) break;
-                            angle--;
-                        } else if (k == TK_SHR) {
-                            if (angle == 0) break;
-                            angle -= 2;
-                            if (angle < 0) angle = 0;
-                        } else if (k == TK_COMMA) {
-                            if (angle == 0) break;
-                        } else if (k == TK_LPAREN || k == TK_LBRACE) {
-                            if (angle == 0) break;
-                        }
+        /* In-class member function: defer body parsing until the
+         * closing '}' of the class. N4659 §6.4.7/1 [class.mem]/6 —
+         * the body is in "complete-class context", so members
+         * declared LATER in the class are visible. We capture the
+         * token range (mem-init list + body) and store it on the
+         * func node; parse_class_body's replay loop walks all
+         * deferred bodies after the class is fully parsed. Skipped
+         * for tentative parses, out-of-class defs (qscope set —
+         * class is already complete), and when the class type isn't
+         * yet recorded on the region. */
+        if (!p->tentative && qscope == NULL &&
+            p->region && p->region->kind == REGION_CLASS &&
+            p->region->owner_type) {
+            int start = p->pos;
+            /* Walk past optional ctor-init list ': ...' to the body
+             * '{', tracking parens/braces/angles to handle the
+             * mem-init list correctly without parsing it. */
+            int paren = 0, brace = 0, angle = 0;
+            while (!parser_at_eof(p)) {
+                TokenKind k = parser_peek(p)->kind;
+                if (paren == 0 && angle == 0 && brace == 0 &&
+                    k == TK_LBRACE) {
+                    /* Top of body */
+                    brace = 1;
+                    parser_advance(p);
+                    while (brace > 0 && !parser_at_eof(p)) {
+                        TokenKind kk = parser_peek(p)->kind;
+                        if (kk == TK_LBRACE) brace++;
+                        else if (kk == TK_RBRACE) brace--;
                         parser_advance(p);
                     }
-                    if (parser_consume(p, TK_LPAREN)) {
-                        int depth = 1;
-                        while (depth > 0 && !parser_at_eof(p)) {
-                            if (parser_at(p, TK_LPAREN)) depth++;
-                            else if (parser_at(p, TK_RPAREN)) {
-                                depth--;
-                                if (depth == 0) break;
-                            }
-                            parser_advance(p);
-                        }
-                        parser_expect(p, TK_RPAREN);
-                    } else if (parser_consume(p, TK_LBRACE)) {
-                        int depth = 1;
-                        while (depth > 0 && !parser_at_eof(p)) {
-                            if (parser_at(p, TK_LBRACE)) depth++;
-                            else if (parser_at(p, TK_RBRACE)) {
-                                depth--;
-                                if (depth == 0) break;
-                            }
-                            parser_advance(p);
-                        }
-                        parser_expect(p, TK_RBRACE);
-                    }
+                    break;
                 }
-                parser_consume(p, TK_ELLIPSIS);  /* pack expansion */
-                if (!parser_consume(p, TK_COMMA)) break;
+                if (k == TK_LPAREN) paren++;
+                else if (k == TK_RPAREN) { if (paren > 0) paren--; }
+                else if (k == TK_LT) angle++;
+                else if (k == TK_GT) { if (angle > 0) angle--; }
+                else if (k == TK_SHR) { if (angle >= 2) angle -= 2; else if (angle > 0) angle = 0; }
+                parser_advance(p);
             }
-            /* Stash the captured list on the func node. Pointer-array
-             * via vec.data; the storage lives in the arena alongside
-             * other parser allocations. */
-            int n = inits.len;
-            if (n > 0) {
-                MemInit *arr = arena_alloc(p->arena, sizeof(MemInit) * n);
-                for (int i = 0; i < n; i++)
-                    arr[i] = *((MemInit **)inits.data)[i];
-                func->func.mem_inits = arr;
-                func->func.n_mem_inits = n;
-            }
+            int end = p->pos;
+            func->func.body_start_pos = start;
+            func->func.body_end_pos = end;
+            func->func.deferred_class_region = p->region;
+            /* Register the function as a class member so subsequent
+             * sibling members can see it (already done above for
+             * region_declare). Skip prototype-scope push and body
+             * parse — they happen at replay time. */
+            if (qscope && !p->tentative)
+                p->region = saved_region;
+            return func;
         }
 
-        func->func.body = parse_compound_stmt(p);
-        region_pop(p);  /* pop prototype scope */
+        /* Push prototype scope and register parameter names */
+        parse_func_body(p, func);
         if (qscope && !p->tentative)
             p->region = saved_region;  /* unsplice qscope */
         return func;
     }
-
     /* Variable with initializer — N4659 §11.6 [dcl.init]
      *
      *   initializer:

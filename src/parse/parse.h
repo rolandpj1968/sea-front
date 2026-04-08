@@ -447,6 +447,18 @@ struct Node {
              * class ClassName). Like dtors, the declared name token is
              * the class name. Mangled as Class_ctor. */
             bool is_constructor;
+            /* Deferred body parsing — N4659 §6.4.7/1 [class.mem]/6.
+             * For an inline member function defined inside a class
+             * body, the function body (and ctor-initializer list) are
+             * in "complete-class context": members declared later in
+             * the class are visible. We capture the body's token
+             * range here during the eager pass and replay it after
+             * the closing '}' of the class with the class scope on
+             * the lookup chain. body_start_pos == -1 means not
+             * deferred (already parsed eagerly, or no body). */
+            int body_start_pos;
+            int body_end_pos;
+            DeclarativeRegion *deferred_class_region;  /* class scope to push at replay */
         } func;
 
         /* ND_PARAM — N4659 §11.3.5 [dcl.fct]
@@ -983,6 +995,7 @@ Node *parse_template_declaration(Parser *p);
  * TK_SHR is treated as two '>' tokens.
  */
 Node *parse_template_id(Parser *p, Token *name);
+void parse_deferred_func_body(Parser *p, Node *func);
 
 /* ================================================================== */
 /* Type construction — type.c                                          */
