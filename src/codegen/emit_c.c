@@ -618,7 +618,38 @@ static void emit_stmt(Node *n) {
              * the emitted C readable, drives the protocol from one
              * place, and means an unbraced 'if (cond) return;' stays
              * safe (the macro wraps a do-while). */
-            int target = return_target();
+
+            /* D-Return (NRVO-style move): if the operand is a bare
+             * identifier naming the topmost CL_VAR — i.e. a class
+             * local that lives at the top of the live stack right
+             * now — treat the return as a move. The local IS the
+             * return value; its lifetime now belongs to the caller's
+             * temp, so we must NOT fire its dtor in the callee.
+             *
+             * Implementation: bypass the local's own cleanup label
+             * and target the next outer label (or __SF_epilogue).
+             * This skips the dtor on the return path while leaving
+             * fall-through paths to the same label still firing it
+             * — so a function with conditional 'return t;' alongside
+             * other paths that drop t cleanly destroys t in those
+             * other paths. No runtime flag needed. */
+            bool moved = false;
+            if (n->ret.expr && n->ret.expr->kind == ND_IDENT &&
+                g_cf.nlive > 0 &&
+                g_cf.live[g_cf.nlive - 1].kind == CL_VAR) {
+                Node *top_var = g_cf.live[g_cf.nlive - 1].var_decl;
+                Token *top_name = top_var ? top_var->var_decl.name : NULL;
+                Token *ret_name = n->ret.expr->ident.name;
+                if (top_name && ret_name &&
+                    top_name->len == ret_name->len &&
+                    memcmp(top_name->loc, ret_name->loc, top_name->len) == 0) {
+                    moved = true;
+                }
+            }
+
+            int target = moved
+                ? find_return_target_from(g_cf.nlive - 1)
+                : return_target();
             char buf[32];
             const char *lbl;
             if (target >= 0) {
