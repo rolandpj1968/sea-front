@@ -581,17 +581,17 @@ static void emit_block(Node *n) {
                         strcmp(rt_buf, ct_buf) == 0;
         if (collapse || (!have_break && !have_cont)) {
             emit_indent();
-            fprintf(stdout, "if (__SF_unwind) goto %s;\n", rt_buf);
+            fprintf(stdout, "__SF_CHAIN_ANY(%s);\n", rt_buf);
         } else {
             emit_indent();
-            fprintf(stdout, "if (__SF_unwind == 1) goto %s;\n", rt_buf);
+            fprintf(stdout, "__SF_CHAIN_RETURN(%s);\n", rt_buf);
             if (have_break) {
                 emit_indent();
-                fprintf(stdout, "if (__SF_unwind == 2) goto %s;\n", bt_buf);
+                fprintf(stdout, "__SF_CHAIN_BREAK(%s);\n", bt_buf);
             }
             if (have_cont) {
                 emit_indent();
-                fprintf(stdout, "if (__SF_unwind == 3) goto %s;\n", ct_buf);
+                fprintf(stdout, "__SF_CHAIN_CONT(%s);\n", ct_buf);
             }
         }
     }
@@ -871,7 +871,7 @@ static void emit_func_body(Node *func) {
         fputs(" __SF_retval = 0;\n", stdout);
         emit_indent();
     }
-    fputs("int __SF_unwind = 0;\n", stdout);
+    fputs("__SF_unwind_t __SF_unwind = __SF_UNWIND_NONE;\n", stdout);
     emit_indent();
     fputs("(void)__SF_unwind;\n", stdout);  /* silence unused if no return */
     emit_indent();
@@ -1100,17 +1100,42 @@ static void emit_prelude(void) {
     fputs("#if defined(__GNUC__) || defined(__clang__)\n", stdout);
     fputs("#  pragma GCC diagnostic ignored \"-Wunused-label\"\n", stdout);
     fputs("#endif\n", stdout);
+    fputs("typedef enum {\n", stdout);
+    fputs("    __SF_UNWIND_NONE   = 0,\n", stdout);
+    fputs("    __SF_UNWIND_RETURN = 1,\n", stdout);
+    fputs("    __SF_UNWIND_BREAK  = 2,\n", stdout);
+    fputs("    __SF_UNWIND_CONT   = 3,\n", stdout);
+    fputs("} __SF_unwind_t;\n", stdout);
+    /* Rewrite macros — set the unwind state and jump to the
+     * innermost cleanup label (which then chains outward). */
     fputs("#define __SF_RETURN(v, lbl) "
-          "do { __SF_retval = (v); __SF_unwind = 1; goto lbl; } while (0)\n",
+          "do { __SF_retval = (v); __SF_unwind = __SF_UNWIND_RETURN; "
+          "goto lbl; } while (0)\n",
           stdout);
     fputs("#define __SF_RETURN_VOID(lbl) "
-          "do { __SF_unwind = 1; goto lbl; } while (0)\n",
+          "do { __SF_unwind = __SF_UNWIND_RETURN; goto lbl; } while (0)\n",
           stdout);
     fputs("#define __SF_BREAK(lbl) "
-          "do { __SF_unwind = 2; goto lbl; } while (0)\n",
+          "do { __SF_unwind = __SF_UNWIND_BREAK; goto lbl; } while (0)\n",
           stdout);
     fputs("#define __SF_CONT(lbl) "
-          "do { __SF_unwind = 3; goto lbl; } while (0)\n",
+          "do { __SF_unwind = __SF_UNWIND_CONT; goto lbl; } while (0)\n",
+          stdout);
+    /* Chain macros — used at the bottom of each block-with-cleanups
+     * after the dtor calls. ANY collapses to a single check when all
+     * three unwind kinds target the same place; otherwise the three
+     * per-kind macros emit a list of intentions, one per line. */
+    fputs("#define __SF_CHAIN_ANY(lbl) "
+          "do { if (__SF_unwind) goto lbl; } while (0)\n",
+          stdout);
+    fputs("#define __SF_CHAIN_RETURN(lbl) "
+          "do { if (__SF_unwind == __SF_UNWIND_RETURN) goto lbl; } while (0)\n",
+          stdout);
+    fputs("#define __SF_CHAIN_BREAK(lbl) "
+          "do { if (__SF_unwind == __SF_UNWIND_BREAK)  goto lbl; } while (0)\n",
+          stdout);
+    fputs("#define __SF_CHAIN_CONT(lbl) "
+          "do { if (__SF_unwind == __SF_UNWIND_CONT)   goto lbl; } while (0)\n",
           stdout);
     fputs("\n", stdout);
 }
