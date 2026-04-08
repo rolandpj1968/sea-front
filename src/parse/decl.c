@@ -112,6 +112,19 @@ static void skip_template_default(Parser *p) {
             (parser_at(p, TK_COMMA) || parser_at(p, TK_GT) ||
              parser_at(p, TK_SHR)))
             break;
+        /* Inside parens, '<' and '>' are comparison operators, NOT
+         * template-arg brackets. Tracking them would mis-count and
+         * leave 'angle' negative — see e.g. the libstdc++ default
+         *   bool _IsPlaceholder = (is_placeholder<_Arg>::value > 0)
+         * where the inner '<...>' is a template-id but the outer
+         * '>' is greater-than. We just walk through paren'd content
+         * without touching the angle counter. */
+        if (paren > 0) {
+            if (parser_at(p, TK_LPAREN)) paren++;
+            else if (parser_at(p, TK_RPAREN)) paren--;
+            parser_advance(p);
+            continue;
+        }
         if (parser_at(p, TK_LT))         { angle++; parser_advance(p); }
         else if (parser_at(p, TK_GT))    { angle--; parser_advance(p); }
         else if (parser_at(p, TK_SHR)) {
@@ -251,6 +264,12 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
      * name as the next token. */
     parser_consume(p, TK_ELLIPSIS);
 
+    /* Tracks whether the declarator-id passed through '::' (qualified
+     * name like Foo::bar or Foo<T>::operator=). Used by the
+     * looks_like_params heuristic below — when the name is qualified,
+     * a following '(' is overwhelmingly a parameter list, never a
+     * call expression. */
+    bool name_was_qualified = false;
     Token *name = NULL;
     Type *ty = base_ty;
 
@@ -350,6 +369,7 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
         /* Consume qualified-id: ident(opt <args>) :: ident :: ... :: ident
          * Terminates: each iteration consumes :: + ident/operator, or breaks. */
         while (parser_at(p, TK_SCOPE)) {
+            name_was_qualified = true;
             Token *after = parser_peek_ahead(p, 1);
             if (after->kind == TK_IDENT) {
                 parser_advance(p);  /* :: */
@@ -482,9 +502,18 @@ parse_suffixes:
     if (parser_at(p, TK_LPAREN) && name) {
         /* Peek inside the parens to decide: parameter list or init?
          * A parameter list starts with: ), void), type-specifier, or ...
-         * Anything else (literal, non-type identifier, etc.) is init. */
+         * Anything else (literal, non-type identifier, etc.) is init.
+         *
+         * BUT: if the declarator name was qualified (Foo::bar,
+         * Foo<T>::baz, etc.), '(args)' is overwhelmingly a parameter
+         * list — qualified names rarely appear at expression position.
+         * Force looks_like_params=true in that case so the heuristic
+         * doesn't fall into the most-vexing-parse trap when an arg is
+         * a member typedef we can't see ('catalog' in messages<char>).
+         */
         Token *after_paren = parser_peek_ahead(p, 1);
         bool looks_like_params =
+            name_was_qualified ||
             after_paren->kind == TK_RPAREN ||
             after_paren->kind == TK_ELLIPSIS ||
             after_paren->kind == TK_KW_VOID ||
@@ -495,8 +524,10 @@ parse_suffixes:
                lookup_is_template_name(p, after_paren))));
 
         /* For the most vexing parse, we need the full heuristic.
-         * Refine: a keyword that's a type-specifier signals params. */
-        if (after_paren->kind >= TK_KW_ALIGNAS &&
+         * Refine: a keyword that's a type-specifier signals params.
+         * But never override a qualified-name forced-true. */
+        if (!name_was_qualified &&
+            after_paren->kind >= TK_KW_ALIGNAS &&
             after_paren->kind <= TK_KW_WHILE) {
             /* It's a keyword — check if it could start a type */
             switch (after_paren->kind) {
@@ -514,7 +545,7 @@ parse_suffixes:
                 looks_like_params = false;
                 break;
             }
-        } else if (after_paren->kind == TK_IDENT) {
+        } else if (!name_was_qualified && after_paren->kind == TK_IDENT) {
             /* A qualified-name (ident::...) is treated as a potential type
              * — qualified lookup isn't resolved here, but the leading
              * segment is overwhelmingly a namespace or class scope.
@@ -532,7 +563,8 @@ parse_suffixes:
         } else if (after_paren->kind == TK_SCOPE) {
             /* '::Foo::Bar' — fully qualified type at start of param list. */
             looks_like_params = true;
-        } else if (after_paren->kind != TK_RPAREN &&
+        } else if (!name_was_qualified &&
+                   after_paren->kind != TK_RPAREN &&
                    after_paren->kind != TK_ELLIPSIS &&
                    after_paren->kind != TK_KW_VOID) {
             looks_like_params = false;
@@ -1287,15 +1319,19 @@ Node *parse_top_level_decl(Parser *p) {
 
     /* C++11 'inline namespace X' — N4659 §10.3.1 [namespace.def]/8.
      * The 'inline' may precede the 'namespace' keyword. */
+    bool is_inline_ns = false;
     if (parser_at(p, TK_KW_INLINE) &&
-        parser_peek_ahead(p, 1)->kind == TK_KW_NAMESPACE)
+        parser_peek_ahead(p, 1)->kind == TK_KW_NAMESPACE) {
+        is_inline_ns = true;
         parser_advance(p);
+    }
 
     if (parser_at(p, TK_KW_NAMESPACE)) {
         Token *tok = parser_advance(p);
 
         /* Optional 'inline' namespace */
-        parser_consume(p, TK_KW_INLINE);
+        if (parser_consume(p, TK_KW_INLINE))
+            is_inline_ns = true;
 
         /* Optional namespace name (unnamed namespaces are valid) */
         Token *ns = NULL;
@@ -1333,11 +1369,24 @@ Node *parse_top_level_decl(Parser *p) {
         parser_expect(p, TK_LBRACE);
 
         /* N4659 §6.3.6 [basic.scope.namespace]: push named namespace scope */
+        DeclarativeRegion *parent_for_inline = p->region;
         if (existing) {
             existing->enclosing = p->region;
             p->region = existing;
         } else {
             region_push(p, REGION_NAMESPACE, ns);
+        }
+        /* C++11 inline namespace — N4659 §10.3.1/7: members of an
+         * inline namespace are visible from the enclosing namespace
+         * as if they had been declared there directly. We model this
+         * by registering the inner region as a using-directive of
+         * the parent so unqualified lookup from the parent walks
+         * into the inline namespace. */
+        if (is_inline_ns && parent_for_inline) {
+            DeclarativeRegion *saved = p->region;
+            p->region = parent_for_inline;
+            region_add_using(p, saved);
+            p->region = saved;
         }
 
         Vec decls = vec_new(p->arena);

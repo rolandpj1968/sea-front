@@ -795,8 +795,11 @@ static Node *postfix_expr(Parser *p) {
         if (tok->kind == TK_DOT || tok->kind == TK_ARROW) {
             TokenKind op = tok->kind;
             parser_advance(p);
-            /* Optional 'template' disambiguator: x.template f<int>() */
-            parser_consume(p, TK_KW_TEMPLATE);
+            /* Optional 'template' disambiguator: x.template f<int>().
+             * When present, the user is asserting that '<' after the
+             * next name IS a template-arg-list — bypass the heuristic
+             * lookahead in the IDENT branch below. */
+            bool member_template_kw = parser_consume(p, TK_KW_TEMPLATE);
             /* Qualified member: x.A::B::method.
              * Only enter when followed by '::' (we'd otherwise eat the
              * '<' of a relational expression like 'x.first < y.first'). */
@@ -837,29 +840,31 @@ static Node *postfix_expr(Parser *p) {
                     parse_template_id(p, member);
             } else {
                 member = parser_expect(p, TK_IDENT);
-                /* Member template-id: 'obj.method<T>(args)'. The
-                 * 'template' disambiguator was already consumed above
-                 * if present; here we speculatively parse '<args>' if
-                 * what follows looks like a template-arg-list. */
+                /* Member template-id: 'obj.method<T>(args)'.
+                 * If the explicit 'template' disambiguator preceded
+                 * the name, trust it and parse '<...>' unconditionally.
+                 * Otherwise speculate based on the leading token. */
                 if (parser_at(p, TK_LT)) {
-                    Token *after = parser_peek_ahead(p, 1);
-                    bool looks_template = false;
-                    switch (after->kind) {
-                    case TK_KW_VOID: case TK_KW_BOOL: case TK_KW_CHAR:
-                    case TK_KW_SHORT: case TK_KW_INT: case TK_KW_LONG:
-                    case TK_KW_FLOAT: case TK_KW_DOUBLE:
-                    case TK_KW_SIGNED: case TK_KW_UNSIGNED:
-                    case TK_KW_WCHAR_T: case TK_KW_CHAR16_T: case TK_KW_CHAR32_T:
-                    case TK_KW_CONST: case TK_KW_VOLATILE:
-                    case TK_KW_TYPENAME: case TK_KW_DECLTYPE:
-                    case TK_KW_AUTO:
-                        looks_template = true; break;
-                    case TK_IDENT:
-                        if (lookup_is_type_name(p, after) ||
-                            lookup_is_template_name(p, after))
-                            looks_template = true;
-                        break;
-                    default: break;
+                    bool looks_template = member_template_kw;
+                    if (!looks_template) {
+                        Token *after = parser_peek_ahead(p, 1);
+                        switch (after->kind) {
+                        case TK_KW_VOID: case TK_KW_BOOL: case TK_KW_CHAR:
+                        case TK_KW_SHORT: case TK_KW_INT: case TK_KW_LONG:
+                        case TK_KW_FLOAT: case TK_KW_DOUBLE:
+                        case TK_KW_SIGNED: case TK_KW_UNSIGNED:
+                        case TK_KW_WCHAR_T: case TK_KW_CHAR16_T: case TK_KW_CHAR32_T:
+                        case TK_KW_CONST: case TK_KW_VOLATILE:
+                        case TK_KW_TYPENAME: case TK_KW_DECLTYPE:
+                        case TK_KW_AUTO:
+                            looks_template = true; break;
+                        case TK_IDENT:
+                            if (lookup_is_type_name(p, after) ||
+                                lookup_is_template_name(p, after))
+                                looks_template = true;
+                            break;
+                        default: break;
+                        }
                     }
                     if (looks_template)
                         parse_template_id(p, member);
