@@ -764,6 +764,13 @@ static void emit_class_def(Node *n) {
     for (int i = 0; i < n->class_def.nmembers; i++) {
         Node *m = n->class_def.members[i];
         if (!m) continue;
+        /* Skip trivial dtors entirely — no forward decl, no body.
+         * has_dtor is the parser-side flag set only for non-empty
+         * dtor bodies, so this also makes class_type->has_dtor the
+         * single source of truth for "should we emit anything". */
+        if (m->kind == ND_FUNC_DEF && m->func.is_destructor &&
+            class_type && !class_type->has_dtor)
+            continue;
         if (m->kind == ND_FUNC_DEF && class_type) {
             emit_method_signature(m, class_type);
             fputs(";\n", stdout);
@@ -789,11 +796,13 @@ static void emit_class_def(Node *n) {
     }
 
     /* Now emit each method (ND_FUNC_DEF in the member list) as a
-     * separate free function. */
+     * separate free function. Trivial dtors are skipped to match
+     * the forward-decl loop above. */
     for (int i = 0; i < n->class_def.nmembers; i++) {
         Node *m = n->class_def.members[i];
-        if (m && m->kind == ND_FUNC_DEF && class_type)
-            emit_method_as_free_fn(m, class_type);
+        if (!m || m->kind != ND_FUNC_DEF || !class_type) continue;
+        if (m->func.is_destructor && !class_type->has_dtor) continue;
+        emit_method_as_free_fn(m, class_type);
     }
 }
 

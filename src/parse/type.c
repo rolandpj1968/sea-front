@@ -486,14 +486,30 @@ DeclSpec parse_type_specifiers(Parser *p) {
                     ty->tag ? ty->tag : parser_peek(p));
                 result.class_def->class_def.ty = ty;
 
-                /* Scan members for a destructor and tag the class type.
-                 * Codegen uses ty->has_dtor to decide whether to emit a
-                 * Class_dtor call at end of scope for instances. */
+                /* Scan members for a NON-TRIVIAL destructor and tag the
+                 * class type. A user-declared dtor whose body is empty
+                 * is treated as trivial — calling it would be a no-op,
+                 * and skipping it lets emit_c avoid spinning up the
+                 * cleanup scaffold for classes that don't actually need
+                 * it (e.g. RAII wrappers around POD that defer cleanup
+                 * to a base or member).
+                 *
+                 * Conservative rule: trivial iff own dtor body is an
+                 * empty compound-statement. Strict standard conformance
+                 * (N4659 §15.4 [class.dtor]/12) also requires every
+                 * non-static member and base to be trivially-destructible
+                 * — once we synthesize member/base dtor invocations we'll
+                 * extend this check to cover them. */
                 for (int mi = 0; mi < members.len; mi++) {
                     Node *m = ((Node **)members.data)[mi];
                     if (m && m->kind == ND_FUNC_DEF && m->func.is_destructor) {
-                        ty->has_dtor = true;
-                        break;
+                        Node *body = m->func.body;
+                        bool empty = body && body->kind == ND_BLOCK &&
+                                     body->block.nstmts == 0;
+                        if (!empty) {
+                            ty->has_dtor = true;
+                            break;
+                        }
                     }
                 }
             }
