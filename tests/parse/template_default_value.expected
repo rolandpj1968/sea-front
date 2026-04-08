@@ -1,0 +1,13 @@
+(translation-unit
+  (block
+    (template (params (param ? "T"))
+      (class-def "numeric_limits"
+        (var-decl const int "digits" (num 0)))))
+  (template (params (param unsigned-int "__w") (param bool))
+    (class-def "A"))
+  (template (params (param unsigned-int "__w") (param bool))
+    (class-def "B"))
+  (template (params (param ? "T") (param ? "U"))
+    (class-def "C"))
+  (template (params (param ? "T") (param ? "U"))
+    (class-def "D")))

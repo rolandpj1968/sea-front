@@ -82,12 +82,7 @@ static int get_binop_prec(Parser *p, TokenKind k) {
     case TK_CARET:                                   return PREC_BITXOR;
     case TK_AMP:                                     return PREC_BITAND;
     case TK_EQ: case TK_NE:                          return PREC_EQUALITY;
-    case TK_LT:
-        /* Inside template-arg-list, '<' is overwhelmingly a nested
-         * template-id rather than less-than. Treat it as non-binary
-         * so the surrounding parser can dispatch to template-id parsing. */
-        if (p->template_depth > 0) return 0;
-        return PREC_RELAT;
+    case TK_LT:                                      return PREC_RELAT;
     case TK_LE:                                      return PREC_RELAT;
     case TK_GT: case TK_GE:
         /* N4659 §17.2/3 [temp.names]: inside a template-argument-list,
@@ -469,11 +464,25 @@ static Node *primary_expr(Parser *p) {
                 default:
                     break;
                 }
-                /* Inside another template-argument-list, '<' is
-                 * overwhelmingly a nested template-id — speculatively
-                 * parse it. */
+                /* Inside another template-argument-list (or default
+                 * value), '<' is *usually* a nested template-id — but
+                 * not always: 'template<unsigned __w, bool = __w < 5>'
+                 * has __w as a non-type parameter and '<' is less-than.
+                 * Treat as template-id when:
+                 *   - the name is a known template, or
+                 *   - the next token can only start a type/template arg
+                 *     (a type keyword), or
+                 *   - we're in a template-arg context AND the name is
+                 *     NOT in lookup as a non-type entity (variable /
+                 *     non-type template parameter). */
+                bool is_nontype_var = false;
+                if (p->template_depth > 0) {
+                    Declaration *d = lookup_unqualified(p, name->loc, name->len);
+                    if (d && d->entity == ENTITY_VARIABLE)
+                        is_nontype_var = true;
+                }
                 if (lookup_is_template_name(p, name) || looks_template_arg ||
-                    p->template_depth > 0)
+                    (p->template_depth > 0 && !is_nontype_var))
                     parse_template_id(p, name);
             }
 

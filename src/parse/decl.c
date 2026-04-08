@@ -104,98 +104,36 @@
  * Handles >> at depth 1: consumes the SHR, sets split_shr so the outer
  * template-parameter-list parser sees a virtual '>'.
  */
-static void skip_template_default_inner(Parser *p);
-
-/* Wrapper: a template-default value almost never spans more than a
- * handful of lines. If the angle-balancing skip runs away (a '<' in
- * the default that we mis-read as template-id-open and never
- * balanced), undo and fall back to a dumb skip that ignores '<'/'>'
- * entirely — break on the first top-level ',' or '>' and trust the
- * outer parser to handle whatever follows. Bounds the blast radius. */
-static void skip_template_default(Parser *p) {
-    ParseState saved = parser_save(p);
-    int start_pos = p->pos;
-    bool saved_split_shr = p->split_shr;
-    skip_template_default_inner(p);
-    int consumed = p->pos - start_pos;
-    if (consumed > 256) {
-        /* Runaway — the angle-balancing skip has been led astray by a
-         * '<' that's actually a relational operator (e.g. 'bool = __w
-         * < static_cast<size_t>(...)' in libstdc++ <random>'s _Shift
-         * default). Restore and re-skip in a stricter mode: only count
-         * '<' as a template-id-open when preceded by a C++ named-cast
-         * keyword. All other '<' tokens are treated as less-than. */
-        p->split_shr = saved_split_shr;
-        parser_restore(p, saved);
-        int angle = 0;
-        int paren = 0;
-        TokenKind prev_kind = TK_EOF;
-        while (!parser_at_eof(p)) {
-            if (angle == 0 && paren == 0 &&
-                (parser_at(p, TK_COMMA) || parser_at(p, TK_GT) ||
-                 parser_at(p, TK_SHR)))
-                break;
-            if (paren > 0) {
-                if (parser_at(p, TK_LPAREN)) paren++;
-                else if (parser_at(p, TK_RPAREN)) paren--;
-                prev_kind = parser_peek(p)->kind;
-                parser_advance(p);
-                continue;
-            }
-            if (parser_at(p, TK_LT)) {
-                if (prev_kind == TK_KW_STATIC_CAST ||
-                    prev_kind == TK_KW_DYNAMIC_CAST ||
-                    prev_kind == TK_KW_REINTERPRET_CAST ||
-                    prev_kind == TK_KW_CONST_CAST)
-                    angle++;
-            } else if (parser_at(p, TK_GT)) {
-                if (angle > 0) angle--;
-            } else if (parser_at(p, TK_SHR)) {
-                if (angle >= 2) angle -= 2;
-                else if (angle == 1) { p->split_shr = true; parser_advance(p); break; }
-            } else if (parser_at(p, TK_LPAREN)) paren++;
-            else if (parser_at(p, TK_RPAREN)) { if (paren > 0) paren--; }
-            prev_kind = parser_peek(p)->kind;
-            parser_advance(p);
-        }
-    }
+/*
+ * parse_template_value_default — non-type / template-template
+ * template-parameter default value (a constant-expression).
+ *
+ * N4659 §17.1/8 [temp.param]: a non-type template-parameter default
+ * is an assignment-expression. §17.2/3 [temp.names]: inside a
+ * template-argument-list (and, by extension, a template-parameter
+ * default value), the first non-nested > is the closing delimiter
+ * rather than greater-than; >> splits into two >'s.
+ *
+ * We bump template_depth so the binary-operator parser stops at the
+ * top-level >, then call parse_assign_expr. Result is currently
+ * discarded (sema doesn't yet substitute defaults).
+ */
+static void parse_template_value_default(Parser *p) {
+    p->template_depth++;
+    (void)parse_assign_expr(p);
+    p->template_depth--;
 }
 
-static void skip_template_default_inner(Parser *p) {
-    int angle = 0;
-    int paren = 0;
-    while (!parser_at_eof(p)) {
-        if (angle == 0 && paren == 0 &&
-            (parser_at(p, TK_COMMA) || parser_at(p, TK_GT) ||
-             parser_at(p, TK_SHR)))
-            break;
-        /* Inside parens, '<' and '>' are comparison operators, NOT
-         * template-arg brackets. Tracking them would mis-count and
-         * leave 'angle' negative — see e.g. the libstdc++ default
-         *   bool _IsPlaceholder = (is_placeholder<_Arg>::value > 0)
-         * where the inner '<...>' is a template-id but the outer
-         * '>' is greater-than. We just walk through paren'd content
-         * without touching the angle counter. */
-        if (paren > 0) {
-            if (parser_at(p, TK_LPAREN)) paren++;
-            else if (parser_at(p, TK_RPAREN)) paren--;
-            parser_advance(p);
-            continue;
-        }
-        if (parser_at(p, TK_LT))         { angle++; parser_advance(p); }
-        else if (parser_at(p, TK_GT))    { angle--; parser_advance(p); }
-        else if (parser_at(p, TK_SHR)) {
-            if (angle >= 2) { angle -= 2; parser_advance(p); }
-            else if (angle == 1) {
-                parser_advance(p);
-                p->split_shr = true;
-                break;
-            } else parser_advance(p);
-        }
-        else if (parser_at(p, TK_LPAREN)) { paren++; parser_advance(p); }
-        else if (parser_at(p, TK_RPAREN)) { paren--; parser_advance(p); }
-        else parser_advance(p);
-    }
+/*
+ * parse_template_type_default — type-parameter default (a type-id).
+ *
+ * 'template<typename T = int*>' / 'template<typename T = vector<int>>'.
+ * The default is a type-id, not an expression. Same > / >> rules apply.
+ */
+static void parse_template_type_default(Parser *p) {
+    p->template_depth++;
+    (void)parse_type_name(p);
+    p->template_depth--;
 }
 
 static void consume_trailing_qualifiers(Parser *p) {
@@ -1616,7 +1554,7 @@ static Node *parse_template_parameter(Parser *p) {
 
             /* Optional default: = type-id */
             if (parser_consume(p, TK_ASSIGN))
-                skip_template_default(p);
+                parse_template_type_default(p);
 
             return new_param_node(p, /*ty=*/NULL, name, tok);
         }
@@ -1652,7 +1590,7 @@ static Node *parse_template_parameter(Parser *p) {
 
         /* Optional default */
         if (parser_consume(p, TK_ASSIGN))
-            skip_template_default(p);
+            parse_template_value_default(p);
 
         return new_param_node(p, /*ty=*/NULL, name, tok);
     }
@@ -1673,7 +1611,7 @@ static Node *parse_template_parameter(Parser *p) {
 
     /* Optional default value: = constant-expression */
     if (parser_consume(p, TK_ASSIGN))
-        skip_template_default(p);
+        parse_template_value_default(p);
 
     return param;
 }
