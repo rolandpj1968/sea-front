@@ -10,8 +10,16 @@ set -e
 
 SEA_FRONT="${1:-build/sea-front}"
 TESTDIR="$(dirname "$0")/emit_c"
-TMPDIR="$(mktemp -d)"
-trap 'rm -rf "$TMPDIR"' EXIT
+
+# Persist generated .c files under gen/emit_c/ at the repo root
+# (gitignored). Useful for eyeballing the lowering between runs;
+# cleared at the start of each invocation so it always reflects
+# the current pass.
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+GEN_DIR="$REPO_ROOT/gen/emit_c"
+rm -rf "$GEN_DIR"
+mkdir -p "$GEN_DIR"
+TMPDIR="$GEN_DIR"
 
 PASS=0
 FAIL=0

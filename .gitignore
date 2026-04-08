@@ -9,3 +9,7 @@
 sea-front
 build/
 claude-resume*
+
+# Emitted C from --emit-c (populated by test_emit_c.sh; useful
+# for eyeballing the lowering. Cleared at the start of each test run.)
+gen/
