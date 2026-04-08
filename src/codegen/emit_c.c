@@ -154,10 +154,22 @@ static void emit_mangled_class_tag(Type *class_type);
  * is a possible future refinement. */
 
 static bool is_class_temp_call(Node *n) {
-    return n && n->kind == ND_CALL && n->resolved_type &&
-           n->resolved_type->kind == TY_STRUCT &&
-           n->resolved_type->has_dtor &&
-           !n->codegen_temp_name;
+    if (!n || n->kind != ND_CALL || !n->resolved_type ||
+        n->resolved_type->kind != TY_STRUCT || n->codegen_temp_name)
+        return false;
+    /* Standard case: class-typed call with non-trivial dtor needs
+     * hoisting so the dtor fires at the right scope. */
+    if (n->resolved_type->has_dtor) return true;
+    /* Ctor-call shape: 'Foo(args)' where the callee is a type-name
+     * needs hoisting even when Foo has no dtor — there's no Foo()
+     * function in the lowered C, only Foo_ctor(struct Foo *, ...).
+     * The temp gets a slot but no cleanup-chain registration. */
+    if (n->call.callee && n->call.callee->kind == ND_IDENT) {
+        Declaration *d = n->call.callee->ident.resolved_decl;
+        if (d && (d->entity == ENTITY_TYPE || d->entity == ENTITY_TAG))
+            return true;
+    }
+    return false;
 }
 
 static void hoist_emit_decl(Node *call) {
@@ -212,13 +224,12 @@ static void hoist_emit_decl(Node *call) {
     call->codegen_temp_name = name;
 
     /* Push as a CL_VAR onto the live stack so the cleanup chain
-     * runs the dtor at end of block. We synthesize a tiny ND_VAR_DECL
-     * just to carry the type and name token for the chain emitter
-     * — but a Token is overkill; instead, smuggle the name via the
-     * codegen_temp_name field on a fresh dummy node? Simpler: store
-     * the call node itself with a flag, and have the dtor emitter
-     * check codegen_temp_name on it. */
-    if (g_cf.nlive < CLEANUP_LIVE_MAX) {
+     * runs the dtor at end of block. Skip the push for trivially-
+     * destructible types (no dtor to call) — the temp is still a
+     * named local that the rest of the expression uses, but it
+     * doesn't need cleanup tracking. */
+    if (call->resolved_type && call->resolved_type->has_dtor &&
+        g_cf.nlive < CLEANUP_LIVE_MAX) {
         g_cf.live[g_cf.nlive].kind = CL_VAR;
         g_cf.live[g_cf.nlive].label_id = id;
         g_cf.live[g_cf.nlive].cont_label_id = -1;
@@ -281,7 +292,15 @@ static void hoist_temps_in_expr(Node *n) {
  * temp needed. We skip hoisting the top-level call but still
  * recurse into its arguments (which may carry their own temps). */
 static void hoist_stmt_temps(Node *s) {
-    if (!s || !g_cf.func_has_cleanups) return;
+    if (!s) return;
+    /* Note: we deliberately do NOT gate on func_has_cleanups here.
+     * Even functions without any non-trivial dtors may contain
+     * ctor-call expressions ('Foo(7)') that need to be materialized
+     * to a synthesized local — the lowered C has no symbol named
+     * 'Foo', only 'Foo_ctor'. The hoist fires; the cleanup-chain
+     * registration in hoist_emit_decl is what's gated on has_dtor,
+     * so a trivially-destructible temp gets a local but no CL_VAR
+     * entry. */
     switch (s->kind) {
     case ND_VAR_DECL: {
         Node *init = s->var_decl.init;
