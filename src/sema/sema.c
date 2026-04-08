@@ -1,9 +1,24 @@
 /*
- * sema.c — semantic analysis pass (first slice).
+ * sema.c — semantic analysis pass.
  *
- * Visits the AST after parsing and fills in node->resolved_type for
- * expression nodes. Currently handles built-in arithmetic types only;
- * everything else stays as resolved_type = NULL.
+ * Visits the AST after parsing and fills in node->resolved_type
+ * for expression nodes plus a few side-channel fields used by
+ * codegen. Currently handles:
+ *   - integer / floating / char / bool literal types
+ *   - identifier resolution against the current scope chain
+ *     (sets resolved_decl + implicit_this for class members)
+ *   - binary / unary / ternary / assignment with usual arithmetic
+ *     conversions (a coarse approximation of N4659 §8/2-3)
+ *   - address-of (& → ptr) and indirection (* → base)
+ *   - member access via TY_STRUCT.class_region lookup
+ *   - subscript (element type from array/pointer base)
+ *   - function calls (return type from TY_FUNC.ret) and
+ *     functional-cast / temporary-construction shape Foo(args)
+ *
+ * Everything else leaves resolved_type as NULL — codegen has
+ * source-form fallbacks for the gaps. As sema grows, more node
+ * kinds will be filled in here rather than guessed at codegen
+ * time.
  */
 
 #include <stdlib.h>
@@ -31,8 +46,13 @@ static Type *sema_new_type(Sema *s, TypeKind kind) {
     return t;
 }
 
-/* The well-known built-in singletons. We allocate one per kind on
- * first use, since they're immutable for our purposes. */
+/* Convenience constructors for the well-known built-in types.
+ *
+ * These currently allocate a fresh Type per call out of the arena
+ * — we do NOT intern singletons. The TODO would be to cache one
+ * Type per fundamental kind on the Sema struct so equality checks
+ * could be pointer comparisons; with a per-TU arena the per-call
+ * cost is small enough that we haven't bothered yet. */
 static Type *ty_int(Sema *s)  { return sema_new_type(s, TY_INT); }
 static Type *ty_long(Sema *s) { return sema_new_type(s, TY_LONG); }
 static Type *ty_bool(Sema *s) { return sema_new_type(s, TY_BOOL); }
@@ -304,11 +324,13 @@ static void visit_member(Sema *s, Node *n) {
     if (!ot->class_region) return;
     Token *m = n->member.member;
     if (!m || m->kind != TK_IDENT) return;
-    /* Lookup in just this class scope (no enclosing walk) — qualified
-     * lookup, not unqualified. lookup_in_scope is the right primitive
-     * but it isn't exposed; lookup_unqualified_from would walk
-     * 'enclosing' which we don't want for member lookup. For now do a
-     * targeted search via lookup_in_scope (declared in parse.h). */
+    /* Member lookup is qualified-name lookup against just the
+     * class scope — no enclosing-chain walk. N4659 §6.4.3
+     * [basic.lookup.qual] / §6.4.5 [class.qual]. lookup_in_scope
+     * is the right primitive: it walks the class's own buckets
+     * and base-class chain (so inherited members resolve) but
+     * stops at the class — it does NOT climb out to the
+     * enclosing namespace. */
     Declaration *d = lookup_in_scope(ot->class_region, m->loc, m->len);
     if (d && d->type)
         n->resolved_type = d->type;

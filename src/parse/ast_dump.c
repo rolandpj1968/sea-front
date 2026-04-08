@@ -1,16 +1,22 @@
 /*
  * ast_dump.c — AST pretty-printer.
  *
- * Prints an S-expression style representation of the AST for debugging
- * and integration testing (--dump-ast mode). Output is designed to be
- * human-readable and diff-able.
+ * Prints an S-expression style representation of the AST for
+ * debugging and integration testing (--dump-ast mode). Output is
+ * designed to be human-readable and diff-able. The format is
+ * consumed verbatim by tests/parse/<name>.expected golden files, so
+ * any change here is observable downstream.
  *
- * Example output:
- *   (func_def int "main" (params (param int "argc") (param (ptr (ptr char)) "argv"))
- *     (block
- *       (if (> (ident "argc") (num 1))
- *         (return (num 0)))
- *       (return (num 1))))
+ * Example output (newlines and indentation roughly as emitted):
+ *   (translation-unit
+ *     (func-def int "main" (params)
+ *       (block
+ *         (return (num 0)))))
+ *
+ * Naming convention: node kinds use hyphens (func-def, var-decl,
+ * class-def, ...), built-in types use hyphens for compound forms
+ * (unsigned-int, long-long, unsigned-long-long), and operators
+ * use their token-kind name from token_kind_name().
  */
 
 #include "parse.h"

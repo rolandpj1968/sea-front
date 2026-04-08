@@ -96,9 +96,10 @@ Mangler *g_mangler = &g_mangler_human;
 /* Framework — recursive walker that calls into the active vtable.    */
 /* ------------------------------------------------------------------ */
 
-/* Walk OUT from a class to collect enclosing namespace tokens, then
- * emit them outermost-first. Mirrors emit_ns_prefix's behavior but
- * routes through the vtable. */
+/* Walk OUT from a class to collect enclosing namespace tokens,
+ * then emit them outermost-first via the active mangler's
+ * open_namespace hook. Bounded to MAX_NS to keep the buffer
+ * stack-allocated; namespace nesting in real C++ rarely exceeds 4. */
 static void emit_namespace_chain(Type *class_type) {
     if (!class_type || !class_type->class_region) return;
     enum { MAX_NS = 16 };
@@ -113,9 +114,14 @@ static void emit_namespace_chain(Type *class_type) {
     /* Outermost first */
     for (int i = n - 1; i >= 0; i--)
         g_mangler->open_namespace(g_mangler, names[i]);
-    /* No matching close_namespace calls — the chain is flat in our
-     * encoding (separator-style), not nested (paren-style). The
-     * Itanium vtable would balance these via N…E and that's fine. */
+    /* TODO(seafront#mangle-itanium): we currently only call
+     * open_namespace, never close_namespace, because the human
+     * encoding is separator-style (no balanced markers). An
+     * Itanium-style scheme balances namespaces via N…E and would
+     * need close_namespace to be called here in reverse order.
+     * The vtable HAS the close_namespace hook ready; the
+     * framework needs the matching call when an Itanium vtable
+     * lands. Same applies to close_class. */
     (void)n;
 }
 
