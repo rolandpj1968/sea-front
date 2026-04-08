@@ -28,6 +28,11 @@
 #include "../sea-front.h"
 
 static int g_indent = 0;
+/* Currently-emitting class definition (for ctor member-init walking
+ * and inherited-member access rewriting). Set by emit_class_def
+ * before each method body, restored after. NULL outside class
+ * member emission. */
+static Node *g_current_class_def = NULL;
 
 static void emit_indent(void) {
     for (int i = 0; i < g_indent; i++) fputs("    ", stdout);
@@ -442,6 +447,66 @@ static void emit_mangled_class_tag(Type *class_type) {
     mangle_class_tag(class_type);
 }
 
+/* Number of direct (non-virtual) base classes — N4659 §13 [class.derived].
+ * Walks the class's REGION_CLASS base list. The bases are recorded
+ * during class-body parsing (parse_type_specifiers calls
+ * region_add_base). For inheritance LAYOUT, codegen embeds each
+ * base as a struct field and chains ctors/dtors through them. */
+static int class_nbases(Type *class_type) {
+    if (!class_type || !class_type->class_region) return 0;
+    return class_type->class_region->nbases;
+}
+
+/* Get the i-th direct base's TYPE (not just its region). The base's
+ * region carries owner_type back to the Type — that's what codegen
+ * needs to mangle the base's tag, walk the base's class_def, etc. */
+static Type *class_base(Type *class_type, int i) {
+    if (!class_type || !class_type->class_region) return NULL;
+    if (i < 0 || i >= class_type->class_region->nbases) return NULL;
+    return class_type->class_region->bases[i]->owner_type;
+}
+
+/* Find a path from 'current' to a base 'target' through the
+ * non-virtual inheritance graph. Depth-first; first match wins,
+ * matching the lookup convention in lookup.c. Path indices are
+ * written to path[] and the length (number of inheritance hops)
+ * is returned. Zero means 'not found' (or current == target — no
+ * walk needed). Bounded by max_depth to avoid runaway in malformed
+ * graphs. */
+static int find_base_path(Type *current, Type *target,
+                          int *path, int max_depth) {
+    if (!current || !target || current == target || max_depth <= 0)
+        return 0;
+    int nb = class_nbases(current);
+    for (int b = 0; b < nb; b++) {
+        Type *base = class_base(current, b);
+        if (!base) continue;
+        if (base == target) {
+            path[0] = b;
+            return 1;
+        }
+        int sub = find_base_path(base, target, path + 1, max_depth - 1);
+        if (sub > 0) {
+            path[0] = b;
+            return sub + 1;
+        }
+    }
+    return 0;
+}
+
+/* Emit '__sf_base.' (or '__sf_base<N>.') for each step in the path.
+ * Used when chaining through inherited members:
+ *     this->__sf_base.__sf_base.x
+ * The trailing '.' is included so the caller can append the final
+ * member name directly. Pass len == 0 for a no-op. */
+static void emit_base_chain(int *path, int len) {
+    for (int i = 0; i < len; i++) {
+        int b = path[i];
+        if (b == 0) fputs("__sf_base.", stdout);
+        else        fprintf(stdout, "__sf_base%d.", b);
+    }
+}
+
 /* Walk a class's member list to find a method by name and report
  * whether it's virtual. Used by call-site emission to decide
  * between direct dispatch (sf__Class__m(&obj, args)) and indirect
@@ -599,7 +664,20 @@ static void emit_expr(Node *n) {
         if (n->str.tok) fprintf(stdout, "%.*s", n->str.tok->len, n->str.tok->loc);
         return;
     case ND_IDENT:
-        if (n->ident.implicit_this) fputs("this->", stdout);
+        if (n->ident.implicit_this) {
+            fputs("this->", stdout);
+            /* If the resolved declaration lives in a BASE class of
+             * the current class, walk through the __sf_base chain
+             * — N4659 §11 [class.derived]. */
+            Declaration *d = n->ident.resolved_decl;
+            if (d && d->home && d->home->owner_type && g_current_class_def) {
+                Type *cur = g_current_class_def->class_def.ty;
+                Type *tgt = d->home->owner_type;
+                int path[8];
+                int len = find_base_path(cur, tgt, path, 8);
+                emit_base_chain(path, len);
+            }
+        }
         emit_token_text(n->ident.name);
         return;
     case ND_BINARY:
@@ -668,13 +746,38 @@ static void emit_expr(Node *n) {
             callee->ident.resolved_decl->home->owner_type->tag) {
             Type *class_type = callee->ident.resolved_decl->home->owner_type;
             Token *mname = callee->ident.name;
+            /* If the method belongs to a base class of the current
+             * class, we need to pass &this->__sf_base.<...> instead
+             * of bare 'this' so the receiver is the right
+             * subobject. find_base_path returns 0 when the method's
+             * home IS the current class — no walk needed. */
+            int base_path[8];
+            int base_len = 0;
+            if (g_current_class_def) {
+                Type *cur = g_current_class_def->class_def.ty;
+                base_len = find_base_path(cur, class_type, base_path, 8);
+            }
             if (method_is_virtual(class_type, mname)) {
                 /* Virtual dispatch: this->__sf_vptr->m(this, args) */
                 fprintf(stdout, "this->__sf_vptr->%.*s(this",
                         mname->len, mname->loc);
             } else {
                 mangle_class_method(class_type, mname);
-                fputs("(this", stdout);
+                if (base_len > 0) {
+                    /* Inherited method — receiver is the base subobject. */
+                    fputs("(&this->", stdout);
+                    /* emit_base_chain leaves a trailing '.', so we
+                     * emit all but the last hop with the chain helper
+                     * and then '__sf_base' (no trailing dot) for the
+                     * final hop. */
+                    if (base_len > 1)
+                        emit_base_chain(base_path, base_len - 1);
+                    int last = base_path[base_len - 1];
+                    if (last == 0) fputs("__sf_base", stdout);
+                    else           fprintf(stdout, "__sf_base%d", last);
+                } else {
+                    fputs("(this", stdout);
+                }
             }
             for (int i = 0; i < n->call.nargs; i++) {
                 fputs(", ", stdout);
@@ -1686,8 +1789,9 @@ static void cf_begin_function(Node *func) {
  * to the class def node — ctor/dtor body emission can then consult
  * it to walk the class's members in declaration order (which the
  * hash-bucketed class_region doesn't preserve). NULL outside the
- * class member loop. */
-static Node *g_current_class_def = NULL;
+ * class member loop. (Declaration is at the top of the file —
+ * forward-needed by ND_IDENT and ND_CALL emission for inherited-
+ * member access rewriting.) */
 
 /* For a ctor with mem-initializers and/or class members needing
  * default construction, emit member ctor calls at the top of the
@@ -1699,13 +1803,34 @@ static void emit_ctor_member_inits(Node *func) {
     if (!func->func.is_constructor) return;
     if (!g_current_class_def) return;
     Node *cdef = g_current_class_def;
+    /* Base subobject construction — N4659 §15.6.2/13 [class.base.init]:
+     * "...non-static data members are initialized in the order
+     *  they were declared in the class definition (again regardless
+     *  of the order of the mem-initializers)" — and bases come first.
+     * For each direct base, call its default ctor if it has one.
+     * (Mem-init-list base-class entries with explicit args are NOT
+     * yet handled — that needs a richer mem-init parse to recognise
+     * 'Base(args)' versus 'member(args)'.) */
+    if (cdef->class_def.ty) {
+        Type *cty = cdef->class_def.ty;
+        int nb = class_nbases(cty);
+        for (int b = 0; b < nb; b++) {
+            Type *base = class_base(cty, b);
+            if (!base || !base->has_default_ctor) continue;
+            emit_indent();
+            mangle_class_ctor(base);
+            fputs("(&this->", stdout);
+            if (b == 0) fputs("__sf_base", stdout);
+            else        fprintf(stdout, "__sf_base%d", b);
+            fputs(");\n", stdout);
+        }
+    }
     /* Vptr install — N4659 §15.6.2/1 [class.base.init]: a polymorphic
      * class's virtual functions become callable through the object
      * once construction is *complete*. We approximate by setting the
-     * vptr at the *start* of the ctor (before member inits and the
-     * user body). For our subset (no virtual base call from a base
-     * ctor body, no override of virtual call from constructor) this
-     * is observationally equivalent to the standard behavior. */
+     * vptr at the *start* of the ctor (after base ctors so it
+     * overrides any vptr the base installed, before member inits
+     * and the user body). */
     if (cdef->class_def.ty && cdef->class_def.ty->has_virtual_methods) {
         emit_indent();
         fputs("this->__sf_vptr = &", stdout);
@@ -1948,10 +2073,43 @@ static void emit_class_def(Node *n) {
     fputc(' ', stdout);
     fputs("{\n", stdout);
     g_indent++;
+    /* Base subobjects — N4659 §11 [class.derived] / §6.7 [class.layout].
+     * For non-virtual single (or multiple) inheritance we embed each
+     * direct base as a struct field at the head of the layout, in
+     * declaration order. The base field is named '__sf_base' (or
+     * '__sf_base<N>' for the second-and-later base) and is itself a
+     * 'struct sf__<Base>'. Inherited member access lowers to
+     *   this->__sf_base.x
+     * via the rewriting in emit_member_via_base / emit_ident.
+     *
+     * Placing the base FIRST in the layout (and the polymorphic vptr
+     * inside the base, not duplicated in the derived) means a
+     * 'Derived*' is layout-compatible with 'Base*' for casts — the
+     * is-a relationship works at the C struct level too. */
+    int nb = class_nbases(class_type);
+    for (int b = 0; b < nb; b++) {
+        Type *base = class_base(class_type, b);
+        if (!base) continue;
+        emit_indent();
+        fputs("struct ", stdout);
+        mangle_class_tag(base);
+        if (b == 0) fputs(" __sf_base;\n", stdout);
+        else        fprintf(stdout, " __sf_base%d;\n", b);
+    }
     /* Vptr at offset 0 — N4659 §13.3 [class.virtual]. The standard
      * doesn't mandate offset 0 but every Itanium-style ABI puts it
-     * there for the simple non-multi-inheritance case, and so do we. */
-    if (poly) {
+     * there for the simple non-multi-inheritance case, and so do we.
+     *
+     * If the class inherits from a polymorphic base, the vptr lives
+     * inside the base subobject and we DO NOT add another vptr here
+     * — that would offset the base's layout and break the is-a
+     * compatibility. */
+    bool has_poly_base = false;
+    for (int b = 0; b < nb; b++) {
+        Type *base = class_base(class_type, b);
+        if (base && base->has_virtual_methods) { has_poly_base = true; break; }
+    }
+    if (poly && !has_poly_base) {
         emit_indent();
         fputs("const struct ", stdout);
         mangle_class_vtable_type(class_type);
@@ -2180,7 +2338,9 @@ static void emit_class_def(Node *n) {
     /* Synthesize the Class_dtor wrapper. Calls Class_dtor_body
      * (if a user dtor existed) FIRST, then chains into each
      * non-trivially-destructible member's dtor in REVERSE
-     * declaration order — N4659 §15.4 [class.dtor]/9. */
+     * declaration order — N4659 §15.4 [class.dtor]/9. After the
+     * members, chains into each base subobject's dtor, also in
+     * REVERSE declaration order. */
     if (class_type && class_type->has_dtor) {
         fputs("__SF_INLINE void ", stdout);
         mangle_class_dtor(class_type);
@@ -2203,6 +2363,18 @@ static void emit_class_def(Node *n) {
             mangle_class_dtor(m->var_decl.ty);
             fprintf(stdout, "(&this->%.*s);\n",
                     m->var_decl.name->len, m->var_decl.name->loc);
+        }
+        /* Base subobject destruction — reverse declaration order. */
+        int nb_d = class_nbases(class_type);
+        for (int b = nb_d - 1; b >= 0; b--) {
+            Type *base = class_base(class_type, b);
+            if (!base || !base->has_dtor) continue;
+            emit_indent();
+            mangle_class_dtor(base);
+            fputs("(&this->", stdout);
+            if (b == 0) fputs("__sf_base", stdout);
+            else        fprintf(stdout, "__sf_base%d", b);
+            fputs(");\n", stdout);
         }
         g_indent--;
         fputs("}\n", stdout);
@@ -2238,7 +2410,19 @@ static void emit_class_def(Node *n) {
         mangle_class_tag(class_type);
         fputs(" *this) {\n", stdout);
         g_indent++;
-        /* Install vptr first for polymorphic classes — see the
+        /* Base subobject construction first — declaration order. */
+        int nb_c = class_nbases(class_type);
+        for (int b = 0; b < nb_c; b++) {
+            Type *base = class_base(class_type, b);
+            if (!base || !base->has_default_ctor) continue;
+            emit_indent();
+            mangle_class_ctor(base);
+            fputs("(&this->", stdout);
+            if (b == 0) fputs("__sf_base", stdout);
+            else        fprintf(stdout, "__sf_base%d", b);
+            fputs(");\n", stdout);
+        }
+        /* Install vptr next for polymorphic classes — see the
          * matching emit_ctor_member_inits path for the rationale. */
         if (class_type->has_virtual_methods) {
             emit_indent();

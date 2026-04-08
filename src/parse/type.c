@@ -610,6 +610,21 @@ DeclSpec parse_type_specifiers(Parser *p) {
                 if (!any_user_ctor && ty->has_virtual_methods) {
                     ty->has_default_ctor = true;
                 }
+                /* N4659 §11 [class.derived]: a derived class inherits
+                 * the destructor / default-ctor obligations of its
+                 * bases. If any direct base has a non-trivial dtor,
+                 * the derived class needs its own dtor wrapper to
+                 * chain into the base. Same for has_default_ctor —
+                 * the synthesized derived ctor must chain to the
+                 * base ctor. */
+                if (ty->class_region) {
+                    for (int bi = 0; bi < ty->class_region->nbases; bi++) {
+                        Type *bt = ty->class_region->bases[bi]->owner_type;
+                        if (!bt) continue;
+                        if (bt->has_dtor) ty->has_dtor = true;
+                        if (bt->has_default_ctor) ty->has_default_ctor = true;
+                    }
+                }
             }
 
             /* Trailing cv-qualifiers between the struct body and the

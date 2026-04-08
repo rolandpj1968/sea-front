@@ -162,21 +162,38 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
 
     /* Parenthesized declarator: ( ptr-declarator )
      *
-     * N4659 §11.2 [dcl.ambig.res] — Rule 2:
-     * "The disambiguation is purely syntactic; that is, the meaning of
-     *  the names occurring in such a statement ... is not generally used
-     *  in or changed by the disambiguation."
+     * N4659 §11.3.4 [dcl.fct] gives the grammar for the abstract
+     * shape and §11.2 [dcl.ambig.res]/1 prescribes how to
+     * disambiguate the THREE constructs that all begin with '(':
      *
-     * When we see '(' at the start of a declarator, it could be:
-     *   (a) Grouping parens: int (*fp)(int)  — '(' starts a nested declarator
-     *   (b) A function parameter list after an unnamed declarator
-     *   (c) Redundant parens around a name: T(x) means variable x of type T
+     *   (a) Grouping parens: int (*fp)(int)  — '(' starts a nested
+     *       declarator that wraps the eventual declarator-id.
+     *   (b) Function parameter list after an unnamed declarator:
+     *       int (int) — i.e. an abstract function declarator.
+     *   (c) Redundant parens around a name: T(x) declaring x of type T.
      *
-     * Heuristic: '(' followed by *, (, or a non-type identifier is grouping.
-     * '(' followed by a type keyword is a parameter list. */
-    /* Pointer-to-member grouped declarator: '(T::*name)(...)'. The leading
-     * 'T' would normally make parser_at_type_specifier return true and
-     * thus skip the grouped branch — detect this shape explicitly. */
+     * The standard's algorithm requires unbounded lookahead through
+     * balanced parentheses: parse the contents tentatively as a
+     * parameter-declaration-clause and commit if it succeeds.
+     *
+     * --- SHORTCUT (our implementation, not the standard's algorithm):
+     * We use a one-token lookahead instead of full tentative parsing.
+     * Specifically: '(' followed by '*', '(', '&', or a non-type
+     * IDENT is treated as case (a)/(c) — grouping. '(' followed by
+     * a type keyword is treated as case (b) — parameter list.
+     *
+     * This works for every shape we've seen in the libstdc++ smoke
+     * set, but it is NOT equivalent to the standard's algorithm for
+     * pathological inputs. TODO(seafront#decl-ambig): replace with
+     * a tentative parse of the parenthesised contents as a
+     * parameter-declaration-clause to match §11.2/1 exactly.
+     *
+     * Special case (the ptm_grouped check below): a pointer-to-member
+     * grouped declarator '(T::*name)(...)' starts with the IDENT 'T',
+     * which parser_at_type_specifier reports as a type. Our shortcut
+     * would otherwise misclassify it as case (b). The 'IDENT :: *'
+     * shape is detected explicitly and forces the grouped branch.
+     * This patch is also a shortcut, not a standard rule. */
     bool ptm_grouped = parser_at(p, TK_LPAREN) &&
         parser_peek_ahead(p, 1)->kind == TK_IDENT &&
         parser_peek_ahead(p, 2)->kind == TK_SCOPE &&
@@ -244,19 +261,47 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
             else if (qres->type && qres->type->class_region)
                 qscope = qres->type->class_region;
         }
-        /* Template-id in declarator: vec<T, A, vl_embed>::operator[].
-         * Speculative — in declarator-id position '<' is overwhelmingly
-         * a template-argument-list, even when our lookup can't confirm
-         * the name (e.g. inline-namespace member referenced from the
-         * enclosing namespace). */
+        /* Template-id in declarator: 'vec<T, A, vl_embed>::operator[]'.
+         *
+         * Standard rule — N4659 §17.2/2 [temp.names]:
+         *   "After name lookup (§6.4) finds that a name is a
+         *    template-name ..., this name, when followed by <, is
+         *    always taken as the [start of a] template-id."
+         * The §11.3 [dcl.meaning] grammar for declarator-id offers
+         * no relational-operator production, so the only valid
+         * reading of '<' here is the template-id opener. If lookup
+         * had found the name to be NOT a template-name, the program
+         * would be ill-formed and the standard would have us
+         * diagnose.
+         *
+         * --- SHORTCUT (our implementation, not the standard's):
+         * We skip the lookup check entirely and parse '<...>' as
+         * template-args unconditionally. For every valid program
+         * this is correct (template-args is the only valid reading).
+         * For ill-formed programs — a non-template name followed by
+         * '<' in declarator-id position — we silently accept rather
+         * than diagnose. The difference matters for diagnostic
+         * quality, not for the output of any correct program.
+         *
+         * The shortcut also lets us parse declarator-ids whose names
+         * lookup can't see (inline-namespace members, friend
+         * declarations not yet visible, etc.) — for those, the
+         * standard's algorithm would also need a fully-modeled
+         * lookup chain to know they're templates. We get the right
+         * answer in practice without that machinery.
+         *
+         * TODO(seafront#decl-tmpl-id): when our lookup covers the
+         * inline-namespace and friend-injection cases, restore the
+         * standard check and emit a diagnostic on lookup failure. */
         if (parser_at(p, TK_LT)) {
             parse_template_id(p, name);
             /* Keep qscope: 'C<T>::f' should still resolve into C's
-             * class_region for member visibility (an instantiation
+             * class_region for member visibility — an instantiation
              * may differ in dependent details, but member names
-             * declared in the primary template are visible). */
+             * declared in the primary template are visible. */
         }
         /* Consume qualified-id: ident(opt <args>) :: ident :: ... :: ident
+         * N4659 §6.4.3 [basic.lookup.qual] / §11.3 grammar.
          * Terminates: each iteration consumes :: + ident/operator, or breaks. */
         while (parser_at(p, TK_SCOPE)) {
             name_was_qualified = true;
@@ -264,8 +309,13 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
             if (after->kind == TK_IDENT) {
                 parser_advance(p);  /* :: */
                 name = parser_advance(p);
-                /* Speculative template-id at intermediate segments —
-                 * 'std::basic_streambuf<C, T>::operator=' style. */
+                /* Template-id at intermediate segments — e.g.
+                 * 'std::basic_streambuf<C, T>::operator='. Same
+                 * §17.2/2 standard rule and same shortcut as the
+                 * leading segment above: lookup-required in theory,
+                 * elided in practice. See the comment block on the
+                 * leading-segment template-id parse for the full
+                 * discussion. */
                 if (parser_at(p, TK_LT)) {
                     parse_template_id(p, name);
                     /* Resolve template-id segment via lookup in current
