@@ -1026,16 +1026,27 @@ Node *parse_declaration(Parser *p) {
     }
 
     if (parser_consume(p, TK_ASSIGN)) {
-        /* = initializer-clause — could be expression or braced-init-list */
-        if (parser_at(p, TK_LBRACE)) {
-            /* Skip braced-init-list { ... } — N4659 §11.6.4 [dcl.init.list]
-             * Terminates: balanced brace counting toward } */
-            int depth = 0;
-            while (!parser_at_eof(p)) {
-                if (parser_at(p, TK_LBRACE)) depth++;
-                if (parser_at(p, TK_RBRACE)) { depth--; if (depth <= 0) { parser_advance(p); break; } }
-                parser_advance(p);
+        /* = initializer-clause — could be expression or braced-init-list.
+         * Copy-list-init 'T x = {args}' on a class type uses ctor
+         * overload resolution (N4659 §11.6.4 [dcl.init.list]/3.6) so
+         * we route to the same ctor_args path as 'T x(args)'. For
+         * non-class types we just store the first arg as init and
+         * ignore the rest (TODO: aggregate init). */
+        if (parser_consume(p, TK_LBRACE)) {
+            decl->var_decl.has_ctor_init = true;
+            Vec args = vec_new(p->arena);
+            if (!parser_at(p, TK_RBRACE)) {
+                vec_push(&args, parse_assign_expr(p));
+                parser_consume(p, TK_ELLIPSIS);
+                while (parser_consume(p, TK_COMMA)) {
+                    if (parser_at(p, TK_RBRACE)) break;  /* trailing comma */
+                    vec_push(&args, parse_assign_expr(p));
+                    parser_consume(p, TK_ELLIPSIS);
+                }
             }
+            decl->var_decl.ctor_args  = (Node **)args.data;
+            decl->var_decl.ctor_nargs = args.len;
+            parser_expect(p, TK_RBRACE);
         } else {
             decl->var_decl.init = parse_assign_expr(p);
         }
@@ -1059,15 +1070,24 @@ Node *parse_declaration(Parser *p) {
         decl->var_decl.ctor_args  = (Node **)args.data;
         decl->var_decl.ctor_nargs = args.len;
         parser_expect(p, TK_RPAREN);
-    } else if (parser_at(p, TK_LBRACE)) {
-        /* Braced-init-list without = : T x{ ... } — N4659 §11.6.4
-         * Terminates: balanced brace counting toward } */
-        int depth = 0;
-        while (!parser_at_eof(p)) {
-            if (parser_at(p, TK_LBRACE)) depth++;
-            if (parser_at(p, TK_RBRACE)) { depth--; if (depth <= 0) { parser_advance(p); break; } }
-            parser_advance(p);
+    } else if (parser_consume(p, TK_LBRACE)) {
+        /* Direct-list-init 'T x{args}' — N4659 §11.6.4 [dcl.init.list]/3.
+         * For class types this picks an overloaded ctor (same as the
+         * paren form). Same lowering: capture as ctor_args. */
+        decl->var_decl.has_ctor_init = true;
+        Vec args = vec_new(p->arena);
+        if (!parser_at(p, TK_RBRACE)) {
+            vec_push(&args, parse_assign_expr(p));
+            parser_consume(p, TK_ELLIPSIS);
+            while (parser_consume(p, TK_COMMA)) {
+                if (parser_at(p, TK_RBRACE)) break;  /* trailing comma */
+                vec_push(&args, parse_assign_expr(p));
+                parser_consume(p, TK_ELLIPSIS);
+            }
         }
+        decl->var_decl.ctor_args  = (Node **)args.data;
+        decl->var_decl.ctor_nargs = args.len;
+        parser_expect(p, TK_RBRACE);
     }
 
     /* N4659 §6.3.2/1 [basic.scope.pdecl]: register the variable name */

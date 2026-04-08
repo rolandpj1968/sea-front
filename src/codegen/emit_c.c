@@ -734,6 +734,18 @@ static void emit_var_decl_inner(Node *n) {
     if (n->var_decl.init) {
         fputs(" = ", stdout);
         emit_expr(n->var_decl.init);
+    } else if (n->var_decl.has_ctor_init && n->var_decl.ty &&
+               n->var_decl.ty->kind != TY_STRUCT &&
+               n->var_decl.ctor_nargs >= 1) {
+        /* Brace-init / paren-init for a non-class type:
+         *   int x{7}    →  int x = 7
+         *   int x(7)    →  int x = 7
+         * The ctor-call branch in the ND_VAR_DECL emit_stmt case
+         * is gated on TY_STRUCT, so non-class direct-inits with
+         * args land here. We use the first arg as a copy-init
+         * source. Multi-arg forms aren't meaningful for scalars. */
+        fputs(" = ", stdout);
+        emit_expr(n->var_decl.ctor_args[0]);
     }
 }
 
