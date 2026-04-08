@@ -214,6 +214,91 @@ static Node *primary_expr(Parser *p) {
         return new_node(p, ND_NULLPTR, tok);  /* opaque placeholder */
     }
 
+    case TK_LBRACKET: {
+        /* lambda-expression — N4659 §8.1.5 [expr.prim.lambda]
+         *   lambda-introducer lambda-declarator(opt) compound-statement
+         *   lambda-introducer: [ lambda-capture(opt) ]
+         *
+         * '[' as a primary expression is unambiguously a lambda
+         * (postfix '[' subscripts an existing operand and is handled
+         * by the postfix loop, not here). Skip-and-discard for now —
+         * we don't lower lambdas yet, but we MUST parse past them so
+         * surrounding code stays parseable. The result is an opaque
+         * placeholder.
+         *
+         * Sequence to skip:
+         *   1. capture list  [ ... ]    (balanced bracket count)
+         *   2. optional template-parameter-list (C++20)
+         *   3. optional lambda-declarator (params + specifiers + ret)
+         *   4. compound-statement { ... }
+         */
+        parser_advance(p);  /* consume [ */
+        int depth = 1;
+        while (depth > 0 && !parser_at_eof(p)) {
+            if (parser_at(p, TK_LBRACKET)) depth++;
+            else if (parser_at(p, TK_RBRACKET)) {
+                depth--;
+                if (depth == 0) break;
+            }
+            parser_advance(p);
+        }
+        parser_expect(p, TK_RBRACKET);
+        /* Optional template parameter list (C++20 generic lambda
+         * with explicit template params). */
+        if (parser_at(p, TK_LT)) {
+            int adepth = 1;
+            parser_advance(p);
+            while (adepth > 0 && !parser_at_eof(p)) {
+                if (parser_at(p, TK_LT)) adepth++;
+                else if (parser_at(p, TK_GT)) {
+                    adepth--;
+                    if (adepth == 0) break;
+                } else if (parser_at(p, TK_SHR)) {
+                    adepth -= 2;
+                    if (adepth <= 0) break;
+                }
+                parser_advance(p);
+            }
+            if (parser_at(p, TK_GT) || parser_at(p, TK_SHR))
+                parser_advance(p);
+        }
+        /* Optional lambda-declarator (params + specifiers). */
+        if (parser_consume(p, TK_LPAREN)) {
+            int pdepth = 1;
+            while (pdepth > 0 && !parser_at_eof(p)) {
+                if (parser_at(p, TK_LPAREN)) pdepth++;
+                else if (parser_at(p, TK_RPAREN)) {
+                    pdepth--;
+                    if (pdepth == 0) break;
+                }
+                parser_advance(p);
+            }
+            parser_expect(p, TK_RPAREN);
+            /* Skip declarator suffixes: mutable, constexpr,
+             * noexcept(...), -> trailing-return-type, attributes.
+             * Stop at '{' which begins the body. */
+            while (!parser_at(p, TK_LBRACE) && !parser_at_eof(p)) {
+                if (parser_at(p, TK_LBRACE)) break;
+                parser_advance(p);
+            }
+        }
+        /* Compound-statement body — must be present. */
+        if (parser_consume(p, TK_LBRACE)) {
+            int bdepth = 1;
+            while (bdepth > 0 && !parser_at_eof(p)) {
+                if (parser_at(p, TK_LBRACE)) bdepth++;
+                else if (parser_at(p, TK_RBRACE)) {
+                    bdepth--;
+                    if (bdepth == 0) break;
+                }
+                parser_advance(p);
+            }
+            parser_expect(p, TK_RBRACE);
+        }
+        /* Opaque placeholder — sema/codegen don't model lambdas. */
+        return new_node(p, ND_NULLPTR, tok);
+    }
+
     default:
         break;
     }
