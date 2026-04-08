@@ -142,7 +142,8 @@ typedef enum {
                          *   template-name < template-argument-list(opt) > */
 
     /* -- Top level -- */
-    ND_TRANSLATION_UNIT, /* translation-unit — N4659 §6.1 [basic.link]
+    ND_TRANSLATION_UNIT, /* translation-unit — N4659 §A.5 (grammar) /
+                          * §5.2/2 [lex.phases]
                           * C++20: adds module-declaration at TU level */
 } NodeKind;
 
@@ -442,11 +443,12 @@ struct Node {
             /* True for destructors (parsed from '~ClassName'). The
              * declared name token still points at 'ClassName' (no tilde),
              * so codegen needs this flag to distinguish a dtor from a
-             * same-named ctor. Mangled as Class_dtor. */
+             * same-named ctor. Mangled via mangle_class_dtor — see
+             * docs/mangling.md and src/codegen/mangle.c. */
             bool is_destructor;
             /* True for constructors (parsed from 'ClassName(...)' inside
              * class ClassName). Like dtors, the declared name token is
-             * the class name. Mangled as Class_ctor. */
+             * the class name. Mangled via mangle_class_ctor. */
             bool is_constructor;
             /* Virtual method — N4659 §13.3 [class.virtual]. The
              * 'virtual' specifier was seen in the decl-specifier-seq.
@@ -499,7 +501,12 @@ struct Node {
             Type   *ty;         /* class type, with class_region; may be NULL */
             Node  **members;    /* member-specification as array of nodes */
             int     nmembers;
-            /* Future: base classes, class-key (struct vs class) */
+            /* Note: base-class metadata is NOT stored on the class_def
+             * node — it lives on Type.class_region->bases (an array
+             * of base-class regions). Codegen reaches it via
+             * class_type->class_region->bases[i]->owner_type. The
+             * struct-vs-class distinction (class-key) is also not
+             * tracked yet — we treat both as TY_STRUCT. */
         } class_def;
 
         /* ND_FRIEND — N4659 §14.3 [class.friend]
@@ -523,8 +530,9 @@ struct Node {
             int nargs;
         } template_id;
 
-        /* ND_TRANSLATION_UNIT — N4659 §6.1 [basic.link]
-         * translation-unit: declaration-seq(opt)
+        /* ND_TRANSLATION_UNIT — N4659 §A.5 (grammar) / §5.2/2
+         * [lex.phases]:
+         *   translation-unit: declaration-seq(opt)
          * C++20: extends with module-declaration, export-declaration */
         struct {
             Node **decls;
@@ -612,9 +620,11 @@ struct Type {
     bool is_const;
     bool is_volatile;
 
-    /* TY_PTR: pointed-to type — N4659 §11.3.1 [dcl.ptr]
-     * TY_ARRAY: element type — N4659 §11.3.4 [dcl.array]
-     * Future: TY_REF, TY_RVALREF for & and && (N4659 §11.3.2 [dcl.ref]) */
+    /* Pointed-to / element / referenced type. Used by:
+     *   TY_PTR     — N4659 §11.3.1 [dcl.ptr]   (T*)
+     *   TY_REF     — N4659 §11.3.2 [dcl.ref]   (T&)
+     *   TY_RVALREF — N4659 §11.3.2 [dcl.ref]   (T&&) (C++11)
+     *   TY_ARRAY   — N4659 §11.3.4 [dcl.array] (T[N]) */
     Type *base;
 
     /* TY_ARRAY: element count, -1 for unsized [] */
@@ -639,17 +649,26 @@ struct Type {
      * Foo's class region (and walks its base-class chain). */
     DeclarativeRegion *class_region;
 
-    /* TY_STRUCT, TY_UNION: true if the class defines a destructor.
-     * Set when the class body is parsed by scanning the member list
-     * for an ND_FUNC_DEF marked is_destructor. Codegen consults this
-     * to decide whether to emit a Class_dtor call at end of scope. */
+    /* TY_STRUCT, TY_UNION: true if the class needs a non-trivial
+     * destructor. Set when the class body is parsed by scanning the
+     * member list for a non-empty user-declared dtor; ALSO inherited
+     * from any direct base whose has_dtor is true (so a derived
+     * class with no own dtor still gets the wrapper synthesized to
+     * chain into the base dtor — see emit_class_def). Codegen
+     * consults this to decide whether to emit a sf__Class__dtor
+     * call at end of scope. */
     bool has_dtor;
 
     /* TY_STRUCT, TY_UNION: true if the class has a user-declared
      * zero-argument constructor. Codegen consults this to decide
-     * whether 'Foo a;' (default-init) should emit a Foo_ctor(&a)
-     * call. Synthesized default ctors (for classes with non-trivial
-     * members but no user ctor) also set this. */
+     * whether 'Foo a;' (default-init) should emit a sf__Foo__ctor(&a)
+     * call. Three sources set it:
+     *   - user-declared zero-arg ctor in the class body
+     *   - synthesized: classes with non-trivially-default-
+     *     constructible members and no user ctor
+     *   - synthesized: polymorphic classes (need ctor to install
+     *     vptr) and any derived class that inherits has_default_ctor
+     *     from a direct base. */
     bool has_default_ctor;
 
     /* TY_STRUCT, TY_UNION: true if any member function (own or
@@ -696,8 +715,8 @@ typedef enum {
                          * (§10.1.7.3 [dcl.type.elab])
                          * Separate from ENTITY_TYPE per §6.3.10/2: a variable
                          * can hide a class name, but 'struct Foo' still works */
-    ENTITY_NAMESPACE,   /* namespace-name (§10.3.1 [namespace.def]) — deferred */
-    ENTITY_TEMPLATE,    /* template-name (§17.1 [temp]) — deferred */
+    ENTITY_NAMESPACE,   /* namespace-name (§10.3.1 [namespace.def]) */
+    ENTITY_TEMPLATE,    /* template-name (§17.1 [temp]) */
     ENTITY_ENUMERATOR,  /* enumerator (§10.2 [dcl.enum]) — a named constant */
 } EntityKind;
 
@@ -738,9 +757,10 @@ typedef enum {
     REGION_BLOCK,       /* §6.3.3 [basic.scope.block] — compound-statement { ... } */
     REGION_PROTOTYPE,   /* §6.3.4 [basic.scope.proto] — function parameter names */
     REGION_NAMESPACE,   /* §6.3.6 [basic.scope.namespace] — namespace or global */
-    REGION_CLASS,       /* §6.3.7 [basic.scope.class] — deferred (Stage 2) */
-    REGION_ENUM,        /* §6.3.8 [basic.scope.enum] — scoped enum (deferred) */
-    REGION_TEMPLATE,    /* §6.3.9 [basic.scope.temp] — template params (deferred) */
+    REGION_CLASS,       /* §6.3.7 [basic.scope.class] — class body */
+    REGION_ENUM,        /* §6.3.8 [basic.scope.enum] — scoped enum (declared
+                         * but unused: enumerator scope is not yet implemented) */
+    REGION_TEMPLATE,    /* §6.3.9 [basic.scope.temp] — template parameters */
 } RegionKind;
 
 /*
@@ -791,7 +811,8 @@ struct DeclarativeRegion {
      * region. Lets sema/codegen recover the class name (via type->tag)
      * starting from a Declaration found inside the region — used to
      * mangle method calls 'doubled()' inside a method body to
-     * 'Box_doubled(this)'. */
+     * 'sf__Box__doubled(this)' via mangle_class_method (see
+     * src/codegen/mangle.c). */
     Type *owner_type;
 };
 
@@ -966,10 +987,13 @@ Node *parse_compound_stmt(Parser *p);
  *       simple-declaration
  *       function-definition
  *       template-declaration           (§17.1)
- *       explicit-instantiation         (deferred)
- *       explicit-specialization        (deferred)
  *       linkage-specification          (extern "C")
- *       namespace-definition           (deferred)
+ *       namespace-definition           (§10.3.1)
+ *       using-declaration              (§10.3.3)
+ *       using-directive                (§10.3.4)
+ *       static_assert-declaration      (§10.1.4)
+ *       explicit-instantiation         (NOT YET — deferred)
+ *       explicit-specialization        (NOT YET — deferred)
  *       // and others
  *
  *   template-declaration:              (§17.1, Annex A.12)
@@ -996,17 +1020,29 @@ Node *parse_top_level_decl(Parser *p);
 Node *parse_template_declaration(Parser *p);
 
 /*
- * Template argument list — N4659 §17.2 [temp.names]
+ * parse_template_id — N4659 §17.2 [temp.names]
+ *   simple-template-id:
+ *       template-name < template-argument-list(opt) >
  *   template-argument-list:
  *       template-argument ...(opt)
  *       template-argument-list , template-argument ...(opt)
  *   template-argument:
  *       constant-expression | type-id | id-expression
  *
- * Called when '<' is known to start a template-argument-list
- * (i.e., after lookup_is_template_name confirmed the name).
- * Handles >> splitting (§17.2/3): when inside template args,
- * TK_SHR is treated as two '>' tokens.
+ * Called when '<' begins a template-argument-list. Two paths reach
+ * this function:
+ *   - Confirmed: lookup_is_template_name returned true for the
+ *     leading name (the standard rule per §17.2/2).
+ *   - Speculative: in declarator-id position, in qualified-name
+ *     chains, and in a few other places where '<' after an IDENT
+ *     is unambiguously template-args by grammar but our lookup
+ *     can't see the name yet (inline-namespace members, deferred
+ *     friend declarations, etc.). See parse_declarator and the
+ *     'SHORTCUT' comments there.
+ *
+ * Handles >> splitting (§17.2/3): when inside template args
+ * (template_depth > 0), TK_SHR is treated as two '>' tokens via
+ * the parser_save / split_shr machinery in parser.c.
  */
 Node *parse_template_id(Parser *p, Token *name);
 void parse_deferred_func_body(Parser *p, Node *func);
@@ -1059,10 +1095,10 @@ Type *parse_type_name(Parser *p);
  *       ptr-operator ptr-declarator
  *
  *   ptr-operator:
- *       * cv-qualifier-seq(opt)
- *       & (deferred — references)
- *       && (deferred — rvalue references)
- *       nested-name-specifier * cv-qualifier-seq(opt) (deferred — ptr-to-member)
+ *       * cv-qualifier-seq(opt)                          (pointer)
+ *       & attribute-specifier-seq(opt)                    (lvalue reference)
+ *       && attribute-specifier-seq(opt)                   (rvalue reference, C++11)
+ *       nested-name-specifier * cv-qualifier-seq(opt)     (pointer-to-member)
  *
  *   noptr-declarator:
  *       declarator-id
