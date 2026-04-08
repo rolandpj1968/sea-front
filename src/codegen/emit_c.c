@@ -1320,13 +1320,15 @@ static void emit_method_signature(Node *func, Type *class_type) {
     fputc(' ', stdout);
     emit_mangled_class_tag(class_type);
     if (func->func.is_destructor) {
-        /* The user's dtor body is emitted as Class_dtor_user; the
+        /* The user's dtor body is emitted as Class_dtor_body — the
+         * '_body' suffix names what it actually contains: just the
+         * user-written body, with no member-dtor chain. The
          * synthesized Class_dtor wrapper (built by emit_class_def)
-         * calls Class_dtor_user first and then chains into member
+         * calls Class_dtor_body first and then chains into member
          * dtor calls. Every CALLER of a class dtor still emits the
          * unsuffixed Class_dtor name — they hit the wrapper, not
-         * the user-body function directly. */
-        fputs("_dtor_user", stdout);
+         * the body function directly. */
+        fputs("_dtor_body", stdout);
     } else {
         fprintf(stdout, "_%.*s",
                 func->func.name->len, func->func.name->loc);
@@ -1403,7 +1405,7 @@ static void emit_class_def(Node *n) {
      * count.
      *
      * Dtor handling: a user-declared dtor with non-empty body lowers
-     * to Class_dtor_user (forward-declared and emitted by the normal
+     * to Class_dtor_body (forward-declared and emitted by the normal
      * method path). The Class_dtor wrapper (synthesized below) is
      * forward-declared separately when class_type->has_dtor is true
      * — that flag may be set by either a user dtor OR by a
@@ -1412,7 +1414,7 @@ static void emit_class_def(Node *n) {
     for (int i = 0; i < n->class_def.nmembers; i++) {
         Node *m = n->class_def.members[i];
         if (!m) continue;
-        /* Skip dtors with empty bodies — no _dtor_user emission.
+        /* Skip dtors with empty bodies — no _dtor_body emission.
          * The class wrapper handles members directly. has_dtor may
          * still be true (because of members), so the wrapper is
          * emitted separately below. */
@@ -1484,7 +1486,7 @@ static void emit_class_def(Node *n) {
         emit_method_as_free_fn(m, class_type);
     }
 
-    /* Synthesize the Class_dtor wrapper. Calls Class_dtor_user
+    /* Synthesize the Class_dtor wrapper. Calls Class_dtor_body
      * (if a user dtor existed) FIRST, then chains into each
      * non-trivially-destructible member's dtor in REVERSE
      * declaration order — N4659 §15.4 [class.dtor]/9. */
@@ -1498,7 +1500,7 @@ static void emit_class_def(Node *n) {
         if (user_dtor) {
             emit_indent();
             emit_mangled_class_tag(class_type);
-            fputs("_dtor_user(this);\n", stdout);
+            fputs("_dtor_body(this);\n", stdout);
         }
         for (int i = n->class_def.nmembers - 1; i >= 0; i--) {
             Node *m = n->class_def.members[i];
@@ -1630,6 +1632,8 @@ static void emit_prelude(void) {
 void emit_c(Node *tu) {
     if (!tu || tu->kind != ND_TRANSLATION_UNIT) return;
     emit_prelude();
-    for (int i = 0; i < tu->tu.ndecls; i++)
+    for (int i = 0; i < tu->tu.ndecls; i++) {
+        if (i > 0) fputc('\n', stdout);  /* blank line between top-level decls */
         emit_top_level(tu->tu.decls[i]);
+    }
 }
