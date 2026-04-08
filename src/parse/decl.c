@@ -394,6 +394,18 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
          * function-def branch to push. */
         if (qscope)
             p->qualified_decl_scope = qscope;
+        /* Out-of-class constructor definition: 'Foo::Foo(...)'.
+         * If the qualified-id ends in a name that matches the
+         * qualifier scope's class name, this is a ctor. The
+         * pending_is_destructor branch above already handles the
+         * dtor case ('Foo::~Foo'); ctors don't have a leading
+         * marker so we have to check name equality. */
+        if (qscope && qscope->kind == REGION_CLASS && qscope->owner_type &&
+            qscope->owner_type->tag && name &&
+            name->len == qscope->owner_type->tag->len &&
+            memcmp(name->loc, qscope->owner_type->tag->loc, name->len) == 0) {
+            p->pending_is_constructor = true;
+        }
     }
     /* Destructor at current scope: ~ClassName */
     if (!name && parser_at(p, TK_TILDE) && parser_peek_ahead(p, 1)->kind == TK_IDENT) {
@@ -1113,6 +1125,20 @@ Node *parse_declaration(Parser *p) {
     }
 
     parser_expect(p, TK_SEMI);
+    /* Propagate pending ctor/dtor flags onto the var-decl when this
+     * is a method declaration (no body, e.g. 'Foo();' inside a class
+     * body). emit_class_def's forward-decl loop reads these to mangle
+     * the right way. */
+    if (decl) {
+        if (p->pending_is_constructor) {
+            decl->var_decl.is_constructor = true;
+            p->pending_is_constructor = false;
+        }
+        if (p->pending_is_destructor) {
+            decl->var_decl.is_destructor = true;
+            p->pending_is_destructor = false;
+        }
+    }
     return decl;
 }
 

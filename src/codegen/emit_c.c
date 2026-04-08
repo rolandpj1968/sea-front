@@ -1553,13 +1553,26 @@ static void emit_class_def(Node *n) {
                    m->var_decl.ty->kind == TY_FUNC && m->var_decl.name &&
                    class_type) {
             /* Synthesise an emit_method_signature-like header from the
-             * var-decl's type. */
+             * var-decl's type. Ctor/dtor declarations get the
+             * Class_ctor / Class_dtor mangling instead of the
+             * regular Class_<methodname> form. */
             Type *fty = m->var_decl.ty;
+            if (m->var_decl.is_destructor) {
+                /* Skip — the Class_dtor wrapper (synthesized below)
+                 * is forward-declared separately. The body, if any,
+                 * goes through the out-of-class def path as
+                 * Class_dtor_body. */
+                continue;
+            }
             emit_type(fty->ret);
             fputc(' ', stdout);
             emit_mangled_class_tag(class_type);
-            fprintf(stdout, "_%.*s(struct ",
-                    m->var_decl.name->len, m->var_decl.name->loc);
+            if (m->var_decl.is_constructor) {
+                fputs("_ctor(struct ", stdout);
+            } else {
+                fprintf(stdout, "_%.*s(struct ",
+                        m->var_decl.name->len, m->var_decl.name->loc);
+            }
             emit_mangled_class_tag(class_type);
             fputs(" *this", stdout);
             for (int k = 0; k < fty->nparams; k++) {
@@ -1651,7 +1664,10 @@ static void emit_class_def(Node *n) {
     bool any_user_ctor = false;
     for (int i = 0; i < n->class_def.nmembers; i++) {
         Node *m = n->class_def.members[i];
-        if (m && m->kind == ND_FUNC_DEF && m->func.is_constructor) {
+        if (!m) continue;
+        if ((m->kind == ND_FUNC_DEF && m->func.is_constructor) ||
+            (m->kind == ND_VAR_DECL && m->var_decl.ty &&
+             m->var_decl.ty->kind == TY_FUNC && m->var_decl.is_constructor)) {
             any_user_ctor = true;
             break;
         }
@@ -1693,11 +1709,21 @@ static void emit_top_level(Node *n) {
         /* Out-of-class method definition 'int Foo::bar() {}' was
          * tagged by the parser with the resolved class type. Emit
          * it as a mangled free function with the 'this' parameter
-         * prepended. */
-        if (n->func.class_type && n->func.class_type->tag)
+         * prepended.
+         *
+         * For ctors specifically, set g_current_class_def from the
+         * class type's back-pointer so emit_ctor_member_inits can
+         * walk the class members in declaration order — same
+         * machinery the in-class method-emission loop already uses. */
+        if (n->func.class_type && n->func.class_type->tag) {
+            Node *saved = g_current_class_def;
+            if (n->func.is_constructor && n->func.class_type->class_def)
+                g_current_class_def = n->func.class_type->class_def;
             emit_method_as_free_fn(n, n->func.class_type);
-        else
+            g_current_class_def = saved;
+        } else {
             emit_func_def(n);
+        }
         return;
     case ND_CLASS_DEF: emit_class_def(n); return;
     case ND_VAR_DECL:

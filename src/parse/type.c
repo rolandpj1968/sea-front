@@ -485,6 +485,10 @@ DeclSpec parse_type_specifiers(Parser *p) {
                     (Node **)members.data, members.len,
                     ty->tag ? ty->tag : parser_peek(p));
                 result.class_def->class_def.ty = ty;
+                /* Back-pointer so codegen can find the ND_CLASS_DEF
+                 * node from the Type alone (used when emitting
+                 * out-of-class ctor/dtor bodies). */
+                ty->class_def = result.class_def;
 
                 /* Trivially-destructible per N4659 §15.4 [class.dtor]/12:
                  *   trivial iff own user-declared dtor body is empty
@@ -518,6 +522,15 @@ DeclSpec parse_type_specifiers(Parser *p) {
                             /* User-declared zero-arg ctor. */
                             ty->has_default_ctor = true;
                         }
+                    } else if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
+                               m->var_decl.ty->kind == TY_FUNC &&
+                               m->var_decl.is_constructor) {
+                        /* Pure ctor declaration ('Foo();') with the body
+                         * defined out-of-class. Same as ND_FUNC_DEF for
+                         * has_default_ctor purposes. */
+                        any_user_ctor = true;
+                        if (m->var_decl.ty->nparams == 0)
+                            ty->has_default_ctor = true;
                     } else if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
                                m->var_decl.ty->kind == TY_STRUCT) {
                         if (m->var_decl.ty->has_dtor) {
@@ -596,6 +609,46 @@ DeclSpec parse_type_specifiers(Parser *p) {
         parser_advance(p);  /* consume leading :: */
         /* fall through to qualified-name handling below */
     }
+    /* Out-of-class constructor/destructor definition with no return
+     * type: 'Class::Class(' or 'Class::~Class('. We must NOT consume
+     * the leading Class as a type-specifier — leave it for
+     * parse_declarator's qualified-id loop to pick up. Return a void
+     * placeholder and set the pending flag. The qualified-type-name
+     * branch immediately below would otherwise gobble Class::Class
+     * as a (nonsensical) type-name. */
+    if (!seen_any && parser_peek(p)->kind == TK_IDENT &&
+        parser_peek_ahead(p, 1)->kind == TK_SCOPE) {
+        Token *first = parser_peek(p);
+        Declaration *td =
+            lookup_unqualified_kind(p, first->loc, first->len, ENTITY_TYPE);
+        if (!td)
+            td = lookup_unqualified_kind(p, first->loc, first->len, ENTITY_TAG);
+        if (td && td->type && td->type->kind == TY_STRUCT && td->type->tag) {
+            Token *t2 = parser_peek_ahead(p, 2);
+            Token *t3 = parser_peek_ahead(p, 3);
+            Token *t4 = parser_peek_ahead(p, 4);
+            bool is_dtor = false, is_ctor = false;
+            if (t2 && t2->kind == TK_TILDE && t3 && t3->kind == TK_IDENT &&
+                t3->len == td->type->tag->len &&
+                memcmp(t3->loc, td->type->tag->loc, t3->len) == 0 &&
+                t4 && t4->kind == TK_LPAREN) {
+                is_dtor = true;
+            } else if (t2 && t2->kind == TK_IDENT &&
+                       t2->len == td->type->tag->len &&
+                       memcmp(t2->loc, td->type->tag->loc, t2->len) == 0 &&
+                       t3 && t3->kind == TK_LPAREN) {
+                is_ctor = true;
+            }
+            if (is_ctor || is_dtor) {
+                if (is_ctor) p->pending_is_constructor = true;
+                if (is_dtor) p->pending_is_destructor = true;
+                Type *vty = new_type(p, TY_VOID);
+                result.type = vty;
+                return result;
+            }
+        }
+    }
+
     if (!seen_any && parser_peek(p)->kind == TK_IDENT &&
         parser_peek_ahead(p, 1)->kind == TK_SCOPE) {
         /* Qualified type name: A::B::C — N4659 §6.4.3 [basic.lookup.qual].

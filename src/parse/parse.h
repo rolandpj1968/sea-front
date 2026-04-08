@@ -410,6 +410,12 @@ struct Node {
             Node **ctor_args;
             int    ctor_nargs;
             bool   has_ctor_init;
+            /* True for class-member function declarations (ND_VAR_DECL
+             * with TY_FUNC) that are constructors / destructors —
+             * used by emit_class_def's forward-decl loop to mangle
+             * the right way. Mirrors the same flags on ND_FUNC_DEF. */
+            bool   is_constructor;
+            bool   is_destructor;
         } var_decl;
 
         /* ND_FUNC_DEF — N4659 §11.4 [dcl.fct.def]
@@ -626,6 +632,14 @@ struct Type {
      * call. Synthesized default ctors (for classes with non-trivial
      * members but no user ctor) also set this. */
     bool has_default_ctor;
+
+    /* TY_STRUCT, TY_UNION: back-pointer to the ND_CLASS_DEF node
+     * that defined this type. Set when the class body is parsed.
+     * Codegen uses it to walk member declarations IN ORDER (the
+     * hash-bucketed class_region doesn't preserve order) when
+     * emitting out-of-class ctor/dtor definitions whose body needs
+     * to chain into member ctors. NULL for forward-declared types. */
+    Node *class_def;
 };
 
 /* ================================================================== */
