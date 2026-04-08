@@ -156,11 +156,21 @@ static Node *parse_if_stmt(Parser *p) {
 
     parser_expect(p, TK_RPAREN);
 
+    /* C++20: attribute-specifier-seq before the substatement.
+     * 'if (cond) [[likely]] { ... }' is allowed by the grammar
+     * (N4861 §9.4.1) — and libstdc++ uses [[__unlikely__]] in
+     * a few places. Skip the attributes. */
+    parser_skip_cxx_attributes(p);
+    parser_skip_gnu_attributes(p);
+
     node->if_.then_ = parse_stmt(p);
 
-    /* else clause — §9.4.1/1 */
-    if (parser_consume(p, TK_KW_ELSE))
+    /* else clause — §9.4.1/1 — same attribute treatment. */
+    if (parser_consume(p, TK_KW_ELSE)) {
+        parser_skip_cxx_attributes(p);
+        parser_skip_gnu_attributes(p);
         node->if_.else_ = parse_stmt(p);
+    }
 
     region_pop(p);  /* pop if-statement scope */
     return node;

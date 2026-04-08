@@ -572,6 +572,11 @@ parse_suffixes:
                         Node *param_decl = parse_declarator(p, param_base);
                         if (param_decl)
                             param_decl->kind = ND_PARAM;
+                        /* C++11 attribute-specifier-seq AFTER the
+                         * declarator — libstdc++ uses
+                         * 'void f(int x [[gnu::unused]])'. */
+                        parser_skip_cxx_attributes(p);
+                        parser_skip_gnu_attributes(p);
 
                         /* Default argument — N4659 §11.3.6 [dcl.fct.default]
                          *   parameter-declaration = assignment-expression */
@@ -671,6 +676,10 @@ parse_suffixes:
                     Type *param_base = parse_type_specifiers(p).type;
                     Node *param_decl = parse_declarator(p, param_base);
                     if (param_decl) param_decl->kind = ND_PARAM;
+                    /* Trailing attribute-specifier-seq after the
+                     * declarator (libstdc++ uses [[gnu::unused]]). */
+                    parser_skip_cxx_attributes(p);
+                    parser_skip_gnu_attributes(p);
                     if (parser_consume(p, TK_ASSIGN))
                         parse_assign_expr(p);  /* default arg — §11.3.6 */
                     if (param_decl) {
@@ -707,8 +716,15 @@ parse_suffixes:
     }
 
     /* Array declarator suffix — N4659 §11.3.4 [dcl.array]
-     *   noptr-declarator [ constant-expression(opt) ] attribute-specifier-seq(opt) */
-    while (parser_consume(p, TK_LBRACKET)) {
+     *   noptr-declarator [ constant-expression(opt) ] attribute-specifier-seq(opt)
+     *
+     * Be careful: '[[' is the C++ attribute-specifier opener, not an
+     * unsized-array bracket. Skip attributes here so they don't get
+     * misparsed as array dimensions. */
+    parser_skip_cxx_attributes(p);
+    while (parser_at(p, TK_LBRACKET) &&
+           parser_peek_ahead(p, 1)->kind != TK_LBRACKET) {
+        parser_advance(p);  /* consume [ */
         int len = -1;  /* unsized */
         if (!parser_at(p, TK_RBRACKET)) {
             /* For the first pass, only handle integer constant array sizes */
@@ -926,8 +942,11 @@ Node *parse_declaration(Parser *p) {
                     Vec args = vec_new(p->arena);
                     if (!parser_at(p, TK_RPAREN)) {
                         vec_push(&args, parse_assign_expr(p));
-                        while (parser_consume(p, TK_COMMA))
+                        parser_consume(p, TK_ELLIPSIS); /* pack expansion */
+                        while (parser_consume(p, TK_COMMA)) {
                             vec_push(&args, parse_assign_expr(p));
+                            parser_consume(p, TK_ELLIPSIS);
+                        }
                     }
                     parser_expect(p, TK_RPAREN);
 
@@ -1017,6 +1036,17 @@ Node *parse_declaration(Parser *p) {
      * Direct-initialization T x(expr) is distinguished from a function
      * declarator by the heuristic in parse_declarator() — if the '(' was
      * not consumed as a parameter list, it arrives here as init. */
+    /* GCC asm-label / symbol rename:
+     *   void foo() __asm("foo_v2");
+     * The asm-string gives the function a different external name.
+     * Consume and discard — sea-front doesn't yet honor asm-labels. */
+    if (parser_at(p, TK_KW_ASM)) {
+        parser_advance(p);
+        parser_expect(p, TK_LPAREN);
+        while (!parser_at_eof(p) && !parser_at(p, TK_RPAREN))
+            parser_advance(p);
+        parser_expect(p, TK_RPAREN);
+    }
     /* Bit-field — N4659 §12.2.4 [class.bit]
      *   member-declarator: identifier(opt) : constant-expression
      * The colon after a declarator name in a class indicates bit-field width.

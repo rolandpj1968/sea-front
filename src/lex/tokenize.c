@@ -145,9 +145,13 @@ typedef struct {
  * representations (mapped to their operator token kinds).
  */
 static const Keyword kw_table[] = {
-    /* C11 alternate spellings (sort first because '_' < 'a' in ASCII). */
+    /* C11 alternate spellings + GCC double-underscore aliases.
+     * Both groups sort before 'alignas' because '_' (0x5F) < 'a' (0x61).
+     * Within them, '_B' (95+66) sorts before '__' (95+95). */
     {"_Bool",            TK_KW_BOOL},
     {"_Static_assert",   TK_KW_STATIC_ASSERT},
+    {"__asm",            TK_KW_ASM},     /* GCC alias for asm */
+    {"__asm__",          TK_KW_ASM},     /* GCC alias for asm */
     {"alignas",          TK_KW_ALIGNAS},
     {"alignof",          TK_KW_ALIGNOF},
     {"and",              TK_LAND},

@@ -321,6 +321,20 @@ DeclSpec parse_type_specifiers(Parser *p) {
                 }
             }
 
+            /* C++11 'final' contextual keyword — N4659 §10.1.7.4
+             *   class-virt-specifier: final
+             * Allowed between the class name and the base-clause /
+             * class-body. We consume and discard — sea-front doesn't
+             * track finality for inheritance checks. 'final' is a
+             * regular identifier outside this position. */
+            if (parser_at(p, TK_IDENT) &&
+                parser_peek(p)->len == 5 &&
+                memcmp(parser_peek(p)->loc, "final", 5) == 0) {
+                Token *t1 = parser_peek_ahead(p, 1);
+                if (t1 && (t1->kind == TK_COLON || t1->kind == TK_LBRACE))
+                    parser_advance(p);
+            }
+
             /* Base clause — N4659 §13.1 [class.derived]
              *   base-clause: : base-specifier-list
              *   base-specifier:
@@ -849,6 +863,11 @@ DeclSpec parse_type_specifiers(Parser *p) {
                             parse_template_id(p, seg);
                     }
                 }
+                /* East-const after the template-id: 'X<int> const&'. */
+                while (parser_at(p, TK_KW_CONST) || parser_at(p, TK_KW_VOLATILE)) {
+                    if (parser_consume(p, TK_KW_CONST))    is_const = true;
+                    if (parser_consume(p, TK_KW_VOLATILE)) is_volatile = true;
+                }
                 /* For now, the resulting type is opaque — sema resolves
                  * the template specialization. */
                 Type *ty = new_type(p, TY_STRUCT);
@@ -1048,6 +1067,7 @@ bool parser_at_type_specifier(Parser *p) {
     case TK_KW_AUTO: case TK_KW_DECLTYPE: case TK_KW_TYPENAME:
     case TK_KW_CONSTEXPR: case TK_KW_VIRTUAL: case TK_KW_EXPLICIT:
     case TK_KW_MUTABLE:
+    case TK_KW_ALIGNAS:        /* C++11 alignment specifier */
         return true;
     case TK_IDENT:
         /* N4659 §10.1.7.1 [dcl.type.simple]: a type-name (typedef-name,

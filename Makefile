@@ -52,12 +52,15 @@ $(BUILDDIR) $(BUILDDIR)/lex $(BUILDDIR)/parse $(BUILDDIR)/sema $(BUILDDIR)/codeg
 	mkdir -p $@
 
 # Core tests — must all pass (gated).
-test: $(LEX_TEST_TARGET) $(TARGET)
+test: $(LEX_TEST_TARGET) $(TARGET) $(MCPP)
 	./$(LEX_TEST_TARGET)
 	@if [ -x tests/test.sh ]; then ./tests/test.sh $(TARGET); fi
 	@if [ -x tests/test_parse.sh ]; then ./tests/test_parse.sh $(TARGET); fi
 	@if [ -x tests/test_emit_c.sh ]; then ./tests/test_emit_c.sh $(TARGET); fi
 	@if [ -x tests/test_multi_tu.sh ]; then ./tests/test_multi_tu.sh $(TARGET); fi
+	@if [ -x tests/test_libstdcxx_headers.sh ] && [ -d /usr/include/c++/13 ]; then \
+	    ./tests/test_libstdcxx_headers.sh $(TARGET) $(MCPP); \
+	fi
 
 # Smoke tests against GCC/Clang test suites — not gated (has expected failures).
 # Tracks progress toward the ultimate bootstrap goal.

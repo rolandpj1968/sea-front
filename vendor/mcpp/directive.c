@@ -79,9 +79,9 @@ static void     dump_repl( const DEFBUF * dp, FILE * fp, int gcc2_va);
 #define L_undef         ('u' ^ ('d' << 1))
 #define L_line          ('l' ^ ('n' << 1))
 #define L_include       ('i' ^ ('c' << 1))
-#if COMPILER == GNUC
+/* sea-front: define L_include_next unconditionally so we can recognise
+ * the GCC #include_next extension regardless of mcpp's COMPILER mode. */
 #define L_include_next  ('i' ^ ('c' << 1) ^ ('_' << 1))
-#endif
 #if SYSTEM == SYS_MAC
 #define L_import        ('i' ^ ('p' << 1))
 #endif
@@ -323,6 +323,18 @@ ifdo:
         in_include = TRUE;
         if (do_include( FALSE) == TRUE && file != infile)
             newlines = -1;  /* File has been included. Clear blank lines    */
+        in_include = FALSE;
+        break;
+    case L_include_next:
+        /* sea-front: GCC #include_next — search the include path
+         * starting AFTER the directory the current file came from.
+         * libstdc++'s C wrappers (cstdlib etc.) use this to chain
+         * to the underlying C system header without infinite
+         * recursion. Pass TRUE so search_dir() in system.c skips
+         * the includer's directory. */
+        in_include = TRUE;
+        if (do_include( TRUE) == TRUE && file != infile)
+            newlines = -1;
         in_include = FALSE;
         break;
 

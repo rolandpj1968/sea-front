@@ -3256,13 +3256,12 @@ static int  open_include(
     if (mcpp_debug & PATH)
         mcpp_fprintf( DBG, "filename: %s\n", filename);
 
-#if COMPILER == GNUC
+    /* sea-front: enable include_next dispatch unconditionally
+     * (was COMPILER==GNUC gated). */
     if (! full_path) {
-        if (i_split                     /* -I- option is specified  */
-                || next)                        /* or #include_next */
-        goto  search_dirs;
+        if (next)                       /* #include_next */
+            goto  search_dirs;
     }
-#endif
 
     if ((searchlocal && ((search_rule & CURRENT) || !has_dir)) || full_path) {
         /*
@@ -3296,8 +3295,11 @@ static int  open_include(
         }
     }
 #endif
-#if COMPILER == GNUC
+    /* sea-front: search_dirs label exposed unconditionally so the
+     * include_next dispatch above can jump here regardless of
+     * COMPILER mode. The -iquote search inside is GNUC-only. */
 search_dirs:
+#if COMPILER == GNUC
     if (searchlocal) {
         /* Search the directories specified by -iquote option, if any.  */
         const char **   qdir;
@@ -3376,11 +3378,11 @@ static int  search_dir(
     const char **   incptr;                 /* -> inlcude directory */
 
     incptr = incdir;
-#if COMPILER == GNUC
-    if (next && **inc_dirp != EOS)
+    /* sea-front: enable include_next search-skip unconditionally
+     * (was COMPILER==GNUC gated). */
+    if (next && inc_dirp != NULL && **inc_dirp != EOS)
         incptr = inc_dirp + 1;
         /* In case of include_next search after the includer's directory    */
-#endif
 
     for ( ; incptr < incend; incptr++) {
         if (strlen( *incptr) + strlen( filename) >= PATHMAX)
