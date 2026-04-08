@@ -1279,33 +1279,96 @@ static void cf_begin_function(Node *func) {
                              subtree_has_cleanups(func->func.body);
 }
 
+/* When emit_class_def is iterating its method members it sets this
+ * to the class def node — ctor/dtor body emission can then consult
+ * it to walk the class's members in declaration order (which the
+ * hash-bucketed class_region doesn't preserve). NULL outside the
+ * class member loop. */
+static Node *g_current_class_def = NULL;
+
+/* For a ctor with mem-initializers and/or class members needing
+ * default construction, emit member ctor calls at the top of the
+ * body — N4659 §15.6.2/13.3, in DECLARATION order. Members listed
+ * in the mem-init-list use the user's args; members not listed but
+ * with non-trivial default ctors get the default ctor call. */
+static void emit_ctor_member_inits(Node *func) {
+    if (!func->func.is_constructor) return;
+    if (!g_current_class_def) return;
+    Node *cdef = g_current_class_def;
+    for (int i = 0; i < cdef->class_def.nmembers; i++) {
+        Node *m = cdef->class_def.members[i];
+        if (!m || m->kind != ND_VAR_DECL) continue;
+        Type *mty = m->var_decl.ty;
+        if (!mty || mty->kind != TY_STRUCT) continue;
+        if (!m->var_decl.name) continue;
+
+        /* Look up this member in the user's mem-init-list. */
+        MemInit *found = NULL;
+        for (int k = 0; k < func->func.n_mem_inits; k++) {
+            MemInit *mi = &func->func.mem_inits[k];
+            if (mi->name && mi->name->len == m->var_decl.name->len &&
+                memcmp(mi->name->loc, m->var_decl.name->loc,
+                       mi->name->len) == 0) {
+                found = mi;
+                break;
+            }
+        }
+
+        if (found) {
+            emit_indent();
+            emit_mangled_class_tag(mty);
+            fprintf(stdout, "_ctor(&this->%.*s",
+                    m->var_decl.name->len, m->var_decl.name->loc);
+            for (int a = 0; a < found->nargs; a++) {
+                fputs(", ", stdout);
+                emit_expr(found->args[a]);
+            }
+            fputs(");\n", stdout);
+        } else if (mty->has_default_ctor) {
+            emit_indent();
+            emit_mangled_class_tag(mty);
+            fprintf(stdout, "_ctor(&this->%.*s);\n",
+                    m->var_decl.name->len, m->var_decl.name->loc);
+        }
+        /* else: trivially-default-constructible member, nothing to do. */
+    }
+}
+
 /* Emit the body of a function with cleanup-aware wrapping when the
  * function has any non-trivial locals: declare __retval/__unwind at
  * the top, run the body, then __epilogue: return __retval; */
 static void emit_func_body(Node *func) {
     if (!func->func.body) { fputs(";\n", stdout); return; }
-    if (!g_cf.func_has_cleanups) {
+    bool has_member_inits = func->func.is_constructor &&
+                            g_current_class_def != NULL;
+    if (!g_cf.func_has_cleanups && !has_member_inits) {
         emit_block(func->func.body);
         return;
     }
     /* Wrap: open a brace, expand __SF_PROLOGUE (declares __SF_retval
-     * and __SF_unwind), emit the user body (its own ND_BLOCK prints
-     * its { }), then __SF_EPILOGUE (label + return). */
+     * and __SF_unwind), emit member-init calls if this is a ctor,
+     * emit the user body (its own ND_BLOCK prints its { }), then
+     * __SF_EPILOGUE (label + return). */
     fputs("{\n", stdout);
     g_indent++;
-    emit_indent();
     bool void_ret = func->func.ret_ty && func->func.ret_ty->kind == TY_VOID;
-    if (void_ret) {
-        fputs("__SF_PROLOGUE_VOID;\n", stdout);
-    } else {
-        fputs("__SF_PROLOGUE(", stdout);
-        emit_type(func->func.ret_ty);
-        fputs(");\n", stdout);
+    if (g_cf.func_has_cleanups) {
+        emit_indent();
+        if (void_ret) {
+            fputs("__SF_PROLOGUE_VOID;\n", stdout);
+        } else {
+            fputs("__SF_PROLOGUE(", stdout);
+            emit_type(func->func.ret_ty);
+            fputs(");\n", stdout);
+        }
     }
+    if (has_member_inits) emit_ctor_member_inits(func);
     emit_indent();
     emit_block(func->func.body);
-    emit_indent();
-    fputs(void_ret ? "__SF_EPILOGUE_VOID;\n" : "__SF_EPILOGUE;\n", stdout);
+    if (g_cf.func_has_cleanups) {
+        emit_indent();
+        fputs(void_ret ? "__SF_EPILOGUE_VOID;\n" : "__SF_EPILOGUE;\n", stdout);
+    }
     g_indent--;
     emit_indent();
     fputs("}\n", stdout);
@@ -1509,7 +1572,11 @@ static void emit_class_def(Node *n) {
 
     /* Now emit each method (ND_FUNC_DEF in the member list) as a
      * separate free function. Trivial dtors are skipped to match
-     * the forward-decl loop above. */
+     * the forward-decl loop above. g_current_class_def is set so
+     * ctor body emission can walk this class's members in
+     * declaration order to emit member-init calls. */
+    Node *saved_cdef = g_current_class_def;
+    g_current_class_def = n;
     for (int i = 0; i < n->class_def.nmembers; i++) {
         Node *m = n->class_def.members[i];
         if (!m || m->kind != ND_FUNC_DEF || !class_type) continue;
@@ -1521,6 +1588,7 @@ static void emit_class_def(Node *n) {
         }
         emit_method_as_free_fn(m, class_type);
     }
+    g_current_class_def = saved_cdef;
 
     /* Synthesize the Class_dtor wrapper. Calls Class_dtor_body
      * (if a user dtor existed) FIRST, then chains into each

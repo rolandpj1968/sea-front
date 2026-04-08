@@ -24,6 +24,16 @@
  * struct Node is defined further down. */
 typedef struct DeclarativeRegion DeclarativeRegion;
 typedef struct Declaration       Declaration;
+typedef struct Node              Node;
+
+/* Constructor mem-initializer-list entry — N4659 §15.6.2 [class.base.init].
+ * Each member-init in the source like 'a(1)' or 'b(make_b(), 7)' becomes
+ * one MemInit entry on the func node. Bases not yet handled. */
+typedef struct MemInit {
+    struct Token *name;  /* member identifier */
+    Node        **args;
+    int           nargs;
+} MemInit;
 
 typedef enum {
     /* -- Expressions --
@@ -411,6 +421,11 @@ struct Node {
             int nparams;
             Node *body;     /* ND_BLOCK (compound-statement) */
             DeclarativeRegion *param_scope;  /* sema; prototype-scope region */
+            /* Constructor mem-initializer-list — N4659 §15.6.2 [class.base.init]
+             * 'mem_inits' is an array of MemInit (defined below) entries.
+             * As-written order; codegen reorders to declaration order. */
+            struct MemInit *mem_inits;
+            int n_mem_inits;
             /* For an out-of-class method definition 'int Foo::bar() {}',
              * this is the resolved class type (Foo). NULL for free
              * functions and in-class method definitions. Codegen uses

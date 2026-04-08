@@ -892,61 +892,96 @@ Node *parse_declaration(Parser *p) {
         }
 
         /* ctor-initializer — N4659 §15.6.2 [class.base.init]
-         *   : mem-initializer-list
+         *   ': ' mem-initializer-list
          *   mem-initializer: identifier ( expression-list(opt) )
          *                  | identifier braced-init-list
          *                  | identifier ... (pack expansion)
-         * Currently parsed and discarded. */
+         * Captures simple 'name(args)' entries. Templates, base-class
+         * inits with template arguments, and braced-init-lists fall
+         * through to a skip path that discards them — these will get
+         * proper parsing once we need them. */
         if (parser_consume(p, TK_COLON)) {
-            /* Terminates: each iteration consumes one mem-initializer; loop
-             * exits when no comma follows. */
+            Vec inits = vec_new(p->arena);
             for (;;) {
-                /* Skip the (possibly qualified or template) member name.
-                 * Track angle-bracket depth so commas inside template
-                 * arguments don't terminate the mem-initializer name. */
-                int angle = 0;
-                while (!parser_at_eof(p)) {
-                    TokenKind k = parser_peek(p)->kind;
-                    if (k == TK_LT) angle++;
-                    else if (k == TK_GT) {
-                        if (angle == 0) break;
-                        angle--;
-                    } else if (k == TK_SHR) {
-                        if (angle == 0) break;
-                        angle -= 2;
-                        if (angle < 0) angle = 0;
-                    } else if (k == TK_COMMA) {
-                        if (angle == 0) break;  /* mem-init separator */
-                    } else if (k == TK_LPAREN || k == TK_LBRACE) {
-                        break;
-                    }
-                    parser_advance(p);
-                }
-                if (parser_consume(p, TK_LPAREN)) {
-                    int depth = 1;
-                    while (depth > 0 && !parser_at_eof(p)) {
-                        if (parser_at(p, TK_LPAREN)) depth++;
-                        else if (parser_at(p, TK_RPAREN)) {
-                            depth--;
-                            if (depth == 0) break;
-                        }
-                        parser_advance(p);
+                /* Common case: a bare member identifier followed by
+                 * '(args)'. Anything more elaborate (qualified name,
+                 * template-id, base-class init) takes the skip path. */
+                bool simple = parser_at(p, TK_IDENT) &&
+                              parser_peek_ahead(p, 1)->kind == TK_LPAREN;
+                if (simple) {
+                    Token *member_name = parser_advance(p);
+                    parser_advance(p);  /* '(' */
+                    Vec args = vec_new(p->arena);
+                    if (!parser_at(p, TK_RPAREN)) {
+                        vec_push(&args, parse_assign_expr(p));
+                        while (parser_consume(p, TK_COMMA))
+                            vec_push(&args, parse_assign_expr(p));
                     }
                     parser_expect(p, TK_RPAREN);
-                } else if (parser_consume(p, TK_LBRACE)) {
-                    int depth = 1;
-                    while (depth > 0 && !parser_at_eof(p)) {
-                        if (parser_at(p, TK_LBRACE)) depth++;
-                        else if (parser_at(p, TK_RBRACE)) {
-                            depth--;
-                            if (depth == 0) break;
+
+                    MemInit *mi = arena_alloc(p->arena, sizeof(MemInit));
+                    mi->name = member_name;
+                    mi->args = (Node **)args.data;
+                    mi->nargs = args.len;
+                    vec_push(&inits, mi);
+                } else {
+                    /* Skip path for forms we don't yet capture
+                     * (qualified base, template-id, brace-init). */
+                    int angle = 0;
+                    while (!parser_at_eof(p)) {
+                        TokenKind k = parser_peek(p)->kind;
+                        if (k == TK_LT) angle++;
+                        else if (k == TK_GT) {
+                            if (angle == 0) break;
+                            angle--;
+                        } else if (k == TK_SHR) {
+                            if (angle == 0) break;
+                            angle -= 2;
+                            if (angle < 0) angle = 0;
+                        } else if (k == TK_COMMA) {
+                            if (angle == 0) break;
+                        } else if (k == TK_LPAREN || k == TK_LBRACE) {
+                            break;
                         }
                         parser_advance(p);
                     }
-                    parser_expect(p, TK_RBRACE);
+                    if (parser_consume(p, TK_LPAREN)) {
+                        int depth = 1;
+                        while (depth > 0 && !parser_at_eof(p)) {
+                            if (parser_at(p, TK_LPAREN)) depth++;
+                            else if (parser_at(p, TK_RPAREN)) {
+                                depth--;
+                                if (depth == 0) break;
+                            }
+                            parser_advance(p);
+                        }
+                        parser_expect(p, TK_RPAREN);
+                    } else if (parser_consume(p, TK_LBRACE)) {
+                        int depth = 1;
+                        while (depth > 0 && !parser_at_eof(p)) {
+                            if (parser_at(p, TK_LBRACE)) depth++;
+                            else if (parser_at(p, TK_RBRACE)) {
+                                depth--;
+                                if (depth == 0) break;
+                            }
+                            parser_advance(p);
+                        }
+                        parser_expect(p, TK_RBRACE);
+                    }
                 }
                 parser_consume(p, TK_ELLIPSIS);  /* pack expansion */
                 if (!parser_consume(p, TK_COMMA)) break;
+            }
+            /* Stash the captured list on the func node. Pointer-array
+             * via vec.data; the storage lives in the arena alongside
+             * other parser allocations. */
+            int n = inits.len;
+            if (n > 0) {
+                MemInit *arr = arena_alloc(p->arena, sizeof(MemInit) * n);
+                for (int i = 0; i < n; i++)
+                    arr[i] = *((MemInit **)inits.data)[i];
+                func->func.mem_inits = arr;
+                func->func.n_mem_inits = n;
             }
         }
 
