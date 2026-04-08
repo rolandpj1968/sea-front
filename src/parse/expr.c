@@ -500,6 +500,23 @@ static Node *primary_expr(Parser *p) {
                     if (parser_at(p, TK_IDENT))
                         vec_push(&parts, parser_advance(p));
                     break;
+                } else if (parser_at(p, TK_KW_OPERATOR)) {
+                    /* Qualified operator: A::operator[] / A::operator+ */
+                    Token *op_tok = parser_advance(p);
+                    vec_push(&parts, op_tok);
+                    if (parser_consume(p, TK_LPAREN))
+                        parser_expect(p, TK_RPAREN);   /* operator() */
+                    else if (parser_consume(p, TK_LBRACKET))
+                        parser_expect(p, TK_RBRACKET); /* operator[] */
+                    else if (parser_at(p, TK_KW_NEW) || parser_at(p, TK_KW_DELETE)) {
+                        parser_advance(p);
+                        if (parser_consume(p, TK_LBRACKET))
+                            parser_expect(p, TK_RBRACKET);
+                    } else if (parser_peek(p)->kind >= TK_LPAREN &&
+                               parser_peek(p)->kind <= TK_HASHHASH) {
+                        parser_advance(p);
+                    }
+                    break;
                 } else {
                     break;
                 }
@@ -509,6 +526,28 @@ static Node *primary_expr(Parser *p) {
         /* If we consumed just one name with no ::, it's a simple ident */
         if (parts.len == 1 && !global_scope) {
             Token *name = (Token *)parts.data[0];
+
+            /* Heuristic: 'IDENT < ... > (' shaped call where the name
+             * isn't in lookup (e.g. a member function template called
+             * from another method body of the same class — we don't
+             * model class member lookup). Tentatively try template-id
+             * parsing; accept iff followed by '('. */
+            if (parser_at(p, TK_LT) && !lookup_is_template_name(p, name) &&
+                lookup_unqualified(p, name->loc, name->len) == NULL) {
+                ParseState saved = parser_save(p);
+                bool prev_t = p->tentative;
+                bool saved_failed = p->tentative_failed;
+                p->tentative = true;
+                p->tentative_failed = false;
+                parse_template_id(p, name);
+                bool ok = !p->tentative_failed && parser_at(p, TK_LPAREN);
+                p->tentative = prev_t;
+                p->tentative_failed = saved_failed;
+                parser_restore(p, saved);
+                if (ok) {
+                    return parse_template_id(p, name);
+                }
+            }
 
             /* Rule 4: template-name followed by < → template-id */
             if (parser_at(p, TK_LT) && lookup_is_template_name(p, name)) {

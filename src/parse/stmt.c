@@ -243,17 +243,46 @@ static Node *parse_for_stmt(Parser *p) {
         bool saved_failed = p->tentative_failed;
         p->tentative = true;
         p->tentative_failed = false;
+        /* Same 'IDENT IDENT' fallback as parse_stmt — for an unknown
+         * type-name (e.g. a template parameter visible only via the
+         * enclosing template-decl that we don't model in lookup). */
+        bool ident_decl_rf = false;
+        if (parser_peek(p)->kind == TK_IDENT && !parser_at_type_specifier(p)) {
+            Token *t1 = parser_peek_ahead(p, 1);
+            if (t1->kind == TK_IDENT &&
+                !lookup_unqualified(p, t1->loc, t1->len))
+                ident_decl_rf = true;
+        }
         if (parser_at_type_specifier(p)) {
             Type *bt = parse_type_specifiers(p).type;
             if (bt) parse_declarator(p, bt);
+        } else if (ident_decl_rf) {
+            /* Skip past the unknown type-name and declarator-id. */
+            parser_advance(p);
+            while (parser_consume(p, TK_STAR) || parser_consume(p, TK_AMP) ||
+                   parser_consume(p, TK_LAND) || parser_consume(p, TK_KW_CONST))
+                ;
+            if (parser_at(p, TK_IDENT)) parser_advance(p);
         }
         bool is_range = !p->tentative_failed && parser_at(p, TK_COLON);
         p->tentative = prev_t;
         p->tentative_failed = saved_failed;
         parser_restore(p, saved_pos);
         if (is_range) {
-            Type *bt = parse_type_specifiers(p).type;
-            Node *decl = bt ? parse_declarator(p, bt) : NULL;
+            Type *bt = NULL;
+            Node *decl = NULL;
+            if (parser_at_type_specifier(p)) {
+                bt = parse_type_specifiers(p).type;
+                if (bt) decl = parse_declarator(p, bt);
+            } else {
+                /* Unknown type-name (template parameter we don't see in
+                 * lookup). Skip past it; this is only a parser walkthrough. */
+                parser_advance(p);
+                while (parser_consume(p, TK_STAR) || parser_consume(p, TK_AMP) ||
+                       parser_consume(p, TK_LAND) || parser_consume(p, TK_KW_CONST))
+                    ;
+                if (parser_at(p, TK_IDENT)) parser_advance(p);
+            }
             parser_expect(p, TK_COLON);
             Node *range = parse_expr(p);
             parser_expect(p, TK_RPAREN);
