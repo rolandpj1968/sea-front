@@ -1560,6 +1560,55 @@ static void emit_stmt(Node *n) {
         fprintf(stdout, "__SF_loop_break_%d: ;\n", brk);
         return;
     }
+    case ND_GOTO: {
+        /* User goto. When CL_VARs are live, fire their dtors INLINE
+         * (in reverse declaration order) before the actual jump.
+         * The dtors are duplicated relative to the cleanup chain
+         * but on a different control path — the chain's labels are
+         * reached via fall-through which doesn't happen here.
+         *
+         * Conservative approximation: fire ALL live CL_VARs. This
+         * is correct when the label is at function scope (most
+         * common). For labels in a same-or-nested scope (rare and
+         * C++ forbids gotos that cross initialized declarations
+         * anyway), this would over-destroy. A future refinement
+         * would consult sema-level label-depth tracking.
+         *
+         * Wrapped in '{ }' so an unbraced 'if (cond) goto X;'
+         * stays correct — without the braces the if would only
+         * guard the first dtor and the goto would run
+         * unconditionally. Same pattern as __SF_RETURN. */
+        fputc('{', stdout);
+        for (int i = g_cf.nlive - 1; i >= 0; i--) {
+            CleanupEntry *e = &g_cf.live[i];
+            if (e->kind != CL_VAR) continue;
+            Node *v = e->var_decl;
+            fputc(' ', stdout);
+            if (v->codegen_temp_name) {
+                emit_mangled_class_tag(v->resolved_type);
+                fprintf(stdout, "_dtor(&%s);", v->codegen_temp_name);
+            } else {
+                emit_mangled_class_tag(v->var_decl.ty);
+                fprintf(stdout, "_dtor(&%.*s);",
+                        v->var_decl.name->len, v->var_decl.name->loc);
+            }
+        }
+        if (n->goto_.label)
+            fprintf(stdout, " goto %.*s; }\n",
+                    n->goto_.label->len, n->goto_.label->loc);
+        else
+            fputs(" goto __SF_unknown; }\n", stdout);
+        return;
+    }
+    case ND_LABEL:
+        if (n->label.label)
+            fprintf(stdout, "%.*s: ",
+                    n->label.label->len, n->label.label->loc);
+        if (n->label.stmt)
+            emit_stmt(n->label.stmt);
+        else
+            fputs(";\n", stdout);
+        return;
     case ND_BREAK:
         if (break_needs_cleanup()) {
             /* Slice C: walk the cleanup chain before exiting the
