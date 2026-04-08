@@ -1609,10 +1609,16 @@ static void emit_class_def(Node *n) {
              * regular Class_<methodname> form. */
             Type *fty = m->var_decl.ty;
             if (m->var_decl.is_destructor) {
-                /* Skip — the Class_dtor wrapper (synthesized below)
-                 * is forward-declared separately. The body, if any,
-                 * goes through the out-of-class def path as
-                 * Class_dtor_body. */
+                /* In-class declaration of a dtor whose body is
+                 * defined out-of-class (Foo::~Foo() { ... }). The
+                 * Class_dtor wrapper (synthesized below) is forward-
+                 * declared separately, but we DO need a forward decl
+                 * for Class_dtor_body so the wrapper can call it. */
+                fputs("void ", stdout);
+                emit_mangled_class_tag(class_type);
+                fputs("_dtor_body(struct ", stdout);
+                emit_mangled_class_tag(class_type);
+                fputs(" *this);\n", stdout);
                 continue;
             }
             emit_type(fty->ret);
@@ -1638,14 +1644,26 @@ static void emit_class_def(Node *n) {
      * the class is non-trivially-destructible. The wrapper exists
      * whether or not a user dtor was written. */
     Node *user_dtor = NULL;
+    bool user_dtor_out_of_class = false;
     if (class_type && class_type->has_dtor) {
         for (int i = 0; i < n->class_def.nmembers; i++) {
             Node *m = n->class_def.members[i];
-            if (m && m->kind == ND_FUNC_DEF && m->func.is_destructor) {
+            if (!m) continue;
+            if (m->kind == ND_FUNC_DEF && m->func.is_destructor) {
                 Node *body = m->func.body;
                 bool empty = body && body->kind == ND_BLOCK &&
                              body->block.nstmts == 0;
                 if (!empty) user_dtor = m;
+                break;
+            }
+            if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
+                m->var_decl.ty->kind == TY_FUNC && m->var_decl.is_destructor) {
+                /* Out-of-class definition: the body lives at namespace
+                 * scope as Foo::~Foo() {...}. We don't have direct
+                 * access to the body here, so we can't check for
+                 * emptiness — assume it has content (matches the
+                 * has_dtor=true assumption in type.c). */
+                user_dtor_out_of_class = true;
                 break;
             }
         }
@@ -1687,7 +1705,7 @@ static void emit_class_def(Node *n) {
         emit_mangled_class_tag(class_type);
         fputs(" *this) {\n", stdout);
         g_indent++;
-        if (user_dtor) {
+        if (user_dtor || user_dtor_out_of_class) {
             emit_indent();
             emit_mangled_class_tag(class_type);
             fputs("_dtor_body(this);\n", stdout);

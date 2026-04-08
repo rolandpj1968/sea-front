@@ -516,6 +516,16 @@ DeclSpec parse_type_specifiers(Parser *p) {
                         bool empty = body && body->kind == ND_BLOCK &&
                                      body->block.nstmts == 0;
                         if (!empty) ty->has_dtor = true;
+                    } else if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
+                               m->var_decl.ty->kind == TY_FUNC &&
+                               m->var_decl.is_destructor) {
+                        /* Pure dtor declaration ('~Foo();') with body
+                         * defined out-of-class. The body lives at
+                         * namespace scope so we can't see it from here
+                         * to check if it's empty. Conservatively assume
+                         * non-trivial — the worst case is generating an
+                         * empty wrapper (negligible). */
+                        ty->has_dtor = true;
                     } else if (m->kind == ND_FUNC_DEF && m->func.is_constructor) {
                         any_user_ctor = true;
                         if (m->func.nparams == 0) {
