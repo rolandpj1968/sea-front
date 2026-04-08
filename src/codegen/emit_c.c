@@ -1228,48 +1228,104 @@ static void emit_stmt(Node *n) {
         return;
     case ND_WHILE: {
         Node *body = n->while_.body;
-        bool wrap = g_cf.func_has_cleanups && subtree_has_cleanups(body);
-        if (!wrap) {
+        bool body_wrap = g_cf.func_has_cleanups && subtree_has_cleanups(body);
+        bool cond_wrap = expr_has_class_temp(n->while_.cond);
+        if (!body_wrap && !cond_wrap) {
+            /* Simple natural form — no cleanups anywhere. */
             fputs("while (", stdout);
             emit_expr(n->while_.cond);
             fputs(") ", stdout);
             emit_stmt(body);
             return;
         }
-        /* Slice C: push a CL_LOOP marker so body cleanup chains can
-         * terminate break/continue at __SF_loop_break_<n> /
-         * __SF_loop_cont_<n>. The natural C 'while' is preserved;
-         * we just wrap the body in an extra block to give the cont
-         * label a place to live. */
-        int brk = g_cf.next_label_id++;
-        int cnt = g_cf.next_label_id++;
-        if (g_cf.nlive < CLEANUP_LIVE_MAX) {
-            g_cf.live[g_cf.nlive].kind = CL_LOOP;
-            g_cf.live[g_cf.nlive].label_id = brk;
-            g_cf.live[g_cf.nlive].cont_label_id = cnt;
-            g_cf.live[g_cf.nlive].var_decl = NULL;
-            g_cf.nlive++;
+        /* Slice C: when the body has cleanups, push a CL_LOOP marker
+         * so body break/continue chains terminate at the loop's
+         * synthetic boundary labels. */
+        int brk = -1, cnt = -1;
+        if (body_wrap) {
+            brk = g_cf.next_label_id++;
+            cnt = g_cf.next_label_id++;
+            if (g_cf.nlive < CLEANUP_LIVE_MAX) {
+                g_cf.live[g_cf.nlive].kind = CL_LOOP;
+                g_cf.live[g_cf.nlive].label_id = brk;
+                g_cf.live[g_cf.nlive].cont_label_id = cnt;
+                g_cf.live[g_cf.nlive].var_decl = NULL;
+                g_cf.nlive++;
+            }
         }
-        fputs("while (", stdout);
-        emit_expr(n->while_.cond);
-        fputs(") {\n", stdout);
-        g_indent++;
-        emit_indent();
-        emit_stmt(body);
-        emit_indent();
-        fprintf(stdout, "__SF_loop_cont_%d: ;\n", cnt);
-        g_indent--;
-        emit_indent();
-        fputs("}\n", stdout);
-        g_cf.nlive--;  /* pop CL_LOOP marker */
-        emit_indent();
-        fprintf(stdout, "__SF_loop_break_%d: ;\n", brk);
+        if (cond_wrap) {
+            /* Slice D-cond: cond contains a class temp. Lower to
+             *   while (1) {
+             *       int __SF_cond_<n>;
+             *       { hoist + assign + cleanup }
+             *       if (!__SF_cond_<n>) break/goto __SF_loop_break_<m>;
+             *       <body>
+             *       __SF_loop_cont_<m>: ;   (only if body_wrap)
+             *   }
+             * The cond's temp dtors fire each iteration before the
+             * test, matching C++'s end-of-full-expression timing. */
+            int cond_id = g_cf.next_label_id++;
+            char cond_name[24];
+            snprintf(cond_name, sizeof(cond_name), "__SF_cond_%d", cond_id);
+            fputs("while (1) {\n", stdout);
+            g_indent++;
+            emit_indent();
+            fprintf(stdout, "int %s;\n", cond_name);
+            emit_indent();
+            fputs("{\n", stdout);
+            g_indent++;
+            int saved_nlive = g_cf.nlive;
+            hoist_temps_in_expr(n->while_.cond);
+            emit_indent();
+            fprintf(stdout, "%s = ", cond_name);
+            emit_expr(n->while_.cond);
+            fputs(";\n", stdout);
+            emit_cleanup_chain_for_added(saved_nlive);
+            g_cf.nlive = saved_nlive;
+            g_indent--;
+            emit_indent();
+            fputs("}\n", stdout);
+            emit_indent();
+            if (body_wrap)
+                fprintf(stdout, "if (!%s) goto __SF_loop_break_%d;\n",
+                        cond_name, brk);
+            else
+                fprintf(stdout, "if (!%s) break;\n", cond_name);
+            emit_indent();
+            emit_stmt(body);
+            if (body_wrap) {
+                emit_indent();
+                fprintf(stdout, "__SF_loop_cont_%d: ;\n", cnt);
+            }
+            g_indent--;
+            emit_indent();
+            fputs("}\n", stdout);
+        } else {
+            /* body_wrap only — natural while preserved (Slice C). */
+            fputs("while (", stdout);
+            emit_expr(n->while_.cond);
+            fputs(") {\n", stdout);
+            g_indent++;
+            emit_indent();
+            emit_stmt(body);
+            emit_indent();
+            fprintf(stdout, "__SF_loop_cont_%d: ;\n", cnt);
+            g_indent--;
+            emit_indent();
+            fputs("}\n", stdout);
+        }
+        if (body_wrap) {
+            g_cf.nlive--;  /* pop CL_LOOP marker */
+            emit_indent();
+            fprintf(stdout, "__SF_loop_break_%d: ;\n", brk);
+        }
         return;
     }
     case ND_DO: {
         Node *body = n->do_.body;
-        bool wrap = g_cf.func_has_cleanups && subtree_has_cleanups(body);
-        if (!wrap) {
+        bool body_wrap = g_cf.func_has_cleanups && subtree_has_cleanups(body);
+        bool cond_wrap = expr_has_class_temp(n->do_.cond);
+        if (!body_wrap && !cond_wrap) {
             fputs("do ", stdout);
             emit_stmt(body);
             emit_indent();
@@ -1278,35 +1334,87 @@ static void emit_stmt(Node *n) {
             fputs(");\n", stdout);
             return;
         }
-        int brk = g_cf.next_label_id++;
-        int cnt = g_cf.next_label_id++;
-        if (g_cf.nlive < CLEANUP_LIVE_MAX) {
-            g_cf.live[g_cf.nlive].kind = CL_LOOP;
-            g_cf.live[g_cf.nlive].label_id = brk;
-            g_cf.live[g_cf.nlive].cont_label_id = cnt;
-            g_cf.live[g_cf.nlive].var_decl = NULL;
-            g_cf.nlive++;
+        int brk = -1, cnt = -1;
+        if (body_wrap) {
+            brk = g_cf.next_label_id++;
+            cnt = g_cf.next_label_id++;
+            if (g_cf.nlive < CLEANUP_LIVE_MAX) {
+                g_cf.live[g_cf.nlive].kind = CL_LOOP;
+                g_cf.live[g_cf.nlive].label_id = brk;
+                g_cf.live[g_cf.nlive].cont_label_id = cnt;
+                g_cf.live[g_cf.nlive].var_decl = NULL;
+                g_cf.nlive++;
+            }
         }
-        fputs("do {\n", stdout);
-        g_indent++;
-        emit_indent();
-        emit_stmt(body);
-        emit_indent();
-        fprintf(stdout, "__SF_loop_cont_%d: ;\n", cnt);
-        g_indent--;
-        emit_indent();
-        fputs("} while (", stdout);
-        emit_expr(n->do_.cond);
-        fputs(");\n", stdout);
-        g_cf.nlive--;
-        emit_indent();
-        fprintf(stdout, "__SF_loop_break_%d: ;\n", brk);
+        if (cond_wrap) {
+            /* Slice D-cond for do-while: the synth must be declared
+             * OUTSIDE the do body because the 'while (synth)' is
+             * outside the body's brace pair. The cond eval mini-
+             * block lives at the END of each body iteration.
+             *
+             *   int __SF_cond_<n>;
+             *   do {
+             *       <body>
+             *       __SF_loop_cont_<m>: ;       (only if body_wrap)
+             *       { hoist + assign + cleanup }
+             *   } while (__SF_cond_<n>);
+             *   __SF_loop_break_<m>: ;          (only if body_wrap) */
+            int cond_id = g_cf.next_label_id++;
+            char cond_name[24];
+            snprintf(cond_name, sizeof(cond_name), "__SF_cond_%d", cond_id);
+            fprintf(stdout, "int %s;\n", cond_name);
+            emit_indent();
+            fputs("do {\n", stdout);
+            g_indent++;
+            emit_indent();
+            emit_stmt(body);
+            if (body_wrap) {
+                emit_indent();
+                fprintf(stdout, "__SF_loop_cont_%d: ;\n", cnt);
+            }
+            emit_indent();
+            fputs("{\n", stdout);
+            g_indent++;
+            int saved_nlive = g_cf.nlive;
+            hoist_temps_in_expr(n->do_.cond);
+            emit_indent();
+            fprintf(stdout, "%s = ", cond_name);
+            emit_expr(n->do_.cond);
+            fputs(";\n", stdout);
+            emit_cleanup_chain_for_added(saved_nlive);
+            g_cf.nlive = saved_nlive;
+            g_indent--;
+            emit_indent();
+            fputs("}\n", stdout);
+            g_indent--;
+            emit_indent();
+            fprintf(stdout, "} while (%s);\n", cond_name);
+        } else {
+            /* body_wrap only — natural do-while preserved (Slice C). */
+            fputs("do {\n", stdout);
+            g_indent++;
+            emit_indent();
+            emit_stmt(body);
+            emit_indent();
+            fprintf(stdout, "__SF_loop_cont_%d: ;\n", cnt);
+            g_indent--;
+            emit_indent();
+            fputs("} while (", stdout);
+            emit_expr(n->do_.cond);
+            fputs(");\n", stdout);
+        }
+        if (body_wrap) {
+            g_cf.nlive--;
+            emit_indent();
+            fprintf(stdout, "__SF_loop_break_%d: ;\n", brk);
+        }
         return;
     }
     case ND_FOR: {
         Node *body = n->for_.body;
-        bool wrap = g_cf.func_has_cleanups && subtree_has_cleanups(body);
-        if (!wrap) {
+        bool body_wrap = g_cf.func_has_cleanups && subtree_has_cleanups(body);
+        bool cond_wrap = n->for_.cond && expr_has_class_temp(n->for_.cond);
+        if (!body_wrap && !cond_wrap) {
             fputs("for (", stdout);
             if (n->for_.init) {
                 Node *init = n->for_.init;
@@ -1324,15 +1432,107 @@ static void emit_stmt(Node *n) {
             emit_stmt(body);
             return;
         }
-        int brk = g_cf.next_label_id++;
-        int cnt = g_cf.next_label_id++;
-        if (g_cf.nlive < CLEANUP_LIVE_MAX) {
-            g_cf.live[g_cf.nlive].kind = CL_LOOP;
-            g_cf.live[g_cf.nlive].label_id = brk;
-            g_cf.live[g_cf.nlive].cont_label_id = cnt;
-            g_cf.live[g_cf.nlive].var_decl = NULL;
-            g_cf.nlive++;
+        int brk = -1, cnt = -1;
+        if (body_wrap) {
+            brk = g_cf.next_label_id++;
+            cnt = g_cf.next_label_id++;
+            if (g_cf.nlive < CLEANUP_LIVE_MAX) {
+                g_cf.live[g_cf.nlive].kind = CL_LOOP;
+                g_cf.live[g_cf.nlive].label_id = brk;
+                g_cf.live[g_cf.nlive].cont_label_id = cnt;
+                g_cf.live[g_cf.nlive].var_decl = NULL;
+                g_cf.nlive++;
+            }
         }
+        if (cond_wrap) {
+            /* Slice D-cond for for-loop: lower to a while(1) form
+             * because the for-loop's cond slot can't hold the
+             * mini-block. Init runs once in a wrapping block;
+             * inc runs at the bottom of each iteration; cond runs
+             * via mini-block at the top of each iteration.
+             *
+             *   {
+             *       init;
+             *       while (1) {
+             *           int __SF_cond_<n>;
+             *           { hoist + assign + cleanup }
+             *           if (!__SF_cond_<n>) break/goto loop_break;
+             *           <body>
+             *           __SF_loop_cont_<m>: ;
+             *           inc;
+             *       }
+             *       __SF_loop_break_<m>: ;
+             *   }
+             *
+             * Init/inc temps are NOT handled here; if they have
+             * class temps the lowering will be slightly wrong
+             * (extended-lifetime). Documented limitation. */
+            int cond_id = g_cf.next_label_id++;
+            char cond_name[24];
+            snprintf(cond_name, sizeof(cond_name), "__SF_cond_%d", cond_id);
+            fputs("{\n", stdout);
+            g_indent++;
+            if (n->for_.init) {
+                emit_indent();
+                Node *init = n->for_.init;
+                if (init->kind == ND_VAR_DECL) {
+                    emit_var_decl_inner(init);
+                    fputs(";\n", stdout);
+                } else if (init->kind == ND_EXPR_STMT) {
+                    emit_expr(init->expr_stmt.expr);
+                    fputs(";\n", stdout);
+                }
+            }
+            emit_indent();
+            fputs("while (1) {\n", stdout);
+            g_indent++;
+            emit_indent();
+            fprintf(stdout, "int %s;\n", cond_name);
+            emit_indent();
+            fputs("{\n", stdout);
+            g_indent++;
+            int saved_nlive = g_cf.nlive;
+            hoist_temps_in_expr(n->for_.cond);
+            emit_indent();
+            fprintf(stdout, "%s = ", cond_name);
+            emit_expr(n->for_.cond);
+            fputs(";\n", stdout);
+            emit_cleanup_chain_for_added(saved_nlive);
+            g_cf.nlive = saved_nlive;
+            g_indent--;
+            emit_indent();
+            fputs("}\n", stdout);
+            emit_indent();
+            if (body_wrap)
+                fprintf(stdout, "if (!%s) goto __SF_loop_break_%d;\n",
+                        cond_name, brk);
+            else
+                fprintf(stdout, "if (!%s) break;\n", cond_name);
+            emit_indent();
+            emit_stmt(body);
+            if (body_wrap) {
+                emit_indent();
+                fprintf(stdout, "__SF_loop_cont_%d: ;\n", cnt);
+            }
+            if (n->for_.inc) {
+                emit_indent();
+                emit_expr(n->for_.inc);
+                fputs(";\n", stdout);
+            }
+            g_indent--;
+            emit_indent();
+            fputs("}\n", stdout);
+            if (body_wrap) {
+                emit_indent();
+                fprintf(stdout, "__SF_loop_break_%d: ;\n", brk);
+            }
+            g_indent--;
+            emit_indent();
+            fputs("}\n", stdout);
+            if (body_wrap) g_cf.nlive--;
+            return;
+        }
+        /* body_wrap only — natural for preserved (Slice C). */
         fputs("for (", stdout);
         if (n->for_.init) {
             Node *init = n->for_.init;
