@@ -486,30 +486,37 @@ DeclSpec parse_type_specifiers(Parser *p) {
                     ty->tag ? ty->tag : parser_peek(p));
                 result.class_def->class_def.ty = ty;
 
-                /* Scan members for a NON-TRIVIAL destructor and tag the
-                 * class type. A user-declared dtor whose body is empty
-                 * is treated as trivial — calling it would be a no-op,
-                 * and skipping it lets emit_c avoid spinning up the
-                 * cleanup scaffold for classes that don't actually need
-                 * it (e.g. RAII wrappers around POD that defer cleanup
-                 * to a base or member).
+                /* Trivially-destructible per N4659 §15.4 [class.dtor]/12:
+                 *   trivial iff own user-declared dtor body is empty
+                 *           AND every non-static member is itself
+                 *               trivially-destructible
+                 *           (and every base is, once we synthesize base
+                 *            dtor calls).
                  *
-                 * Conservative rule: trivial iff own dtor body is an
-                 * empty compound-statement. Strict standard conformance
-                 * (N4659 §15.4 [class.dtor]/12) also requires every
-                 * non-static member and base to be trivially-destructible
-                 * — once we synthesize member/base dtor invocations we'll
-                 * extend this check to cover them. */
+                 * Pointer-to-class members are trivially-destructible
+                 * (the pointer is just an int-sized scalar); only
+                 * BY-VALUE class members propagate non-triviality.
+                 *
+                 * Self-referential classes need pointer indirection in
+                 * C++ anyway ('struct T { T sub; }' is illegal), so
+                 * the chicken/egg case never arises — by the time we
+                 * see a member of class type by value, that class type
+                 * has already been fully parsed and has_dtor set. */
                 for (int mi = 0; mi < members.len; mi++) {
                     Node *m = ((Node **)members.data)[mi];
-                    if (m && m->kind == ND_FUNC_DEF && m->func.is_destructor) {
+                    if (!m) continue;
+                    if (m->kind == ND_FUNC_DEF && m->func.is_destructor) {
                         Node *body = m->func.body;
                         bool empty = body && body->kind == ND_BLOCK &&
                                      body->block.nstmts == 0;
-                        if (!empty) {
-                            ty->has_dtor = true;
-                            break;
-                        }
+                        if (!empty) ty->has_dtor = true;
+                    } else if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
+                               m->var_decl.ty->kind == TY_STRUCT &&
+                               m->var_decl.ty->has_dtor) {
+                        /* By-value class member with non-trivial dtor —
+                         * the containing class needs a synthesized dtor
+                         * to chain into the member's. */
+                        ty->has_dtor = true;
                     }
                 }
             }

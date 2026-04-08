@@ -1184,10 +1184,13 @@ static void emit_method_signature(Node *func, Type *class_type) {
     fputc(' ', stdout);
     emit_mangled_class_tag(class_type);
     if (func->func.is_destructor) {
-        /* Mangle dtors as Class_dtor so they don't collide with a
-         * same-named ctor (Class::Class). The name token still points
-         * at the class identifier — we ignore it for dtors. */
-        fputs("_dtor", stdout);
+        /* The user's dtor body is emitted as Class_dtor_user; the
+         * synthesized Class_dtor wrapper (built by emit_class_def)
+         * calls Class_dtor_user first and then chains into member
+         * dtor calls. Every CALLER of a class dtor still emits the
+         * unsuffixed Class_dtor name — they hit the wrapper, not
+         * the user-body function directly. */
+        fputs("_dtor_user", stdout);
     } else {
         fprintf(stdout, "_%.*s",
                 func->func.name->len, func->func.name->loc);
@@ -1261,17 +1264,29 @@ static void emit_class_def(Node *n) {
      * out-of-class definitions ('int Foo::bar() {}') see a prior
      * declaration of the mangled name. Both in-class definitions
      * (ND_FUNC_DEF) and pure declarations (ND_VAR_DECL with TY_FUNC)
-     * count. */
+     * count.
+     *
+     * Dtor handling: a user-declared dtor with non-empty body lowers
+     * to Class_dtor_user (forward-declared and emitted by the normal
+     * method path). The Class_dtor wrapper (synthesized below) is
+     * forward-declared separately when class_type->has_dtor is true
+     * — that flag may be set by either a user dtor OR by a
+     * non-trivially-destructible member, so the wrapper exists even
+     * when no user dtor was written. */
     for (int i = 0; i < n->class_def.nmembers; i++) {
         Node *m = n->class_def.members[i];
         if (!m) continue;
-        /* Skip trivial dtors entirely — no forward decl, no body.
-         * has_dtor is the parser-side flag set only for non-empty
-         * dtor bodies, so this also makes class_type->has_dtor the
-         * single source of truth for "should we emit anything". */
-        if (m->kind == ND_FUNC_DEF && m->func.is_destructor &&
-            class_type && !class_type->has_dtor)
-            continue;
+        /* Skip dtors with empty bodies — no _dtor_user emission.
+         * The class wrapper handles members directly. has_dtor may
+         * still be true (because of members), so the wrapper is
+         * emitted separately below. */
+        if (m->kind == ND_FUNC_DEF && m->func.is_destructor) {
+            Node *body = m->func.body;
+            bool empty = body && body->kind == ND_BLOCK &&
+                         body->block.nstmts == 0;
+            if (empty) continue;
+            if (!class_type || !class_type->has_dtor) continue;
+        }
         if (m->kind == ND_FUNC_DEF && class_type) {
             emit_method_signature(m, class_type);
             fputs(";\n", stdout);
@@ -1296,14 +1311,72 @@ static void emit_class_def(Node *n) {
         }
     }
 
+    /* Forward-declare and (later) emit the Class_dtor wrapper when
+     * the class is non-trivially-destructible. The wrapper exists
+     * whether or not a user dtor was written. */
+    Node *user_dtor = NULL;
+    if (class_type && class_type->has_dtor) {
+        for (int i = 0; i < n->class_def.nmembers; i++) {
+            Node *m = n->class_def.members[i];
+            if (m && m->kind == ND_FUNC_DEF && m->func.is_destructor) {
+                Node *body = m->func.body;
+                bool empty = body && body->kind == ND_BLOCK &&
+                             body->block.nstmts == 0;
+                if (!empty) user_dtor = m;
+                break;
+            }
+        }
+        fputs("void ", stdout);
+        emit_mangled_class_tag(class_type);
+        fputs("_dtor(struct ", stdout);
+        emit_mangled_class_tag(class_type);
+        fputs(" *this);\n", stdout);
+    }
+
     /* Now emit each method (ND_FUNC_DEF in the member list) as a
      * separate free function. Trivial dtors are skipped to match
      * the forward-decl loop above. */
     for (int i = 0; i < n->class_def.nmembers; i++) {
         Node *m = n->class_def.members[i];
         if (!m || m->kind != ND_FUNC_DEF || !class_type) continue;
-        if (m->func.is_destructor && !class_type->has_dtor) continue;
+        if (m->func.is_destructor) {
+            Node *body = m->func.body;
+            bool empty = body && body->kind == ND_BLOCK &&
+                         body->block.nstmts == 0;
+            if (empty || !class_type->has_dtor) continue;
+        }
         emit_method_as_free_fn(m, class_type);
+    }
+
+    /* Synthesize the Class_dtor wrapper. Calls Class_dtor_user
+     * (if a user dtor existed) FIRST, then chains into each
+     * non-trivially-destructible member's dtor in REVERSE
+     * declaration order — N4659 §15.4 [class.dtor]/9. */
+    if (class_type && class_type->has_dtor) {
+        fputs("void ", stdout);
+        emit_mangled_class_tag(class_type);
+        fputs("_dtor(struct ", stdout);
+        emit_mangled_class_tag(class_type);
+        fputs(" *this) {\n", stdout);
+        g_indent++;
+        if (user_dtor) {
+            emit_indent();
+            emit_mangled_class_tag(class_type);
+            fputs("_dtor_user(this);\n", stdout);
+        }
+        for (int i = n->class_def.nmembers - 1; i >= 0; i--) {
+            Node *m = n->class_def.members[i];
+            if (!m || m->kind != ND_VAR_DECL) continue;
+            if (!m->var_decl.ty || m->var_decl.ty->kind != TY_STRUCT) continue;
+            if (!m->var_decl.ty->has_dtor) continue;
+            if (!m->var_decl.name) continue;
+            emit_indent();
+            emit_mangled_class_tag(m->var_decl.ty);
+            fprintf(stdout, "_dtor(&this->%.*s);\n",
+                    m->var_decl.name->len, m->var_decl.name->loc);
+        }
+        g_indent--;
+        fputs("}\n", stdout);
     }
 }
 
