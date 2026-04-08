@@ -1427,8 +1427,17 @@ static void emit_func_body(Node *func) {
         }
     }
     if (has_member_inits) emit_ctor_member_inits(func);
-    emit_indent();
-    emit_block(func->func.body);
+    /* Skip emitting the user body block entirely when it has zero
+     * statements — the wrapper's own braces are already emitted, so
+     * dropping the empty inner '{ }' is purely cosmetic and keeps
+     * generated ctors/dtors readable. emit_block's cleanup-chain
+     * bookkeeping is a no-op for a stmt-less body anyway. */
+    Node *body = func->func.body;
+    bool body_empty = body && body->kind == ND_BLOCK && body->block.nstmts == 0;
+    if (!body_empty) {
+        emit_indent();
+        emit_block(body);
+    }
     if (g_cf.func_has_cleanups) {
         emit_indent();
         fputs(void_ret ? "__SF_EPILOGUE_VOID;\n" : "__SF_EPILOGUE;\n", stdout);
