@@ -22,6 +22,7 @@
  */
 
 #include <stdio.h>
+#include <string.h>
 #include "emit_c.h"
 #include "../sea-front.h"
 
@@ -45,40 +46,95 @@ static void emit_indent(void) {
 /* global is fine — codegen is single-threaded and not reentrant.      */
 /* ------------------------------------------------------------------ */
 
-/* Per-var cleanup tracking. Each dtor-bearing local gets its own
- * unique label and dtor call site. The 'live' list is a flat stack
- * of currently-constructed vars in declaration order, across all
- * enclosing blocks of the current emission point. emit_block saves
- * the count on entry and restores on exit, so block scoping is just
- * a stack-trim. innermost_cleanup_label() looks at the top, which
- * is always the most recently constructed live var — exactly what
- * a return at this point should target.
+/* Per-var cleanup tracking — Slice C extension.
  *
- * This shape fixes the partial-construction bug from Slice B: a
- * return mid-block jumps to the label of the most recent live var,
- * skipping any later var in the same block whose dtor would have
- * been called on uninitialized storage. */
+ * The 'live' stack now holds two kinds of entries:
+ *   CL_VAR  — a constructed dtor-bearing local. Has a label_id and
+ *             a var_decl; its label is both a dtor call site and a
+ *             chain target for any unwind type.
+ *   CL_LOOP — a loop boundary marker. Pushed by emit_while/do/for
+ *             when a loop has cleanups in its body. Carries the
+ *             loop's break_label and cont_label. Markers do not run
+ *             dtors; they exist so break/continue chains know where
+ *             to terminate.
+ *
+ * Walking the stack outward:
+ *   RETURN: skip CL_LOOP markers, find the next CL_VAR; if none,
+ *           target __SF_epilogue.
+ *   BREAK:  use the FIRST entry encountered (CL_VAR or CL_LOOP).
+ *           A var chains to the next thing; a marker is the loop
+ *           boundary and resolves to its break_label.
+ *   CONT:   same as BREAK, but a marker resolves to its cont_label.
+ *
+ * For chain-out emission at the bottom of a block, the three target
+ * walks usually collapse to the same answer (no enclosing loop, or
+ * no marker between us and the next var). We compare and emit a
+ * single 'if (__SF_unwind) goto X' when they coincide, otherwise a
+ * three-way conditional. */
 
-typedef struct CleanupVar {
-    int   label_id;   /* unique within the function */
-    Node *var_decl;   /* ND_VAR_DECL — name + type for the dtor call */
-} CleanupVar;
+typedef enum CleanupKind {
+    CL_VAR,
+    CL_LOOP,
+} CleanupKind;
+
+typedef struct CleanupEntry {
+    CleanupKind kind;
+    int         label_id;       /* CL_VAR: cleanup label / CL_LOOP: break_label */
+    int         cont_label_id;  /* CL_LOOP only */
+    Node       *var_decl;       /* CL_VAR only */
+} CleanupEntry;
 
 #define CLEANUP_LIVE_MAX 64
 
 static struct {
-    bool        func_has_cleanups;  /* function-wide flag, set by pre-scan */
-    int         next_label_id;      /* fresh-id counter */
-    CleanupVar  live[CLEANUP_LIVE_MAX];
-    int         nlive;              /* number of live vars currently */
+    bool          func_has_cleanups;  /* function-wide flag, set by pre-scan */
+    int           next_label_id;      /* fresh-id counter */
+    CleanupEntry  live[CLEANUP_LIVE_MAX];
+    int           nlive;              /* number of live entries currently */
 } g_cf;
 
-/* The innermost (most recent) live var's cleanup label, or -1 when
- * nothing is live — in which case 'return' jumps straight to
- * __SF_epilogue. */
-static int innermost_cleanup_label(void) {
-    if (g_cf.nlive == 0) return -1;
-    return g_cf.live[g_cf.nlive - 1].label_id;
+/* For RETURN: walk outward, skip CL_LOOP markers, find first CL_VAR.
+ * Returns label_id, or -1 meaning "jump straight to __SF_epilogue". */
+static int find_return_target_from(int top) {
+    for (int i = top - 1; i >= 0; i--)
+        if (g_cf.live[i].kind == CL_VAR)
+            return g_cf.live[i].label_id;
+    return -1;
+}
+
+/* For BREAK: the topmost live entry IS the next target — both
+ * CL_VAR (chain to its label) and CL_LOOP (its break_label) live
+ * in the same field. Returns -1 only if break is used outside any
+ * loop or var scope (malformed; should already be a sema error). */
+static int find_break_target_from(int top) {
+    if (top <= 0) return -1;
+    return g_cf.live[top - 1].label_id;
+}
+
+/* For CONT: same as break, but CL_LOOP resolves to its cont_label
+ * instead of its break_label. CL_VAR is unchanged. */
+static int find_cont_target_from(int top) {
+    if (top <= 0) return -1;
+    CleanupEntry *e = &g_cf.live[top - 1];
+    return (e->kind == CL_VAR) ? e->label_id : e->cont_label_id;
+}
+
+/* Top-of-stack views for ND_RETURN/BREAK/CONTINUE rewrite sites. */
+static int return_target(void) { return find_return_target_from(g_cf.nlive); }
+static int break_target(void)  { return find_break_target_from(g_cf.nlive); }
+static int cont_target(void)   { return find_cont_target_from(g_cf.nlive); }
+
+/* Are we currently inside any enclosing loop? Used to decide
+ * whether ND_BREAK/CONTINUE need the cleanup-aware rewrite or
+ * can be lowered as a plain C break/continue. */
+static bool break_needs_cleanup(void) {
+    /* If the topmost live entry is a CL_LOOP marker, no cleanup
+     * vars are in flight inside the current loop and a plain C
+     * 'break' will exit the loop correctly. Otherwise we have at
+     * least one var to destroy first. */
+    if (!g_cf.func_has_cleanups) return false;
+    if (g_cf.nlive == 0) return false;
+    return g_cf.live[g_cf.nlive - 1].kind == CL_VAR;
 }
 
 /* Pre-scan: does any block in this subtree declare a class instance
@@ -453,7 +509,9 @@ static void emit_block(Node *n) {
             s->kind == ND_VAR_DECL && s->var_decl.ty &&
             s->var_decl.ty->kind == TY_STRUCT && s->var_decl.ty->has_dtor &&
             s->var_decl.name && g_cf.nlive < CLEANUP_LIVE_MAX) {
+            g_cf.live[g_cf.nlive].kind = CL_VAR;
             g_cf.live[g_cf.nlive].label_id = g_cf.next_label_id++;
+            g_cf.live[g_cf.nlive].cont_label_id = -1;
             g_cf.live[g_cf.nlive].var_decl = s;
             g_cf.nlive++;
         }
@@ -464,24 +522,78 @@ static void emit_block(Node *n) {
      * outermost (oldest) one carries the unwind chain-out. Labels
      * not actually targeted by any goto are still emitted — the
      * prelude pragma silences -Wunused-label. */
-    int added = g_cf.nlive - saved_nlive;
+    int added = 0;
+    for (int i = saved_nlive; i < g_cf.nlive; i++)
+        if (g_cf.live[i].kind == CL_VAR) added++;
     if (added > 0) {
         for (int i = g_cf.nlive - 1; i >= saved_nlive; i--) {
-            CleanupVar *cv = &g_cf.live[i];
-            Node *v = cv->var_decl;
+            CleanupEntry *e = &g_cf.live[i];
+            if (e->kind != CL_VAR) continue;
+            Node *v = e->var_decl;
             emit_indent();
-            fprintf(stdout, "__SF_cleanup_%d: ;\n", cv->label_id);
+            fprintf(stdout, "__SF_cleanup_%d: ;\n", e->label_id);
             emit_indent();
             emit_mangled_class_tag(v->var_decl.ty);
             fprintf(stdout, "_dtor(&%.*s);\n",
                     v->var_decl.name->len, v->var_decl.name->loc);
         }
-        emit_indent();
-        if (saved_nlive > 0)
-            fprintf(stdout, "if (__SF_unwind) goto __SF_cleanup_%d;\n",
-                    g_cf.live[saved_nlive - 1].label_id);
-        else if (g_cf.func_has_cleanups)
-            fputs("if (__SF_unwind) goto __SF_epilogue;\n", stdout);
+        /* Three-way chain-out. Walks below saved_nlive to find the
+         * next outward target for each unwind kind, and formats each
+         * as a label string. When all three coincide we collapse to
+         * a single 'if (__SF_unwind) goto X' (the common case).
+         *
+         * Targets come from two distinct label spaces:
+         *   __SF_cleanup_<n>     — produced by CL_VAR entries
+         *   __SF_loop_break_<n>  — produced by CL_LOOP markers (break)
+         *   __SF_loop_cont_<n>   — produced by CL_LOOP markers (cont)
+         *   __SF_epilogue        — fall-off-the-bottom for return */
+        char rt_buf[40], bt_buf[40], ct_buf[40];
+        bool have_break = false, have_cont = false;
+        bool top_is_loop = (saved_nlive > 0 &&
+                            g_cf.live[saved_nlive - 1].kind == CL_LOOP);
+
+        int rt = find_return_target_from(saved_nlive);
+        if (rt >= 0)
+            snprintf(rt_buf, sizeof(rt_buf), "__SF_cleanup_%d", rt);
+        else
+            snprintf(rt_buf, sizeof(rt_buf), "__SF_epilogue");
+
+        int bt = find_break_target_from(saved_nlive);
+        if (bt >= 0) {
+            have_break = true;
+            if (top_is_loop)
+                snprintf(bt_buf, sizeof(bt_buf), "__SF_loop_break_%d", bt);
+            else
+                snprintf(bt_buf, sizeof(bt_buf), "__SF_cleanup_%d", bt);
+        }
+
+        int ct = find_cont_target_from(saved_nlive);
+        if (ct >= 0) {
+            have_cont = true;
+            if (top_is_loop)
+                snprintf(ct_buf, sizeof(ct_buf), "__SF_loop_cont_%d", ct);
+            else
+                snprintf(ct_buf, sizeof(ct_buf), "__SF_cleanup_%d", ct);
+        }
+
+        bool collapse = have_break && have_cont &&
+                        strcmp(rt_buf, bt_buf) == 0 &&
+                        strcmp(rt_buf, ct_buf) == 0;
+        if (collapse || (!have_break && !have_cont)) {
+            emit_indent();
+            fprintf(stdout, "if (__SF_unwind) goto %s;\n", rt_buf);
+        } else {
+            emit_indent();
+            fprintf(stdout, "if (__SF_unwind == 1) goto %s;\n", rt_buf);
+            if (have_break) {
+                emit_indent();
+                fprintf(stdout, "if (__SF_unwind == 2) goto %s;\n", bt_buf);
+            }
+            if (have_cont) {
+                emit_indent();
+                fprintf(stdout, "if (__SF_unwind == 3) goto %s;\n", ct_buf);
+            }
+        }
     }
 
     /* Restore live count — the vars introduced by this block are
@@ -506,21 +618,21 @@ static void emit_stmt(Node *n) {
              * the emitted C readable, drives the protocol from one
              * place, and means an unbraced 'if (cond) return;' stays
              * safe (the macro wraps a do-while). */
-            int target = innermost_cleanup_label();
-            const char *target_str_buf = NULL;
+            int target = return_target();
             char buf[32];
+            const char *lbl;
             if (target >= 0) {
                 snprintf(buf, sizeof(buf), "__SF_cleanup_%d", target);
-                target_str_buf = buf;
+                lbl = buf;
             } else {
-                target_str_buf = "__SF_epilogue";
+                lbl = "__SF_epilogue";
             }
             if (n->ret.expr) {
                 fputs("__SF_RETURN(", stdout);
                 emit_expr(n->ret.expr);
-                fprintf(stdout, ", %s);\n", target_str_buf);
+                fprintf(stdout, ", %s);\n", lbl);
             } else {
-                fprintf(stdout, "__SF_RETURN_VOID(%s);\n", target_str_buf);
+                fprintf(stdout, "__SF_RETURN_VOID(%s);\n", lbl);
             }
         } else {
             fputs("return", stdout);
@@ -554,17 +666,115 @@ static void emit_stmt(Node *n) {
             emit_stmt(n->if_.else_);
         }
         return;
-    case ND_WHILE:
+    case ND_WHILE: {
+        Node *body = n->while_.body;
+        bool wrap = g_cf.func_has_cleanups && subtree_has_cleanups(body);
+        if (!wrap) {
+            fputs("while (", stdout);
+            emit_expr(n->while_.cond);
+            fputs(") ", stdout);
+            emit_stmt(body);
+            return;
+        }
+        /* Slice C: push a CL_LOOP marker so body cleanup chains can
+         * terminate break/continue at __SF_loop_break_<n> /
+         * __SF_loop_cont_<n>. The natural C 'while' is preserved;
+         * we just wrap the body in an extra block to give the cont
+         * label a place to live. */
+        int brk = g_cf.next_label_id++;
+        int cnt = g_cf.next_label_id++;
+        if (g_cf.nlive < CLEANUP_LIVE_MAX) {
+            g_cf.live[g_cf.nlive].kind = CL_LOOP;
+            g_cf.live[g_cf.nlive].label_id = brk;
+            g_cf.live[g_cf.nlive].cont_label_id = cnt;
+            g_cf.live[g_cf.nlive].var_decl = NULL;
+            g_cf.nlive++;
+        }
         fputs("while (", stdout);
         emit_expr(n->while_.cond);
-        fputs(") ", stdout);
-        emit_stmt(n->while_.body);
+        fputs(") {\n", stdout);
+        g_indent++;
+        emit_indent();
+        emit_stmt(body);
+        emit_indent();
+        fprintf(stdout, "__SF_loop_cont_%d: ;\n", cnt);
+        g_indent--;
+        emit_indent();
+        fputs("}\n", stdout);
+        g_cf.nlive--;  /* pop CL_LOOP marker */
+        emit_indent();
+        fprintf(stdout, "__SF_loop_break_%d: ;\n", brk);
         return;
-    case ND_FOR:
+    }
+    case ND_DO: {
+        Node *body = n->do_.body;
+        bool wrap = g_cf.func_has_cleanups && subtree_has_cleanups(body);
+        if (!wrap) {
+            fputs("do ", stdout);
+            emit_stmt(body);
+            emit_indent();
+            fputs("while (", stdout);
+            emit_expr(n->do_.cond);
+            fputs(");\n", stdout);
+            return;
+        }
+        int brk = g_cf.next_label_id++;
+        int cnt = g_cf.next_label_id++;
+        if (g_cf.nlive < CLEANUP_LIVE_MAX) {
+            g_cf.live[g_cf.nlive].kind = CL_LOOP;
+            g_cf.live[g_cf.nlive].label_id = brk;
+            g_cf.live[g_cf.nlive].cont_label_id = cnt;
+            g_cf.live[g_cf.nlive].var_decl = NULL;
+            g_cf.nlive++;
+        }
+        fputs("do {\n", stdout);
+        g_indent++;
+        emit_indent();
+        emit_stmt(body);
+        emit_indent();
+        fprintf(stdout, "__SF_loop_cont_%d: ;\n", cnt);
+        g_indent--;
+        emit_indent();
+        fputs("} while (", stdout);
+        emit_expr(n->do_.cond);
+        fputs(");\n", stdout);
+        g_cf.nlive--;
+        emit_indent();
+        fprintf(stdout, "__SF_loop_break_%d: ;\n", brk);
+        return;
+    }
+    case ND_FOR: {
+        Node *body = n->for_.body;
+        bool wrap = g_cf.func_has_cleanups && subtree_has_cleanups(body);
+        if (!wrap) {
+            fputs("for (", stdout);
+            if (n->for_.init) {
+                Node *init = n->for_.init;
+                if (init->kind == ND_VAR_DECL) {
+                    emit_var_decl_inner(init);
+                } else if (init->kind == ND_EXPR_STMT) {
+                    emit_expr(init->expr_stmt.expr);
+                }
+            }
+            fputs("; ", stdout);
+            if (n->for_.cond) emit_expr(n->for_.cond);
+            fputs("; ", stdout);
+            if (n->for_.inc)  emit_expr(n->for_.inc);
+            fputs(") ", stdout);
+            emit_stmt(body);
+            return;
+        }
+        int brk = g_cf.next_label_id++;
+        int cnt = g_cf.next_label_id++;
+        if (g_cf.nlive < CLEANUP_LIVE_MAX) {
+            g_cf.live[g_cf.nlive].kind = CL_LOOP;
+            g_cf.live[g_cf.nlive].label_id = brk;
+            g_cf.live[g_cf.nlive].cont_label_id = cnt;
+            g_cf.live[g_cf.nlive].var_decl = NULL;
+            g_cf.nlive++;
+        }
         fputs("for (", stdout);
         if (n->for_.init) {
-            /* Inline form: emit a var-decl or expression without the
-             * trailing ';\n' that emit_stmt would produce. */
             Node *init = n->for_.init;
             if (init->kind == ND_VAR_DECL) {
                 emit_var_decl_inner(init);
@@ -576,14 +786,47 @@ static void emit_stmt(Node *n) {
         if (n->for_.cond) emit_expr(n->for_.cond);
         fputs("; ", stdout);
         if (n->for_.inc)  emit_expr(n->for_.inc);
-        fputs(") ", stdout);
-        emit_stmt(n->for_.body);
+        fputs(") {\n", stdout);
+        g_indent++;
+        emit_indent();
+        emit_stmt(body);
+        emit_indent();
+        fprintf(stdout, "__SF_loop_cont_%d: ;\n", cnt);
+        g_indent--;
+        emit_indent();
+        fputs("}\n", stdout);
+        g_cf.nlive--;
+        emit_indent();
+        fprintf(stdout, "__SF_loop_break_%d: ;\n", brk);
         return;
+    }
     case ND_BREAK:
-        fputs("break;\n", stdout);
+        if (break_needs_cleanup()) {
+            /* Slice C: walk the cleanup chain before exiting the
+             * loop. Topmost live entry is a CL_VAR — its label is
+             * the next chain target; the chain itself terminates
+             * at __SF_loop_break_<n> for the innermost CL_LOOP. */
+            int target = break_target();
+            char buf[32];
+            snprintf(buf, sizeof(buf), "__SF_cleanup_%d", target);
+            fprintf(stdout, "__SF_BREAK(%s);\n", buf);
+        } else {
+            fputs("break;\n", stdout);
+        }
         return;
     case ND_CONTINUE:
-        fputs("continue;\n", stdout);
+        if (break_needs_cleanup()) {
+            /* Same shape as break — at this point top-of-stack must
+             * be a CL_VAR (otherwise break_needs_cleanup() would be
+             * false), so cont's first chain target is that var's
+             * cleanup label. */
+            int target = cont_target();
+            char buf[32];
+            snprintf(buf, sizeof(buf), "__SF_cleanup_%d", target);
+            fprintf(stdout, "__SF_CONT(%s);\n", buf);
+        } else {
+            fputs("continue;\n", stdout);
+        }
         return;
     default:
         fputs("/* stmt */;\n", stdout);
@@ -862,6 +1105,12 @@ static void emit_prelude(void) {
           stdout);
     fputs("#define __SF_RETURN_VOID(lbl) "
           "do { __SF_unwind = 1; goto lbl; } while (0)\n",
+          stdout);
+    fputs("#define __SF_BREAK(lbl) "
+          "do { __SF_unwind = 2; goto lbl; } while (0)\n",
+          stdout);
+    fputs("#define __SF_CONT(lbl) "
+          "do { __SF_unwind = 3; goto lbl; } while (0)\n",
           stdout);
     fputs("\n", stdout);
 }
