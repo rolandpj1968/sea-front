@@ -72,7 +72,7 @@ typedef enum {
     TK_SPACESHIP,       /* <=> (C++20, included for forward-compat) */
     TK_LE,              /* <= */
     TK_GE,              /* >= */
-    TK_EQ,              /* == or eq (nonstandard but sometimes seen) */
+    TK_EQ,              /* == */
     TK_NE,              /* != or not_eq */
     TK_LAND,            /* && or and */
     TK_LOR,             /* || or or */
@@ -90,8 +90,10 @@ typedef enum {
     TK_ELLIPSIS,        /* ... */
     TK_HASHHASH,        /* ## */
 
-    /* Keywords — contiguous range for is_keyword() range check.
-     * Alphabetical order matches Table 5 of N4659. */
+    /* Keywords — alphabetical order matches Table 5 of N4659. The
+     * range is contiguous (the enum values are sequential between
+     * TK_KW_ALIGNAS and TK_KW_WHILE) so a range-check predicate
+     * could be added if needed; none currently is. */
     TK_KW_ALIGNAS,
     TK_KW_ALIGNOF,
     TK_KW_ASM,
@@ -209,8 +211,14 @@ struct Token {
     /* Literal values */
     int64_t ival;       /* integer / character literal value */
     double fval;        /* floating-point literal value */
-    char *str;          /* string literal decoded contents (malloc'd) */
-    int str_len;        /* string literal byte length (excluding NUL) */
+    /* Declared-but-unused: a planned 'decoded string contents'
+     * field. The lexer doesn't currently decode escapes into a
+     * separate buffer — every consumer reads loc/len directly and
+     * decodes on demand. Kept here as a hook for the eventual
+     * decode-once-cache; remove if no consumer materialises.
+     * TODO(seafront#token-str-cache). */
+    char *str;
+    int str_len;
 
     int enc;            /* encoding prefix: ENC_NONE, ENC_U8, etc. */
     bool is_raw;        /* true for raw string literals */

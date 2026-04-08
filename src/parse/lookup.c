@@ -242,10 +242,10 @@ Declaration *lookup_unqualified_kind(Parser *p, const char *name,
 
 /* ------------------------------------------------------------------ */
 /* Disambiguation oracles                                              */
-/*                                                                     */
-/* These are the "two semantic oracles" identified in                   */
-/* doc/disambiguation-rules.md. They are convenience wrappers around   */
-/* unqualified name lookup that inspect the EntityKind of the result.  */
+/*                                                                    */
+/* These are the "two semantic oracles" identified in                 */
+/* doc/disambiguation-rules.md. They are convenience wrappers around  */
+/* unqualified name lookup that inspect the EntityKind of the result. */
 /* ------------------------------------------------------------------ */
 
 /*

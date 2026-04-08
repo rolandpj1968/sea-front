@@ -4,11 +4,17 @@
  * Usage: sea-front [options] <file>
  *
  * Options:
- *   --dump-tokens    Print token list and exit
- *   --dump-ast       Parse and print AST and exit
+ *   --dump-tokens    Print token list and exit (skips parse/sema/codegen)
+ *   --dump-ast       Parse and print AST and exit (skips sema/codegen)
+ *   --emit-c         Parse, sema, lower to C on stdout (the main use case)
  *   --std=c++17      Set C++ standard (default: c++17)
  *   --std=c++20      Enable C++20 features
  *   --std=c++23      Enable C++23 features
+ *
+ * With NO action flag (no --dump-* and no --emit-c) the driver
+ * reads, lexes, and parses the input — silently — then exits with
+ * status 0 if the parse succeeded. This 'parse-only' mode is what
+ * the libstdc++ smoke harness uses to find parser gaps.
  */
 
 #include "sea-front.h"
@@ -118,7 +124,11 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    /* Future: semantic analysis, codegen */
+    /* Parse-only mode: no action flag was passed. We've already
+     * lexed and parsed; just clean up and exit successfully. The
+     * libstdc++ smoke harness uses this mode — a parser gap shows
+     * up as a non-zero exit. Sema and codegen are reachable via
+     * --emit-c above. */
     arena_free_all(&arena);
     return 0;
 }
