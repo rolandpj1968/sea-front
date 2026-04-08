@@ -104,7 +104,64 @@
  * Handles >> at depth 1: consumes the SHR, sets split_shr so the outer
  * template-parameter-list parser sees a virtual '>'.
  */
+static void skip_template_default_inner(Parser *p);
+
+/* Wrapper: a template-default value almost never spans more than a
+ * handful of lines. If the angle-balancing skip runs away (a '<' in
+ * the default that we mis-read as template-id-open and never
+ * balanced), undo and fall back to a dumb skip that ignores '<'/'>'
+ * entirely — break on the first top-level ',' or '>' and trust the
+ * outer parser to handle whatever follows. Bounds the blast radius. */
 static void skip_template_default(Parser *p) {
+    ParseState saved = parser_save(p);
+    int start_pos = p->pos;
+    bool saved_split_shr = p->split_shr;
+    skip_template_default_inner(p);
+    int consumed = p->pos - start_pos;
+    if (consumed > 256) {
+        /* Runaway — the angle-balancing skip has been led astray by a
+         * '<' that's actually a relational operator (e.g. 'bool = __w
+         * < static_cast<size_t>(...)' in libstdc++ <random>'s _Shift
+         * default). Restore and re-skip in a stricter mode: only count
+         * '<' as a template-id-open when preceded by a C++ named-cast
+         * keyword. All other '<' tokens are treated as less-than. */
+        p->split_shr = saved_split_shr;
+        parser_restore(p, saved);
+        int angle = 0;
+        int paren = 0;
+        TokenKind prev_kind = TK_EOF;
+        while (!parser_at_eof(p)) {
+            if (angle == 0 && paren == 0 &&
+                (parser_at(p, TK_COMMA) || parser_at(p, TK_GT) ||
+                 parser_at(p, TK_SHR)))
+                break;
+            if (paren > 0) {
+                if (parser_at(p, TK_LPAREN)) paren++;
+                else if (parser_at(p, TK_RPAREN)) paren--;
+                prev_kind = parser_peek(p)->kind;
+                parser_advance(p);
+                continue;
+            }
+            if (parser_at(p, TK_LT)) {
+                if (prev_kind == TK_KW_STATIC_CAST ||
+                    prev_kind == TK_KW_DYNAMIC_CAST ||
+                    prev_kind == TK_KW_REINTERPRET_CAST ||
+                    prev_kind == TK_KW_CONST_CAST)
+                    angle++;
+            } else if (parser_at(p, TK_GT)) {
+                if (angle > 0) angle--;
+            } else if (parser_at(p, TK_SHR)) {
+                if (angle >= 2) angle -= 2;
+                else if (angle == 1) { p->split_shr = true; parser_advance(p); break; }
+            } else if (parser_at(p, TK_LPAREN)) paren++;
+            else if (parser_at(p, TK_RPAREN)) { if (paren > 0) paren--; }
+            prev_kind = parser_peek(p)->kind;
+            parser_advance(p);
+        }
+    }
+}
+
+static void skip_template_default_inner(Parser *p) {
     int angle = 0;
     int paren = 0;
     while (!parser_at_eof(p)) {

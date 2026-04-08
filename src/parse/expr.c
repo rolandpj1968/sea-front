@@ -487,12 +487,30 @@ static Node *primary_expr(Parser *p) {
                 if (parser_at(p, TK_IDENT)) {
                     name = parser_advance(p);
                     vec_push(&parts, name);
-                    /* Template-id in the chain: A::B<int>::C.
-                     * In a qualified-name, '<' after a segment is
-                     * overwhelmingly a template-argument-list — we can't
-                     * do qualified lookup, so accept it speculatively. */
+                    /* Template-id in a qualified-name chain: A::B<int>::C.
+                     * Speculative tentative parse: only commit to '<'
+                     * as template-args when the parse closes cleanly
+                     * AND is followed by '::' (continuing the qualified
+                     * chain) or by '(' (function-style call on a
+                     * member template). Otherwise '<' is a relational
+                     * operator on the fully-qualified value, e.g.
+                     * 'numeric_limits<T>::digits < 64'. */
                     if (parser_at(p, TK_LT)) {
+                        ParseState saved2 = parser_save(p);
+                        bool prev_t = p->tentative;
+                        bool saved_failed = p->tentative_failed;
+                        p->tentative = true;
+                        p->tentative_failed = false;
                         parse_template_id(p, name);
+                        bool ok = !p->tentative_failed &&
+                                  (parser_at(p, TK_SCOPE) ||
+                                   parser_at(p, TK_LPAREN) ||
+                                   parser_at(p, TK_LBRACE));
+                        p->tentative = prev_t;
+                        p->tentative_failed = saved_failed;
+                        parser_restore(p, saved2);
+                        if (ok)
+                            parse_template_id(p, name);
                     }
                 } else if (parser_at(p, TK_TILDE)) {
                     /* Qualified destructor: A::~B */
