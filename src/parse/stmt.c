@@ -11,13 +11,20 @@
  *       attribute-specifier-seq(opt) iteration-statement     (§9.5)
  *       attribute-specifier-seq(opt) jump-statement          (§9.6)
  *       declaration-statement           (§9.7)
- *       attribute-specifier-seq(opt) try-block (deferred — no exceptions)
+ *       try-block                        (§9.7 — NOT YET, no exceptions)
  *
- * C++17 changes: init-statement in if and switch (§9.4.1, §9.4.2)
- * C++20 changes: co_return-statement (§9.6.3.1 — deferred)
- * C++23 changes: if consteval (N4950 §9.4.2 — deferred)
+ * Attributes (§10.6 [dcl.attr]) are PARSED but DISCARDED — we call
+ * parser_skip_cxx_attributes / parser_skip_gnu_attributes at the
+ * sites where they're allowed (e.g. before substatements after
+ * 'if (cond)') so they don't trip the parser, but we don't build
+ * AST nodes for them.
  *
- * Attributes (§10.6) are deferred to a later stage.
+ * C++17 changes (implemented): init-statement in if and switch
+ *   (§9.4.1, §9.4.2).
+ * C++17 changes (still NOT YET): structured bindings in
+ *   declarations.
+ * C++20 changes (NOT YET): co_return-statement (§9.6.3.1).
+ * C++23 changes (NOT YET): if consteval (N4950 §9.4.2).
  */
 
 #include "parse.h"
@@ -90,8 +97,9 @@ static Node *parse_if_stmt(Parser *p) {
      *              brace-or-equal-initializer
      * Used as e.g. 'if (T x = expr)'. We tentatively try a declaration; if
      * it doesn't end at ')', restore and parse as expression. */
-    /* Same IDENT-IDENT heuristic as parse_stmt — recognise an
-     * inherited member typedef even when we can't resolve it. */
+    /* Same IDENT-IDENT shortcut as parse_stmt — see the long
+     * comment block there for the standard rule, our deviation,
+     * and the TODO(seafront#stmt-ambig) tracking. */
     bool if_decl_ident = false;
     if (parser_peek(p)->kind == TK_IDENT && !parser_at_type_specifier(p)) {
         Token *t1 = parser_peek_ahead(p, 1);
@@ -217,14 +225,18 @@ static Node *parse_do_stmt(Parser *p) {
 }
 
 /*
- * for-statement — N4659 §9.5.3 [stmt.for]
+ * for-statement — N4659 §9.5.3 [stmt.for] / §9.5.4 [stmt.ranged]
  *   for ( init-statement condition(opt) ; expression(opt) ) statement
+ *   for ( for-range-declaration : for-range-initializer ) statement
  *
- * init-statement can be an expression-statement or a simple-declaration.
- * We use the type-specifier heuristic for stmt-vs-decl disambiguation.
+ * Both forms are handled. We tentatively detect the range-based
+ * form by parsing a declarator and checking for ':' before falling
+ * through to the traditional form. The traditional form's
+ * init-statement can be an expression-statement or a simple-
+ * declaration; stmt-vs-decl disambiguation uses the same approach
+ * as parse_stmt below.
  *
- * C++11 (§9.5.4 [stmt.ranged]): range-based for — deferred.
- * C++20/23: no changes to traditional for syntax.
+ * C++20/23: no changes to either for syntax.
  */
 static Node *parse_for_stmt(Parser *p) {
     Token *tok = parser_expect(p, TK_KW_FOR);
@@ -243,9 +255,11 @@ static Node *parse_for_stmt(Parser *p) {
         bool saved_failed = p->tentative_failed;
         p->tentative = true;
         p->tentative_failed = false;
-        /* Same 'IDENT IDENT' fallback as parse_stmt — for an unknown
-         * type-name (e.g. a template parameter visible only via the
-         * enclosing template-decl that we don't model in lookup). */
+        /* Same IDENT-IDENT shortcut as parse_stmt (see the long
+         * comment block there). Used here to recognise a range-based
+         * for declaration whose loop variable's type is an unknown
+         * IDENT — typically a template parameter visible only via
+         * the enclosing template-decl that we don't model in lookup. */
         bool ident_decl_rf = false;
         if (parser_peek(p)->kind == TK_IDENT && !parser_at_type_specifier(p)) {
             Token *t1 = parser_peek_ahead(p, 1);
@@ -297,8 +311,9 @@ static Node *parse_for_stmt(Parser *p) {
     /* init-statement: declaration or expression-statement */
     Node *init = NULL;
     if (!parser_at(p, TK_SEMI)) {
-        /* Same heuristic as parse_stmt: 'IDENT IDENT' looks like a
-         * declaration with an unresolved member typedef. */
+        /* Same IDENT-IDENT shortcut as parse_stmt (see the long
+         * comment block there) — used in the for-loop's traditional
+         * init-statement position. */
         bool ident_decl = false;
         if (parser_peek(p)->kind == TK_IDENT && !parser_at_type_specifier(p)) {
             Token *t1 = parser_peek_ahead(p, 1);
@@ -504,17 +519,48 @@ Node *parse_stmt(Parser *p) {
      *   (c) Not a type at all — expression-statement.
      */
 
-    /* Heuristic: 'IDENT IDENT' (or 'IDENT * IDENT', 'IDENT & IDENT')
-     * looks like a declaration even when the first ident isn't in our
-     * lookup as a type — typically a member typedef inherited from a
-     * base class we can't resolve. Per §9.8 try a declaration first. */
+    /* IDENT-IDENT shape disambiguation.
+     *
+     * Standard rule — N4659 §9.8 [stmt.ambig] / §17.2/2 [temp.names]:
+     * the parser must use name lookup to decide whether the leading
+     * IDENT is a type-name. If lookup finds it as a type-name, treat
+     * the statement as a declaration; otherwise as an expression.
+     *
+     * --- SHORTCUT (our implementation, not the standard's):
+     * Sea-front's name lookup doesn't yet model every place a
+     * type-name can come from (notably: typedefs inherited from a
+     * base class via a dependent template-parameter, where we'd
+     * need template instantiation to know the base; and a few
+     * inline-namespace forms). When the leading IDENT is not in
+     * lookup AT ALL but is followed by a second IDENT (or by
+     * '* IDENT' / '& IDENT' / '&& IDENT' or by '__name(') we GUESS
+     * that it's a declaration, because the alternative — parsing
+     * 'unknown_ident other_ident' as an expression — is never
+     * valid C++. The guess is biased by §9.8's "any statement that
+     * could be a declaration IS a declaration" but is not the
+     * literal §9.8 algorithm (which requires positive lookup
+     * confirmation).
+     *
+     * False positives: if a header introduces 'foo bar' where 'foo'
+     * is genuinely undeclared, we silently accept it as a
+     * declaration of 'bar' of type 'foo'. Real compilers would
+     * diagnose. We never produce wrong code from this — the
+     * downstream sema/codegen sees an opaque-typed 'bar' and
+     * either resolves it later or leaves it as-is.
+     *
+     * TODO(seafront#stmt-ambig): when name lookup covers inherited
+     * member typedefs through dependent bases, restore the literal
+     * §9.8 algorithm and remove this guess. The four sites that
+     * use it (here in parse_stmt, plus parse_if_stmt's condition
+     * path, parse_for_stmt's range-based detection, and
+     * parse_for_stmt's init-statement) should all collapse. */
     bool might_be_decl_ident = false;
     if (parser_peek(p)->kind == TK_IDENT &&
         !parser_at_type_specifier(p) &&
-        /* Tightened: only fire the heuristic when the leading ident
-         * is NOT in lookup at all. If lookup found it as a non-type
-         * (variable, function, enumerator), the statement is an
-         * expression, not a declaration. */
+        /* Only fire when the leading ident is unknown to lookup.
+         * If lookup found it as a non-type (variable, function,
+         * enumerator), the statement is an expression — the
+         * §6.3.10 hiding rule says variables hide type-names. */
         lookup_unqualified(p, parser_peek(p)->loc, parser_peek(p)->len) == NULL) {
         Token *t1 = parser_peek_ahead(p, 1);
         Token *t2 = parser_peek_ahead(p, 2);
@@ -522,8 +568,8 @@ Node *parse_stmt(Parser *p) {
             !lookup_unqualified(p, t1->loc, t1->len)) {
             might_be_decl_ident = true;
         }
-        /* 'IDENT * IDENT' / 'IDENT & IDENT' shapes — pointer/ref type
-         * with an unresolved leading type-name. */
+        /* 'IDENT * IDENT' / 'IDENT & IDENT' / 'IDENT && IDENT' —
+         * pointer / lvalue-ref / rvalue-ref of an unknown type. */
         if ((t1->kind == TK_STAR || t1->kind == TK_AMP || t1->kind == TK_LAND) &&
             t2->kind == TK_IDENT &&
             !lookup_unqualified(p, t2->loc, t2->len)) {
