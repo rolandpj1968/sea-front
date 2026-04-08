@@ -809,6 +809,25 @@ DeclSpec parse_type_specifiers(Parser *p) {
         return result;
     }
 
+    /* Unknown identifier in a tentative template-argument-list position:
+     * 'Foo<Bar>' where Bar isn't yet declared (e.g. a nested type used
+     * before its point of declaration in the same class body). Accept
+     * the bare IDENT as an opaque type when followed by , > or >>. */
+    if (!seen_any && p->tentative && parser_peek(p)->kind == TK_IDENT &&
+        lookup_unqualified(p, parser_peek(p)->loc, parser_peek(p)->len) == NULL) {
+        TokenKind nk = parser_peek_ahead(p, 1)->kind;
+        if (nk == TK_COMMA || nk == TK_GT || nk == TK_SHR ||
+            nk == TK_ELLIPSIS) {
+            Token *name_tok = parser_advance(p);
+            Type *ty = new_type(p, TY_STRUCT);
+            ty->is_const = is_const;
+            ty->is_volatile = is_volatile;
+            ty->tag = name_tok;
+            result.type = ty;
+            return result;
+        }
+    }
+
     if (!seen_any && parser_peek(p)->kind == TK_IDENT) {
         /* Constructor: 'ClassName(...)' at the start of a member
          * declaration, inside class ClassName. There's no return

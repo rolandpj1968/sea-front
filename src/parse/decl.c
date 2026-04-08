@@ -1004,7 +1004,7 @@ Node *parse_declaration(Parser *p) {
                         } else if (k == TK_COMMA) {
                             if (angle == 0) break;
                         } else if (k == TK_LPAREN || k == TK_LBRACE) {
-                            break;
+                            if (angle == 0) break;
                         }
                         parser_advance(p);
                     }
@@ -1207,6 +1207,10 @@ Node *parse_declaration(Parser *p) {
     }
 
     parser_expect(p, TK_SEMI);
+    /* Drop any qualified_decl_scope set by parse_declarator — only the
+     * function-def branch consumes it; for plain declarations (incl.
+     * declare-only ctors/dtors) it must not leak into the next decl. */
+    p->qualified_decl_scope = NULL;
     /* Propagate pending ctor/dtor flags onto the var-decl when this
      * is a method declaration (no body, e.g. 'Foo();' inside a class
      * body). emit_class_def's forward-decl loop reads these to mangle

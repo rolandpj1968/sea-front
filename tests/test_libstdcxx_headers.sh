@@ -54,15 +54,25 @@ rm -rf "$GEN_DIR"
 mkdir -p "$GEN_DIR"
 
 # Gated headers — must always parse cleanly with -V201103L (C++11).
-# Everything we've ever tried parses cleanly today. Adding more is
-# just a matter of probing them.
+# These are the libstdc++ headers we've verified parse end-to-end.
 PASS_HEADERS="vector string map set algorithm memory iostream unordered_map \
               tuple thread chrono sstream fstream \
               mutex functional deque list array bitset queue stack \
               iomanip iterator type_traits utility numeric optional variant"
 
-# Stretch headers — currently failing or unverified. Empty for now.
-STRETCH_HEADERS=""
+# Stretch headers — informational. Adding more libstdc++ headers
+# here is the easiest way to find new parser gaps; promote to gated
+# when they pass.
+STRETCH_HEADERS="any atomic complex condition_variable forward_list \
+                 future initializer_list ios iosfwd istream limits \
+                 locale new numeric ostream random ratio regex \
+                 scoped_allocator stdexcept streambuf string_view \
+                 system_error typeindex typeinfo unordered_set \
+                 valarray bit charconv codecvt csetjmp csignal \
+                 cstdarg cstddef cstdint cstdio cstdlib cstring \
+                 ctime cwchar cwctype cassert cctype cerrno \
+                 cfenv cfloat cinttypes climits clocale cmath \
+                 exception filesystem"
 
 PASS=0
 FAIL=0

@@ -149,9 +149,15 @@ static const Keyword kw_table[] = {
      * Both groups sort before 'alignas' because '_' (0x5F) < 'a' (0x61).
      * Within them, '_B' (95+66) sorts before '__' (95+95). */
     {"_Bool",            TK_KW_BOOL},
+    {"_Complex",         TK_KW_VOID},    /* C complex type — silently skip as void; sema doesn't model */
     {"_Static_assert",   TK_KW_STATIC_ASSERT},
     {"__asm",            TK_KW_ASM},     /* GCC alias for asm */
     {"__asm__",          TK_KW_ASM},     /* GCC alias for asm */
+    {"__complex__",      TK_KW_VOID},    /* GCC complex — same as _Complex, treat as void */
+    {"__imag__",         TK_PLUS},       /* GCC complex imag-part — alias to unary plus (no-op) */
+    {"__real__",         TK_PLUS},       /* GCC complex real-part — alias to unary plus (no-op) */
+    {"__restrict",       TK_KW_VOLATILE}, /* GCC restrict — treat as volatile (noise spec we discard) */
+    {"__restrict__",     TK_KW_VOLATILE}, /* GCC restrict alias */
     {"__thread",         TK_KW_THREAD_LOCAL},  /* GCC TLS storage class */
     {"alignas",          TK_KW_ALIGNAS},
     {"alignof",          TK_KW_ALIGNOF},

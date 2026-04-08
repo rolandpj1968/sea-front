@@ -1,0 +1,9 @@
+(translation-unit
+  (template (params (param ? "T"))
+    (class-def "uptr"
+      (var-decl (func-type void ((ptr int))) "uptr" )))
+  (class-def "C"
+    (func-def void "f" (params)
+      (block
+        (var-decl struct uptr "p" (ctor-args (cast struct MR (null))))))
+    (class-def "MR")))

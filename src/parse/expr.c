@@ -989,10 +989,33 @@ static Node *unary_expr(Parser *p) {
             }
         }
 
-        /* Type being allocated */
-        Type *ty = parse_type_name(p);
+        /* Type being allocated. If it's an unknown bare identifier
+         * (e.g. a class member type used before its point of declaration
+         * in the same class body), accept it as an opaque type. */
+        Type *ty = NULL;
+        if (parser_peek(p)->kind == TK_IDENT &&
+            !parser_at_type_specifier(p) &&
+            parser_peek_ahead(p, 1)->kind != TK_LT &&
+            parser_peek_ahead(p, 1)->kind != TK_SCOPE &&
+            lookup_unqualified(p, parser_peek(p)->loc, parser_peek(p)->len) == NULL) {
+            Token *name_tok = parser_advance(p);
+            ty = new_type(p, TY_STRUCT);
+            ty->tag = name_tok;
+            /* Optional ptr/ref operators */
+            while (parser_consume(p, TK_STAR) || parser_consume(p, TK_AMP) ||
+                   parser_consume(p, TK_LAND))
+                ;
+            /* Optional array extents: new T[n] / new T[n][m] */
+            while (parser_consume(p, TK_LBRACKET)) {
+                if (!parser_at(p, TK_RBRACKET)) parse_assign_expr(p);
+                parser_expect(p, TK_RBRACKET);
+            }
+        } else {
+            ty = parse_type_name(p);
+        }
 
-        /* Optional initializer: (args) or {} */
+        /* Optional initializer: (args) or braced-init-list {args}
+         * — N4659 §8.3.4 [expr.new]/15. */
         if (parser_consume(p, TK_LPAREN)) {
             if (!parser_at(p, TK_RPAREN)) {
                 /* Parse comma-separated args; consume optional '...' pack
@@ -1005,6 +1028,20 @@ static Node *unary_expr(Parser *p) {
                 }
             }
             parser_expect(p, TK_RPAREN);
+        } else if (parser_consume(p, TK_LBRACE)) {
+            /* Braced new-initializer. Skip-and-discard via balanced
+             * brace count — sema doesn't model the initializer
+             * structure, just needs to walk past the tokens. */
+            int depth = 1;
+            while (depth > 0 && !parser_at_eof(p)) {
+                if (parser_at(p, TK_LBRACE)) depth++;
+                else if (parser_at(p, TK_RBRACE)) {
+                    depth--;
+                    if (depth == 0) break;
+                }
+                parser_advance(p);
+            }
+            parser_expect(p, TK_RBRACE);
         }
 
         return new_cast_node(p, ty, /*operand=*/NULL, tok);  /* reuse CAST for now */
