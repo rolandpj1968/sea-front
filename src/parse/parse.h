@@ -604,6 +604,13 @@ struct Type {
      * for an ND_FUNC_DEF marked is_destructor. Codegen consults this
      * to decide whether to emit a Class_dtor call at end of scope. */
     bool has_dtor;
+
+    /* TY_STRUCT, TY_UNION: true if the class has a user-declared
+     * zero-argument constructor. Codegen consults this to decide
+     * whether 'Foo a;' (default-init) should emit a Foo_ctor(&a)
+     * call. Synthesized default ctors (for classes with non-trivial
+     * members but no user ctor) also set this. */
+    bool has_default_ctor;
 };
 
 /* ================================================================== */

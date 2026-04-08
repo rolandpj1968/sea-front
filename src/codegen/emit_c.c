@@ -1072,6 +1072,19 @@ static void emit_stmt(Node *n) {
             }
             fputs(");\n", stdout);
         }
+        /* Default-init 'Foo a;' (no init, no parens) calls the
+         * class's user-declared default ctor when one exists.
+         * Without a default ctor we leave the storage uninitialized
+         * — same as C semantics, and matching what C++ does for
+         * trivially-default-constructible types. */
+        else if (!n->var_decl.init && !n->var_decl.has_ctor_init &&
+                 n->var_decl.ty && n->var_decl.ty->kind == TY_STRUCT &&
+                 n->var_decl.ty->has_default_ctor && n->var_decl.name) {
+            emit_indent();
+            emit_mangled_class_tag(n->var_decl.ty);
+            fprintf(stdout, "_ctor(&%.*s);\n",
+                    n->var_decl.name->len, n->var_decl.name->loc);
+        }
         return;
     case ND_IF:
         fputs("if (", stdout);
