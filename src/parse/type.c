@@ -158,6 +158,7 @@ DeclSpec parse_type_specifiers(Parser *p) {
         if (tok->kind == TK_KW_VIRTUAL)   { parser_advance(p); result.flags |= DECL_VIRTUAL; continue; }
         if (tok->kind == TK_KW_EXPLICIT)  { parser_advance(p); result.flags |= DECL_EXPLICIT; continue; }
         if (tok->kind == TK_KW_MUTABLE)   { parser_advance(p); result.flags |= DECL_MUTABLE; continue; }
+        if (tok->kind == TK_KW_THREAD_LOCAL) { parser_advance(p); continue; }
         /* typename qualified-name — N4659 §17.6 [temp.res]
          * Disambiguates a dependent qualified name as a type. Consume the
          * keyword and let the following identifier/qualified-id be parsed
@@ -1068,6 +1069,7 @@ bool parser_at_type_specifier(Parser *p) {
     case TK_KW_CONSTEXPR: case TK_KW_VIRTUAL: case TK_KW_EXPLICIT:
     case TK_KW_MUTABLE:
     case TK_KW_ALIGNAS:        /* C++11 alignment specifier */
+    case TK_KW_THREAD_LOCAL:   /* C++11 / GCC __thread */
         return true;
     case TK_IDENT:
         /* N4659 §10.1.7.1 [dcl.type.simple]: a type-name (typedef-name,

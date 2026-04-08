@@ -743,6 +743,13 @@ static Node *postfix_expr(Parser *p) {
             } else if (parser_at(p, TK_TILDE)) {
                 parser_advance(p);
                 member = parser_expect(p, TK_IDENT);
+                /* Pseudo-destructor with template-id:
+                 *   p->~Class<args>()
+                 * Speculatively consume the '<...>' so the call
+                 * suffix can pick up. The dtor name is opaque to
+                 * us — we just need to skip the template args. */
+                if (parser_at(p, TK_LT))
+                    parse_template_id(p, member);
             } else {
                 member = parser_expect(p, TK_IDENT);
                 /* Member template-id: 'obj.method<T>(args)'. The

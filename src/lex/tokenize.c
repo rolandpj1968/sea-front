@@ -152,6 +152,7 @@ static const Keyword kw_table[] = {
     {"_Static_assert",   TK_KW_STATIC_ASSERT},
     {"__asm",            TK_KW_ASM},     /* GCC alias for asm */
     {"__asm__",          TK_KW_ASM},     /* GCC alias for asm */
+    {"__thread",         TK_KW_THREAD_LOCAL},  /* GCC TLS storage class */
     {"alignas",          TK_KW_ALIGNAS},
     {"alignof",          TK_KW_ALIGNOF},
     {"and",              TK_LAND},
