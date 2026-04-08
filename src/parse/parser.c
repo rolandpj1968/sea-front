@@ -10,13 +10,19 @@
 /* ------------------------------------------------------------------ */
 /* Token stream operations — index-based cursor into contiguous array  */
 /*                                                                     */
-/* The split_shr flag handles >> splitting (N4659 §17.2/3):            */
-/* When a >> is split inside template args, the first > is consumed    */
-/* and split_shr is set. Subsequent peek/at/advance see a virtual      */
-/* TK_GT until the flag is cleared by advance.                         */
+/* '>>' splitting per N4659 §17.2/3 [temp.names]: "the first non-     */
+/* nested >> is treated as two consecutive but distinct > tokens".    */
+/* The lexer produces a single TK_SHR token. When the inner template- */
+/* id consumes a TK_SHR (closing two angle brackets at once), it      */
+/* sets p->split_shr = true to leave a "virtual >" behind for the     */
+/* outer template-id to consume. While split_shr is true,             */
+/* parser_peek / parser_at / parser_consume / parser_advance act as   */
+/* if a synthetic TK_GT token sat at the current position; consuming  */
+/* it via advance/consume/expect clears the flag and the real cursor  */
+/* moves on.                                                          */
 /* ------------------------------------------------------------------ */
 
-/* Synthetic TK_GT token used when split_shr is active */
+/* Synthetic TK_GT returned by parser_peek when p->split_shr is set. */
 static Token synthetic_gt = { .kind = TK_GT, .loc = ">", .len = 1 };
 
 Token *parser_peek(Parser *p) {
@@ -362,11 +368,22 @@ Node *new_template_id_node(Parser *p, Token *name, Node **args, int nargs,
 /* ------------------------------------------------------------------ */
 
 /*
- * translation-unit — N4659 §6.1 [basic.link]
- *   translation-unit: declaration-seq(opt)
+ * parse — top-level entry point. Builds an ND_TRANSLATION_UNIT
+ * over the entire token array.
  *
- * C++20: extends with module-declaration, export-declaration
- *   (N4861 §10.1 [module.unit])
+ * translation-unit — N4659 §A.5 (grammar) / §5.2/2 [lex.phases]:
+ *   translation-unit: declaration-seq(opt)
+ * The outermost declarative region of a translation unit is the
+ * global namespace (§6.3.6/3 [basic.scope.namespace]); we push it
+ * here as REGION_NAMESPACE before parsing.
+ *
+ * Pre-pass: filter out preprocessor leftover lines (#line N "file")
+ * that mcpp emits anywhere in its output. The filter is line-based:
+ * any token sequence whose first token is TK_HASH is dropped from
+ * the start of that token's source line through end-of-line.
+ *
+ * C++20: adds module-declaration / export-declaration at translation-
+ * unit start (N4861 §10.1 [module.unit]) — not yet handled.
  */
 Node *parse(TokenArray tokens, Arena *arena, CppStandard std) {
     Parser p;
