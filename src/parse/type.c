@@ -765,7 +765,25 @@ DeclSpec parse_type_specifiers(Parser *p) {
                  * Template arguments make the segment's type opaque from
                  * lookup's perspective — drop scope. */
                 if (parser_at(p, TK_LT)) {
-                    parse_template_id(p, seg);
+                    Node *tid = parse_template_id(p, seg);
+                    /* If no :: follows, this template-id IS the type
+                     * (e.g. ns::Box<int>). Return immediately with
+                     * template_id_node set so the instantiation pass
+                     * can find it. If :: follows, it's an intermediate
+                     * segment (e.g. ns::Box<int>::value_type) — continue
+                     * walking. */
+                    if (!parser_at(p, TK_SCOPE)) {
+                        while (parser_at(p, TK_KW_CONST) || parser_at(p, TK_KW_VOLATILE)) {
+                            if (parser_consume(p, TK_KW_CONST))    is_const = true;
+                            if (parser_consume(p, TK_KW_VOLATILE)) is_volatile = true;
+                        }
+                        Type *ty = new_type(p, TY_STRUCT);
+                        ty->is_const = is_const;
+                        ty->is_volatile = is_volatile;
+                        ty->tag = seg;
+                        ty->template_id_node = tid;
+                        result.type = ty; return result;
+                    }
                     resolved = NULL;
                     scope = NULL;
                     continue;
@@ -912,6 +930,79 @@ DeclSpec parse_type_specifiers(Parser *p) {
             d = lookup_unqualified_kind(p, parser_peek(p)->loc, parser_peek(p)->len, ENTITY_TAG);
         if (!d)
             d = lookup_unqualified_kind(p, parser_peek(p)->loc, parser_peek(p)->len, ENTITY_TEMPLATE);
+
+        /* Namespace-qualified type: ns::Type or ns::ns2::Type<args>.
+         * Walk the namespace chain via qualified lookup until we
+         * reach a type/template at the end. Handles the complete
+         * type-specifier inline and returns early when matched.
+         *
+         * N4659 §6.4.3 [basic.lookup.qual]: qualified lookup walks
+         * through namespace/class scopes named by the nested-name-
+         * specifier. */
+        if (!d && parser_peek_ahead(p, 1)->kind == TK_SCOPE) {
+            Declaration *ns_d = lookup_unqualified_kind(
+                p, parser_peek(p)->loc, parser_peek(p)->len,
+                ENTITY_NAMESPACE);
+            if (ns_d && ns_d->ns_region) {
+                parser_advance(p);  /* consume namespace name */
+                DeclarativeRegion *scope = ns_d->ns_region;
+                Token *last_name = NULL;
+                Declaration *resolved = NULL;
+                while (parser_consume(p, TK_SCOPE)) {
+                    parser_consume(p, TK_KW_TEMPLATE);
+                    if (!parser_at(p, TK_IDENT)) break;
+                    Token *seg = parser_advance(p);
+                    last_name = seg;
+                    Declaration *seg_d = lookup_in_scope(
+                        scope, seg->loc, seg->len);
+                    if (seg_d && seg_d->entity == ENTITY_NAMESPACE) {
+                        scope = seg_d->ns_region;
+                        continue;
+                    }
+                    if (seg_d) resolved = seg_d;
+                    break;
+                }
+                if (resolved && last_name) {
+                    /* Template-id: ns::Box<int> */
+                    if (parser_at(p, TK_LT)) {
+                        Node *tid = parse_template_id(p, last_name);
+                        while (parser_consume(p, TK_SCOPE)) {
+                            parser_consume(p, TK_KW_TEMPLATE);
+                            if (parser_at(p, TK_IDENT)) {
+                                Token *seg2 = parser_advance(p);
+                                if (parser_at(p, TK_LT))
+                                    parse_template_id(p, seg2);
+                            }
+                        }
+                        while (parser_at(p, TK_KW_CONST) || parser_at(p, TK_KW_VOLATILE)) {
+                            if (parser_consume(p, TK_KW_CONST))    is_const = true;
+                            if (parser_consume(p, TK_KW_VOLATILE)) is_volatile = true;
+                        }
+                        Type *ty = new_type(p, TY_STRUCT);
+                        ty->is_const = is_const;
+                        ty->is_volatile = is_volatile;
+                        ty->tag = last_name;
+                        ty->template_id_node = tid;
+                        result.type = ty; return result;
+                    }
+                    /* Plain qualified type: ns::Type (no template) */
+                    Type *ty = resolved->type;
+                    if (ty) {
+                        Type *copy = arena_alloc(p->arena, sizeof(Type));
+                        *copy = *ty;
+                        copy->is_const = is_const;
+                        copy->is_volatile = is_volatile;
+                        result.type = copy; return result;
+                    }
+                    ty = new_type(p, TY_INT);
+                    ty->tag = last_name;
+                    ty->is_const = is_const;
+                    ty->is_volatile = is_volatile;
+                    result.type = ty; return result;
+                }
+            }
+        }
+
         if (d) {
             Token *name_tok = parser_advance(p);
 
