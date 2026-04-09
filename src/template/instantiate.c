@@ -330,6 +330,119 @@ static void collect_from_node(InstCollector *col, Node *n) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Deduplication set                                                   */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Build a dedup key string for a template-id: "name\0arg1\0arg2\0...".
+ * Two instantiations with the same key are identical and should be
+ * emitted only once. The key encodes template name + each arg type's
+ * mangled representation.
+ *
+ * Returns key length (including embedded NULs). The buffer must be
+ * large enough (MAX_DEDUP_KEY).
+ */
+#define MAX_DEDUP_KEY 512
+
+static int type_to_key(Type *ty, char *buf, int pos, int max) {
+    if (!ty || pos >= max - 1) return pos;
+    switch (ty->kind) {
+    case TY_VOID:    pos += snprintf(buf+pos, max-pos, "v"); break;
+    case TY_BOOL:    pos += snprintf(buf+pos, max-pos, "b"); break;
+    case TY_CHAR:    pos += snprintf(buf+pos, max-pos, ty->is_unsigned ? "uc" : "c"); break;
+    case TY_SHORT:   pos += snprintf(buf+pos, max-pos, ty->is_unsigned ? "us" : "s"); break;
+    case TY_INT:     pos += snprintf(buf+pos, max-pos, ty->is_unsigned ? "ui" : "i"); break;
+    case TY_LONG:    pos += snprintf(buf+pos, max-pos, ty->is_unsigned ? "ul" : "l"); break;
+    case TY_LLONG:   pos += snprintf(buf+pos, max-pos, ty->is_unsigned ? "ull" : "ll"); break;
+    case TY_FLOAT:   pos += snprintf(buf+pos, max-pos, "f"); break;
+    case TY_DOUBLE:  pos += snprintf(buf+pos, max-pos, "d"); break;
+    case TY_LDOUBLE: pos += snprintf(buf+pos, max-pos, "ld"); break;
+    case TY_PTR:     buf[pos++] = 'P'; pos = type_to_key(ty->base, buf, pos, max); break;
+    case TY_REF:     buf[pos++] = 'R'; pos = type_to_key(ty->base, buf, pos, max); break;
+    case TY_RVALREF: buf[pos++] = 'O'; pos = type_to_key(ty->base, buf, pos, max); break;
+    case TY_STRUCT: case TY_UNION:
+        if (ty->tag) pos += snprintf(buf+pos, max-pos, "S%.*s", ty->tag->len, ty->tag->loc);
+        /* Include template args of nested template types */
+        if (ty->n_template_args > 0) {
+            buf[pos++] = '<';
+            for (int i = 0; i < ty->n_template_args; i++)
+                pos = type_to_key(ty->template_args[i], buf, pos, max);
+            buf[pos++] = '>';
+        }
+        break;
+    default:
+        pos += snprintf(buf+pos, max-pos, "?");
+        break;
+    }
+    return pos;
+}
+
+static int build_dedup_key(Node *template_id, char *buf) {
+    Token *name = template_id->template_id.name;
+    int pos = 0;
+    /* Template name */
+    if (name && pos + name->len < MAX_DEDUP_KEY) {
+        memcpy(buf, name->loc, name->len);
+        pos = name->len;
+    }
+    buf[pos++] = '\0';
+    /* Args */
+    for (int i = 0; i < template_id->template_id.nargs; i++) {
+        pos = type_to_key(
+            (template_id->template_id.args[i] &&
+             template_id->template_id.args[i]->kind == ND_VAR_DECL)
+                ? template_id->template_id.args[i]->var_decl.ty : NULL,
+            buf, pos, MAX_DEDUP_KEY);
+        buf[pos++] = '\0';
+    }
+    return pos;
+}
+
+#define DEDUP_HASH_SIZE 64
+
+typedef struct DedupEntry DedupEntry;
+struct DedupEntry {
+    char       key[MAX_DEDUP_KEY];
+    int        key_len;
+    Type      *inst_type;   /* the instantiated Type (for patching) */
+    DedupEntry *next;
+};
+
+typedef struct {
+    DedupEntry *buckets[DEDUP_HASH_SIZE];
+    Arena      *arena;
+} DedupSet;
+
+static uint32_t hash_key(const char *key, int len) {
+    uint32_t h = 2166136261u;
+    for (int i = 0; i < len; i++) {
+        h ^= (uint8_t)key[i];
+        h *= 16777619u;
+    }
+    return h;
+}
+
+/* Returns the existing Type* if already instantiated, else NULL. */
+static Type *dedup_find(DedupSet *ds, const char *key, int key_len) {
+    uint32_t idx = hash_key(key, key_len) % DEDUP_HASH_SIZE;
+    for (DedupEntry *e = ds->buckets[idx]; e; e = e->next) {
+        if (e->key_len == key_len && memcmp(e->key, key, key_len) == 0)
+            return e->inst_type;
+    }
+    return NULL;
+}
+
+static void dedup_add(DedupSet *ds, const char *key, int key_len, Type *ty) {
+    uint32_t idx = hash_key(key, key_len) % DEDUP_HASH_SIZE;
+    DedupEntry *e = arena_alloc(ds->arena, sizeof(DedupEntry));
+    memcpy(e->key, key, key_len < MAX_DEDUP_KEY ? key_len : MAX_DEDUP_KEY);
+    e->key_len = key_len;
+    e->inst_type = ty;
+    e->next = ds->buckets[idx];
+    ds->buckets[idx] = e;
+}
+
+/* ------------------------------------------------------------------ */
 /* Phase 3 — Instantiation                                            */
 /* ------------------------------------------------------------------ */
 
@@ -512,22 +625,43 @@ void template_instantiate(Node *tu, Arena *arena) {
     /* Phase 3: instantiate (Stage 3 — not yet implemented).
      * For now, diagnostic output in debug mode. */
     (void)col;
-    /* Phase 3: instantiate each request and prepend to the TU.
+    /* Phase 3: instantiate each unique request and prepend to the TU.
      *
      * We build an array of instantiated declarations, then prepend
      * them all before the existing TU declarations so that
      * instantiated types are defined before user code that uses them.
      *
-     * TODO: deduplication — currently we may instantiate the same
-     * (name, args) combination more than once. Stage 7 adds a dedup
-     * set. For now, duplicate instantiations are harmless (codegen
-     * emits them with __SF_INLINE / weak linkage). */
+     * Deduplication: a hash set keyed by (template-name, arg-types)
+     * ensures each unique instantiation is cloned exactly once. If a
+     * duplicate is found, we just patch the usage-site type to point
+     * at the existing instantiation. */
     if (col.count == 0) return;
+
+    DedupSet ds = {0};
+    ds.arena = arena;
 
     /* Collect instantiated nodes and patch usage-site types */
     int ninst = 0;
     Node **instantiated = arena_alloc(arena, col.count * sizeof(Node *));
     for (InstRequest *req = col.head; req; req = req->next) {
+        /* Dedup check */
+        char key[MAX_DEDUP_KEY];
+        int key_len = build_dedup_key(req->template_id, key);
+        Type *existing = dedup_find(&ds, key, key_len);
+
+        if (existing) {
+            /* Already instantiated — just patch the usage-site type */
+            if (req->usage_type) {
+                req->usage_type->template_args    = existing->template_args;
+                req->usage_type->n_template_args   = existing->n_template_args;
+                req->usage_type->class_region      = existing->class_region;
+                req->usage_type->class_def         = existing->class_def;
+                req->usage_type->has_dtor          = existing->has_dtor;
+                req->usage_type->has_default_ctor  = existing->has_default_ctor;
+            }
+            continue;
+        }
+
         Node *inst = instantiate_one(req->tmpl_def, req->template_id, arena);
         if (inst) {
             instantiated[ninst++] = inst;
@@ -536,12 +670,14 @@ void template_instantiate(Node *tu, Arena *arena) {
             if (inst->kind == ND_CLASS_DEF && inst->class_def.ty &&
                 req->usage_type) {
                 Type *inst_ty = inst->class_def.ty;
-                req->usage_type->template_args   = inst_ty->template_args;
-                req->usage_type->n_template_args  = inst_ty->n_template_args;
-                req->usage_type->class_region     = inst_ty->class_region;
-                req->usage_type->class_def        = inst_ty->class_def;
-                req->usage_type->has_dtor         = inst_ty->has_dtor;
-                req->usage_type->has_default_ctor = inst_ty->has_default_ctor;
+                req->usage_type->template_args    = inst_ty->template_args;
+                req->usage_type->n_template_args   = inst_ty->n_template_args;
+                req->usage_type->class_region      = inst_ty->class_region;
+                req->usage_type->class_def         = inst_ty->class_def;
+                req->usage_type->has_dtor          = inst_ty->has_dtor;
+                req->usage_type->has_default_ctor  = inst_ty->has_default_ctor;
+                /* Register in dedup set */
+                dedup_add(&ds, key, key_len, inst_ty);
             }
         }
     }
