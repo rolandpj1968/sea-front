@@ -48,6 +48,67 @@ with no circular self-hosting dependency.
   But C++ remains the major unsolved gap. Modern GCC and Clang require a C++
   compiler to build, so the bootstrap chain currently dead-ends at C.
 
+### The Concrete Bootstrap Chain
+
+The [live-bootstrap](https://github.com/fosslinux/live-bootstrap) project
+(the primary implementation of the bootstrappable.org vision) has built an
+auditable chain from hex to a working C compiler. The chain as of 2024–2025:
+
+```
+hex0-seed (357 bytes of hand-auditable hex)
+  -> hex1 -> hex2 -> catm -> M0
+  -> M1 -> M2 -> mescc-tools
+  -> mes (Scheme interpreter in C subset)
+  -> mescc (C compiler in Scheme, hosted on mes)
+  -> tcc 0.9.27 (Tiny C Compiler, bootstrapped from mescc)
+  -> gcc 4.0.4 (built by tcc)
+  -> gcc 4.7.4 (built by gcc 4.0.4)
+                                          <-- THE C/C++ CHASM
+  -> gcc 13+ (requires a C++ compiler to build)
+```
+
+**The chasm**: gcc 4.7.4 is the last gcc version that can be built by a
+C-only compiler. gcc 4.8 was the first to require C++ to build itself.
+The live-bootstrap project currently bridges this gap by carrying
+gcc 4.6 and gcc 4.7.4 as "heritage" C-only compilers — large, complex
+artifacts maintained solely for this single bootstrap step.
+
+**Sea-front's role**: replace the heritage gcc rung with a small,
+auditable C program:
+
+```
+hex0 -> ... -> mescc -> tcc 0.9.27 -> gcc 4.7.4
+                                          |
+                      sea-front (built by gcc 4.7.4 or tcc)
+                                          |
+               gcc 4.8+ source ---[sea-front transpiles to C]--> C code
+                                          |
+                      gcc 4.7.4 or tcc compiles the C output
+                                          |
+                                  working gcc 4.8+ binary
+                                          |
+                              modern gcc builds itself
+```
+
+**The scaffolding C compiler**: the C compiler that compiles both
+sea-front itself and its generated C output is **gcc 4.7.4** (or
+potentially tcc, depending on the C dialect requirements of the
+generated code). This constrains:
+
+- **sea-front's own source**: must be plain C that gcc 4.7.4 (or tcc)
+  can compile. Currently C11-clean; may need to stay within C99 if tcc
+  is the target. No GCC extensions, no C11 atomics.
+- **sea-front's generated C output**: must be compilable by the same
+  scaffolding compiler. This means the generated C should avoid C11
+  features that gcc 4.0.4/4.7.4 may not support, and should avoid
+  GCC-specific extensions unless they're available across the relevant
+  gcc versions.
+
+The DDC (Diverse Double-Compiling) angle: sea-front's trust value comes
+from being built by the trusted chain. Sea-front compiled by a modern
+gcc has no more trust than gcc itself — the whole point is that
+sea-front inherits the mescc/tcc lineage.
+
 ### What This Project Is NOT
 
 - **Not a production compiler.** It doesn't need to be fast, generate optimised
