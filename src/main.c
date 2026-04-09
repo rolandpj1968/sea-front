@@ -19,6 +19,7 @@
 
 #include "sea-front.h"
 #include "sema/sema.h"
+#include "template/instantiate.h"
 #include "codegen/emit_c.h"
 
 static void dump_tokens(TokenArray ta) {
@@ -119,6 +120,7 @@ int main(int argc, char **argv) {
 
     if (do_emit_c) {
         sema_run(ast, &arena);
+        template_instantiate(ast, &arena);
         emit_c(ast);
         arena_free_all(&arena);
         return 0;

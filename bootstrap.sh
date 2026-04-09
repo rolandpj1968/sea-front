@@ -31,6 +31,7 @@ $CC $CFLAGS -o sea-front \
     src/parse/lookup.c \
     src/parse/ast_dump.c \
     src/sema/sema.c \
+    src/template/instantiate.c \
     src/codegen/emit_c.c \
     src/codegen/mangle.c
 
