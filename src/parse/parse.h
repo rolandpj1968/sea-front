@@ -470,10 +470,17 @@ struct Node {
         } func;
 
         /* ND_PARAM — N4659 §11.3.5 [dcl.fct]
-         * parameter-declaration: decl-specifier-seq declarator */
+         * parameter-declaration: decl-specifier-seq declarator
+         *
+         * For template type parameters (§17.1 [temp.param]),
+         * default_type holds the default type-id from '= type-id'
+         * (e.g. 'typename T = int'). NULL when no default. The
+         * instantiation pass consults this when fewer template
+         * arguments are provided than parameters. */
         struct {
             Type *ty;
             Token *name;    /* may be NULL for unnamed params */
+            Type *default_type;  /* template param default, or NULL */
         } param;
 
         /* ND_TEMPLATE_DECL — N4659 §17.1 [temp] (Annex A.12)

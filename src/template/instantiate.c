@@ -493,18 +493,26 @@ static Node *instantiate_one(Node *tmpl, Node *template_id, Arena *arena) {
     int nparams = tmpl->template_decl.nparams;
     int nargs   = template_id->template_id.nargs;
 
-    /* Build the substitution map */
+    /* Build the substitution map.
+     * For each template parameter, use the corresponding argument if
+     * provided; otherwise fall back to the parameter's default type
+     * (§17.1/8 [temp.param]). */
     SubstMap map = subst_map_new(arena, nparams > 0 ? nparams : 1);
-    for (int i = 0; i < nparams && i < nargs; i++) {
+    for (int i = 0; i < nparams; i++) {
         Node *param = tmpl->template_decl.params[i];
         if (!param) continue;
         Token *pname = param->param.name;
         if (!pname) continue;
 
-        Type *arg_ty = type_arg_from_node(template_id->template_id.args[i]);
+        Type *arg_ty = NULL;
+        if (i < nargs)
+            arg_ty = type_arg_from_node(template_id->template_id.args[i]);
+        /* Fall back to default if no explicit argument */
+        if (!arg_ty && param->param.default_type)
+            arg_ty = param->param.default_type;
         if (arg_ty)
             subst_map_add(&map, pname, arg_ty);
-        /* else: non-type param — not yet handled */
+        /* else: non-type param or missing default — not yet handled */
     }
 
     /* Clone the inner declaration with type substitution */
@@ -521,15 +529,15 @@ static Node *instantiate_one(Node *tmpl, Node *template_id, Arena *arena) {
             inst_ty->kind = TY_STRUCT;
         inst_ty->tag = template_id->template_id.name;
 
-        /* Store the concrete template args on the type for mangling */
-        int n = template_id->template_id.nargs;
+        /* Store the concrete template args on the type for mangling.
+         * Use the substitution map (which includes defaults) rather
+         * than just the explicit args from the template-id. */
+        int n = map.nentries;
         if (n > 0) {
             inst_ty->template_args = arena_alloc(arena, n * sizeof(Type *));
             inst_ty->n_template_args = n;
-            for (int i = 0; i < n; i++) {
-                inst_ty->template_args[i] =
-                    type_arg_from_node(template_id->template_id.args[i]);
-            }
+            for (int i = 0; i < n; i++)
+                inst_ty->template_args[i] = map.entries[i].concrete_type;
         }
 
         /* Build a class_region for the instantiated class so sema

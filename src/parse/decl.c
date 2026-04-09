@@ -1676,10 +1676,11 @@ static void parse_template_value_default(Parser *p) {
  * not an expression, so this calls parse_type_name instead of
  * parse_assign_expr.
  */
-static void parse_template_type_default(Parser *p) {
+static Type *parse_template_type_default(Parser *p) {
     p->template_depth++;
-    (void)parse_type_name(p);
+    Type *ty = parse_type_name(p);
     p->template_depth--;
+    return ty;
 }
 
 /*
@@ -1762,10 +1763,13 @@ static Node *parse_template_parameter(Parser *p) {
             }
 
             /* Optional default: = type-id */
+            Type *default_ty = NULL;
             if (parser_consume(p, TK_ASSIGN))
-                parse_template_type_default(p);
+                default_ty = parse_template_type_default(p);
 
-            return new_param_node(p, /*ty=*/NULL, name, tok);
+            Node *pnode = new_param_node(p, /*ty=*/NULL, name, tok);
+            pnode->param.default_type = default_ty;
+            return pnode;
         }
         /* else: fall through to non-type parameter parsing */
     }
