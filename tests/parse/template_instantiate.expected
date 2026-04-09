@@ -1,0 +1,10 @@
+(translation-unit
+  (template (params (param ? "T"))
+    (class-def "Box"
+      (var-decl dependent T "val")))
+  (template (params (param ? "A") (param ? "B"))
+    (class-def "Pair"
+      (var-decl dependent A "first")
+      (var-decl dependent B "second")))
+  (var-decl struct Box "b")
+  (var-decl struct Pair "p"))

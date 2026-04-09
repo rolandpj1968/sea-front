@@ -12,6 +12,7 @@ SRCS     = src/main.c src/util.c src/arena.c \
            src/parse/ast_dump.c \
            src/sema/sema.c \
            src/template/instantiate.c \
+           src/template/clone.c \
            src/codegen/emit_c.c \
            src/codegen/mangle.c
 OBJS     = $(patsubst src/%.c,$(BUILDDIR)/%.o,$(SRCS))
