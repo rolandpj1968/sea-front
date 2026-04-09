@@ -121,6 +121,7 @@ int main(int argc, char **argv) {
     if (do_emit_c) {
         sema_run(ast, &arena);
         template_instantiate(ast, &arena);
+        sema_run(ast, &arena);  /* re-run on instantiated nodes */
         emit_c(ast);
         arena_free_all(&arena);
         return 0;

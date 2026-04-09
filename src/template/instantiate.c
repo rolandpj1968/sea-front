@@ -398,14 +398,89 @@ static Node *instantiate_one(Node *tmpl, Node *template_id, Arena *arena) {
             }
         }
 
-        /* Clear class_region — the instantiated class gets its own
-         * scope, not the template's. For the first pass we leave it
-         * NULL; codegen reads members from the class_def node. */
-        inst_ty->class_region = NULL;
+        /* Build a class_region for the instantiated class so sema
+         * can resolve member references inside method bodies. Walk
+         * the cloned members and declare data members + methods. */
+        DeclarativeRegion *cr = arena_alloc(arena, sizeof(DeclarativeRegion));
+        memset(cr, 0, sizeof(DeclarativeRegion));
+        cr->kind = REGION_CLASS;
+        cr->owner_type = inst_ty;
+        for (int i = 0; i < cloned->class_def.nmembers; i++) {
+            Node *m = cloned->class_def.members[i];
+            if (!m) continue;
+            Token *mname = NULL;
+            Type  *mtype = NULL;
+            if (m->kind == ND_VAR_DECL || m->kind == ND_TYPEDEF) {
+                mname = m->var_decl.name;
+                mtype = m->var_decl.ty;
+            } else if (m->kind == ND_FUNC_DEF || m->kind == ND_FUNC_DECL) {
+                mname = m->func.name;
+                mtype = m->func.ret_ty;
+            }
+            if (mname && mname->kind == TK_IDENT) {
+                /* Declare in the class region — use a minimal
+                 * inline declaration (no Parser needed). */
+                uint32_t idx = 2166136261u;
+                for (int j = 0; j < mname->len; j++) {
+                    idx ^= (uint8_t)mname->loc[j];
+                    idx *= 16777619u;
+                }
+                idx %= REGION_HASH_SIZE;
+                Declaration *d = arena_alloc(arena, sizeof(Declaration));
+                d->name     = mname->loc;
+                d->name_len = mname->len;
+                d->entity   = ENTITY_VARIABLE;
+                d->type     = mtype;
+                d->home     = cr;
+                d->next     = cr->buckets[idx];
+                cr->buckets[idx] = d;
+            }
+        }
+        inst_ty->class_region = cr;
         inst_ty->class_def = cloned;
         inst_ty->has_dtor = false;
         inst_ty->has_default_ctor = false;
         inst_ty->has_virtual_methods = false;
+
+        /* Wire up method param_scopes so sema can resolve member
+         * references inside method bodies. Each method gets a fresh
+         * REGION_PROTOTYPE whose enclosing is the class region, with
+         * its parameters declared so name lookup finds them. */
+        for (int i = 0; i < cloned->class_def.nmembers; i++) {
+            Node *m = cloned->class_def.members[i];
+            if (!m || (m->kind != ND_FUNC_DEF && m->kind != ND_FUNC_DECL))
+                continue;
+            if (!m->func.body) continue;
+            DeclarativeRegion *ps = arena_alloc(arena,
+                sizeof(DeclarativeRegion));
+            memset(ps, 0, sizeof(DeclarativeRegion));
+            ps->kind = REGION_PROTOTYPE;
+            ps->enclosing = cr;  /* class scope is the parent */
+            /* Declare each parameter in the prototype scope */
+            for (int j = 0; j < m->func.nparams; j++) {
+                Node *p = m->func.params[j];
+                if (!p || !p->param.name) continue;
+                Token *pn = p->param.name;
+                uint32_t pidx = 2166136261u;
+                for (int k = 0; k < pn->len; k++) {
+                    pidx ^= (uint8_t)pn->loc[k];
+                    pidx *= 16777619u;
+                }
+                pidx %= REGION_HASH_SIZE;
+                Declaration *pd = arena_alloc(arena, sizeof(Declaration));
+                pd->name     = pn->loc;
+                pd->name_len = pn->len;
+                pd->entity   = ENTITY_VARIABLE;
+                pd->type     = p->param.ty;
+                pd->home     = ps;
+                pd->next     = ps->buckets[pidx];
+                ps->buckets[pidx] = pd;
+            }
+            m->func.param_scope = ps;
+            /* Also set the class_type so codegen knows to mangle
+             * this as a method, not a free function. */
+            m->func.class_type = inst_ty;
+        }
 
         cloned->class_def.ty  = inst_ty;
         cloned->class_def.tag = template_id->template_id.name;
