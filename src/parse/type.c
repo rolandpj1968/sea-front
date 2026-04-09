@@ -645,6 +645,7 @@ DeclSpec parse_type_specifiers(Parser *p) {
             result.type = ty; return result;
         }
         /* enum — N4659 §10.2 [dcl.enum]
+         * C++20: adds using-enum-declaration (§9.12 [enum.udecl]).
          * Parse optional tag name and skip enumerator-list { ... }. */
         if (tok->kind == TK_KW_ENUM) {
             parser_advance(p);

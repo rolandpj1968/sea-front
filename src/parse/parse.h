@@ -542,7 +542,8 @@ struct Node {
 };
 
 /* ================================================================== */
-/* Declaration specifier flags — N4659 §10.1 [dcl.spec]               */
+/* Declaration specifier flags — N4659 §10.1 [dcl.spec]              */
+/* C++20: adds consteval (§9.2.6), constinit (§9.2.7)               */
 /* ================================================================== */
 
 /*
@@ -584,7 +585,8 @@ enum {
 typedef struct DeclarativeRegion DeclarativeRegion;
 
 typedef enum {
-    /* Fundamental types — N4659 §6.9.1 [basic.fundamental] */
+    /* Fundamental types — N4659 §6.9.1 [basic.fundamental]
+     * C++20: adds char8_t (N4861 §7.3.1) */
     TY_VOID,
     TY_BOOL,            /* bool — N4659 §6.9.1/6 */
     TY_CHAR,            /* char, signed char, unsigned char */
@@ -971,7 +973,8 @@ Node *parse_assign_expr(Parser *p);
  *       // C++11: attribute-specifier-seq(opt) before each
  *       // C++17: init-statement in if/switch
  *       // C++20: co_return-statement (§9.6.3.1)
- *       // C++23: if consteval (§9.4.2)
+ *       // C++23: if consteval (§9.4.2), label refactoring
+ *       //        (labels at end of compound-statement)
  */
 Node *parse_stmt(Parser *p);
 Node *parse_compound_stmt(Parser *p);
@@ -987,17 +990,20 @@ Node *parse_compound_stmt(Parser *p);
  *       simple-declaration
  *       function-definition
  *       template-declaration           (§17.1)
+ *       explicit-instantiation         (§17.7.2 — skip-parsed)
+ *       explicit-specialization        (§17.7.3 — via template<>)
  *       linkage-specification          (extern "C")
  *       namespace-definition           (§10.3.1)
  *       using-declaration              (§10.3.3)
  *       using-directive                (§10.3.4)
  *       static_assert-declaration      (§10.1.4)
- *       explicit-instantiation         (NOT YET — deferred)
- *       explicit-specialization        (NOT YET — deferred)
- *       // and others
+ *       // C++20: adds export-declaration, module-import-declaration,
+ *       //        concept-definition
+ *       // C++23: refactors into name-declaration / special-declaration
  *
  *   template-declaration:              (§17.1, Annex A.12)
  *       template < template-parameter-list > declaration
+ *       // C++20: adds trailing requires-clause
  *
  * Stmt-vs-decl disambiguation (Rule 1, N4659 §9.8 [stmt.ambig]):
  *   "any statement that could be a declaration IS a declaration."

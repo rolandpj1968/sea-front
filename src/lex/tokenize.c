@@ -454,6 +454,11 @@ static void consume_decimal_digits(LexCtx *ctx) {
  *   - integer and float suffixes
  *   - user-defined literal suffixes (§5.13.8)
  *
+ * C++23 changes (N4950 §7.3.2/§7.3.4): adds size-suffix z/Z on
+ *   integers, extended floating-point suffixes f16/f32/f64/f128/bf16.
+ *   We accept but don't distinguish these from the C++17 suffixes —
+ *   the type distinction is a sema concern.
+ *
  * Computes Token.ival or Token.fval into the returned token using
  * strtoull / strtod after stripping digit separators into a temp
  * buffer. UDL-suffixed literals leave ival/fval unset — sema is
@@ -549,6 +554,7 @@ static Token *read_number(LexCtx *ctx) {
         /* Integer suffix — N4659 §5.13.2/3 [lex.icon]: an
          * integer-literal may carry an unsigned-suffix (u or U)
          * and/or a long-suffix (l, L, ll, or LL) in either order.
+         * C++23: adds size-suffix z/Z (§7.3.2 [lex.icon]).
          * Terminates: each branch sets a flag, so at most one
          * iteration of each branch can fire (i.e. at most 2
          * value-consuming iterations + 1 break iteration). The
@@ -618,6 +624,13 @@ static Token *read_number(LexCtx *ctx) {
 /*
  * string_prefix_len — recognise the optional encoding prefix on a
  * string or character literal (N4659 §5.13.5/§5.13.3).
+ *
+ * C++20: adds char8_t (u8'c') as a distinct type from unsigned char.
+ *   The encoding prefix u8 is already recognised here; the type
+ *   distinction is a sema concern, not a lexer concern.
+ * C++23: adds extended floating-point suffixes (f16/f32/f64/f128/bf16)
+ *   and size-literal suffix z/Z on integers — handled in read_number,
+ *   not here.
  *
  * On entry, 'p' may point at any character. On return:
  *   *quote   — '"' or '\'' if a literal starts here, '\0' otherwise.

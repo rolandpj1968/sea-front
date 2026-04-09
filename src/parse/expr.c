@@ -219,6 +219,12 @@ static Node *primary_expr(Parser *p) {
          *   lambda-introducer lambda-declarator(opt) compound-statement
          *   lambda-introducer: [ lambda-capture(opt) ]
          *
+         * C++20: adds explicit template-parameter-list
+         *   (lambda-introducer <T-params> requires-clause(opt) ...),
+         *   pack-expansion in init-capture.
+         * C++23: adds static lambda-specifier, restructures
+         *   lambda-declarator with lambda-specifier-seq.
+         *
          * '[' as a primary expression is unambiguously a lambda
          * (postfix '[' subscripts an existing operand and is handled
          * by the postfix loop, not here). Skip-and-discard for now —

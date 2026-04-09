@@ -33,7 +33,11 @@
  * compound-statement — N4659 §9.3 [stmt.block]
  *   { statement-seq(opt) }
  *
- * Unchanged in C++20/23.
+ * C++20: unchanged.
+ * C++23: allows label-seq at end of compound-statement (labels
+ *   before '}' without a following statement). We already accept
+ *   this — our loop parses 'case:' / 'default:' labels before
+ *   the next statement, and a '}' simply ends the block.
  */
 Node *parse_compound_stmt(Parser *p) {
     Token *tok = parser_expect(p, TK_LBRACE);
@@ -375,7 +379,12 @@ static Node *parse_switch_stmt(Parser *p) {
  * case-label — N4659 §9.1 [stmt.label]
  *   case constant-expression : statement
  *
- * Unchanged in C++20/23.
+ * C++20: unchanged.
+ * C++23: labeled-statement refactored — labels are separated from
+ *   their statement (label-seq + statement). The grammar change
+ *   allows labels at end-of-block without a following statement.
+ *   Our implementation is unaffected: we parse the label then
+ *   always parse a statement (which may be empty/null).
  */
 static Node *parse_case_stmt(Parser *p) {
     Token *tok = parser_expect(p, TK_KW_CASE);
