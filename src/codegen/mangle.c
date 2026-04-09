@@ -125,14 +125,71 @@ static void emit_namespace_chain(Type *class_type) {
     (void)n;
 }
 
-/* Open the class scope and emit its name. The caller is responsible
- * for any subsequent member/ctor/dtor append + close. */
+/* Emit the mangled encoding for a single type argument in a
+ * template argument list. For the human scheme, this produces
+ * the type's C-like name (int, double, struct tag, etc.). */
+static void emit_type_for_mangle(Type *ty) {
+    if (!ty) { fputs("unknown", stdout); return; }
+    switch (ty->kind) {
+    case TY_VOID:    fputs("void", stdout); return;
+    case TY_BOOL:    fputs("bool", stdout); return;
+    case TY_CHAR:    fputs(ty->is_unsigned ? "uchar" : "char", stdout); return;
+    case TY_CHAR16:  fputs("char16", stdout); return;
+    case TY_CHAR32:  fputs("char32", stdout); return;
+    case TY_WCHAR:   fputs("wchar", stdout); return;
+    case TY_SHORT:   fputs(ty->is_unsigned ? "ushort" : "short", stdout); return;
+    case TY_INT:     fputs(ty->is_unsigned ? "uint" : "int", stdout); return;
+    case TY_LONG:    fputs(ty->is_unsigned ? "ulong" : "long", stdout); return;
+    case TY_LLONG:   fputs(ty->is_unsigned ? "ullong" : "llong", stdout); return;
+    case TY_FLOAT:   fputs("float", stdout); return;
+    case TY_DOUBLE:  fputs("double", stdout); return;
+    case TY_LDOUBLE: fputs("ldouble", stdout); return;
+    case TY_PTR:     emit_type_for_mangle(ty->base); fputs("_ptr", stdout); return;
+    case TY_REF:     emit_type_for_mangle(ty->base); fputs("_ref", stdout); return;
+    case TY_RVALREF: emit_type_for_mangle(ty->base); fputs("_rref", stdout); return;
+    case TY_STRUCT: case TY_UNION:
+        if (ty->tag) fprintf(stdout, "%.*s", ty->tag->len, ty->tag->loc);
+        else fputs("anon", stdout);
+        /* If this struct itself is a template instantiation, emit
+         * its template args recursively. */
+        if (ty->n_template_args > 0) {
+            fputs("_t_", stdout);
+            for (int i = 0; i < ty->n_template_args; i++) {
+                if (i > 0) fputc('_', stdout);
+                emit_type_for_mangle(ty->template_args[i]);
+            }
+            fputs("_te_", stdout);
+        }
+        return;
+    case TY_ENUM:
+        if (ty->tag) fprintf(stdout, "%.*s", ty->tag->len, ty->tag->loc);
+        else fputs("anon_enum", stdout);
+        return;
+    default:
+        fputs("unknown", stdout);
+        return;
+    }
+}
+
+/* Open the class scope and emit its name. If the class type has
+ * template arguments, emit them after the class name using the
+ * _t_..._te_ encoding. The caller is responsible for any
+ * subsequent member/ctor/dtor append + close. */
 static void emit_class_open(Type *class_type) {
     g_mangler->start(g_mangler);
     emit_namespace_chain(class_type);
     g_mangler->open_class(g_mangler);
     g_mangler->append_class_name(g_mangler,
         class_type ? class_type->tag : NULL);
+    /* Template argument suffix */
+    if (class_type && class_type->n_template_args > 0) {
+        fputs("_t_", stdout);
+        for (int i = 0; i < class_type->n_template_args; i++) {
+            if (i > 0) fputc('_', stdout);
+            emit_type_for_mangle(class_type->template_args[i]);
+        }
+        fputs("_te_", stdout);
+    }
 }
 
 static void emit_class_close(void) {

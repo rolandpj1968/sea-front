@@ -132,6 +132,7 @@ struct InstRequest {
     Token *name;            /* template name */
     Node  *template_id;     /* ND_TEMPLATE_ID with args */
     Node  *tmpl_def;        /* resolved ND_TEMPLATE_DECL */
+    Type  *usage_type;      /* the Type* at the usage site (to patch) */
     InstRequest *next;
 };
 
@@ -179,6 +180,7 @@ static void collect_from_type(InstCollector *col, Type *ty) {
     req->name = name;
     req->template_id = tid;
     req->tmpl_def = tmpl;
+    req->usage_type = ty;  /* patch this type after instantiation */
     req->next = col->head;
     col->head = req;
     col->count++;
@@ -447,13 +449,26 @@ void template_instantiate(Node *tu, Arena *arena) {
      * emits them with __SF_INLINE / weak linkage). */
     if (col.count == 0) return;
 
-    /* Collect instantiated nodes */
+    /* Collect instantiated nodes and patch usage-site types */
     int ninst = 0;
     Node **instantiated = arena_alloc(arena, col.count * sizeof(Node *));
     for (InstRequest *req = col.head; req; req = req->next) {
         Node *inst = instantiate_one(req->tmpl_def, req->template_id, arena);
-        if (inst)
+        if (inst) {
             instantiated[ninst++] = inst;
+            /* Patch the usage-site type so codegen mangles it
+             * with template args (e.g. sf__Box_t_int_te_). */
+            if (inst->kind == ND_CLASS_DEF && inst->class_def.ty &&
+                req->usage_type) {
+                Type *inst_ty = inst->class_def.ty;
+                req->usage_type->template_args   = inst_ty->template_args;
+                req->usage_type->n_template_args  = inst_ty->n_template_args;
+                req->usage_type->class_region     = inst_ty->class_region;
+                req->usage_type->class_def        = inst_ty->class_def;
+                req->usage_type->has_dtor         = inst_ty->has_dtor;
+                req->usage_type->has_default_ctor = inst_ty->has_default_ctor;
+            }
+        }
     }
     if (ninst == 0) return;
 
