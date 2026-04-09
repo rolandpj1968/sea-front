@@ -398,8 +398,14 @@ static int type_to_key(Type *ty, char *buf, int pos, int max) {
     return pos;
 }
 
-static int build_dedup_key(Node *template_id, char *buf) {
-    Token *name = template_id->template_id.name;
+/*
+ * Build a dedup key from the template name + resolved substitution
+ * map (which includes defaults). This ensures that e.g. vec<int>
+ * and vec<int, int, int> produce the same key when defaults fill
+ * in the same types.
+ */
+static int build_dedup_key_from_map(Token *name, SubstMap *map,
+                                     char *buf) {
     int pos = 0;
     /* Template name */
     if (name && pos + name->len < MAX_DEDUP_KEY) {
@@ -407,13 +413,10 @@ static int build_dedup_key(Node *template_id, char *buf) {
         pos = name->len;
     }
     buf[pos++] = '\0';
-    /* Args */
-    for (int i = 0; i < template_id->template_id.nargs; i++) {
-        pos = type_to_key(
-            (template_id->template_id.args[i] &&
-             template_id->template_id.args[i]->kind == ND_VAR_DECL)
-                ? template_id->template_id.args[i]->var_decl.ty : NULL,
-            buf, pos, MAX_DEDUP_KEY);
+    /* Resolved args (from substitution map, includes defaults) */
+    for (int i = 0; i < map->nentries; i++) {
+        pos = type_to_key(map->entries[i].concrete_type,
+                          buf, pos, MAX_DEDUP_KEY);
         buf[pos++] = '\0';
     }
     return pos;
@@ -723,9 +726,6 @@ void template_instantiate(Node *tu, Arena *arena) {
     for (int i = 0; i < tu->tu.ndecls; i++)
         collect_from_node(&col, tu->tu.decls[i]);
 
-    /* Phase 3: instantiate (Stage 3 — not yet implemented).
-     * For now, diagnostic output in debug mode. */
-    (void)col;
     /* Phase 3: instantiate each unique request and prepend to the TU.
      *
      * We build an array of instantiated declarations, then prepend
@@ -745,9 +745,28 @@ void template_instantiate(Node *tu, Arena *arena) {
     int ninst = 0;
     Node **instantiated = arena_alloc(arena, col.count * sizeof(Node *));
     for (InstRequest *req = col.head; req; req = req->next) {
-        /* Dedup check */
+        /* Build a temporary SubstMap to compute the dedup key
+         * (includes defaults). This is rebuilt inside instantiate_one
+         * if we proceed — minor redundancy for cleaner code. */
+        Node *tmpl = req->tmpl_def;
+        int np = tmpl->template_decl.nparams;
+        int na = req->template_id->template_id.nargs;
+        SubstMap tmp_map = subst_map_new(arena, np > 0 ? np : 1);
+        for (int i = 0; i < np; i++) {
+            Node *param = tmpl->template_decl.params[i];
+            if (!param || !param->param.name) continue;
+            Type *arg_ty = (i < na) ?
+                type_arg_from_node(req->template_id->template_id.args[i]) :
+                NULL;
+            if (!arg_ty && param->param.default_type)
+                arg_ty = param->param.default_type;
+            if (arg_ty)
+                subst_map_add(&tmp_map, param->param.name, arg_ty);
+        }
+
+        /* Dedup check — uses resolved map (includes defaults) */
         char key[MAX_DEDUP_KEY];
-        int key_len = build_dedup_key(req->template_id, key);
+        int key_len = build_dedup_key_from_map(req->name, &tmp_map, key);
         Type *existing = dedup_find(&ds, key, key_len);
 
         if (existing) {
