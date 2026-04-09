@@ -323,6 +323,27 @@ static void collect_from_node(InstCollector *col, Node *n) {
         collect_from_node(col, n->friend_decl.decl);
         break;
 
+    case ND_TEMPLATE_ID: {
+        /* A template-id in expression position (e.g. max_of<int> as
+         * a call callee). Record as a function template instantiation
+         * request if the name resolves to a template definition. */
+        Token *tname = n->template_id.name;
+        if (tname) {
+            Node *tmpl = registry_find(col->reg, tname->loc, tname->len);
+            if (tmpl) {
+                InstRequest *req = arena_alloc(col->arena, sizeof(InstRequest));
+                req->name = tname;
+                req->template_id = n;
+                req->tmpl_def = tmpl;
+                req->usage_type = NULL;  /* no usage-site type for functions */
+                req->next = col->head;
+                col->head = req;
+                col->count++;
+            }
+        }
+        break;
+    }
+
     default:
         /* Leaf nodes (ND_NUM, ND_IDENT, ND_STR, etc.) — no types to check */
         break;
@@ -597,6 +618,78 @@ static Node *instantiate_one(Node *tmpl, Node *template_id, Arena *arena) {
 
         cloned->class_def.ty  = inst_ty;
         cloned->class_def.tag = template_id->template_id.name;
+    }
+
+    /* For function templates: set up a param scope and rewrite the
+     * template-id call site to reference the mangled name.
+     * The cloned function gets emitted as a top-level free function
+     * with a mangled name encoding the template args. */
+    if (cloned->kind == ND_FUNC_DEF || cloned->kind == ND_FUNC_DECL) {
+        /* Build a synthetic mangled name for the function.
+         * For now we build it by snprintf'ing into an arena buffer.
+         * E.g. max_of<int> → max_of_t_int_te_ */
+        Token *fname = cloned->func.name;
+        int n = template_id->template_id.nargs;
+        int bufsize = 256;
+        char *buf = arena_alloc(arena, bufsize);
+        int pos = 0;
+        if (fname)
+            pos += snprintf(buf + pos, bufsize - pos, "%.*s",
+                            fname->len, fname->loc);
+        pos += snprintf(buf + pos, bufsize - pos, "_t_");
+        for (int i = 0; i < n; i++) {
+            if (i > 0) buf[pos++] = '_';
+            Type *at = type_arg_from_node(template_id->template_id.args[i]);
+            pos = type_to_key(at, buf, pos, bufsize);
+        }
+        pos += snprintf(buf + pos, bufsize - pos, "_te_");
+
+        /* Create a synthetic token pointing at the mangled name.
+         * We reuse the original token but override loc/len. */
+        Token *mangled = arena_alloc(arena, sizeof(Token));
+        if (fname) *mangled = *fname;
+        else memset(mangled, 0, sizeof(Token));
+        mangled->loc = buf;
+        mangled->len = pos;
+        mangled->kind = TK_IDENT;
+        cloned->func.name = mangled;
+
+        /* Rewrite the template-id node itself so codegen emits
+         * the mangled name at call sites. We do this by converting
+         * the ND_TEMPLATE_ID into an ND_IDENT pointing at the
+         * mangled name. */
+        template_id->kind = ND_IDENT;
+        template_id->ident.name = mangled;
+        template_id->ident.implicit_this = false;
+        template_id->ident.resolved_decl = NULL;
+
+        /* Set up param scope for sema */
+        if (cloned->func.body && cloned->func.nparams > 0) {
+            DeclarativeRegion *ps = arena_alloc(arena,
+                sizeof(DeclarativeRegion));
+            memset(ps, 0, sizeof(DeclarativeRegion));
+            ps->kind = REGION_PROTOTYPE;
+            for (int j = 0; j < cloned->func.nparams; j++) {
+                Node *p = cloned->func.params[j];
+                if (!p || !p->param.name) continue;
+                Token *pn = p->param.name;
+                uint32_t pidx = 2166136261u;
+                for (int k = 0; k < pn->len; k++) {
+                    pidx ^= (uint8_t)pn->loc[k];
+                    pidx *= 16777619u;
+                }
+                pidx %= REGION_HASH_SIZE;
+                Declaration *pd = arena_alloc(arena, sizeof(Declaration));
+                pd->name     = pn->loc;
+                pd->name_len = pn->len;
+                pd->entity   = ENTITY_VARIABLE;
+                pd->type     = p->param.ty;
+                pd->home     = ps;
+                pd->next     = ps->buckets[pidx];
+                ps->buckets[pidx] = pd;
+            }
+            cloned->func.param_scope = ps;
+        }
     }
 
     return cloned;

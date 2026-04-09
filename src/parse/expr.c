@@ -493,8 +493,17 @@ static Node *primary_expr(Parser *p) {
                         is_nontype_var = true;
                 }
                 if (lookup_is_template_name(p, name) || looks_template_arg ||
-                    (p->template_depth > 0 && !is_nontype_var))
-                    parse_template_id(p, name);
+                    (p->template_depth > 0 && !is_nontype_var)) {
+                    Node *tid = parse_template_id(p, name);
+                    /* If no :: follows, this was a standalone
+                     * template-id (e.g. max_of<int>(...)) — return
+                     * the ND_TEMPLATE_ID directly so the call site
+                     * can use it for instantiation. If :: follows,
+                     * it's an intermediate segment in a qualified
+                     * name and we continue building parts. */
+                    if (!parser_at(p, TK_SCOPE) && parts.len == 1)
+                        return tid;
+                }
             }
 
             while (parser_at(p, TK_SCOPE)) {

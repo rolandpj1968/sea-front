@@ -4,5 +4,5 @@
   (class-def "C"
     (func-def void "f" (params)
       (block
-        (call (ident "g"))
-        (call (ident "g") (num 42))))))
+        (call (template-id "g" (true) (false)))
+        (call (template-id "g" (true) (false)) (num 42))))))
