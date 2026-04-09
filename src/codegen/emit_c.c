@@ -597,6 +597,16 @@ static void emit_type(Type *ty) {
         fputs("enum ", stdout);
         if (ty->tag) fprintf(stdout, "%.*s", ty->tag->len, ty->tag->loc);
         return;
+    case TY_DEPENDENT:
+        /* Template type parameter — should have been substituted by the
+         * instantiation pass before codegen. If we reach here, the type
+         * is in an uninstantiated template body (skipped by codegen) or
+         * a dependent context we haven't resolved. Emit as a comment
+         * for debugging. */
+        fputs("/*dep:", stdout);
+        if (ty->tag) fprintf(stdout, "%.*s", ty->tag->len, ty->tag->loc);
+        fputs("*/ int", stdout);
+        return;
     default:
         fputs("/*?*/ int", stdout);
         return;

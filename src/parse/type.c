@@ -931,7 +931,7 @@ DeclSpec parse_type_specifiers(Parser *p) {
              * TODO(seafront#type-tmpl-id): consult lookup once inline
              * namespaces are modelled. */
             if (parser_at(p, TK_LT)) {
-                parse_template_id(p, name_tok);  /* consumes <args> */
+                Node *tid = parse_template_id(p, name_tok);  /* consumes <args> */
                 /* Trailing nested-name: enable_if<...>::type, possibly chained.
                  * Each segment may itself be a template-id. */
                 while (parser_consume(p, TK_SCOPE)) {
@@ -949,12 +949,14 @@ DeclSpec parse_type_specifiers(Parser *p) {
                     if (parser_consume(p, TK_KW_CONST))    is_const = true;
                     if (parser_consume(p, TK_KW_VOLATILE)) is_volatile = true;
                 }
-                /* For now, the resulting type is opaque — sema resolves
-                 * the template specialization. */
+                /* The resulting type carries the template-id node so the
+                 * instantiation pass can recover the template name and
+                 * arguments. Before instantiation, the type is opaque. */
                 Type *ty = new_type(p, TY_STRUCT);
                 ty->is_const = is_const;
                 ty->is_volatile = is_volatile;
                 ty->tag = name_tok;
+                ty->template_id_node = tid;
                 result.type = ty; return result;
             }
 

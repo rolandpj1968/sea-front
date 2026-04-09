@@ -1750,9 +1750,16 @@ static Node *parse_template_parameter(Parser *p) {
 
             /* Register the type parameter name in the template scope.
              * N4659 §6.3.9 [basic.scope.temp]: template parameter names
-             * are in the template's declarative region. */
-            if (name)
-                region_declare(p, name->loc, name->len, ENTITY_TYPE, /*type=*/NULL);
+             * are in the template's declarative region.
+             *
+             * We create a TY_DEPENDENT type so the AST cleanly marks
+             * where template parameters appear. During instantiation,
+             * subst_type replaces TY_DEPENDENT with the concrete arg. */
+            if (name) {
+                Type *dep = new_type(p, TY_DEPENDENT);
+                dep->tag = name;
+                region_declare(p, name->loc, name->len, ENTITY_TYPE, dep);
+            }
 
             /* Optional default: = type-id */
             if (parser_consume(p, TK_ASSIGN))

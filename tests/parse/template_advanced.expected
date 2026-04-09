@@ -1,13 +1,13 @@
 (translation-unit
   (template (params (param ? "T"))
     (class-def "Box"
-      (var-decl int "val")))
+      (var-decl dependent T "val")))
   (template (params (param ? "A") (param ? "B"))
     (class-def "Pair"
-      (var-decl int "a")
-      (var-decl int "b")))
+      (var-decl dependent A "a")
+      (var-decl dependent B "b")))
   (template (params (param ? "T"))
-    (func-def int "identity" (params (param int "x"))
+    (func-def dependent T "identity" (params (param dependent T "x"))
       (block
         (return (ident "x")))))
   (template (params (param int "N"))

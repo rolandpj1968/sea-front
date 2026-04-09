@@ -1,18 +1,18 @@
 (translation-unit
   (template (params (param ? "T"))
-    (func-def int "add" (params (param int "a") (param int "b"))
+    (func-def dependent T "add" (params (param dependent T "a") (param dependent T "b"))
       (block
         (return (+ (ident "a") (ident "b"))))))
   (template (params (param ? "T") (param int "N"))
     (class-def "Array"
-      (var-decl (array int 10) "data")))
+      (var-decl (array dependent T 10) "data")))
   (template (params (param ? "T"))
     (class-def "Box"
-      (var-decl int "val")))
+      (var-decl dependent T "val")))
   (template (params (param ? "A") (param ? "B"))
     (class-def "Pair"
-      (var-decl int "first")
-      (var-decl int "second")))
+      (var-decl dependent A "first")
+      (var-decl dependent B "second")))
   (func-def int "main" (params)
     (block
       (var-decl int "x" (call (ident "add") (num 1) (num 2)))

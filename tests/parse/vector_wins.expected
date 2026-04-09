@@ -29,13 +29,13 @@
             (block
               (return (true))))))))
   (template (params (param ? "T"))
-    (func-def void "mswap" (params (param (ref int) "a") (param (ref int) "b"))
+    (func-def void "mswap" (params (param (ref dependent T) "a") (param (ref dependent T) "b"))
       (block
-        (var-decl int "t" (ident "a"))
+        (var-decl dependent T "t" (ident "a"))
         (= (ident "a") (ident "b"))
         (= (ident "b") (ident "t")))))
   (template (params (param ? "T") (param unsigned-long "N"))
-    (func-def void "mswap" (params (param (array (ref int)) "a") (param (array (ref int)) "b"))
+    (func-def void "mswap" (params (param (array (ref dependent T)) "a") (param (array (ref dependent T)) "b"))
       (block
         (for (var-decl unsigned-long "i" (num 0)) (< (ident "i") (ident "N")) (++ (ident "i"))
           (call (ident "mswap") ([] (ident "a") (ident "i")) ([] (ident "b") (ident "i")))))))

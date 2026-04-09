@@ -92,6 +92,10 @@ static void dump_type(Type *ty) {
         printf("enum");
         if (ty->tag) printf(" %.*s", ty->tag->len, ty->tag->loc);
         return;
+    case TY_DEPENDENT:
+        printf("dependent");
+        if (ty->tag) printf(" %.*s", ty->tag->len, ty->tag->loc);
+        return;
     }
 }
 

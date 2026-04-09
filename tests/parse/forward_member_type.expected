@@ -1,7 +1,7 @@
 (translation-unit
   (template (params (param ? "T"))
     (class-def "uptr"
-      (var-decl (func-type void ((ptr int))) "uptr" )))
+      (var-decl (func-type void ((ptr dependent T))) "uptr" )))
   (class-def "C"
     (func-def void "f" (params)
       (block

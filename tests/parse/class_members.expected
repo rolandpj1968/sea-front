@@ -15,8 +15,8 @@
     (var-decl int "shared"))
   (template (params (param ? "T"))
     (class-def "Container"
-      (var-decl int "value")
-      (func-def int "get" (params)
+      (var-decl dependent T "value")
+      (func-def dependent T "get" (params)
         (block
           (return (ident "value"))))))
   (var-decl struct Point "p")

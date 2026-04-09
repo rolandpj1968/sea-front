@@ -1,12 +1,12 @@
 (translation-unit
   (template (params (param ? "_Ret") (param ? "_Tp"))
     (class-def "mem_fun"
-      (func-def void "mem_fun" (params (param (func-type (ptr int) ()) "pf"))
+      (func-def void "mem_fun" (params (param (func-type (ptr dependent _Ret) ()) "pf"))
         (block))
-      (func-def int "operator" (params (param (ptr int) "p"))
+      (func-def dependent _Ret "operator" (params (param (ptr dependent _Tp) "p"))
         (block
           (return (call (->* (ident "p") (ident "f"))))))
-      (var-decl (func-type (ptr int) ()) "f")))
+      (var-decl (func-type (ptr dependent _Ret) ()) "f")))
   (class-def "PMtest"
     (var-decl int "v")
     (func-def int "run" (params (param (ptr struct PMtest) "p") (param (ptr int) "pm"))
@@ -33,7 +33,7 @@
         (cast void (ident "g"))
         (cast void (ident "x")))))
   (template (params (param ? "T"))
-    (func-def int "do_cast" (params (param int "x"))
+    (func-def int "do_cast" (params (param dependent T "x"))
       (block
         (return (cast int (ident "x"))))))
   (template (params (param ? "T"))

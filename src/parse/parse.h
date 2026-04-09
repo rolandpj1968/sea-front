@@ -612,6 +612,14 @@ typedef enum {
     TY_STRUCT,          /* struct — N4659 §12 [class] */
     TY_UNION,           /* union — N4659 §12.3 [class.union] */
     TY_ENUM,            /* enum — N4659 §10.2 [dcl.enum] */
+
+    /* Template type parameter — placeholder for substitution during
+     * template instantiation. Created when a template type parameter
+     * (typename T / class T) is used as a type-specifier inside the
+     * template body. The tag field carries the parameter name token.
+     * During instantiation, subst_type replaces TY_DEPENDENT nodes
+     * with concrete types from the substitution map. */
+    TY_DEPENDENT,
 } TypeKind;
 
 struct Type {
@@ -687,6 +695,22 @@ struct Type {
      * emitting out-of-class ctor/dtor definitions whose body needs
      * to chain into member ctors. NULL for forward-declared types. */
     Node *class_def;
+
+    /* Template instantiation metadata.
+     *
+     * template_id_node: back-pointer to the ND_TEMPLATE_ID node that
+     *   produced this type (e.g. when 'vec<int>' is parsed in type-
+     *   specifier position). NULL for non-template types. The
+     *   instantiation pass reads the template name and arguments from
+     *   this node to decide what to instantiate.
+     *
+     * template_args / n_template_args: concrete type arguments for an
+     *   instantiated template type. Set by the instantiation pass after
+     *   cloning. The mangler reads these to produce distinct names for
+     *   each instantiation (e.g. sf__vec_t_int_te_). */
+    Node *template_id_node;
+    Type **template_args;
+    int    n_template_args;
 };
 
 /* ================================================================== */
