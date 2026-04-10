@@ -562,7 +562,7 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
             arg_ty = type_arg_from_node(template_id->template_id.args[i]);
         /* Fall back to default if no explicit argument */
         if (!arg_ty && param->param.default_type)
-            arg_ty = param->param.default_type;
+            arg_ty = subst_type(param->param.default_type, &map, arena);
         if (arg_ty)
             subst_map_add(&map, pname, arg_ty);
         /* else: non-type param or missing default — not yet handled */
@@ -870,7 +870,7 @@ void template_instantiate(Node *tu, Arena *arena) {
                 type_arg_from_node(req->template_id->template_id.args[i]) :
                 NULL;
             if (!arg_ty && param->param.default_type)
-                arg_ty = param->param.default_type;
+                arg_ty = subst_type(param->param.default_type, &tmp_map, arena);
             if (arg_ty)
                 subst_map_add(&tmp_map, param->param.name, arg_ty);
         }
