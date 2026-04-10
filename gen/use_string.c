@@ -167,14 +167,17 @@ struct sf__basic_streambuf ;
 
 struct sf__basic_ios ;
 
+/* C++:     struct integral_constant */
 struct sf__integral_constant_t_bool_te_ {
     _Bool value = __v;
 };
 __SF_INLINE void sf__integral_constant_t_bool_te___operator(struct sf__integral_constant_t_bool_te_ *this);
+/* C++:       constexpr operator value_type() const noexcept */
 __SF_INLINE void sf__integral_constant_t_bool_te___operator(struct sf__integral_constant_t_bool_te_ *this) {
     return this->value;
 }
 
+/* C++:     class fpos */
 struct sf__fpos_t_anon_te_ {
     long long _M_off;
     struct ? _M_state;
@@ -192,43 +195,53 @@ __SF_INLINE struct sf__std__fpos* sf__fpos_t_anon_te___operator(struct sf__fpos_
 __SF_INLINE struct sf__std__fpos sf__fpos_t_anon_te___operator(struct sf__fpos_t_anon_te_ *this, long long __off);
 __SF_INLINE struct sf__std__fpos sf__fpos_t_anon_te___operator(struct sf__fpos_t_anon_te_ *this, long long __off);
 __SF_INLINE long long sf__fpos_t_anon_te___operator(struct sf__fpos_t_anon_te_ *this, const struct sf__std__fpos* __other);
+/* C++:       fpos() */
 __SF_INLINE void sf__fpos_t_anon_te___ctor(struct sf__fpos_t_anon_te_ *this) {
     this->_M_off = 0;
     sf__anon__ctor(&this->_M_state);
 }
+/* C++:       fpos(streamoff __off) */
 __SF_INLINE void sf__fpos_t_anon_te___ctor(struct sf__fpos_t_anon_te_ *this, long long __off) {
     this->_M_off = __off;
     sf__anon__ctor(&this->_M_state);
 }
+/* C++:       operator streamoff() const */
 __SF_INLINE void sf__fpos_t_anon_te___operator(struct sf__fpos_t_anon_te_ *this) {
     return this->_M_off;
 }
+/* C++:       state(_StateT __st) */
 __SF_INLINE void sf__fpos_t_anon_te___state(struct sf__fpos_t_anon_te_ *this, struct ? __st) {
     (this->_M_state = __st);
 }
+/* C++:       state() const */
 __SF_INLINE struct ? sf__fpos_t_anon_te___state(struct sf__fpos_t_anon_te_ *this) {
     return this->_M_state;
 }
+/* C++:       operator+=(streamoff __off) */
 __SF_INLINE struct sf__std__fpos* sf__fpos_t_anon_te___operator(struct sf__fpos_t_anon_te_ *this, long long __off) {
     (this->_M_off += __off);
     return (*this);
 }
+/* C++:       operator-=(streamoff __off) */
 __SF_INLINE struct sf__std__fpos* sf__fpos_t_anon_te___operator(struct sf__fpos_t_anon_te_ *this, long long __off) {
     (this->_M_off -= __off);
     return (*this);
 }
+/* C++:       operator+(streamoff __off) const */
 __SF_INLINE struct sf__std__fpos sf__fpos_t_anon_te___operator(struct sf__fpos_t_anon_te_ *this, long long __off) {
     struct sf__std__fpos __pos;
     sf__std__fpos__ctor(&__pos, (*this));
     (__pos += __off);
     return __pos;
 }
+/* C++:       operator-(streamoff __off) const */
 __SF_INLINE struct sf__std__fpos sf__fpos_t_anon_te___operator(struct sf__fpos_t_anon_te_ *this, long long __off) {
     struct sf__std__fpos __pos;
     sf__std__fpos__ctor(&__pos, (*this));
     (__pos -= __off);
     return __pos;
 }
+/* C++:       operator-(const fpos& __other) const */
 __SF_INLINE long long sf__fpos_t_anon_te___operator(struct sf__fpos_t_anon_te_ *this, const struct sf__std__fpos* __other) {
     return (this->_M_off - __other._M_off);
 }
@@ -4828,6 +4841,7 @@ struct sf__basic_string ;
 /* unsupported top-level */
 /* unsupported top-level */
 /* unsupported top-level */
+/* C++:   inline void __terminate()  noexcept */
 void __terminate(void) {
     /*?*/ int terminate;
     terminate();
@@ -4835,6 +4849,7 @@ void __terminate(void) {
 
 
 
+/* C++:   __is_constant_evaluated()  noexcept */
 _Bool __is_constant_evaluated(void) {
     return false;
 }
@@ -4873,6 +4888,7 @@ struct sf___IO_FILE ;
 
 /* unsupported top-level */
 
+/* C++: struct __locale_struct */
 struct sf____locale_struct {
     struct sf____locale_data** __locales;
     const unsigned short* __ctype_b;
@@ -4969,18 +4985,23 @@ int ungetwc(int, struct sf___IO_FILE*);
 long wcsftime(wchar_t*, long, const wchar_t*, const struct sf__tm*);
 
 
+/* C++:   wcschr(wchar_t* __p, wchar_t __c) */
 wchar_t* wcschr(wchar_t* __p, wchar_t __c) {
     return wcschr((const wchar_t*)__p, __c);
 }
+/* C++:   wcspbrk(wchar_t* __s1, const wchar_t* __s2) */
 wchar_t* wcspbrk(wchar_t* __s1, const wchar_t* __s2) {
     return wcspbrk((const wchar_t*)__s1, __s2);
 }
+/* C++:   wcsrchr(wchar_t* __p, wchar_t __c) */
 wchar_t* wcsrchr(wchar_t* __p, wchar_t __c) {
     return wcsrchr((const wchar_t*)__p, __c);
 }
+/* C++:   wcsstr(wchar_t* __s1, const wchar_t* __s2) */
 wchar_t* wcsstr(wchar_t* __s1, const wchar_t* __s2) {
     return wcsstr((const wchar_t*)__s1, __s2);
 }
+/* C++:   wmemchr(wchar_t* __p, wchar_t __c, size_t __n) */
 wchar_t* wmemchr(wchar_t* __p, wchar_t __c, long __n) {
     return wmemchr((const wchar_t*)__p, __c, __n);
 }
@@ -4997,49 +5018,71 @@ wchar_t* wmemchr(wchar_t* __p, wchar_t __c, long __n) {
 
 /* unsupported top-level */
 /* unsupported top-level */
+/* C++:   struct __do_is_destructible_impl */
 struct sf__std____do_is_destructible_impl {
 };
+/* C++:   struct __do_is_nt_destructible_impl */
 struct sf__std____do_is_nt_destructible_impl {
 };
+/* C++:   struct __do_is_implicitly_default_constructible_impl */
 struct sf__std____do_is_implicitly_default_constructible_impl {
 };
 __SF_INLINE struct sf__integral_constant_t_bool_te_ sf__std____do_is_implicitly_default_constructible_impl____test(struct sf__std____do_is_implicitly_default_constructible_impl *this);
+/* C++:   class __make_unsigned_selector_base */
 struct sf__std____make_unsigned_selector_base {
 };
+/* C++:   struct __failure_type */
 struct sf__std____failure_type {
 };
+/* C++:   struct __do_common_type_impl */
 struct sf__std____do_common_type_impl {
 };
+/* C++:   struct __invoke_memfun_ref */
 struct sf__std____invoke_memfun_ref {
 };
+/* C++:   struct __invoke_memfun_deref */
 struct sf__std____invoke_memfun_deref {
 };
+/* C++:   struct __invoke_memobj_ref */
 struct sf__std____invoke_memobj_ref {
 };
+/* C++:   struct __invoke_memobj_deref */
 struct sf__std____invoke_memobj_deref {
 };
+/* C++:   struct __invoke_other */
 struct sf__std____invoke_other {
 };
+/* C++:   struct __result_of_memfun_ref_impl */
 struct sf__std____result_of_memfun_ref_impl {
 };
+/* C++:   struct __result_of_memfun_deref_impl */
 struct sf__std____result_of_memfun_deref_impl {
 };
+/* C++:   struct __result_of_memobj_ref_impl */
 struct sf__std____result_of_memobj_ref_impl {
 };
+/* C++:   struct __result_of_memobj_deref_impl */
 struct sf__std____result_of_memobj_deref_impl {
 };
+/* C++:   struct __result_of_other_impl */
 struct sf__std____result_of_other_impl {
 };
+/* C++:     struct __do_is_swappable_impl */
 struct sf__std____swappable_details____do_is_swappable_impl {
 };
+/* C++:     struct __do_is_nothrow_swappable_impl */
 struct sf__std____swappable_details____do_is_nothrow_swappable_impl {
 };
+/* C++:     struct __do_is_swappable_with_impl */
 struct sf__std____swappable_with_details____do_is_swappable_with_impl {
 };
+/* C++:     struct __do_is_nothrow_swappable_with_impl */
 struct sf__std____swappable_with_details____do_is_nothrow_swappable_with_impl {
 };
+/* C++:   struct __nonesuchbase */
 struct sf__std____nonesuchbase {
 };
+/* C++:   struct __nonesuch : private __nonesuchbase */
 struct sf__std____nonesuch {
     struct sf__std____nonesuchbase __sf_base;
 };
@@ -5055,6 +5098,7 @@ __SF_INLINE void sf__std____nonesuch__dtor(struct sf__std____nonesuch *this) {
 
 
 
+/* C++:   class exception */
 struct sf__std__exception__vtable;
 struct sf__std__exception {
     const struct sf__std__exception__vtable *__sf_vptr;
@@ -5073,6 +5117,7 @@ struct sf__std__exception__vtable {
 static const struct sf__std__exception__vtable sf__std__exception__vtable_instance = {
     sf__std__exception__what,
 };
+/* C++:     exception()  noexcept */
 __SF_INLINE void sf__std__exception__ctor(struct sf__std__exception *this) {
     this->__sf_vptr = &sf__std__exception__vtable_instance;
 }
@@ -5080,6 +5125,7 @@ __SF_INLINE void sf__std__exception__dtor(struct sf__std__exception *this) {
     sf__std__exception__dtor_body(this);
 }
 
+/* C++:   class bad_alloc : public exception */
 struct sf__std__bad_alloc__vtable;
 struct sf__std__bad_alloc {
     struct sf__std__exception __sf_base;
@@ -5096,6 +5142,7 @@ struct sf__std__bad_alloc__vtable {
 static const struct sf__std__bad_alloc__vtable sf__std__bad_alloc__vtable_instance = {
     sf__std__bad_alloc__what,
 };
+/* C++:     bad_alloc() throw() */
 __SF_INLINE void sf__std__bad_alloc__ctor(struct sf__std__bad_alloc *this) {
     sf__std__exception__ctor(&this->__sf_base);
     this->__sf_vptr = &sf__std__bad_alloc__vtable_instance;
@@ -5104,6 +5151,7 @@ __SF_INLINE void sf__std__bad_alloc__dtor(struct sf__std__bad_alloc *this) {
     sf__std__bad_alloc__dtor_body(this);
     sf__std__exception__dtor(&this->__sf_base);
 }
+/* C++:   class bad_array_new_length : public bad_alloc */
 struct sf__std__bad_array_new_length__vtable;
 struct sf__std__bad_array_new_length {
     struct sf__std__bad_alloc __sf_base;
@@ -5118,6 +5166,7 @@ struct sf__std__bad_array_new_length__vtable {
 static const struct sf__std__bad_array_new_length__vtable sf__std__bad_array_new_length__vtable_instance = {
     sf__std__bad_array_new_length__what,
 };
+/* C++:     bad_array_new_length() throw() */
 __SF_INLINE void sf__std__bad_array_new_length__ctor(struct sf__std__bad_array_new_length *this) {
     sf__std__bad_alloc__ctor(&this->__sf_base);
     this->__sf_vptr = &sf__std__bad_array_new_length__vtable_instance;
@@ -5126,6 +5175,7 @@ __SF_INLINE void sf__std__bad_array_new_length__dtor(struct sf__std__bad_array_n
     sf__std__bad_array_new_length__dtor_body(this);
     sf__std__bad_alloc__dtor(&this->__sf_base);
 }
+/* C++:   struct nothrow_t */
 struct sf__std__nothrow_t {
 };
 __SF_INLINE void sf__std__nothrow_t__ctor(struct sf__std__nothrow_t *this);
@@ -5141,14 +5191,18 @@ void* operator(long, const struct sf__std__nothrow_t*);
 void* operator(long, const struct sf__std__nothrow_t*);
 void operator(void*, const struct sf__std__nothrow_t*);
 void operator(void*, const struct sf__std__nothrow_t*);
+/* C++:  inline void* operator new(std::size_t, void* __p)  noexcept */
 void* operator(long, void* __p) {
     return __p;
 }
+/* C++:  inline void* operator new[](std::size_t, void* __p)  noexcept */
 void* operator(long, void* __p) {
     return __p;
 }
+/* C++: inline void operator delete (void*, void*)  noexcept */
 void operator(void*, void*) {
 }
+/* C++: inline void operator delete[](void*, void*)  noexcept */
 void operator(void*, void*) {
 }
 
@@ -5177,11 +5231,14 @@ void __throw_bad_function_call(void);
 
 
 
+/* C++:   struct __true_type */
 struct sf__std____true_type {
 };
+/* C++:   struct __false_type */
 struct sf__std____false_type {
 };
 
+/* C++: struct lconv */
 struct sf__lconv {
     char* decimal_point;
     char* thousands_sep;
@@ -5219,6 +5276,7 @@ struct sf____locale_struct* uselocale(struct sf____locale_struct*);
 int __uselocale;
 
 /* unsupported top-level */
+/* C++:   __convert_from_v(const __c_locale& __cloc  , */
 int __convert_from_v(const struct sf____locale_struct** __cloc, char* __out, const int __size, const char* __fmt) {
     struct sf____locale_struct* __old = /* expr */(__cloc);
     int __args;
@@ -5305,6 +5363,7 @@ struct sf__time_base ;
 struct sf__money_base ;
 struct sf__messages_base ;
 
+/* C++:   class __forced_unwind */
 struct sf____cxxabiv1____forced_unwind__vtable;
 struct sf____cxxabiv1____forced_unwind {
     const struct sf____cxxabiv1____forced_unwind__vtable *__sf_vptr;
@@ -5327,21 +5386,27 @@ __SF_INLINE void sf____cxxabiv1____forced_unwind__ctor(struct sf____cxxabiv1____
 }
 
 
+/* C++:   struct input_iterator_tag */
 struct sf__std__input_iterator_tag {
 };
+/* C++:   struct output_iterator_tag */
 struct sf__std__output_iterator_tag {
 };
+/* C++:   struct forward_iterator_tag : public input_iterator_tag */
 struct sf__std__forward_iterator_tag {
     struct sf__std__input_iterator_tag __sf_base;
 };
+/* C++:   struct bidirectional_iterator_tag : public forward_iterator_tag */
 struct sf__std__bidirectional_iterator_tag {
     struct sf__std__forward_iterator_tag __sf_base;
 };
+/* C++:   struct random_access_iterator_tag : public bidirectional_iterator_tag */
 struct sf__std__random_access_iterator_tag {
     struct sf__std__bidirectional_iterator_tag __sf_base;
 };
 
 
+/* C++:   __is_null_pointer(std::nullptr_t) */
 _Bool __is_null_pointer(int) {
     return true;
 }
@@ -5355,6 +5420,7 @@ struct sf____undefined ;
 
 
 
+/* C++:   struct piecewise_construct_t */
 struct sf__std__piecewise_construct_t {
 };
 __SF_INLINE void sf__std__piecewise_construct_t__ctor(struct sf__std__piecewise_construct_t *this);
@@ -5362,59 +5428,74 @@ struct sf__std__piecewise_construct_t piecewise_construct = piecewise_construct_
 
 
 
+/* C++:   struct _Iter_less_iter */
 struct sf____gnu_cxx____ops___Iter_less_iter {
 };
+/* C++:   __iter_less_iter() */
 struct sf____gnu_cxx____ops___Iter_less_iter __iter_less_iter(void) {
     struct sf____gnu_cxx____ops___Iter_less_iter __SF_temp_0;
     sf____gnu_cxx____ops___Iter_less_iter__ctor(&__SF_temp_0);
     return __SF_temp_0;
 }
+/* C++:   struct _Iter_less_val */
 struct sf____gnu_cxx____ops___Iter_less_val {
 };
 __SF_INLINE void sf____gnu_cxx____ops___Iter_less_val__ctor(struct sf____gnu_cxx____ops___Iter_less_val *this);
 __SF_INLINE void sf____gnu_cxx____ops___Iter_less_val__ctor(struct sf____gnu_cxx____ops___Iter_less_val *this, struct sf____gnu_cxx____ops___Iter_less_iter);
+/* C++:     _Iter_less_val(_Iter_less_iter) */
 __SF_INLINE void sf____gnu_cxx____ops___Iter_less_val__ctor(struct sf____gnu_cxx____ops___Iter_less_val *this, struct sf____gnu_cxx____ops___Iter_less_iter) {
 }
+/* C++:   __iter_less_val() */
 struct sf____gnu_cxx____ops___Iter_less_val __iter_less_val(void) {
     struct sf____gnu_cxx____ops___Iter_less_val __SF_temp_0;
     sf____gnu_cxx____ops___Iter_less_val__ctor(&__SF_temp_0);
     return __SF_temp_0;
 }
+/* C++:   __iter_comp_val(_Iter_less_iter) */
 struct sf____gnu_cxx____ops___Iter_less_val __iter_comp_val(struct sf____gnu_cxx____ops___Iter_less_iter) {
     struct sf____gnu_cxx____ops___Iter_less_val __SF_temp_0;
     sf____gnu_cxx____ops___Iter_less_val__ctor(&__SF_temp_0);
     return __SF_temp_0;
 }
+/* C++:   struct _Val_less_iter */
 struct sf____gnu_cxx____ops___Val_less_iter {
 };
 __SF_INLINE void sf____gnu_cxx____ops___Val_less_iter__ctor(struct sf____gnu_cxx____ops___Val_less_iter *this);
 __SF_INLINE void sf____gnu_cxx____ops___Val_less_iter__ctor(struct sf____gnu_cxx____ops___Val_less_iter *this, struct sf____gnu_cxx____ops___Iter_less_iter);
+/* C++:     _Val_less_iter(_Iter_less_iter) */
 __SF_INLINE void sf____gnu_cxx____ops___Val_less_iter__ctor(struct sf____gnu_cxx____ops___Val_less_iter *this, struct sf____gnu_cxx____ops___Iter_less_iter) {
 }
+/* C++:   __val_less_iter() */
 struct sf____gnu_cxx____ops___Val_less_iter __val_less_iter(void) {
     struct sf____gnu_cxx____ops___Val_less_iter __SF_temp_0;
     sf____gnu_cxx____ops___Val_less_iter__ctor(&__SF_temp_0);
     return __SF_temp_0;
 }
+/* C++:   __val_comp_iter(_Iter_less_iter) */
 struct sf____gnu_cxx____ops___Val_less_iter __val_comp_iter(struct sf____gnu_cxx____ops___Iter_less_iter) {
     struct sf____gnu_cxx____ops___Val_less_iter __SF_temp_0;
     sf____gnu_cxx____ops___Val_less_iter__ctor(&__SF_temp_0);
     return __SF_temp_0;
 }
+/* C++:   struct _Iter_equal_to_iter */
 struct sf____gnu_cxx____ops___Iter_equal_to_iter {
 };
+/* C++:   __iter_equal_to_iter() */
 struct sf____gnu_cxx____ops___Iter_equal_to_iter __iter_equal_to_iter(void) {
     struct sf____gnu_cxx____ops___Iter_equal_to_iter __SF_temp_0;
     sf____gnu_cxx____ops___Iter_equal_to_iter__ctor(&__SF_temp_0);
     return __SF_temp_0;
 }
+/* C++:   struct _Iter_equal_to_val */
 struct sf____gnu_cxx____ops___Iter_equal_to_val {
 };
+/* C++:   __iter_equal_to_val() */
 struct sf____gnu_cxx____ops___Iter_equal_to_val __iter_equal_to_val(void) {
     struct sf____gnu_cxx____ops___Iter_equal_to_val __SF_temp_0;
     sf____gnu_cxx____ops___Iter_equal_to_val__ctor(&__SF_temp_0);
     return __SF_temp_0;
 }
+/* C++:   __iter_comp_val(_Iter_equal_to_iter) */
 struct sf____gnu_cxx____ops___Iter_equal_to_val __iter_comp_val(struct sf____gnu_cxx____ops___Iter_equal_to_iter) {
     struct sf____gnu_cxx____ops___Iter_equal_to_val __SF_temp_0;
     sf____gnu_cxx____ops___Iter_equal_to_val__ctor(&__SF_temp_0);
@@ -5423,30 +5504,39 @@ struct sf____gnu_cxx____ops___Iter_equal_to_val __iter_comp_val(struct sf____gnu
 
 struct sf___Bit_iterator ;
 void __fill_a1(struct sf___Bit_iterator, struct sf___Bit_iterator, const _Bool*);
+/* C++:   __size_to_integer(int __n) */
 int __size_to_integer(int __n) {
     return __n;
 }
+/* C++:   __size_to_integer(unsigned __n) */
 unsigned int __size_to_integer(unsigned int __n) {
     return __n;
 }
+/* C++:   __size_to_integer(long __n) */
 long __size_to_integer(long __n) {
     return __n;
 }
+/* C++:   __size_to_integer(unsigned long __n) */
 unsigned long __size_to_integer(unsigned long __n) {
     return __n;
 }
+/* C++:   __size_to_integer(long long __n) */
 long long __size_to_integer(long long __n) {
     return __n;
 }
+/* C++:   __size_to_integer(unsigned long long __n) */
 unsigned long long __size_to_integer(unsigned long long __n) {
     return __n;
 }
+/* C++:   __size_to_integer(float __n) */
 long long __size_to_integer(float __n) {
     return (long long)__n;
 }
+/* C++:   __size_to_integer(double __n) */
 long long __size_to_integer(double __n) {
     return (long long)__n;
 }
+/* C++:   __size_to_integer(long double __n) */
 long long __size_to_integer(long double __n) {
     return (long long)__n;
 }
@@ -5456,6 +5546,7 @@ long long __size_to_integer(long double __n) {
 
 
 
+/* C++:   struct __allocator_traits_base */
 struct sf__std____allocator_traits_base {
 };
 
@@ -5514,30 +5605,38 @@ long a64l(const char*);
 /* unsupported top-level */
 /* unsupported top-level */
 /* unsupported top-level */
+/* C++: __bswap_16 (__uint16_t __bsx) */
 unsigned short __bswap_16(unsigned short __bsx) {
     return (unsigned short)(((__bsx >> 8) & 255) | ((__bsx & 255) << 8));
 }
+/* C++: __bswap_32 (__uint32_t __bsx) */
 unsigned int __bswap_32(unsigned int __bsx) {
     return (((((__bsx & 4278190080) >> 24) | ((__bsx & 16711680) >> 8)) | ((__bsx & 65280) << 8)) | ((__bsx & 255) << 24));
 }
+/* C++: __bswap_64 (__uint64_t __bsx) */
 unsigned long __bswap_64(unsigned long __bsx) {
     return (((((((((__bsx & -72057594037927936) >> 56) | ((__bsx & 71776119061217280) >> 40)) | ((__bsx & 280375465082880) >> 24)) | ((__bsx & 1095216660480) >> 8)) | ((__bsx & 4278190080) << 8)) | ((__bsx & 16711680) << 24)) | ((__bsx & 65280) << 40)) | ((__bsx & 255) << 56));
 }
+/* C++: __uint16_identity (__uint16_t __x) */
 unsigned short __uint16_identity(unsigned short __x) {
     return __x;
 }
+/* C++: __uint32_identity (__uint32_t __x) */
 unsigned int __uint32_identity(unsigned int __x) {
     return __x;
 }
+/* C++: __uint64_identity (__uint64_t __x) */
 unsigned long __uint64_identity(unsigned long __x) {
     return __x;
 }
 /* unsupported top-level */
 /* unsupported top-level */
+/* C++: struct timeval */
 struct sf__timeval {
     long tv_sec;
     long tv_usec;
 };
+/* C++: struct timespec */
 struct sf__timespec {
     long tv_sec;
     long tv_nsec;
@@ -5555,6 +5654,7 @@ int pselect(int, struct ?*, struct ?*, struct ?*, const struct sf__timespec*, co
 /* unsupported top-level */
 /* unsupported top-level */
 /* unsupported top-level */
+/* C++: struct __pthread_mutex_s */
 struct sf____pthread_mutex_s {
     int __lock;
     unsigned int __count;
@@ -5565,6 +5665,7 @@ struct sf____pthread_mutex_s {
     short __elision;
     struct sf____pthread_internal_list __list;
 };
+/* C++: struct __pthread_rwlock_arch_t */
 struct sf____pthread_rwlock_arch_t {
     unsigned int __readers;
     unsigned int __writers;
@@ -5579,6 +5680,7 @@ struct sf____pthread_rwlock_arch_t {
     unsigned long __pad2;
     unsigned int __flags;
 };
+/* C++: struct __pthread_cond_s */
 struct sf____pthread_cond_s {
     union ? __wseq;
     union ? __g1_start;
@@ -5596,6 +5698,7 @@ struct sf____pthread_cond_s {
 /* unsupported top-level */
 /* unsupported top-level */
 /* unsupported top-level */
+/* C++: union pthread_attr_t */
 struct sf__pthread_attr_t {
     char* __size;
     long __align;
@@ -5612,6 +5715,7 @@ long random(void);
 void srandom(unsigned int);
 char* initstate(unsigned int, char*, long);
 char* setstate(char*);
+/* C++: struct random_data */
 struct sf__random_data {
     int* fptr;
     int* rptr;
@@ -5637,6 +5741,7 @@ long jrand48(unsigned short*);
 void srand48(long);
 unsigned short* seed48(unsigned short*);
 void lcong48(unsigned short*);
+/* C++: struct drand48_data */
 struct sf__drand48_data {
     unsigned short* __x;
     unsigned short* __old_x;
@@ -5711,25 +5816,32 @@ int rpmatch(const char*);
 int getsubopt(char**, const char**, char**);
 int getloadavg(double*, int);
 
+/* C++:   abs(long __i) */
 long abs(long __i) {
     return __builtin_labs;
 }
+/* C++:   abs(long long __x) */
 long long abs(long long __x) {
     return __builtin_llabs;
 }
+/* C++:   abs(double __x) */
 double abs(double __x) {
     return __builtin_fabs;
 }
+/* C++:   abs(float __x) */
 float abs(float __x) {
     return __builtin_fabsf;
 }
+/* C++:   abs(long double __x) */
 long double abs(long double __x) {
     return __builtin_fabsl;
 }
 
+/* C++:   div(long __i, long __j)  noexcept */
 struct ? div(long __i, long __j) {
     return ldiv(__i, __j);
 }
+/* C++:   div(long long __n, long long __d) */
 struct ? div(long long __n, long long __d) {
     struct ? __q;
     (__q.quot = (__n / __d));
@@ -5744,6 +5856,7 @@ struct sf___IO_marker ;
 struct sf___IO_codecvt ;
 struct sf___IO_wide_data ;
 /* unsupported top-level */
+/* C++: struct _IO_FILE */
 struct sf___IO_FILE {
     int _flags;
     char* _IO_read_ptr;
@@ -5888,30 +6001,39 @@ int* __errno_location(void);
 
 
 
+/* C++:   stoi(const string& __str, size_t* __idx = 0, int __base = 10) */
 int stoi(const struct sf__basic_string* __str, long* __idx, int __base) {
     return /* expr */((&/* expr */), "stoi", __str.c_str(), __idx, __base);
 }
+/* C++:   stol(const string& __str, size_t* __idx = 0, int __base = 10) */
 long stol(const struct sf__basic_string* __str, long* __idx, int __base) {
     return /* expr */((&/* expr */), "stol", __str.c_str(), __idx, __base);
 }
+/* C++:   stoul(const string& __str, size_t* __idx = 0, int __base = 10) */
 unsigned long stoul(const struct sf__basic_string* __str, long* __idx, int __base) {
     return /* expr */((&/* expr */), "stoul", __str.c_str(), __idx, __base);
 }
+/* C++:   stoll(const string& __str, size_t* __idx = 0, int __base = 10) */
 long long stoll(const struct sf__basic_string* __str, long* __idx, int __base) {
     return /* expr */((&/* expr */), "stoll", __str.c_str(), __idx, __base);
 }
+/* C++:   stoull(const string& __str, size_t* __idx = 0, int __base = 10) */
 unsigned long long stoull(const struct sf__basic_string* __str, long* __idx, int __base) {
     return /* expr */((&/* expr */), "stoull", __str.c_str(), __idx, __base);
 }
+/* C++:   stof(const string& __str, size_t* __idx = 0) */
 float stof(const struct sf__basic_string* __str, long* __idx) {
     return /* expr */((&/* expr */), "stof", __str.c_str(), __idx);
 }
+/* C++:   stod(const string& __str, size_t* __idx = 0) */
 double stod(const struct sf__basic_string* __str, long* __idx) {
     return /* expr */((&/* expr */), "stod", __str.c_str(), __idx);
 }
+/* C++:   stold(const string& __str, size_t* __idx = 0) */
 long double stold(const struct sf__basic_string* __str, long* __idx) {
     return /* expr */((&/* expr */), "stold", __str.c_str(), __idx);
 }
+/* C++:   to_string(int __val) */
 struct sf__basic_string to_string(int __val) {
     const _Bool __neg = (__val < 0);
     const unsigned int __uval = (__neg ? ((unsigned int)(~__val) + 1) : __val);
@@ -5921,12 +6043,14 @@ struct sf__basic_string to_string(int __val) {
     /* expr */((&__str[__neg]), __len, __uval);
     return __str;
 }
+/* C++:   to_string(unsigned __val) */
 struct sf__basic_string to_string(unsigned int __val) {
     struct sf__basic_string __str;
     sf__basic_string__ctor(&__str, /* expr */(__val), '\0');
     /* expr */((&__str[0]), sf__basic_string__size(&__str), __val);
     return __str;
 }
+/* C++:   to_string(long __val) */
 struct sf__basic_string to_string(long __val) {
     const _Bool __neg = (__val < 0);
     const unsigned long __uval = (__neg ? ((unsigned long)(~__val) + 1) : __val);
@@ -5936,12 +6060,14 @@ struct sf__basic_string to_string(long __val) {
     /* expr */((&__str[__neg]), __len, __uval);
     return __str;
 }
+/* C++:   to_string(unsigned long __val) */
 struct sf__basic_string to_string(unsigned long __val) {
     struct sf__basic_string __str;
     sf__basic_string__ctor(&__str, /* expr */(__val), '\0');
     /* expr */((&__str[0]), sf__basic_string__size(&__str), __val);
     return __str;
 }
+/* C++:   to_string(long long __val) */
 struct sf__basic_string to_string(long long __val) {
     const _Bool __neg = (__val < 0);
     const unsigned long long __uval = (__neg ? ((unsigned long long)(~__val) + 1) : __val);
@@ -5951,74 +6077,95 @@ struct sf__basic_string to_string(long long __val) {
     /* expr */((&__str[__neg]), __len, __uval);
     return __str;
 }
+/* C++:   to_string(unsigned long long __val) */
 struct sf__basic_string to_string(unsigned long long __val) {
     struct sf__basic_string __str;
     sf__basic_string__ctor(&__str, /* expr */(__val), '\0');
     /* expr */((&__str[0]), sf__basic_string__size(&__str), __val);
     return __str;
 }
+/* C++:   to_string(float __val) */
 struct sf__basic_string to_string(float __val) {
     const int __n = (/* expr */ + 20);
     return /* expr */((&/* expr */), __n, "%f", __val);
 }
+/* C++:   to_string(double __val) */
 struct sf__basic_string to_string(double __val) {
     const int __n = (/* expr */ + 20);
     return /* expr */((&/* expr */), __n, "%f", __val);
 }
+/* C++:   to_string(long double __val) */
 struct sf__basic_string to_string(long double __val) {
     const int __n = (/* expr */ + 20);
     return /* expr */((&/* expr */), __n, "%Lf", __val);
 }
+/* C++:   stoi(const wstring& __str, size_t* __idx = 0, int __base = 10) */
 int stoi(const struct sf__basic_string* __str, long* __idx, int __base) {
     return /* expr */((&/* expr */), "stoi", __str.c_str(), __idx, __base);
 }
+/* C++:   stol(const wstring& __str, size_t* __idx = 0, int __base = 10) */
 long stol(const struct sf__basic_string* __str, long* __idx, int __base) {
     return /* expr */((&/* expr */), "stol", __str.c_str(), __idx, __base);
 }
+/* C++:   stoul(const wstring& __str, size_t* __idx = 0, int __base = 10) */
 unsigned long stoul(const struct sf__basic_string* __str, long* __idx, int __base) {
     return /* expr */((&/* expr */), "stoul", __str.c_str(), __idx, __base);
 }
+/* C++:   stoll(const wstring& __str, size_t* __idx = 0, int __base = 10) */
 long long stoll(const struct sf__basic_string* __str, long* __idx, int __base) {
     return /* expr */((&/* expr */), "stoll", __str.c_str(), __idx, __base);
 }
+/* C++:   stoull(const wstring& __str, size_t* __idx = 0, int __base = 10) */
 unsigned long long stoull(const struct sf__basic_string* __str, long* __idx, int __base) {
     return /* expr */((&/* expr */), "stoull", __str.c_str(), __idx, __base);
 }
+/* C++:   stof(const wstring& __str, size_t* __idx = 0) */
 float stof(const struct sf__basic_string* __str, long* __idx) {
     return /* expr */((&/* expr */), "stof", __str.c_str(), __idx);
 }
+/* C++:   stod(const wstring& __str, size_t* __idx = 0) */
 double stod(const struct sf__basic_string* __str, long* __idx) {
     return /* expr */((&/* expr */), "stod", __str.c_str(), __idx);
 }
+/* C++:   stold(const wstring& __str, size_t* __idx = 0) */
 long double stold(const struct sf__basic_string* __str, long* __idx) {
     return /* expr */((&/* expr */), "stold", __str.c_str(), __idx);
 }
+/* C++:   to_wstring(int __val) */
 struct sf__basic_string to_wstring(int __val) {
     return /* expr */((&/* expr */), (4 * /* expr */), L"%d", __val);
 }
+/* C++:   to_wstring(unsigned __val) */
 struct sf__basic_string to_wstring(unsigned int __val) {
     return /* expr */((&/* expr */), (4 * /* expr */), L"%u", __val);
 }
+/* C++:   to_wstring(long __val) */
 struct sf__basic_string to_wstring(long __val) {
     return /* expr */((&/* expr */), (4 * /* expr */), L"%ld", __val);
 }
+/* C++:   to_wstring(unsigned long __val) */
 struct sf__basic_string to_wstring(unsigned long __val) {
     return /* expr */((&/* expr */), (4 * /* expr */), L"%lu", __val);
 }
+/* C++:   to_wstring(long long __val) */
 struct sf__basic_string to_wstring(long long __val) {
     return /* expr */((&/* expr */), (4 * /* expr */), L"%lld", __val);
 }
+/* C++:   to_wstring(unsigned long long __val) */
 struct sf__basic_string to_wstring(unsigned long long __val) {
     return /* expr */((&/* expr */), (4 * /* expr */), L"%llu", __val);
 }
+/* C++:   to_wstring(float __val) */
 struct sf__basic_string to_wstring(float __val) {
     const int __n = (/* expr */ + 20);
     return /* expr */((&/* expr */), __n, L"%f", __val);
 }
+/* C++:   to_wstring(double __val) */
 struct sf__basic_string to_wstring(double __val) {
     const int __n = (/* expr */ + 20);
     return /* expr */((&/* expr */), __n, L"%f", __val);
 }
+/* C++:   to_wstring(long double __val) */
 struct sf__basic_string to_wstring(long double __val) {
     const int __n = (/* expr */ + 20);
     return /* expr */((&/* expr */), __n, L"%Lf", __val);
@@ -6027,17 +6174,21 @@ struct sf__basic_string to_wstring(long double __val) {
 long _Hash_bytes(const void*, long, long);
 long _Fnv_hash_bytes(const void*, long, long);
 
+/* C++:   struct _Hash_impl */
 struct sf__std___Hash_impl {
 };
 __SF_INLINE long sf__std___Hash_impl__ctor(struct sf__std___Hash_impl *this, const void* __ptr, long __clength, long __seed);
+/* C++:     hash(const void* __ptr, size_t __clength, */
 __SF_INLINE long sf__std___Hash_impl__ctor(struct sf__std___Hash_impl *this, const void* __ptr, long __clength, long __seed) {
     {
         return _Hash_bytes(__ptr, __clength, __seed);
     }
 }
+/* C++:   struct _Fnv_hash_impl */
 struct sf__std___Fnv_hash_impl {
 };
 __SF_INLINE long sf__std___Fnv_hash_impl__ctor(struct sf__std___Fnv_hash_impl *this, const void* __ptr, long __clength, long __seed);
+/* C++:     hash(const void* __ptr, size_t __clength, */
 __SF_INLINE long sf__std___Fnv_hash_impl__ctor(struct sf__std___Fnv_hash_impl *this, const void* __ptr, long __clength, long __seed) {
     {
         return _Fnv_hash_bytes(__ptr, __clength, __seed);
@@ -6046,6 +6197,7 @@ __SF_INLINE long sf__std___Fnv_hash_impl__ctor(struct sf__std___Fnv_hash_impl *t
 
 
 
+/* C++: int main() */
 int main(void) {
     struct sf__basic_string s;
     return 0;

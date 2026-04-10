@@ -161,6 +161,41 @@ static void emit_expr(Node *n);
 static void emit_type(Type *ty);
 static void emit_mangled_class_tag(Type *class_type);
 
+/*
+ * Emit a "C++: ..." comment showing the original C++ declaration.
+ * Extracts the source line from the Token's loc pointer (which points
+ * into the source buffer). Prints from the start of the line up to
+ * the first '{', ';', or end of line — just the declaration part.
+ */
+static void emit_source_comment(Token *tok) {
+    if (!tok || !tok->loc) return;
+    /* Walk backward to the start of the line */
+    const char *line_start = tok->loc;
+    while (line_start > tok->loc - 200 && line_start[-1] != '\n')
+        line_start--;
+    /* Walk forward to find the end of the declaration part */
+    const char *p = line_start;
+    int len = 0;
+    while (p[len] && p[len] != '\n' && p[len] != '{' && len < 200)
+        len++;
+    /* Trim trailing whitespace */
+    while (len > 0 && (p[len-1] == ' ' || p[len-1] == '\t'))
+        len--;
+    if (len <= 0) return;
+    fputs("/* C++: ", stdout);
+    /* Write the source line, escaping any embedded comment-close
+     * sequences that would break the C comment. */
+    for (int i = 0; i < len; i++) {
+        if (p[i] == '*' && i + 1 < len && p[i + 1] == '/') {
+            fputs("*\\/", stdout);
+            i++;  /* skip the '/' */
+        } else {
+            fputc(p[i], stdout);
+        }
+    }
+    fputs(" */\n", stdout);
+}
+
 /* Slice D-Hoist temp materialization.
  *
  * Walks an expression tree post-order, looking for ND_CALL nodes
@@ -1987,6 +2022,7 @@ static void emit_func_body(Node *func) {
 }
 
 static void emit_func_def(Node *n) {
+    emit_source_comment(n->tok);
     cf_begin_function(n);
     emit_type(n->func.ret_ty);
     fputc(' ', stdout);
@@ -2075,6 +2111,7 @@ static void emit_method_as_free_fn(Node *func, Type *class_type) {
     if (!func || func->kind != ND_FUNC_DEF) return;
     if (!class_type || !class_type->tag || !func->func.name) return;
 
+    emit_source_comment(func->tok);
     cf_begin_function(func);
     emit_method_signature(func, class_type);
     fputc(' ', stdout);
@@ -2087,6 +2124,7 @@ static void emit_class_def(Node *n) {
      * Skipped INSIDE the struct: methods (lowered to free functions
      * after the struct definition).
      * Other members (nested types, access specifiers) ignored. */
+    emit_source_comment(n->tok);
     Type *class_type = n->class_def.ty;
 
     /* For polymorphic classes (any virtual method), forward-declare

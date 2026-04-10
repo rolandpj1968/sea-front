@@ -35,10 +35,12 @@ struct sf__pair_t_int_int_te_;
 struct sf__Box_t_int_te_;
 struct sf__integral_constant_t_bool_te_;
 struct sf___PCC_t_int_te_;
+/* C++: T add(T a, T b) */
 int add_t_i_te_(int a, int b) {
     return (a + b);
 }
 
+/* C++:     struct pair */
 struct sf__pair_t_int_int_te_ {
     int first;
     int second;
@@ -48,37 +50,45 @@ __SF_INLINE void sf__pair_t_int_int_te___ctor(struct sf__pair_t_int_int_te_ *thi
 __SF_INLINE void sf__pair_t_int_int_te___swap(struct sf__pair_t_int_int_te_ *this, struct sf__std__pair* __p);
 __SF_INLINE struct sf__std__pair* sf__pair_t_int_int_te___operator(struct sf__pair_t_int_int_te_ *this, struct sf____conditional_t __p);
 __SF_INLINE struct sf__std__pair* sf__pair_t_int_int_te___operator(struct sf__pair_t_int_int_te_ *this, struct sf____conditional_t __p);
+/* C++:       swap(pair& __p) */
 __SF_INLINE void sf__pair_t_int_int_te___swap(struct sf__pair_t_int_int_te_ *this, struct sf__std__pair* __p) {
     this->swap(this->first, __p.first);
     this->swap(this->second, __p.second);
 }
+/* C++:       operator=(__conditional_t<__and_<is_copy_assignable<_T1>, */
 __SF_INLINE struct sf__std__pair* sf__pair_t_int_int_te___operator(struct sf__pair_t_int_int_te_ *this, struct sf____conditional_t __p) {
     (this->first = __p.first);
     (this->second = __p.second);
     return (*this);
 }
+/* C++:       operator=(__conditional_t<__and_<is_move_assignable<_T1>, */
 __SF_INLINE struct sf__std__pair* sf__pair_t_int_int_te___operator(struct sf__pair_t_int_int_te_ *this, struct sf____conditional_t __p) {
     (this->first = /* expr */(__p.first));
     (this->second = /* expr */(__p.second));
     return (*this);
 }
 
+/* C++: struct Box */
 struct sf__Box_t_int_te_ {
     int val;
 };
 __SF_INLINE int sf__Box_t_int_te___get(struct sf__Box_t_int_te_ *this);
 __SF_INLINE void sf__Box_t_int_te___set(struct sf__Box_t_int_te_ *this, int v);
+/* C++:     T get() */
 __SF_INLINE int sf__Box_t_int_te___get(struct sf__Box_t_int_te_ *this) {
     return this->val;
 }
+/* C++:     void set(T v) */
 __SF_INLINE void sf__Box_t_int_te___set(struct sf__Box_t_int_te_ *this, int v) {
     (this->val = v);
 }
 
+/* C++:     struct integral_constant */
 struct sf__integral_constant_t_bool_te_ {
     _Bool value = __v;
 };
 __SF_INLINE void sf__integral_constant_t_bool_te___operator(struct sf__integral_constant_t_bool_te_ *this);
+/* C++:       constexpr operator value_type() const noexcept */
 __SF_INLINE void sf__integral_constant_t_bool_te___operator(struct sf__integral_constant_t_bool_te_ *this) {
     return this->value;
 }
@@ -87,6 +97,7 @@ __SF_INLINE void sf__integral_constant_t_bool_te___operator(struct sf__integral_
 
 /* unsupported top-level */
 
+/* C++:     struct _PCC<false, _T1, _T2> */
 struct sf___PCC_t_int_te_ {
 };
 
@@ -94,6 +105,7 @@ struct sf___PCC_t_int_te_ {
 
 /* unsupported top-level */
 
+/* C++:     struct __conditional<false> */
 struct sf____conditional {
 };
 
@@ -398,6 +410,7 @@ struct sf____conditional {
 /* unsupported top-level */
 /* unsupported top-level */
 /* unsupported top-level */
+/* C++:   inline void __terminate()  noexcept */
 void __terminate(void) {
     /*?*/ int terminate;
     terminate();
@@ -405,6 +418,7 @@ void __terminate(void) {
 
 
 
+/* C++:   __is_constant_evaluated()  noexcept */
 _Bool __is_constant_evaluated(void) {
     return false;
 }
@@ -412,49 +426,71 @@ _Bool __is_constant_evaluated(void) {
 
 /* unsupported top-level */
 /* unsupported top-level */
+/* C++:   struct __do_is_destructible_impl */
 struct sf__std____do_is_destructible_impl {
 };
+/* C++:   struct __do_is_nt_destructible_impl */
 struct sf__std____do_is_nt_destructible_impl {
 };
+/* C++:   struct __do_is_implicitly_default_constructible_impl */
 struct sf__std____do_is_implicitly_default_constructible_impl {
 };
 __SF_INLINE struct sf__integral_constant_t_bool_te_ sf__std____do_is_implicitly_default_constructible_impl____test(struct sf__std____do_is_implicitly_default_constructible_impl *this);
+/* C++:   class __make_unsigned_selector_base */
 struct sf__std____make_unsigned_selector_base {
 };
+/* C++:   struct __failure_type */
 struct sf__std____failure_type {
 };
+/* C++:   struct __do_common_type_impl */
 struct sf__std____do_common_type_impl {
 };
+/* C++:   struct __invoke_memfun_ref */
 struct sf__std____invoke_memfun_ref {
 };
+/* C++:   struct __invoke_memfun_deref */
 struct sf__std____invoke_memfun_deref {
 };
+/* C++:   struct __invoke_memobj_ref */
 struct sf__std____invoke_memobj_ref {
 };
+/* C++:   struct __invoke_memobj_deref */
 struct sf__std____invoke_memobj_deref {
 };
+/* C++:   struct __invoke_other */
 struct sf__std____invoke_other {
 };
+/* C++:   struct __result_of_memfun_ref_impl */
 struct sf__std____result_of_memfun_ref_impl {
 };
+/* C++:   struct __result_of_memfun_deref_impl */
 struct sf__std____result_of_memfun_deref_impl {
 };
+/* C++:   struct __result_of_memobj_ref_impl */
 struct sf__std____result_of_memobj_ref_impl {
 };
+/* C++:   struct __result_of_memobj_deref_impl */
 struct sf__std____result_of_memobj_deref_impl {
 };
+/* C++:   struct __result_of_other_impl */
 struct sf__std____result_of_other_impl {
 };
+/* C++:     struct __do_is_swappable_impl */
 struct sf__std____swappable_details____do_is_swappable_impl {
 };
+/* C++:     struct __do_is_nothrow_swappable_impl */
 struct sf__std____swappable_details____do_is_nothrow_swappable_impl {
 };
+/* C++:     struct __do_is_swappable_with_impl */
 struct sf__std____swappable_with_details____do_is_swappable_with_impl {
 };
+/* C++:     struct __do_is_nothrow_swappable_with_impl */
 struct sf__std____swappable_with_details____do_is_nothrow_swappable_with_impl {
 };
+/* C++:   struct __nonesuchbase */
 struct sf__std____nonesuchbase {
 };
+/* C++:   struct __nonesuch : private __nonesuchbase */
 struct sf__std____nonesuch {
     struct sf__std____nonesuchbase __sf_base;
 };
@@ -468,6 +504,7 @@ __SF_INLINE void sf__std____nonesuch__dtor(struct sf__std____nonesuch *this) {
 
 
 
+/* C++:   struct piecewise_construct_t */
 struct sf__std__piecewise_construct_t {
 };
 __SF_INLINE void sf__std__piecewise_construct_t__ctor(struct sf__std__piecewise_construct_t *this);
@@ -477,6 +514,7 @@ struct sf__std__piecewise_construct_t piecewise_construct = piecewise_construct_
 
 
 
+/* C++: int main() */
 int main(void) {
     struct sf__Box_t_int_te_ b;
     sf__Box_t_int_te___set(&b, 20);
