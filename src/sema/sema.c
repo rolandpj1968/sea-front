@@ -170,9 +170,10 @@ static void visit_ident(Sema *s, Node *n) {
 }
 
 static void visit_binary(Sema *s, Node *n) {
-    visit(s, n->binary.lhs);
-    visit(s, n->binary.rhs);
+    if (n->binary.lhs) visit(s, n->binary.lhs);
+    if (n->binary.rhs) visit(s, n->binary.rhs);
 
+    if (!n->binary.lhs || !n->binary.rhs) return;
     Type *lt = n->binary.lhs->resolved_type;
     Type *rt = n->binary.rhs->resolved_type;
 
