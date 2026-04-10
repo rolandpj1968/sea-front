@@ -279,8 +279,10 @@ DeclSpec parse_type_specifiers(Parser *p) {
              * 'class basic_ostream<C, T>::sentry'. */
             if (parser_at(p, TK_IDENT)) {
                 ty->tag = parser_advance(p);
-                if (parser_at(p, TK_LT))
-                    parse_template_id(p, ty->tag);
+                if (parser_at(p, TK_LT)) {
+                    Node *tid = parse_template_id(p, ty->tag);
+                    ty->template_id_node = tid;
+                }
                 while (parser_consume(p, TK_SCOPE)) {
                     if (parser_at(p, TK_IDENT)) {
                         ty->tag = parser_advance(p);

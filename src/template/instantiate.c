@@ -55,11 +55,75 @@ static void registry_add(TmplRegistry *reg, const char *name, int name_len,
     reg->buckets[idx] = e;
 }
 
+/* Find the primary template (nparams > 0) for a given name. */
 static Node *registry_find(TmplRegistry *reg, const char *name, int name_len) {
     uint32_t idx = hash_name(name, name_len) % TMPL_REGISTRY_SIZE;
     for (TmplEntry *e = reg->buckets[idx]; e; e = e->next) {
+        if (e->name_len == name_len && memcmp(e->name, name, name_len) == 0 &&
+            e->tmpl->template_decl.nparams > 0)
+            return e->tmpl;
+    }
+    /* Fallback: return any match (covers cases where only
+     * specializations exist, e.g. forward-declared primaries). */
+    for (TmplEntry *e = reg->buckets[idx]; e; e = e->next) {
         if (e->name_len == name_len && memcmp(e->name, name, name_len) == 0)
             return e->tmpl;
+    }
+    return NULL;
+}
+
+/*
+ * Find a full specialization matching the given template-id args.
+ * Specializations are ND_TEMPLATE_DECL with nparams == 0 whose
+ * inner class has a template_id_node with matching arg types.
+ *
+ * Returns the specialization's ND_TEMPLATE_DECL, or NULL.
+ */
+static Node *registry_find_specialization(TmplRegistry *reg,
+                                           const char *name, int name_len,
+                                           Node *template_id) {
+    uint32_t idx = hash_name(name, name_len) % TMPL_REGISTRY_SIZE;
+    for (TmplEntry *e = reg->buckets[idx]; e; e = e->next) {
+        if (e->name_len != name_len ||
+            memcmp(e->name, name, name_len) != 0)
+            continue;
+        /* Must be a specialization (nparams == 0) */
+        if (e->tmpl->template_decl.nparams != 0) continue;
+        /* Get the specialization's template-id args from its inner
+         * class type */
+        Node *spec_decl = e->tmpl->template_decl.decl;
+        if (!spec_decl) continue;
+        Type *spec_ty = NULL;
+        if (spec_decl->kind == ND_CLASS_DEF)
+            spec_ty = spec_decl->class_def.ty;
+        else if (spec_decl->kind == ND_VAR_DECL)
+            spec_ty = spec_decl->var_decl.ty;
+        if (!spec_ty || !spec_ty->template_id_node) continue;
+        Node *spec_tid = spec_ty->template_id_node;
+        if (spec_tid->kind != ND_TEMPLATE_ID) continue;
+        /* Compare arg count */
+        if (spec_tid->template_id.nargs != template_id->template_id.nargs)
+            continue;
+        /* Compare each arg type */
+        bool match = true;
+        for (int i = 0; i < spec_tid->template_id.nargs && match; i++) {
+            Node *sa = spec_tid->template_id.args[i];
+            Node *ua = template_id->template_id.args[i];
+            Type *st = (sa && sa->kind == ND_VAR_DECL) ? sa->var_decl.ty : NULL;
+            Type *ut = (ua && ua->kind == ND_VAR_DECL) ? ua->var_decl.ty : NULL;
+            if (!st || !ut) { match = false; break; }
+            /* Compare type kinds — simple structural comparison */
+            if (st->kind != ut->kind) { match = false; break; }
+            if (st->is_unsigned != ut->is_unsigned) { match = false; break; }
+            /* For struct/union, compare tags */
+            if ((st->kind == TY_STRUCT || st->kind == TY_UNION) &&
+                st->tag && ut->tag) {
+                if (st->tag->len != ut->tag->len ||
+                    memcmp(st->tag->loc, ut->tag->loc, st->tag->len) != 0)
+                    match = false;
+            }
+        }
+        if (match) return e->tmpl;
     }
     return NULL;
 }
@@ -900,10 +964,104 @@ void template_instantiate(Node *tu, Arena *arena) {
             continue;
         }
 
+        /* Check for a full specialization that matches the requested
+         * args. If found, use the specialization's concrete definition
+         * directly instead of cloning the primary template. */
+        Node *spec = registry_find_specialization(
+            &reg, req->name->loc, req->name->len, req->template_id);
+
         Node **extra_methods = NULL;
         int nextra = 0;
-        Node *inst = instantiate_one(req->tmpl_def, req->template_id,
+        Node *inst;
+        if (spec) {
+            /* Full specialization — use the concrete class directly.
+             * No cloning or substitution needed. */
+            inst = spec->template_decl.decl;
+            if (inst && inst->kind == ND_CLASS_DEF) {
+                /* Set template_args on the type for mangling */
+                Type *sty = inst->class_def.ty;
+                if (sty) {
+                    int n = req->template_id->template_id.nargs;
+                    if (n > 0 && sty->n_template_args == 0) {
+                        sty->template_args = arena_alloc(arena,
+                            n * sizeof(Type *));
+                        sty->n_template_args = n;
+                        for (int i = 0; i < n; i++)
+                            sty->template_args[i] = type_arg_from_node(
+                                req->template_id->template_id.args[i]);
+                    }
+                    /* Build class_region if not already present */
+                    if (!sty->class_region) {
+                        DeclarativeRegion *cr = arena_alloc(arena,
+                            sizeof(DeclarativeRegion));
+                        memset(cr, 0, sizeof(DeclarativeRegion));
+                        cr->kind = REGION_CLASS;
+                        cr->owner_type = sty;
+                        for (int i = 0; i < inst->class_def.nmembers; i++) {
+                            Node *m = inst->class_def.members[i];
+                            if (!m) continue;
+                            Token *mname = NULL;
+                            Type *mtype = NULL;
+                            if (m->kind == ND_VAR_DECL || m->kind == ND_TYPEDEF) {
+                                mname = m->var_decl.name;
+                                mtype = m->var_decl.ty;
+                            } else if (m->kind == ND_FUNC_DEF || m->kind == ND_FUNC_DECL) {
+                                mname = m->func.name;
+                                Type *fty = arena_alloc(arena, sizeof(Type));
+                                memset(fty, 0, sizeof(Type));
+                                fty->kind = TY_FUNC;
+                                fty->ret = m->func.ret_ty;
+                                mtype = fty;
+                            }
+                            if (mname && mname->kind == TK_IDENT) {
+                                uint32_t idx = hash_name(mname->loc, mname->len) % REGION_HASH_SIZE;
+                                Declaration *d = arena_alloc(arena, sizeof(Declaration));
+                                d->name = mname->loc;
+                                d->name_len = mname->len;
+                                d->entity = ENTITY_VARIABLE;
+                                d->type = mtype;
+                                d->home = cr;
+                                d->next = cr->buckets[idx];
+                                cr->buckets[idx] = d;
+                            }
+                        }
+                        sty->class_region = cr;
+                        sty->class_def = inst;
+                    }
+                    /* Wire method param scopes */
+                    for (int i = 0; i < inst->class_def.nmembers; i++) {
+                        Node *m = inst->class_def.members[i];
+                        if (!m || m->kind != ND_FUNC_DEF || !m->func.body)
+                            continue;
+                        if (m->func.param_scope) continue;
+                        DeclarativeRegion *ps = arena_alloc(arena,
+                            sizeof(DeclarativeRegion));
+                        memset(ps, 0, sizeof(DeclarativeRegion));
+                        ps->kind = REGION_PROTOTYPE;
+                        ps->enclosing = sty->class_region;
+                        for (int j = 0; j < m->func.nparams; j++) {
+                            Node *p = m->func.params[j];
+                            if (!p || !p->param.name) continue;
+                            Token *pn = p->param.name;
+                            uint32_t pidx = hash_name(pn->loc, pn->len) % REGION_HASH_SIZE;
+                            Declaration *pd = arena_alloc(arena, sizeof(Declaration));
+                            pd->name = pn->loc;
+                            pd->name_len = pn->len;
+                            pd->entity = ENTITY_VARIABLE;
+                            pd->type = p->param.ty;
+                            pd->home = ps;
+                            pd->next = ps->buckets[pidx];
+                            ps->buckets[pidx] = pd;
+                        }
+                        m->func.param_scope = ps;
+                        m->func.class_type = sty;
+                    }
+                }
+            }
+        } else {
+            inst = instantiate_one(req->tmpl_def, req->template_id,
                                       arena, tu, &extra_methods, &nextra);
+        }
         if (inst) {
             if (total_inst < MAX_INST)
                 all_instantiated[total_inst++] = inst;
