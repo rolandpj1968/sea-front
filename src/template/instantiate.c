@@ -610,7 +610,14 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
                 mtype = m->var_decl.ty;
             } else if (m->kind == ND_FUNC_DEF || m->kind == ND_FUNC_DECL) {
                 mname = m->func.name;
-                mtype = m->func.ret_ty;
+                /* Build a TY_FUNC type so codegen recognises this
+                 * Declaration as a method (checks type->kind == TY_FUNC
+                 * for implicit_this method call lowering). */
+                Type *fty = arena_alloc(arena, sizeof(Type));
+                memset(fty, 0, sizeof(Type));
+                fty->kind = TY_FUNC;
+                fty->ret = m->func.ret_ty;
+                mtype = fty;
             }
             if (mname && mname->kind == TK_IDENT) {
                 /* Declare in the class region — use a minimal
