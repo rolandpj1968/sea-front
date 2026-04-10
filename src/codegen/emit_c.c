@@ -957,7 +957,30 @@ static void emit_expr(Node *n) {
 static void emit_stmt(Node *n);
 
 static void emit_var_decl_inner(Node *n) {
-    emit_type(n->var_decl.ty);
+    Type *ty = n->var_decl.ty;
+    /* Array declarations: C requires 'int arr[10]' not 'int* arr'.
+     * Emit the element type, then the name, then [N]. For unsized
+     * arrays (int arr[]) emit just []. For function parameters,
+     * emit_type already decays to pointer — this path handles
+     * local/global variable declarations only. */
+    if (ty && ty->kind == TY_ARRAY) {
+        emit_type(ty->base);
+        fputc(' ', stdout);
+        if (n->var_decl.name)
+            fprintf(stdout, "%.*s", n->var_decl.name->len,
+                    n->var_decl.name->loc);
+        if (ty->array_len >= 0)
+            fprintf(stdout, "[%d]", ty->array_len);
+        else
+            fputs("[]", stdout);
+        /* Array init (if any) */
+        if (n->var_decl.init) {
+            fputs(" = ", stdout);
+            emit_expr(n->var_decl.init);
+        }
+        return;
+    }
+    emit_type(ty);
     fputc(' ', stdout);
     if (n->var_decl.name)
         fprintf(stdout, "%.*s", n->var_decl.name->len, n->var_decl.name->loc);
