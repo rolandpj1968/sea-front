@@ -457,6 +457,15 @@ parse_suffixes:
      * but is not equivalent to it.
      * TODO(seafront#decl-ambig-gate): drop the gate and run a true
      * §11.2/1 tentative parse once perf allows. */
+    /* For qualified declarator-ids (Foo<T>::method), temporarily push
+     * the class scope so member typedefs (value_type, etc.) are
+     * visible during parameter list parsing. */
+    DeclarativeRegion *saved_region_for_params = NULL;
+    if (name_was_qualified && p->qualified_decl_scope && !p->tentative) {
+        saved_region_for_params = p->region;
+        p->region = p->qualified_decl_scope;
+    }
+
     if (parser_at(p, TK_LPAREN) && name) {
         /* Peek inside the parens to decide: parameter list or init?
          * A parameter list starts with: ), void), type-specifier, or ...
@@ -600,6 +609,8 @@ parse_suffixes:
                  * Restore the position and let the caller see the '('. */
                 parser_restore(p, saved);
                 p->tentative_failed = saved_failed;
+                if (saved_region_for_params)
+                    p->region = saved_region_for_params;
                 return new_var_decl_node(p, ty, name, name);
             }
 
@@ -616,10 +627,16 @@ parse_suffixes:
                                            name ? name : parser_peek(p));
             node->func.params = (Node **)params.data;
             node->func.nparams = params.len;
+            if (saved_region_for_params)
+                p->region = saved_region_for_params;
             return node;
         }
         /* else: not a parameter list — fall through, leave ( for caller */
     }
+    /* Restore the saved region after qualified-param scope push. */
+    if (saved_region_for_params)
+        p->region = saved_region_for_params;
+
     /* Unnamed declarator: '(' starts parameter list ONLY if what follows
      * is plausibly a parameter (type-spec, ')', '...'). Otherwise leave
      * '(' for the caller — it may be direct-init in a tentative parse. */
