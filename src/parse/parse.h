@@ -508,7 +508,13 @@ struct Node {
             Type   *ty;         /* class type, with class_region; may be NULL */
             Node  **members;    /* member-specification as array of nodes */
             int     nmembers;
-            /* Note: base-class metadata is NOT stored on the class_def
+            /* Base-class types from the base-clause. Stored here
+             * (in addition to class_region->bases) so the template
+             * instantiation pass can recover template base types
+             * (whose class_region is NULL at parse time). */
+            Type  **base_types;
+            int     nbase_types;
+            /* Note: base-class metadata is ALSO stored on the class_def
              * node — it lives on Type.class_region->bases (an array
              * of base-class regions). Codegen reaches it via
              * class_type->class_region->bases[i]->owner_type. The

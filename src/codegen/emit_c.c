@@ -2816,26 +2816,49 @@ static void emit_prelude(void) {
     fputs("\n", stdout);
 }
 
+/* Recursively emit forward declarations for all struct/union types
+ * in the TU so ordering between classes (and template instantiations)
+ * doesn't matter. */
+static void emit_fwd_decl_walk(Node *n) {
+    if (!n) return;
+    switch (n->kind) {
+    case ND_CLASS_DEF: {
+        Type *ty = n->class_def.ty;
+        if (ty && ty->tag) {
+            fputs("struct ", stdout);
+            emit_mangled_class_tag(ty);
+            fputs(";\n", stdout);
+        }
+        break;
+    }
+    case ND_BLOCK:
+        for (int i = 0; i < n->block.nstmts; i++)
+            emit_fwd_decl_walk(n->block.stmts[i]);
+        break;
+    case ND_TEMPLATE_DECL:
+        /* Don't forward-declare template bodies — only instantiated
+         * copies (which appear as top-level ND_CLASS_DEF). */
+        break;
+    default:
+        break;
+    }
+}
+
+static void emit_forward_decl_structs(Node *tu) {
+    for (int i = 0; i < tu->tu.ndecls; i++)
+        emit_fwd_decl_walk(tu->tu.decls[i]);
+}
+
 void emit_c(Node *tu) {
     if (!tu || tu->kind != ND_TRANSLATION_UNIT) return;
     emit_prelude();
 
-    /* Forward-declare all template-instantiated struct types so
-     * ordering between instantiations doesn't matter. Without
-     * this, a container<T, allocator<T>> instantiation that appears
-     * before allocator<T>'s instantiation would fail to compile
-     * because its by-value member has an incomplete type. The
-     * forward declarations make all instantiated struct names
-     * visible before any full definitions are emitted. */
-    for (int i = 0; i < tu->tu.ndecls; i++) {
-        Node *n = tu->tu.decls[i];
-        if (!n || n->kind != ND_CLASS_DEF) continue;
-        Type *ty = n->class_def.ty;
-        if (!ty || ty->n_template_args <= 0) continue;
-        fputs("struct ", stdout);
-        emit_mangled_class_tag(ty);
-        fputs(";\n", stdout);
-    }
+    /* Forward-declare ALL struct types so ordering between classes
+     * and template instantiations doesn't matter. Without this,
+     * a derived class instantiation that appears before its base
+     * class definition would fail to compile because its base
+     * member has an incomplete type. */
+    emit_forward_decl_structs(tu);
 
     for (int i = 0; i < tu->tu.ndecls; i++) {
         if (i > 0) fputc('\n', stdout);  /* blank line between top-level decls */

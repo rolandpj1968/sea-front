@@ -359,7 +359,9 @@ DeclSpec parse_type_specifiers(Parser *p) {
              * attached to the class scope after region_push below. */
             #define MAX_BASES 16
             DeclarativeRegion *base_regions[MAX_BASES];
+            Type *base_types[MAX_BASES];
             int n_base_regions = 0;
+            int n_base_types = 0;
             if (parser_consume(p, TK_COLON)) {
                 for (;;) {
                     parser_skip_cxx_attributes(p);
@@ -414,6 +416,8 @@ DeclSpec parse_type_specifiers(Parser *p) {
                     /* Re-parse committed and record the class_region. */
                     parser_restore(p, saved);
                     base_ty = parse_type_specifiers(p).type;
+                    if (base_ty && n_base_types < MAX_BASES)
+                        base_types[n_base_types++] = base_ty;
                     if (base_ty && base_ty->class_region &&
                         n_base_regions < MAX_BASES)
                         base_regions[n_base_regions++] = base_ty->class_region;
@@ -527,6 +531,14 @@ DeclSpec parse_type_specifiers(Parser *p) {
                     (Node **)members.data, members.len,
                     ty->tag ? ty->tag : parser_peek(p));
                 result.class_def->class_def.ty = ty;
+                /* Store base types for template instantiation. */
+                if (n_base_types > 0) {
+                    result.class_def->class_def.base_types =
+                        arena_alloc(p->arena, n_base_types * sizeof(Type *));
+                    for (int i = 0; i < n_base_types; i++)
+                        result.class_def->class_def.base_types[i] = base_types[i];
+                    result.class_def->class_def.nbase_types = n_base_types;
+                }
                 /* Back-pointer so codegen can find the ND_CLASS_DEF
                  * node from the Type alone (used when emitting
                  * out-of-class ctor/dtor bodies). */

@@ -355,6 +355,15 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
     case ND_CLASS_DEF:
         c->class_def.members = clone_node_array(
             n->class_def.members, n->class_def.nmembers, map, arena);
+        /* Substitute base types (for template inheritance) */
+        if (n->class_def.nbase_types > 0) {
+            c->class_def.base_types = arena_alloc(arena,
+                n->class_def.nbase_types * sizeof(Type *));
+            c->class_def.nbase_types = n->class_def.nbase_types;
+            for (int i = 0; i < n->class_def.nbase_types; i++)
+                c->class_def.base_types[i] =
+                    subst_type(n->class_def.base_types[i], map, arena);
+        }
         /* Type is created fresh by the instantiation driver */
         break;
 

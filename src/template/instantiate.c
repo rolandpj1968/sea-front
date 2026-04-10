@@ -11,6 +11,9 @@
 
 #include "instantiate.h"
 #include "clone.h"
+
+static void region_add_base_raw(DeclarativeRegion *r,
+                                 DeclarativeRegion *base, Arena *arena);
 #include <stdio.h>
 #include <string.h>
 
@@ -708,6 +711,25 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
         inst_ty->has_default_ctor = false;
         inst_ty->has_virtual_methods = false;
 
+        /* Process base classes: for each base type on the cloned
+         * class_def, find or create its class_region and add it to
+         * the instantiated class_region's bases list. For template
+         * bases (e.g. Base<T> → Base<int>), the base type was
+         * already substituted by clone.c's subst_type. If the base
+         * has a template_id_node, it needs to be instantiated too
+         * (this happens transitively in the fixpoint loop). For
+         * concrete bases, just link the existing class_region. */
+        for (int bi = 0; bi < cloned->class_def.nbase_types; bi++) {
+            Type *base_ty = cloned->class_def.base_types[bi];
+            if (!base_ty) continue;
+            if (base_ty->class_region) {
+                /* Concrete base with known class_region */
+                region_add_base_raw(cr, base_ty->class_region, arena);
+            }
+            /* Template bases will be resolved after the fixpoint
+             * loop instantiates them and patch_all_types runs. */
+        }
+
         /* Wire up method param_scopes so sema can resolve member
          * references inside method bodies. Each method gets a fresh
          * REGION_PROTOTYPE whose enclosing is the class region, with
@@ -882,6 +904,22 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
     }
 
     return cloned;
+}
+
+static void region_add_base_raw(DeclarativeRegion *r,
+                                 DeclarativeRegion *base, Arena *arena) {
+    if (!r || !base) return;
+    if (r->nbases >= r->bases_cap) {
+        int new_cap = r->bases_cap < 4 ? 4 : r->bases_cap * 2;
+        DeclarativeRegion **new_arr = arena_alloc(arena,
+            new_cap * sizeof(DeclarativeRegion *));
+        if (r->bases)
+            memcpy(new_arr, r->bases,
+                   r->nbases * sizeof(DeclarativeRegion *));
+        r->bases = new_arr;
+        r->bases_cap = new_cap;
+    }
+    r->bases[r->nbases++] = base;
 }
 
 /* Forward declarations for post-instantiation type patching */
@@ -1111,17 +1149,30 @@ void template_instantiate(Node *tu, Arena *arena) {
     }
     if (ninst_this_round == 0) break;
 
-    /* Prepend this round's instantiations to the TU so the next
-     * iteration's collection phase can scan them for transitive
-     * template-id usages. */
+    /* Insert this round's instantiations into the TU. They go after
+     * all class definitions (so concrete base classes are defined
+     * first) but before function definitions (so function bodies
+     * can reference the instantiated types). Find the last
+     * ND_CLASS_DEF / ND_BLOCK in the source and insert after it. */
+    int insert_pos = 0;
+    for (int i = 0; i < tu->tu.ndecls; i++) {
+        Node *d = tu->tu.decls[i];
+        if (d && (d->kind == ND_CLASS_DEF || d->kind == ND_BLOCK))
+            insert_pos = i + 1;
+    }
+    /* If no classes found, insert at front (same as before) */
     int old_n = tu->tu.ndecls;
     int new_n = old_n + ninst_this_round;
     Node **new_decls = arena_alloc(arena, new_n * sizeof(Node *));
-    /* New instantiations at the front */
     int idx = 0;
+    /* Source decls before insert point */
+    for (int i = 0; i < insert_pos && i < old_n; i++)
+        new_decls[idx++] = tu->tu.decls[i];
+    /* Instantiations */
     for (int i = total_inst - ninst_this_round; i < total_inst; i++)
         new_decls[idx++] = all_instantiated[i];
-    for (int i = 0; i < old_n; i++)
+    /* Source decls after insert point */
+    for (int i = insert_pos; i < old_n; i++)
         new_decls[idx++] = tu->tu.decls[i];
     tu->tu.decls  = new_decls;
     tu->tu.ndecls = new_n;
@@ -1188,17 +1239,32 @@ void template_instantiate(Node *tu, Arena *arena) {
         if (!changed) break;
     }
 
-    /* Rebuild the TU decl list with sorted instantiations at front */
+    /* Rebuild the TU decl list: insert sorted instantiations after
+     * the last class/block (so concrete base classes are defined
+     * first) and before function definitions. */
     {
         int old_n = tu->tu.ndecls;
+        /* Find insert position: after the last ND_CLASS_DEF or
+         * ND_BLOCK among user (non-instantiated) decls. */
+        int insert_pos = 0;
+        for (int i = 0; i < old_n; i++) {
+            Node *d = tu->tu.decls[i];
+            /* Skip instantiated decls when finding position */
+            bool is_inst = false;
+            for (int j = 0; j < total_inst; j++) {
+                if (d == all_instantiated[j]) { is_inst = true; break; }
+            }
+            if (is_inst) continue;
+            if (d && (d->kind == ND_CLASS_DEF || d->kind == ND_BLOCK))
+                insert_pos = i + 1;
+        }
         /* Count non-instantiated decls */
         int user_n = 0;
         for (int i = 0; i < old_n; i++) {
             bool is_inst = false;
             for (int j = 0; j < total_inst; j++) {
                 if (tu->tu.decls[i] == all_instantiated[j]) {
-                    is_inst = true;
-                    break;
+                    is_inst = true; break;
                 }
             }
             if (!is_inst) user_n++;
@@ -1206,17 +1272,25 @@ void template_instantiate(Node *tu, Arena *arena) {
         int new_n = total_inst + user_n;
         Node **new_decls = arena_alloc(arena, new_n * sizeof(Node *));
         int idx = 0;
-        for (int i = 0; i < total_inst; i++)
-            new_decls[idx++] = all_instantiated[i];
+        /* User decls before insert point */
         for (int i = 0; i < old_n; i++) {
+            if (idx == insert_pos) {
+                /* Insert instantiations here */
+                for (int j = 0; j < total_inst; j++)
+                    new_decls[idx++] = all_instantiated[j];
+            }
             bool is_inst = false;
             for (int j = 0; j < total_inst; j++) {
                 if (tu->tu.decls[i] == all_instantiated[j]) {
-                    is_inst = true;
-                    break;
+                    is_inst = true; break;
                 }
             }
             if (!is_inst) new_decls[idx++] = tu->tu.decls[i];
+        }
+        /* If insert_pos >= user_n, append at end */
+        if (idx == new_n - total_inst) {
+            for (int j = 0; j < total_inst; j++)
+                new_decls[idx++] = all_instantiated[j];
         }
         tu->tu.decls = new_decls;
         tu->tu.ndecls = new_n;
