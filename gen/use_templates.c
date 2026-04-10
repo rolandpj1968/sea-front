@@ -36,32 +36,36 @@ struct sf__holder_t_long_te_;
 struct sf__cached_t_long_holder_t_long_te__te_;
 struct sf__cached_t_int_holder_t_int_te__te_;
 struct sf__entry_t_int_long_te_;
-/* C++:     struct holder */
+/* C++: struct holder */
 struct sf__holder_t_int_te_ {
     int value;
 };
+/* C++: T get() */
 __SF_INLINE int sf__holder_t_int_te___get(struct sf__holder_t_int_te_ *this);
+/* C++: void set(T v) */
 __SF_INLINE void sf__holder_t_int_te___set(struct sf__holder_t_int_te_ *this, int v);
-/* C++:         T get() */
+/* C++: T get() */
 __SF_INLINE int sf__holder_t_int_te___get(struct sf__holder_t_int_te_ *this) {
     return this->value;
 }
-/* C++:         void set(T v) */
+/* C++: void set(T v) */
 __SF_INLINE void sf__holder_t_int_te___set(struct sf__holder_t_int_te_ *this, int v) {
     (this->value = v);
 }
 
-/* C++:     struct holder */
+/* C++: struct holder */
 struct sf__holder_t_long_te_ {
     long value;
 };
+/* C++: T get() */
 __SF_INLINE long sf__holder_t_long_te___get(struct sf__holder_t_long_te_ *this);
+/* C++: void set(T v) */
 __SF_INLINE void sf__holder_t_long_te___set(struct sf__holder_t_long_te_ *this, long v);
-/* C++:         T get() */
+/* C++: T get() */
 __SF_INLINE long sf__holder_t_long_te___get(struct sf__holder_t_long_te_ *this) {
     return this->value;
 }
-/* C++:         void set(T v) */
+/* C++: void set(T v) */
 __SF_INLINE void sf__holder_t_long_te___set(struct sf__holder_t_long_te_ *this, long v) {
     (this->value = v);
 }
@@ -71,14 +75,16 @@ struct sf__cached_t_long_holder_t_long_te__te_ {
     struct sf__holder_t_long_te_ store;
     int valid;
 };
+/* C++: void put(T v) */
 __SF_INLINE void sf__cached_t_long_holder_t_long_te__te___put(struct sf__cached_t_long_holder_t_long_te__te_ *this, long v);
+/* C++: T fetch() */
 __SF_INLINE long sf__cached_t_long_holder_t_long_te__te___fetch(struct sf__cached_t_long_holder_t_long_te__te_ *this);
-/* C++:     void put(T v) */
+/* C++: void put(T v) */
 __SF_INLINE void sf__cached_t_long_holder_t_long_te__te___put(struct sf__cached_t_long_holder_t_long_te__te_ *this, long v) {
     sf__holder_t_long_te___set(&this->store, v);
     (this->valid = 1);
 }
-/* C++:     T fetch() */
+/* C++: T fetch() */
 __SF_INLINE long sf__cached_t_long_holder_t_long_te__te___fetch(struct sf__cached_t_long_holder_t_long_te__te_ *this) {
     return sf__holder_t_long_te___get(&this->store);
 }
@@ -94,14 +100,16 @@ struct sf__cached_t_int_holder_t_int_te__te_ {
     struct sf__holder_t_int_te_ store;
     int valid;
 };
+/* C++: void put(T v) */
 __SF_INLINE void sf__cached_t_int_holder_t_int_te__te___put(struct sf__cached_t_int_holder_t_int_te__te_ *this, int v);
+/* C++: T fetch() */
 __SF_INLINE int sf__cached_t_int_holder_t_int_te__te___fetch(struct sf__cached_t_int_holder_t_int_te__te_ *this);
-/* C++:     void put(T v) */
+/* C++: void put(T v) */
 __SF_INLINE void sf__cached_t_int_holder_t_int_te__te___put(struct sf__cached_t_int_holder_t_int_te__te_ *this, int v) {
     sf__holder_t_int_te___set(&this->store, v);
     (this->valid = 1);
 }
-/* C++:     T fetch() */
+/* C++: T fetch() */
 __SF_INLINE int sf__cached_t_int_holder_t_int_te__te___fetch(struct sf__cached_t_int_holder_t_int_te__te_ *this) {
     return sf__holder_t_int_te___get(&this->store);
 }

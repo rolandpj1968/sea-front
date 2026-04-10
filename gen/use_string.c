@@ -167,81 +167,95 @@ struct sf__basic_streambuf ;
 
 struct sf__basic_ios ;
 
-/* C++:     struct integral_constant */
+/* C++: struct integral_constant */
 struct sf__integral_constant_t_bool_te_ {
     _Bool value = __v;
 };
+/* C++: constexpr operator value_type() const noexcept */
 __SF_INLINE void sf__integral_constant_t_bool_te___operator(struct sf__integral_constant_t_bool_te_ *this);
-/* C++:       constexpr operator value_type() const noexcept */
+/* C++: constexpr operator value_type() const noexcept */
 __SF_INLINE void sf__integral_constant_t_bool_te___operator(struct sf__integral_constant_t_bool_te_ *this) {
     return this->value;
 }
 
-/* C++:     class fpos */
+/* C++: class fpos */
 struct sf__fpos_t_anon_te_ {
     long long _M_off;
     struct ? _M_state;
 };
+/* C++: fpos() */
 __SF_INLINE void sf__fpos_t_anon_te___ctor(struct sf__fpos_t_anon_te_ *this);
+/* C++: fpos(streamoff __off) */
 __SF_INLINE void sf__fpos_t_anon_te___ctor(struct sf__fpos_t_anon_te_ *this, long long __off);
+/* C++: fpos(const fpos&) = default; */
 __SF_INLINE void sf__fpos_t_anon_te___ctor(struct sf__fpos_t_anon_te_ *this, const struct sf__std__fpos*);
+/* C++: fpos& operator=(const fpos&) = default; */
 __SF_INLINE struct sf__std__fpos* sf__fpos_t_anon_te___operator(struct sf__fpos_t_anon_te_ *this, const struct sf__std__fpos*);
+/* C++: ~fpos() = default; */
 __SF_INLINE void sf__fpos_t_anon_te___dtor_body(struct sf__fpos_t_anon_te_ *this);
+/* C++: operator streamoff() const */
 __SF_INLINE void sf__fpos_t_anon_te___operator(struct sf__fpos_t_anon_te_ *this);
+/* C++: state(_StateT __st) */
 __SF_INLINE void sf__fpos_t_anon_te___state(struct sf__fpos_t_anon_te_ *this, struct ? __st);
+/* C++: state() const */
 __SF_INLINE struct ? sf__fpos_t_anon_te___state(struct sf__fpos_t_anon_te_ *this);
+/* C++: operator+=(streamoff __off) */
 __SF_INLINE struct sf__std__fpos* sf__fpos_t_anon_te___operator(struct sf__fpos_t_anon_te_ *this, long long __off);
+/* C++: operator-=(streamoff __off) */
 __SF_INLINE struct sf__std__fpos* sf__fpos_t_anon_te___operator(struct sf__fpos_t_anon_te_ *this, long long __off);
+/* C++: operator+(streamoff __off) const */
 __SF_INLINE struct sf__std__fpos sf__fpos_t_anon_te___operator(struct sf__fpos_t_anon_te_ *this, long long __off);
+/* C++: operator-(streamoff __off) const */
 __SF_INLINE struct sf__std__fpos sf__fpos_t_anon_te___operator(struct sf__fpos_t_anon_te_ *this, long long __off);
+/* C++: operator-(const fpos& __other) const */
 __SF_INLINE long long sf__fpos_t_anon_te___operator(struct sf__fpos_t_anon_te_ *this, const struct sf__std__fpos* __other);
-/* C++:       fpos() */
+/* C++: fpos() */
 __SF_INLINE void sf__fpos_t_anon_te___ctor(struct sf__fpos_t_anon_te_ *this) {
     this->_M_off = 0;
     sf__anon__ctor(&this->_M_state);
 }
-/* C++:       fpos(streamoff __off) */
+/* C++: fpos(streamoff __off) */
 __SF_INLINE void sf__fpos_t_anon_te___ctor(struct sf__fpos_t_anon_te_ *this, long long __off) {
     this->_M_off = __off;
     sf__anon__ctor(&this->_M_state);
 }
-/* C++:       operator streamoff() const */
+/* C++: operator streamoff() const */
 __SF_INLINE void sf__fpos_t_anon_te___operator(struct sf__fpos_t_anon_te_ *this) {
     return this->_M_off;
 }
-/* C++:       state(_StateT __st) */
+/* C++: state(_StateT __st) */
 __SF_INLINE void sf__fpos_t_anon_te___state(struct sf__fpos_t_anon_te_ *this, struct ? __st) {
     (this->_M_state = __st);
 }
-/* C++:       state() const */
+/* C++: state() const */
 __SF_INLINE struct ? sf__fpos_t_anon_te___state(struct sf__fpos_t_anon_te_ *this) {
     return this->_M_state;
 }
-/* C++:       operator+=(streamoff __off) */
+/* C++: operator+=(streamoff __off) */
 __SF_INLINE struct sf__std__fpos* sf__fpos_t_anon_te___operator(struct sf__fpos_t_anon_te_ *this, long long __off) {
     (this->_M_off += __off);
     return (*this);
 }
-/* C++:       operator-=(streamoff __off) */
+/* C++: operator-=(streamoff __off) */
 __SF_INLINE struct sf__std__fpos* sf__fpos_t_anon_te___operator(struct sf__fpos_t_anon_te_ *this, long long __off) {
     (this->_M_off -= __off);
     return (*this);
 }
-/* C++:       operator+(streamoff __off) const */
+/* C++: operator+(streamoff __off) const */
 __SF_INLINE struct sf__std__fpos sf__fpos_t_anon_te___operator(struct sf__fpos_t_anon_te_ *this, long long __off) {
     struct sf__std__fpos __pos;
     sf__std__fpos__ctor(&__pos, (*this));
     (__pos += __off);
     return __pos;
 }
-/* C++:       operator-(streamoff __off) const */
+/* C++: operator-(streamoff __off) const */
 __SF_INLINE struct sf__std__fpos sf__fpos_t_anon_te___operator(struct sf__fpos_t_anon_te_ *this, long long __off) {
     struct sf__std__fpos __pos;
     sf__std__fpos__ctor(&__pos, (*this));
     (__pos -= __off);
     return __pos;
 }
-/* C++:       operator-(const fpos& __other) const */
+/* C++: operator-(const fpos& __other) const */
 __SF_INLINE long long sf__fpos_t_anon_te___operator(struct sf__fpos_t_anon_te_ *this, const struct sf__std__fpos* __other) {
     return (this->_M_off - __other._M_off);
 }
@@ -4841,7 +4855,7 @@ struct sf__basic_string ;
 /* unsupported top-level */
 /* unsupported top-level */
 /* unsupported top-level */
-/* C++:   inline void __terminate()  noexcept */
+/* C++: inline void __terminate()  noexcept */
 void __terminate(void) {
     /*?*/ int terminate;
     terminate();
@@ -4849,7 +4863,7 @@ void __terminate(void) {
 
 
 
-/* C++:   __is_constant_evaluated()  noexcept */
+/* C++: __is_constant_evaluated()  noexcept */
 _Bool __is_constant_evaluated(void) {
     return false;
 }
@@ -4902,106 +4916,187 @@ struct sf____locale_struct {
 /* unsupported top-level */
 
 struct sf__tm ;
+/* C++: extern wchar_t *wcscpy (wchar_t *  __dest, */
 wchar_t* wcscpy(wchar_t*, const wchar_t*);
+/* C++: extern wchar_t *wcsncpy (wchar_t *  __dest, */
 wchar_t* wcsncpy(wchar_t*, const wchar_t*, long);
+/* C++: extern size_t wcslcpy (wchar_t *  __dest, */
 long wcslcpy(wchar_t*, const wchar_t*, long);
+/* C++: extern size_t wcslcat (wchar_t *  __dest, */
 long wcslcat(wchar_t*, const wchar_t*, long);
+/* C++: extern wchar_t *wcscat (wchar_t *  __dest, */
 wchar_t* wcscat(wchar_t*, const wchar_t*);
+/* C++: extern wchar_t *wcsncat (wchar_t *  __dest, */
 wchar_t* wcsncat(wchar_t*, const wchar_t*, long);
+/* C++: extern int wcscmp (const wchar_t *__s1, const wchar_t *__s2) */
 int wcscmp(const wchar_t*, const wchar_t*);
+/* C++: extern int wcsncmp (const wchar_t *__s1, const wchar_t *__s2, size_t __n) */
 int wcsncmp(const wchar_t*, const wchar_t*, long);
+/* C++: extern int wcscasecmp (const wchar_t *__s1, const wchar_t *__s2)  ; */
 int wcscasecmp(const wchar_t*, const wchar_t*);
+/* C++: extern int wcsncasecmp (const wchar_t *__s1, const wchar_t *__s2, */
 int wcsncasecmp(const wchar_t*, const wchar_t*, long);
+/* C++: extern int wcscasecmp_l (const wchar_t *__s1, const wchar_t *__s2, */
 int wcscasecmp_l(const wchar_t*, const wchar_t*, struct sf____locale_struct*);
+/* C++: extern int wcsncasecmp_l (const wchar_t *__s1, const wchar_t *__s2, */
 int wcsncasecmp_l(const wchar_t*, const wchar_t*, long, struct sf____locale_struct*);
+/* C++: extern int wcscoll (const wchar_t *__s1, const wchar_t *__s2)  ; */
 int wcscoll(const wchar_t*, const wchar_t*);
+/* C++: extern size_t wcsxfrm (wchar_t *  __s1, */
 long wcsxfrm(wchar_t*, const wchar_t*, long);
+/* C++: extern int wcscoll_l (const wchar_t *__s1, const wchar_t *__s2, */
 int wcscoll_l(const wchar_t*, const wchar_t*, struct sf____locale_struct*);
+/* C++: extern size_t wcsxfrm_l (wchar_t *__s1, const wchar_t *__s2, */
 long wcsxfrm_l(wchar_t*, const wchar_t*, long, struct sf____locale_struct*);
+/* C++: extern wchar_t *wcsdup (const wchar_t *__s) */
 wchar_t* wcsdup(const wchar_t*);
+/* C++: extern wchar_t *wcschr (const wchar_t *__wcs, wchar_t __wc) */
 wchar_t* wcschr(const wchar_t*, wchar_t);
+/* C++: extern wchar_t *wcsrchr (const wchar_t *__wcs, wchar_t __wc) */
 wchar_t* wcsrchr(const wchar_t*, wchar_t);
+/* C++: extern size_t wcscspn (const wchar_t *__wcs, const wchar_t *__reject) */
 long wcscspn(const wchar_t*, const wchar_t*);
+/* C++: extern size_t wcsspn (const wchar_t *__wcs, const wchar_t *__accept) */
 long wcsspn(const wchar_t*, const wchar_t*);
+/* C++: extern wchar_t *wcspbrk (const wchar_t *__wcs, const wchar_t *__accept) */
 wchar_t* wcspbrk(const wchar_t*, const wchar_t*);
+/* C++: extern wchar_t *wcsstr (const wchar_t *__haystack, const wchar_t *__needle) */
 wchar_t* wcsstr(const wchar_t*, const wchar_t*);
+/* C++: extern wchar_t *wcstok (wchar_t *  __s, */
 wchar_t* wcstok(wchar_t*, const wchar_t*, wchar_t**);
+/* C++: extern size_t wcslen (const wchar_t *__s)    ; */
 long wcslen(const wchar_t*);
+/* C++: extern size_t wcsnlen (const wchar_t *__s, size_t __maxlen) */
 long wcsnlen(const wchar_t*, long);
+/* C++: extern wchar_t *wmemchr (const wchar_t *__s, wchar_t __c, size_t __n) */
 wchar_t* wmemchr(const wchar_t*, wchar_t, long);
+/* C++: extern int wmemcmp (const wchar_t *__s1, const wchar_t *__s2, size_t __n) */
 int wmemcmp(const wchar_t*, const wchar_t*, long);
+/* C++: extern wchar_t *wmemcpy (wchar_t *  __s1, */
 wchar_t* wmemcpy(wchar_t*, const wchar_t*, long);
+/* C++: extern wchar_t *wmemmove (wchar_t *__s1, const wchar_t *__s2, size_t __n) */
 wchar_t* wmemmove(wchar_t*, const wchar_t*, long);
+/* C++: extern wchar_t *wmemset (wchar_t *__s, wchar_t __c, size_t __n)  ; */
 wchar_t* wmemset(wchar_t*, wchar_t, long);
+/* C++: extern wint_t btowc (int __c)  ; */
 int btowc(int);
+/* C++: extern int wctob (wint_t __c)  ; */
 int wctob(int);
+/* C++: extern int mbsinit (const mbstate_t *__ps)    ; */
 int mbsinit(const struct ?*);
+/* C++: extern size_t mbrtowc (wchar_t *  __pwc, */
 long mbrtowc(wchar_t*, const char*, long, struct ?*);
+/* C++: extern size_t wcrtomb (char *  __s, wchar_t __wc, */
 long wcrtomb(char*, wchar_t, struct ?*);
+/* C++: extern size_t __mbrlen (const char *  __s, size_t __n, */
 long __mbrlen(const char*, long, struct ?*);
+/* C++: extern size_t mbrlen (const char *  __s, size_t __n, */
 long mbrlen(const char*, long, struct ?*);
+/* C++: extern size_t mbsrtowcs (wchar_t *  __dst, */
 long mbsrtowcs(wchar_t*, const char**, long, struct ?*);
+/* C++: extern size_t wcsrtombs (char *  __dst, */
 long wcsrtombs(char*, const wchar_t**, long, struct ?*);
+/* C++: extern size_t mbsnrtowcs (wchar_t *  __dst, */
 long mbsnrtowcs(wchar_t*, const char**, long, long, struct ?*);
+/* C++: extern size_t wcsnrtombs (char *  __dst, */
 long wcsnrtombs(char*, const wchar_t**, long, long, struct ?*);
+/* C++: extern double wcstod (const wchar_t *  __nptr, */
 double wcstod(const wchar_t*, wchar_t**);
+/* C++: extern float wcstof (const wchar_t *  __nptr, */
 float wcstof(const wchar_t*, wchar_t**);
+/* C++: extern long double wcstold (const wchar_t *  __nptr, */
 long double wcstold(const wchar_t*, wchar_t**);
+/* C++: extern long int wcstol (const wchar_t *  __nptr, */
 long wcstol(const wchar_t*, wchar_t**, int);
+/* C++: extern unsigned long int wcstoul (const wchar_t *  __nptr, */
 unsigned long wcstoul(const wchar_t*, wchar_t**, int);
+/* C++: extern long long int wcstoll (const wchar_t *  __nptr, */
 long long wcstoll(const wchar_t*, wchar_t**, int);
+/* C++: extern unsigned long long int wcstoull (const wchar_t *  __nptr, */
 unsigned long long wcstoull(const wchar_t*, wchar_t**, int);
+/* C++: extern wchar_t *wcpcpy (wchar_t *  __dest, */
 wchar_t* wcpcpy(wchar_t*, const wchar_t*);
+/* C++: extern wchar_t *wcpncpy (wchar_t *  __dest, */
 wchar_t* wcpncpy(wchar_t*, const wchar_t*, long);
+/* C++: extern __FILE *open_wmemstream (wchar_t **__bufloc, size_t *__sizeloc) */
 struct sf___IO_FILE* open_wmemstream(wchar_t**, long*);
+/* C++: extern int fwide (__FILE *__fp, int __mode)  ; */
 int fwide(struct sf___IO_FILE*, int);
+/* C++: extern int fwprintf (__FILE *  __stream, */
 int fwprintf(struct sf___IO_FILE*, const wchar_t*);
+/* C++: extern int wprintf (const wchar_t *  __format, ...) */
 int wprintf(const wchar_t*);
+/* C++: extern int swprintf (wchar_t *  __s, size_t __n, */
 int swprintf(wchar_t*, long, const wchar_t*);
+/* C++: extern int vfwprintf (__FILE *  __s, */
 int vfwprintf(struct sf___IO_FILE*, const wchar_t*, int);
+/* C++: extern int vwprintf (const wchar_t *  __format, */
 int vwprintf(const wchar_t*, int);
+/* C++: extern int vswprintf (wchar_t *  __s, size_t __n, */
 int vswprintf(wchar_t*, long, const wchar_t*, int);
+/* C++: extern int fwscanf (__FILE *  __stream, */
 int fwscanf(struct sf___IO_FILE*, const wchar_t*);
+/* C++: extern int wscanf (const wchar_t *  __format, ...) */
 int wscanf(const wchar_t*);
+/* C++: extern int swscanf (const wchar_t *  __s, */
 int swscanf(const wchar_t*, const wchar_t*);
+/* C++: extern int __isoc99_fwscanf (__FILE *  __stream, */
 int __isoc99_fwscanf(struct sf___IO_FILE*, const wchar_t*);
+/* C++: extern int __isoc99_wscanf (const wchar_t *  __format, ...); */
 int __isoc99_wscanf(const wchar_t*);
+/* C++: extern int __isoc99_swscanf (const wchar_t *  __s, */
 int __isoc99_swscanf(const wchar_t*, const wchar_t*);
+/* C++: extern int vfwscanf (__FILE *  __s, */
 int vfwscanf(struct sf___IO_FILE*, const wchar_t*, int);
+/* C++: extern int vwscanf (const wchar_t *  __format, */
 int vwscanf(const wchar_t*, int);
+/* C++: extern int vswscanf (const wchar_t *  __s, */
 int vswscanf(const wchar_t*, const wchar_t*, int);
+/* C++: extern int __isoc99_vfwscanf (__FILE *  __s, */
 int __isoc99_vfwscanf(struct sf___IO_FILE*, const wchar_t*, int);
+/* C++: extern int __isoc99_vwscanf (const wchar_t *  __format, */
 int __isoc99_vwscanf(const wchar_t*, int);
+/* C++: extern int __isoc99_vswscanf (const wchar_t *  __s, */
 int __isoc99_vswscanf(const wchar_t*, const wchar_t*, int);
+/* C++: extern wint_t fgetwc (__FILE *__stream); */
 int fgetwc(struct sf___IO_FILE*);
+/* C++: extern wint_t getwc (__FILE *__stream); */
 int getwc(struct sf___IO_FILE*);
+/* C++: extern wint_t getwchar (void); */
 int getwchar(void);
+/* C++: extern wint_t fputwc (wchar_t __wc, __FILE *__stream); */
 int fputwc(wchar_t, struct sf___IO_FILE*);
+/* C++: extern wint_t putwc (wchar_t __wc, __FILE *__stream); */
 int putwc(wchar_t, struct sf___IO_FILE*);
+/* C++: extern wint_t putwchar (wchar_t __wc); */
 int putwchar(wchar_t);
+/* C++: extern wchar_t *fgetws (wchar_t *  __ws, int __n, */
 wchar_t* fgetws(wchar_t*, int, struct sf___IO_FILE*);
+/* C++: extern int fputws (const wchar_t *  __ws, */
 int fputws(const wchar_t*, struct sf___IO_FILE*);
+/* C++: extern wint_t ungetwc (wint_t __wc, __FILE *__stream); */
 int ungetwc(int, struct sf___IO_FILE*);
+/* C++: extern size_t wcsftime (wchar_t *  __s, size_t __maxsize, */
 long wcsftime(wchar_t*, long, const wchar_t*, const struct sf__tm*);
 
 
-/* C++:   wcschr(wchar_t* __p, wchar_t __c) */
+/* C++: wcschr(wchar_t* __p, wchar_t __c) */
 wchar_t* wcschr(wchar_t* __p, wchar_t __c) {
     return wcschr((const wchar_t*)__p, __c);
 }
-/* C++:   wcspbrk(wchar_t* __s1, const wchar_t* __s2) */
+/* C++: wcspbrk(wchar_t* __s1, const wchar_t* __s2) */
 wchar_t* wcspbrk(wchar_t* __s1, const wchar_t* __s2) {
     return wcspbrk((const wchar_t*)__s1, __s2);
 }
-/* C++:   wcsrchr(wchar_t* __p, wchar_t __c) */
+/* C++: wcsrchr(wchar_t* __p, wchar_t __c) */
 wchar_t* wcsrchr(wchar_t* __p, wchar_t __c) {
     return wcsrchr((const wchar_t*)__p, __c);
 }
-/* C++:   wcsstr(wchar_t* __s1, const wchar_t* __s2) */
+/* C++: wcsstr(wchar_t* __s1, const wchar_t* __s2) */
 wchar_t* wcsstr(wchar_t* __s1, const wchar_t* __s2) {
     return wcsstr((const wchar_t*)__s1, __s2);
 }
-/* C++:   wmemchr(wchar_t* __p, wchar_t __c, size_t __n) */
+/* C++: wmemchr(wchar_t* __p, wchar_t __c, size_t __n) */
 wchar_t* wmemchr(wchar_t* __p, wchar_t __c, long __n) {
     return wmemchr((const wchar_t*)__p, __c, __n);
 }
@@ -5018,76 +5113,80 @@ wchar_t* wmemchr(wchar_t* __p, wchar_t __c, long __n) {
 
 /* unsupported top-level */
 /* unsupported top-level */
-/* C++:   struct __do_is_destructible_impl */
+/* C++: struct __do_is_destructible_impl */
 struct sf__std____do_is_destructible_impl {
 };
-/* C++:   struct __do_is_nt_destructible_impl */
+/* C++: struct __do_is_nt_destructible_impl */
 struct sf__std____do_is_nt_destructible_impl {
 };
-/* C++:   struct __do_is_implicitly_default_constructible_impl */
+/* C++: struct __do_is_implicitly_default_constructible_impl */
 struct sf__std____do_is_implicitly_default_constructible_impl {
 };
+/* C++: static false_type __test(...); */
 __SF_INLINE struct sf__integral_constant_t_bool_te_ sf__std____do_is_implicitly_default_constructible_impl____test(struct sf__std____do_is_implicitly_default_constructible_impl *this);
-/* C++:   class __make_unsigned_selector_base */
+/* C++: class __make_unsigned_selector_base */
 struct sf__std____make_unsigned_selector_base {
 };
-/* C++:   struct __failure_type */
+/* C++: struct __failure_type */
 struct sf__std____failure_type {
 };
-/* C++:   struct __do_common_type_impl */
+/* C++: struct __do_common_type_impl */
 struct sf__std____do_common_type_impl {
 };
-/* C++:   struct __invoke_memfun_ref */
+/* C++: struct __invoke_memfun_ref */
 struct sf__std____invoke_memfun_ref {
 };
-/* C++:   struct __invoke_memfun_deref */
+/* C++: struct __invoke_memfun_deref */
 struct sf__std____invoke_memfun_deref {
 };
-/* C++:   struct __invoke_memobj_ref */
+/* C++: struct __invoke_memobj_ref */
 struct sf__std____invoke_memobj_ref {
 };
-/* C++:   struct __invoke_memobj_deref */
+/* C++: struct __invoke_memobj_deref */
 struct sf__std____invoke_memobj_deref {
 };
-/* C++:   struct __invoke_other */
+/* C++: struct __invoke_other */
 struct sf__std____invoke_other {
 };
-/* C++:   struct __result_of_memfun_ref_impl */
+/* C++: struct __result_of_memfun_ref_impl */
 struct sf__std____result_of_memfun_ref_impl {
 };
-/* C++:   struct __result_of_memfun_deref_impl */
+/* C++: struct __result_of_memfun_deref_impl */
 struct sf__std____result_of_memfun_deref_impl {
 };
-/* C++:   struct __result_of_memobj_ref_impl */
+/* C++: struct __result_of_memobj_ref_impl */
 struct sf__std____result_of_memobj_ref_impl {
 };
-/* C++:   struct __result_of_memobj_deref_impl */
+/* C++: struct __result_of_memobj_deref_impl */
 struct sf__std____result_of_memobj_deref_impl {
 };
-/* C++:   struct __result_of_other_impl */
+/* C++: struct __result_of_other_impl */
 struct sf__std____result_of_other_impl {
 };
-/* C++:     struct __do_is_swappable_impl */
+/* C++: struct __do_is_swappable_impl */
 struct sf__std____swappable_details____do_is_swappable_impl {
 };
-/* C++:     struct __do_is_nothrow_swappable_impl */
+/* C++: struct __do_is_nothrow_swappable_impl */
 struct sf__std____swappable_details____do_is_nothrow_swappable_impl {
 };
-/* C++:     struct __do_is_swappable_with_impl */
+/* C++: struct __do_is_swappable_with_impl */
 struct sf__std____swappable_with_details____do_is_swappable_with_impl {
 };
-/* C++:     struct __do_is_nothrow_swappable_with_impl */
+/* C++: struct __do_is_nothrow_swappable_with_impl */
 struct sf__std____swappable_with_details____do_is_nothrow_swappable_with_impl {
 };
-/* C++:   struct __nonesuchbase */
+/* C++: struct __nonesuchbase */
 struct sf__std____nonesuchbase {
 };
-/* C++:   struct __nonesuch : private __nonesuchbase */
+/* C++: struct __nonesuch : private __nonesuchbase */
 struct sf__std____nonesuch {
     struct sf__std____nonesuchbase __sf_base;
 };
+/* C++: ~__nonesuch() = delete; */
 __SF_INLINE void sf__std____nonesuch__dtor_body(struct sf__std____nonesuch *this);
+/* C++: __nonesuch(__nonesuch const&) = delete; */
 __SF_INLINE void sf__std____nonesuch__ctor(struct sf__std____nonesuch *this, const struct sf__std____nonesuch*);
+/* C++: void operator=(__nonesuch const&) = delete; */
 __SF_INLINE void sf__std____nonesuch__operator(struct sf__std____nonesuch *this, const struct sf__std____nonesuch*);
 __SF_INLINE void sf__std____nonesuch__dtor(struct sf__std____nonesuch *this);
 __SF_INLINE void sf__std____nonesuch__dtor(struct sf__std____nonesuch *this) {
@@ -5098,17 +5197,24 @@ __SF_INLINE void sf__std____nonesuch__dtor(struct sf__std____nonesuch *this) {
 
 
 
-/* C++:   class exception */
+/* C++: class exception */
 struct sf__std__exception__vtable;
 struct sf__std__exception {
     const struct sf__std__exception__vtable *__sf_vptr;
 };
+/* C++: exception()  noexcept */
 __SF_INLINE void sf__std__exception__ctor(struct sf__std__exception *this);
+/* C++: virtual ~exception()    noexcept ; */
 __SF_INLINE void sf__std__exception__dtor_body(struct sf__std__exception *this);
+/* C++: exception(const exception&) = default; */
 __SF_INLINE void sf__std__exception__ctor(struct sf__std__exception *this, const struct sf__std__exception*);
+/* C++: exception& operator=(const exception&) = default; */
 __SF_INLINE struct sf__std__exception* sf__std__exception__operator(struct sf__std__exception *this, const struct sf__std__exception*);
+/* C++: exception(exception&&) = default; */
 __SF_INLINE void sf__std__exception__ctor(struct sf__std__exception *this, struct sf__std__exception*);
+/* C++: exception& operator=(exception&&) = default; */
 __SF_INLINE struct sf__std__exception* sf__std__exception__operator(struct sf__std__exception *this, struct sf__std__exception*);
+/* C++: what() const    noexcept ; */
 __SF_INLINE const char* sf__std__exception__what(struct sf__std__exception *this);
 __SF_INLINE void sf__std__exception__dtor(struct sf__std__exception *this);
 struct sf__std__exception__vtable {
@@ -5117,7 +5223,7 @@ struct sf__std__exception__vtable {
 static const struct sf__std__exception__vtable sf__std__exception__vtable_instance = {
     sf__std__exception__what,
 };
-/* C++:     exception()  noexcept */
+/* C++: exception()  noexcept */
 __SF_INLINE void sf__std__exception__ctor(struct sf__std__exception *this) {
     this->__sf_vptr = &sf__std__exception__vtable_instance;
 }
@@ -5125,15 +5231,20 @@ __SF_INLINE void sf__std__exception__dtor(struct sf__std__exception *this) {
     sf__std__exception__dtor_body(this);
 }
 
-/* C++:   class bad_alloc : public exception */
+/* C++: class bad_alloc : public exception */
 struct sf__std__bad_alloc__vtable;
 struct sf__std__bad_alloc {
     struct sf__std__exception __sf_base;
 };
+/* C++: bad_alloc() throw() */
 __SF_INLINE void sf__std__bad_alloc__ctor(struct sf__std__bad_alloc *this);
+/* C++: bad_alloc(const bad_alloc&) = default; */
 __SF_INLINE void sf__std__bad_alloc__ctor(struct sf__std__bad_alloc *this, const struct sf__std__bad_alloc*);
+/* C++: bad_alloc& operator=(const bad_alloc&) = default; */
 __SF_INLINE struct sf__std__bad_alloc* sf__std__bad_alloc__operator(struct sf__std__bad_alloc *this, const struct sf__std__bad_alloc*);
+/* C++: virtual ~bad_alloc() throw(); */
 __SF_INLINE void sf__std__bad_alloc__dtor_body(struct sf__std__bad_alloc *this);
+/* C++: virtual const char* what() const throw(); */
 __SF_INLINE const char* sf__std__bad_alloc__what(struct sf__std__bad_alloc *this);
 __SF_INLINE void sf__std__bad_alloc__dtor(struct sf__std__bad_alloc *this);
 struct sf__std__bad_alloc__vtable {
@@ -5142,7 +5253,7 @@ struct sf__std__bad_alloc__vtable {
 static const struct sf__std__bad_alloc__vtable sf__std__bad_alloc__vtable_instance = {
     sf__std__bad_alloc__what,
 };
-/* C++:     bad_alloc() throw() */
+/* C++: bad_alloc() throw() */
 __SF_INLINE void sf__std__bad_alloc__ctor(struct sf__std__bad_alloc *this) {
     sf__std__exception__ctor(&this->__sf_base);
     this->__sf_vptr = &sf__std__bad_alloc__vtable_instance;
@@ -5151,13 +5262,16 @@ __SF_INLINE void sf__std__bad_alloc__dtor(struct sf__std__bad_alloc *this) {
     sf__std__bad_alloc__dtor_body(this);
     sf__std__exception__dtor(&this->__sf_base);
 }
-/* C++:   class bad_array_new_length : public bad_alloc */
+/* C++: class bad_array_new_length : public bad_alloc */
 struct sf__std__bad_array_new_length__vtable;
 struct sf__std__bad_array_new_length {
     struct sf__std__bad_alloc __sf_base;
 };
+/* C++: bad_array_new_length() throw() */
 __SF_INLINE void sf__std__bad_array_new_length__ctor(struct sf__std__bad_array_new_length *this);
+/* C++: virtual ~bad_array_new_length() throw(); */
 __SF_INLINE void sf__std__bad_array_new_length__dtor_body(struct sf__std__bad_array_new_length *this);
+/* C++: virtual const char* what() const throw(); */
 __SF_INLINE const char* sf__std__bad_array_new_length__what(struct sf__std__bad_array_new_length *this);
 __SF_INLINE void sf__std__bad_array_new_length__dtor(struct sf__std__bad_array_new_length *this);
 struct sf__std__bad_array_new_length__vtable {
@@ -5166,7 +5280,7 @@ struct sf__std__bad_array_new_length__vtable {
 static const struct sf__std__bad_array_new_length__vtable sf__std__bad_array_new_length__vtable_instance = {
     sf__std__bad_array_new_length__what,
 };
-/* C++:     bad_array_new_length() throw() */
+/* C++: bad_array_new_length() throw() */
 __SF_INLINE void sf__std__bad_array_new_length__ctor(struct sf__std__bad_array_new_length *this) {
     sf__std__bad_alloc__ctor(&this->__sf_base);
     this->__sf_vptr = &sf__std__bad_array_new_length__vtable_instance;
@@ -5175,27 +5289,38 @@ __SF_INLINE void sf__std__bad_array_new_length__dtor(struct sf__std__bad_array_n
     sf__std__bad_array_new_length__dtor_body(this);
     sf__std__bad_alloc__dtor(&this->__sf_base);
 }
-/* C++:   struct nothrow_t */
+/* C++: struct nothrow_t */
 struct sf__std__nothrow_t {
 };
+/* C++: explicit nothrow_t() = default; */
 __SF_INLINE void sf__std__nothrow_t__ctor(struct sf__std__nothrow_t *this);
 const struct sf__std__nothrow_t nothrow;
 /* unsupported top-level */
+/* C++: new_handler set_new_handler(new_handler) throw(); */
 /*?*/ int set_new_handler(/*?*/ int);
+/* C++: new_handler get_new_handler() noexcept; */
 /*?*/ int get_new_handler(void);
+/* C++: void* operator new(std::size_t) */
 void* operator(long);
+/* C++: void* operator new[](std::size_t) */
 void* operator(long);
+/* C++: void operator delete(void*)  noexcept */
 void operator(void*);
+/* C++: void operator delete[](void*)  noexcept */
 void operator(void*);
+/* C++: void* operator new(std::size_t, const std::nothrow_t&)  noexcept */
 void* operator(long, const struct sf__std__nothrow_t*);
+/* C++: void* operator new[](std::size_t, const std::nothrow_t&)  noexcept */
 void* operator(long, const struct sf__std__nothrow_t*);
+/* C++: void operator delete(void*, const std::nothrow_t&)  noexcept */
 void operator(void*, const struct sf__std__nothrow_t*);
+/* C++: void operator delete[](void*, const std::nothrow_t&)  noexcept */
 void operator(void*, const struct sf__std__nothrow_t*);
-/* C++:  inline void* operator new(std::size_t, void* __p)  noexcept */
+/* C++: inline void* operator new(std::size_t, void* __p)  noexcept */
 void* operator(long, void* __p) {
     return __p;
 }
-/* C++:  inline void* operator new[](std::size_t, void* __p)  noexcept */
+/* C++: inline void* operator new[](std::size_t, void* __p)  noexcept */
 void* operator(long, void* __p) {
     return __p;
 }
@@ -5206,35 +5331,55 @@ void operator(void*, void*) {
 void operator(void*, void*) {
 }
 
+/* C++: __throw_bad_exception(void)  ; */
 void __throw_bad_exception(void);
+/* C++: __throw_bad_alloc(void)  ; */
 void __throw_bad_alloc(void);
+/* C++: __throw_bad_array_new_length(void)  ; */
 void __throw_bad_array_new_length(void);
+/* C++: __throw_bad_cast(void)  ; */
 void __throw_bad_cast(void);
+/* C++: __throw_bad_typeid(void)  ; */
 void __throw_bad_typeid(void);
+/* C++: __throw_logic_error(const char*)  ; */
 void __throw_logic_error(const char*);
+/* C++: __throw_domain_error(const char*)  ; */
 void __throw_domain_error(const char*);
+/* C++: __throw_invalid_argument(const char*)  ; */
 void __throw_invalid_argument(const char*);
+/* C++: __throw_length_error(const char*)  ; */
 void __throw_length_error(const char*);
+/* C++: __throw_out_of_range(const char*)  ; */
 void __throw_out_of_range(const char*);
+/* C++: __throw_out_of_range_fmt(const char*, ...) */
 void __throw_out_of_range_fmt(const char*);
+/* C++: __throw_runtime_error(const char*)  ; */
 void __throw_runtime_error(const char*);
+/* C++: __throw_range_error(const char*)  ; */
 void __throw_range_error(const char*);
+/* C++: __throw_overflow_error(const char*)  ; */
 void __throw_overflow_error(const char*);
+/* C++: __throw_underflow_error(const char*)  ; */
 void __throw_underflow_error(const char*);
+/* C++: __throw_ios_failure(const char*)  ; */
 void __throw_ios_failure(const char*);
+/* C++: __throw_ios_failure(const char*, int)  ; */
 void __throw_ios_failure(const char*, int);
+/* C++: __throw_system_error(int)  ; */
 void __throw_system_error(int);
+/* C++: __throw_future_error(int)  ; */
 void __throw_future_error(int);
+/* C++: __throw_bad_function_call()  ; */
 void __throw_bad_function_call(void);
 
 
 
 
 
-/* C++:   struct __true_type */
+/* C++: struct __true_type */
 struct sf__std____true_type {
 };
-/* C++:   struct __false_type */
+/* C++: struct __false_type */
 struct sf__std____false_type {
 };
 
@@ -5265,18 +5410,24 @@ struct sf__lconv {
     char int_p_sign_posn;
     char int_n_sign_posn;
 };
+/* C++: extern char *setlocale (int __category, const char *__locale)  ; */
 char* setlocale(int, const char*);
+/* C++: extern struct lconv *localeconv (void)  ; */
 struct sf__lconv* localeconv(void);
+/* C++: extern locale_t newlocale (int __category_mask, const char *__locale, */
 struct sf____locale_struct* newlocale(int, const char*, struct sf____locale_struct*);
+/* C++: extern locale_t duplocale (locale_t __dataset)  ; */
 struct sf____locale_struct* duplocale(struct sf____locale_struct*);
+/* C++: extern void freelocale (locale_t __dataset)  ; */
 void freelocale(struct sf____locale_struct*);
+/* C++: extern locale_t uselocale (locale_t __dataset)  ; */
 struct sf____locale_struct* uselocale(struct sf____locale_struct*);
 
 
 int __uselocale;
 
 /* unsupported top-level */
-/* C++:   __convert_from_v(const __c_locale& __cloc  , */
+/* C++: __convert_from_v(const __c_locale& __cloc  , */
 int __convert_from_v(const struct sf____locale_struct** __cloc, char* __out, const int __size, const char* __fmt) {
     struct sf____locale_struct* __old = /* expr */(__cloc);
     int __args;
@@ -5316,42 +5467,79 @@ struct sf__ios_base ;
 /* unsupported top-level */
 
 enum  ;
+/* C++: extern const unsigned short int **__ctype_b_loc (void) */
 const unsigned short** __ctype_b_loc(void);
+/* C++: extern const __int32_t **__ctype_tolower_loc (void) */
 const int** __ctype_tolower_loc(void);
+/* C++: extern const __int32_t **__ctype_toupper_loc (void) */
 const int** __ctype_toupper_loc(void);
+/* C++: extern int isalnum (int) ; */
 int isalnum(int);
+/* C++: extern int isalpha (int) ; */
 int isalpha(int);
+/* C++: extern int iscntrl (int) ; */
 int iscntrl(int);
+/* C++: extern int isdigit (int) ; */
 int isdigit(int);
+/* C++: extern int islower (int) ; */
 int islower(int);
+/* C++: extern int isgraph (int) ; */
 int isgraph(int);
+/* C++: extern int isprint (int) ; */
 int isprint(int);
+/* C++: extern int ispunct (int) ; */
 int ispunct(int);
+/* C++: extern int isspace (int) ; */
 int isspace(int);
+/* C++: extern int isupper (int) ; */
 int isupper(int);
+/* C++: extern int isxdigit (int) ; */
 int isxdigit(int);
+/* C++: extern int tolower (int __c)  ; */
 int tolower(int);
+/* C++: extern int toupper (int __c)  ; */
 int toupper(int);
+/* C++: extern int isblank (int) ; */
 int isblank(int);
+/* C++: extern int isascii (int __c)  ; */
 int isascii(int);
+/* C++: extern int toascii (int __c)  ; */
 int toascii(int);
+/* C++: extern int _toupper (int) ; */
 int _toupper(int);
+/* C++: extern int _tolower (int) ; */
 int _tolower(int);
+/* C++: extern int isalnum_l (int, locale_t) ; */
 int isalnum_l(int, struct sf____locale_struct*);
+/* C++: extern int isalpha_l (int, locale_t) ; */
 int isalpha_l(int, struct sf____locale_struct*);
+/* C++: extern int iscntrl_l (int, locale_t) ; */
 int iscntrl_l(int, struct sf____locale_struct*);
+/* C++: extern int isdigit_l (int, locale_t) ; */
 int isdigit_l(int, struct sf____locale_struct*);
+/* C++: extern int islower_l (int, locale_t) ; */
 int islower_l(int, struct sf____locale_struct*);
+/* C++: extern int isgraph_l (int, locale_t) ; */
 int isgraph_l(int, struct sf____locale_struct*);
+/* C++: extern int isprint_l (int, locale_t) ; */
 int isprint_l(int, struct sf____locale_struct*);
+/* C++: extern int ispunct_l (int, locale_t) ; */
 int ispunct_l(int, struct sf____locale_struct*);
+/* C++: extern int isspace_l (int, locale_t) ; */
 int isspace_l(int, struct sf____locale_struct*);
+/* C++: extern int isupper_l (int, locale_t) ; */
 int isupper_l(int, struct sf____locale_struct*);
+/* C++: extern int isxdigit_l (int, locale_t) ; */
 int isxdigit_l(int, struct sf____locale_struct*);
+/* C++: extern int isblank_l (int, locale_t) ; */
 int isblank_l(int, struct sf____locale_struct*);
+/* C++: extern int __tolower_l (int __c, locale_t __l)  ; */
 int __tolower_l(int, struct sf____locale_struct*);
+/* C++: extern int tolower_l (int __c, locale_t __l)  ; */
 int tolower_l(int, struct sf____locale_struct*);
+/* C++: extern int __toupper_l (int __c, locale_t __l)  ; */
 int __toupper_l(int, struct sf____locale_struct*);
+/* C++: extern int toupper_l (int __c, locale_t __l)  ; */
 int toupper_l(int, struct sf____locale_struct*);
 
 
@@ -5363,12 +5551,14 @@ struct sf__time_base ;
 struct sf__money_base ;
 struct sf__messages_base ;
 
-/* C++:   class __forced_unwind */
+/* C++: class __forced_unwind */
 struct sf____cxxabiv1____forced_unwind__vtable;
 struct sf____cxxabiv1____forced_unwind {
     const struct sf____cxxabiv1____forced_unwind__vtable *__sf_vptr;
 };
+/* C++: virtual ~__forced_unwind() throw(); */
 __SF_INLINE void sf____cxxabiv1____forced_unwind__dtor_body(struct sf____cxxabiv1____forced_unwind *this);
+/* C++: virtual void __pure_dummy() = 0; */
 __SF_INLINE void sf____cxxabiv1____forced_unwind____pure_dummy(struct sf____cxxabiv1____forced_unwind *this);
 __SF_INLINE void sf____cxxabiv1____forced_unwind__dtor(struct sf____cxxabiv1____forced_unwind *this);
 struct sf____cxxabiv1____forced_unwind__vtable {
@@ -5386,27 +5576,27 @@ __SF_INLINE void sf____cxxabiv1____forced_unwind__ctor(struct sf____cxxabiv1____
 }
 
 
-/* C++:   struct input_iterator_tag */
+/* C++: struct input_iterator_tag */
 struct sf__std__input_iterator_tag {
 };
-/* C++:   struct output_iterator_tag */
+/* C++: struct output_iterator_tag */
 struct sf__std__output_iterator_tag {
 };
-/* C++:   struct forward_iterator_tag : public input_iterator_tag */
+/* C++: struct forward_iterator_tag : public input_iterator_tag */
 struct sf__std__forward_iterator_tag {
     struct sf__std__input_iterator_tag __sf_base;
 };
-/* C++:   struct bidirectional_iterator_tag : public forward_iterator_tag */
+/* C++: struct bidirectional_iterator_tag : public forward_iterator_tag */
 struct sf__std__bidirectional_iterator_tag {
     struct sf__std__forward_iterator_tag __sf_base;
 };
-/* C++:   struct random_access_iterator_tag : public bidirectional_iterator_tag */
+/* C++: struct random_access_iterator_tag : public bidirectional_iterator_tag */
 struct sf__std__random_access_iterator_tag {
     struct sf__std__bidirectional_iterator_tag __sf_base;
 };
 
 
-/* C++:   __is_null_pointer(std::nullptr_t) */
+/* C++: __is_null_pointer(std::nullptr_t) */
 _Bool __is_null_pointer(int) {
     return true;
 }
@@ -5420,82 +5610,87 @@ struct sf____undefined ;
 
 
 
-/* C++:   struct piecewise_construct_t */
+/* C++: struct piecewise_construct_t */
 struct sf__std__piecewise_construct_t {
 };
+/* C++: struct piecewise_construct_t */
 __SF_INLINE void sf__std__piecewise_construct_t__ctor(struct sf__std__piecewise_construct_t *this);
 struct sf__std__piecewise_construct_t piecewise_construct = piecewise_construct_t();
 
 
 
-/* C++:   struct _Iter_less_iter */
+/* C++: struct _Iter_less_iter */
 struct sf____gnu_cxx____ops___Iter_less_iter {
 };
-/* C++:   __iter_less_iter() */
+/* C++: __iter_less_iter() */
 struct sf____gnu_cxx____ops___Iter_less_iter __iter_less_iter(void) {
     struct sf____gnu_cxx____ops___Iter_less_iter __SF_temp_0;
     sf____gnu_cxx____ops___Iter_less_iter__ctor(&__SF_temp_0);
     return __SF_temp_0;
 }
-/* C++:   struct _Iter_less_val */
+/* C++: struct _Iter_less_val */
 struct sf____gnu_cxx____ops___Iter_less_val {
 };
+/* C++: constexpr _Iter_less_val() = default; */
 __SF_INLINE void sf____gnu_cxx____ops___Iter_less_val__ctor(struct sf____gnu_cxx____ops___Iter_less_val *this);
+/* C++: _Iter_less_val(_Iter_less_iter) */
 __SF_INLINE void sf____gnu_cxx____ops___Iter_less_val__ctor(struct sf____gnu_cxx____ops___Iter_less_val *this, struct sf____gnu_cxx____ops___Iter_less_iter);
-/* C++:     _Iter_less_val(_Iter_less_iter) */
+/* C++: _Iter_less_val(_Iter_less_iter) */
 __SF_INLINE void sf____gnu_cxx____ops___Iter_less_val__ctor(struct sf____gnu_cxx____ops___Iter_less_val *this, struct sf____gnu_cxx____ops___Iter_less_iter) {
 }
-/* C++:   __iter_less_val() */
+/* C++: __iter_less_val() */
 struct sf____gnu_cxx____ops___Iter_less_val __iter_less_val(void) {
     struct sf____gnu_cxx____ops___Iter_less_val __SF_temp_0;
     sf____gnu_cxx____ops___Iter_less_val__ctor(&__SF_temp_0);
     return __SF_temp_0;
 }
-/* C++:   __iter_comp_val(_Iter_less_iter) */
+/* C++: __iter_comp_val(_Iter_less_iter) */
 struct sf____gnu_cxx____ops___Iter_less_val __iter_comp_val(struct sf____gnu_cxx____ops___Iter_less_iter) {
     struct sf____gnu_cxx____ops___Iter_less_val __SF_temp_0;
     sf____gnu_cxx____ops___Iter_less_val__ctor(&__SF_temp_0);
     return __SF_temp_0;
 }
-/* C++:   struct _Val_less_iter */
+/* C++: struct _Val_less_iter */
 struct sf____gnu_cxx____ops___Val_less_iter {
 };
+/* C++: constexpr _Val_less_iter() = default; */
 __SF_INLINE void sf____gnu_cxx____ops___Val_less_iter__ctor(struct sf____gnu_cxx____ops___Val_less_iter *this);
+/* C++: _Val_less_iter(_Iter_less_iter) */
 __SF_INLINE void sf____gnu_cxx____ops___Val_less_iter__ctor(struct sf____gnu_cxx____ops___Val_less_iter *this, struct sf____gnu_cxx____ops___Iter_less_iter);
-/* C++:     _Val_less_iter(_Iter_less_iter) */
+/* C++: _Val_less_iter(_Iter_less_iter) */
 __SF_INLINE void sf____gnu_cxx____ops___Val_less_iter__ctor(struct sf____gnu_cxx____ops___Val_less_iter *this, struct sf____gnu_cxx____ops___Iter_less_iter) {
 }
-/* C++:   __val_less_iter() */
+/* C++: __val_less_iter() */
 struct sf____gnu_cxx____ops___Val_less_iter __val_less_iter(void) {
     struct sf____gnu_cxx____ops___Val_less_iter __SF_temp_0;
     sf____gnu_cxx____ops___Val_less_iter__ctor(&__SF_temp_0);
     return __SF_temp_0;
 }
-/* C++:   __val_comp_iter(_Iter_less_iter) */
+/* C++: __val_comp_iter(_Iter_less_iter) */
 struct sf____gnu_cxx____ops___Val_less_iter __val_comp_iter(struct sf____gnu_cxx____ops___Iter_less_iter) {
     struct sf____gnu_cxx____ops___Val_less_iter __SF_temp_0;
     sf____gnu_cxx____ops___Val_less_iter__ctor(&__SF_temp_0);
     return __SF_temp_0;
 }
-/* C++:   struct _Iter_equal_to_iter */
+/* C++: struct _Iter_equal_to_iter */
 struct sf____gnu_cxx____ops___Iter_equal_to_iter {
 };
-/* C++:   __iter_equal_to_iter() */
+/* C++: __iter_equal_to_iter() */
 struct sf____gnu_cxx____ops___Iter_equal_to_iter __iter_equal_to_iter(void) {
     struct sf____gnu_cxx____ops___Iter_equal_to_iter __SF_temp_0;
     sf____gnu_cxx____ops___Iter_equal_to_iter__ctor(&__SF_temp_0);
     return __SF_temp_0;
 }
-/* C++:   struct _Iter_equal_to_val */
+/* C++: struct _Iter_equal_to_val */
 struct sf____gnu_cxx____ops___Iter_equal_to_val {
 };
-/* C++:   __iter_equal_to_val() */
+/* C++: __iter_equal_to_val() */
 struct sf____gnu_cxx____ops___Iter_equal_to_val __iter_equal_to_val(void) {
     struct sf____gnu_cxx____ops___Iter_equal_to_val __SF_temp_0;
     sf____gnu_cxx____ops___Iter_equal_to_val__ctor(&__SF_temp_0);
     return __SF_temp_0;
 }
-/* C++:   __iter_comp_val(_Iter_equal_to_iter) */
+/* C++: __iter_comp_val(_Iter_equal_to_iter) */
 struct sf____gnu_cxx____ops___Iter_equal_to_val __iter_comp_val(struct sf____gnu_cxx____ops___Iter_equal_to_iter) {
     struct sf____gnu_cxx____ops___Iter_equal_to_val __SF_temp_0;
     sf____gnu_cxx____ops___Iter_equal_to_val__ctor(&__SF_temp_0);
@@ -5503,40 +5698,41 @@ struct sf____gnu_cxx____ops___Iter_equal_to_val __iter_comp_val(struct sf____gnu
 }
 
 struct sf___Bit_iterator ;
+/* C++: __fill_a1( std ::_Bit_iterator,  std ::_Bit_iterator, */
 void __fill_a1(struct sf___Bit_iterator, struct sf___Bit_iterator, const _Bool*);
-/* C++:   __size_to_integer(int __n) */
+/* C++: __size_to_integer(int __n) */
 int __size_to_integer(int __n) {
     return __n;
 }
-/* C++:   __size_to_integer(unsigned __n) */
+/* C++: __size_to_integer(unsigned __n) */
 unsigned int __size_to_integer(unsigned int __n) {
     return __n;
 }
-/* C++:   __size_to_integer(long __n) */
+/* C++: __size_to_integer(long __n) */
 long __size_to_integer(long __n) {
     return __n;
 }
-/* C++:   __size_to_integer(unsigned long __n) */
+/* C++: __size_to_integer(unsigned long __n) */
 unsigned long __size_to_integer(unsigned long __n) {
     return __n;
 }
-/* C++:   __size_to_integer(long long __n) */
+/* C++: __size_to_integer(long long __n) */
 long long __size_to_integer(long long __n) {
     return __n;
 }
-/* C++:   __size_to_integer(unsigned long long __n) */
+/* C++: __size_to_integer(unsigned long long __n) */
 unsigned long long __size_to_integer(unsigned long long __n) {
     return __n;
 }
-/* C++:   __size_to_integer(float __n) */
+/* C++: __size_to_integer(float __n) */
 long long __size_to_integer(float __n) {
     return (long long)__n;
 }
-/* C++:   __size_to_integer(double __n) */
+/* C++: __size_to_integer(double __n) */
 long long __size_to_integer(double __n) {
     return (long long)__n;
 }
-/* C++:   __size_to_integer(long double __n) */
+/* C++: __size_to_integer(long double __n) */
 long long __size_to_integer(long double __n) {
     return (long long)__n;
 }
@@ -5546,7 +5742,7 @@ long long __size_to_integer(long double __n) {
 
 
 
-/* C++:   struct __allocator_traits_base */
+/* C++: struct __allocator_traits_base */
 struct sf__std____allocator_traits_base {
 };
 
@@ -5556,21 +5752,37 @@ struct sf__std____allocator_traits_base {
 /* unsupported top-level */
 /* unsupported top-level */
 /* unsupported top-level */
+/* C++: extern size_t __ctype_get_mb_cur_max (void)    ; */
 long __ctype_get_mb_cur_max(void);
+/* C++: extern double atof (const char *__nptr) */
 double atof(const char*);
+/* C++: extern int atoi (const char *__nptr) */
 int atoi(const char*);
+/* C++: extern long int atol (const char *__nptr) */
 long atol(const char*);
+/* C++: extern long long int atoll (const char *__nptr) */
 long long atoll(const char*);
+/* C++: extern double strtod (const char *  __nptr, */
 double strtod(const char*, char**);
+/* C++: extern float strtof (const char *  __nptr, */
 float strtof(const char*, char**);
+/* C++: extern long double strtold (const char *  __nptr, */
 long double strtold(const char*, char**);
+/* C++: extern long int strtol (const char *  __nptr, */
 long strtol(const char*, char**, int);
+/* C++: extern unsigned long int strtoul (const char *  __nptr, */
 unsigned long strtoul(const char*, char**, int);
+/* C++: extern long long int strtoq (const char *  __nptr, */
 long long strtoq(const char*, char**, int);
+/* C++: extern unsigned long long int strtouq (const char *  __nptr, */
 unsigned long long strtouq(const char*, char**, int);
+/* C++: extern long long int strtoll (const char *  __nptr, */
 long long strtoll(const char*, char**, int);
+/* C++: extern unsigned long long int strtoull (const char *  __nptr, */
 unsigned long long strtoull(const char*, char**, int);
+/* C++: extern char *l64a (long int __n)    ; */
 char* l64a(long);
+/* C++: extern long int a64l (const char *__s) */
 long a64l(const char*);
 /* unsupported top-level */
 /* unsupported top-level */
@@ -5645,7 +5857,9 @@ struct sf__timespec {
 /* unsupported top-level */
 /* unsupported top-level */
 /* unsupported top-level */
+/* C++: extern int select (int __nfds, fd_set *  __readfds, */
 int select(int, struct ?*, struct ?*, struct ?*, struct sf__timeval*);
+/* C++: extern int pselect (int __nfds, fd_set *  __readfds, */
 int pselect(int, struct ?*, struct ?*, struct ?*, const struct sf__timespec*, const struct ?*);
 /* unsupported top-level */
 /* unsupported top-level */
@@ -5711,9 +5925,13 @@ struct sf__pthread_attr_t {
 /* unsupported top-level */
 /* unsupported top-level */
 /* unsupported top-level */
+/* C++: extern long int random (void)  ; */
 long random(void);
+/* C++: extern void srandom (unsigned int __seed)  ; */
 void srandom(unsigned int);
+/* C++: extern char *initstate (unsigned int __seed, char *__statebuf, */
 char* initstate(unsigned int, char*, long);
+/* C++: extern char *setstate (char *__statebuf)    ; */
 char* setstate(char*);
 /* C++: struct random_data */
 struct sf__random_data {
@@ -5725,21 +5943,37 @@ struct sf__random_data {
     int rand_sep;
     int* end_ptr;
 };
+/* C++: extern int random_r (struct random_data *  __buf, */
 int random_r(struct sf__random_data*, int*);
+/* C++: extern int srandom_r (unsigned int __seed, struct random_data *__buf) */
 int srandom_r(unsigned int, struct sf__random_data*);
+/* C++: extern int initstate_r (unsigned int __seed, char *  __statebuf, */
 int initstate_r(unsigned int, char*, long, struct sf__random_data*);
+/* C++: extern int setstate_r (char *  __statebuf, */
 int setstate_r(char*, struct sf__random_data*);
+/* C++: extern int rand (void)  ; */
 int rand(void);
+/* C++: extern void srand (unsigned int __seed)  ; */
 void srand(unsigned int);
+/* C++: extern int rand_r (unsigned int *__seed)  ; */
 int rand_r(unsigned int*);
+/* C++: extern double drand48 (void)  ; */
 double drand48(void);
+/* C++: extern double erand48 (unsigned short int __xsubi[3])    ; */
 double erand48(unsigned short*);
+/* C++: extern long int lrand48 (void)  ; */
 long lrand48(void);
+/* C++: extern long int nrand48 (unsigned short int __xsubi[3]) */
 long nrand48(unsigned short*);
+/* C++: extern long int mrand48 (void)  ; */
 long mrand48(void);
+/* C++: extern long int jrand48 (unsigned short int __xsubi[3]) */
 long jrand48(unsigned short*);
+/* C++: extern void srand48 (long int __seedval)  ; */
 void srand48(long);
+/* C++: extern unsigned short int *seed48 (unsigned short int __seed16v[3]) */
 unsigned short* seed48(unsigned short*);
+/* C++: extern void lcong48 (unsigned short int __param[7])    ; */
 void lcong48(unsigned short*);
 /* C++: struct drand48_data */
 struct sf__drand48_data {
@@ -5749,99 +5983,164 @@ struct sf__drand48_data {
     unsigned short __init;
     unsigned long long __a;
 };
+/* C++: extern int drand48_r (struct drand48_data *  __buffer, */
 int drand48_r(struct sf__drand48_data*, double*);
+/* C++: extern int erand48_r (unsigned short int __xsubi[3], */
 int erand48_r(unsigned short*, struct sf__drand48_data*, double*);
+/* C++: extern int lrand48_r (struct drand48_data *  __buffer, */
 int lrand48_r(struct sf__drand48_data*, long*);
+/* C++: extern int nrand48_r (unsigned short int __xsubi[3], */
 int nrand48_r(unsigned short*, struct sf__drand48_data*, long*);
+/* C++: extern int mrand48_r (struct drand48_data *  __buffer, */
 int mrand48_r(struct sf__drand48_data*, long*);
+/* C++: extern int jrand48_r (unsigned short int __xsubi[3], */
 int jrand48_r(unsigned short*, struct sf__drand48_data*, long*);
+/* C++: extern int srand48_r (long int __seedval, struct drand48_data *__buffer) */
 int srand48_r(long, struct sf__drand48_data*);
+/* C++: extern int seed48_r (unsigned short int __seed16v[3], */
 int seed48_r(unsigned short*, struct sf__drand48_data*);
+/* C++: extern int lcong48_r (unsigned short int __param[7], */
 int lcong48_r(unsigned short*, struct sf__drand48_data*);
+/* C++: extern __uint32_t arc4random (void) */
 unsigned int arc4random(void);
+/* C++: extern void arc4random_buf (void *__buf, size_t __size) */
 void arc4random_buf(void*, long);
+/* C++: extern __uint32_t arc4random_uniform (__uint32_t __upper_bound) */
 unsigned int arc4random_uniform(unsigned int);
+/* C++: extern void *malloc (size_t __size) */
 void* malloc(long);
+/* C++: extern void *calloc (size_t __nmemb, size_t __size) */
 void* calloc(long, long);
+/* C++: extern void *realloc (void *__ptr, size_t __size) */
 void* realloc(void*, long);
+/* C++: extern void free (void *__ptr)  ; */
 void free(void*);
+/* C++: extern void *reallocarray (void *__ptr, size_t __nmemb, size_t __size) */
 void* reallocarray(void*, long, long);
+/* C++: extern void *reallocarray (void *__ptr, size_t __nmemb, size_t __size) */
 void* reallocarray(void*, long, long);
+/* C++: extern void *alloca (size_t __size)  ; */
 void* alloca(long);
+/* C++: extern void *valloc (size_t __size) */
 void* valloc(long);
+/* C++: extern int posix_memalign (void **__memptr, size_t __alignment, size_t __size) */
 int posix_memalign(void**, long, long);
+/* C++: extern void abort (void)    ; */
 void abort(void);
+/* C++: extern int atexit (void (*__func) (void))    ; */
 int atexit(/*?*/ int);
+/* C++: extern "C++" int at_quick_exit (void (*__func) (void)) */
 int at_quick_exit(/*?*/ int);
+/* C++: extern int on_exit (void (*__func) (int __status, void *__arg), void *__arg) */
 int on_exit(/*?*/ int, void*);
+/* C++: extern void exit (int __status)    ; */
 void exit(int);
+/* C++: extern void quick_exit (int __status)    ; */
 void quick_exit(int);
+/* C++: extern void _Exit (int __status)    ; */
 void _Exit(int);
+/* C++: extern char *getenv (const char *__name)      ; */
 char* getenv(const char*);
+/* C++: extern int putenv (char *__string)    ; */
 int putenv(char*);
+/* C++: extern int setenv (const char *__name, const char *__value, int __replace) */
 int setenv(const char*, const char*, int);
+/* C++: extern int unsetenv (const char *__name)    ; */
 int unsetenv(const char*);
+/* C++: extern int clearenv (void)  ; */
 int clearenv(void);
+/* C++: extern char *mktemp (char *__template)    ; */
 char* mktemp(char*);
+/* C++: extern int mkstemp (char *__template)    ; */
 int mkstemp(char*);
+/* C++: extern int mkstemps (char *__template, int __suffixlen)    ; */
 int mkstemps(char*, int);
+/* C++: extern char *mkdtemp (char *__template)      ; */
 char* mkdtemp(char*);
+/* C++: extern int system (const char *__command)  ; */
 int system(const char*);
+/* C++: extern char *realpath (const char *  __name, */
 char* realpath(const char*, char*);
 /* unsupported top-level */
+/* C++: extern void *bsearch (const void *__key, const void *__base, */
 void* bsearch(const void*, const void*, long, long, /*?*/ int);
+/* C++: extern void qsort (void *__base, size_t __nmemb, size_t __size, */
 void qsort(void*, long, long, /*?*/ int);
+/* C++: extern int abs (int __x)      ; */
 int abs(int);
+/* C++: extern long int labs (long int __x)      ; */
 long labs(long);
+/* C++: extern long long int llabs (long long int __x) */
 long long llabs(long long);
+/* C++: extern div_t div (int __numer, int __denom) */
 struct ? div(int, int);
+/* C++: extern ldiv_t ldiv (long int __numer, long int __denom) */
 struct ? ldiv(long, long);
+/* C++: extern lldiv_t lldiv (long long int __numer, */
 struct ? lldiv(long long, long long);
+/* C++: extern char *ecvt (double __value, int __ndigit, int *  __decpt, */
 char* ecvt(double, int, int*, int*);
+/* C++: extern char *fcvt (double __value, int __ndigit, int *  __decpt, */
 char* fcvt(double, int, int*, int*);
+/* C++: extern char *gcvt (double __value, int __ndigit, char *__buf) */
 char* gcvt(double, int, char*);
+/* C++: extern char *qecvt (long double __value, int __ndigit, */
 char* qecvt(long double, int, int*, int*);
+/* C++: extern char *qfcvt (long double __value, int __ndigit, */
 char* qfcvt(long double, int, int*, int*);
+/* C++: extern char *qgcvt (long double __value, int __ndigit, char *__buf) */
 char* qgcvt(long double, int, char*);
+/* C++: extern int ecvt_r (double __value, int __ndigit, int *  __decpt, */
 int ecvt_r(double, int, int*, int*, char*, long);
+/* C++: extern int fcvt_r (double __value, int __ndigit, int *  __decpt, */
 int fcvt_r(double, int, int*, int*, char*, long);
+/* C++: extern int qecvt_r (long double __value, int __ndigit, */
 int qecvt_r(long double, int, int*, int*, char*, long);
+/* C++: extern int qfcvt_r (long double __value, int __ndigit, */
 int qfcvt_r(long double, int, int*, int*, char*, long);
+/* C++: extern int mblen (const char *__s, size_t __n)  ; */
 int mblen(const char*, long);
+/* C++: extern int mbtowc (wchar_t *  __pwc, */
 int mbtowc(wchar_t*, const char*, long);
+/* C++: extern int wctomb (char *__s, wchar_t __wchar)  ; */
 int wctomb(char*, wchar_t);
+/* C++: extern size_t mbstowcs (wchar_t *  __pwcs, */
 long mbstowcs(wchar_t*, const char*, long);
+/* C++: extern size_t wcstombs (char *  __s, */
 long wcstombs(char*, const wchar_t*, long);
+/* C++: extern int rpmatch (const char *__response)      ; */
 int rpmatch(const char*);
+/* C++: extern int getsubopt (char **  __optionp, */
 int getsubopt(char**, const char**, char**);
+/* C++: extern int getloadavg (double __loadavg[], int __nelem) */
 int getloadavg(double*, int);
 
-/* C++:   abs(long __i) */
+/* C++: abs(long __i) */
 long abs(long __i) {
     return __builtin_labs;
 }
-/* C++:   abs(long long __x) */
+/* C++: abs(long long __x) */
 long long abs(long long __x) {
     return __builtin_llabs;
 }
-/* C++:   abs(double __x) */
+/* C++: abs(double __x) */
 double abs(double __x) {
     return __builtin_fabs;
 }
-/* C++:   abs(float __x) */
+/* C++: abs(float __x) */
 float abs(float __x) {
     return __builtin_fabsf;
 }
-/* C++:   abs(long double __x) */
+/* C++: abs(long double __x) */
 long double abs(long double __x) {
     return __builtin_fabsl;
 }
 
-/* C++:   div(long __i, long __j)  noexcept */
+/* C++: div(long __i, long __j)  noexcept */
 struct ? div(long __i, long __j) {
     return ldiv(__i, __j);
 }
-/* C++:   div(long long __n, long long __d) */
+/* C++: div(long long __n, long long __d) */
 struct ? div(long long __n, long long __d) {
     struct ? __q;
     (__q.quot = (__n / __d));
@@ -5897,143 +6196,240 @@ struct sf___IO_FILE {
 struct sf___IO_FILE* stdin;
 struct sf___IO_FILE* stdout;
 struct sf___IO_FILE* stderr;
+/* C++: extern int remove (const char *__filename)  ; */
 int remove(const char*);
+/* C++: extern int rename (const char *__old, const char *__new)  ; */
 int rename(const char*, const char*);
+/* C++: extern int renameat (int __oldfd, const char *__old, int __newfd, */
 int renameat(int, const char*, int, const char*);
+/* C++: extern int fclose (FILE *__stream)  ; */
 int fclose(struct sf___IO_FILE*);
+/* C++: extern FILE *tmpfile (void) */
 struct sf___IO_FILE* tmpfile(void);
+/* C++: extern char *tmpnam (char[ 20 ])    ; */
 char* tmpnam(char*);
+/* C++: extern char *tmpnam_r (char __s[ 20 ])    ; */
 char* tmpnam_r(char*);
+/* C++: extern char *tempnam (const char *__dir, const char *__pfx) */
 char* tempnam(const char*, const char*);
+/* C++: extern int fflush (FILE *__stream); */
 int fflush(struct sf___IO_FILE*);
+/* C++: extern int fflush_unlocked (FILE *__stream); */
 int fflush_unlocked(struct sf___IO_FILE*);
+/* C++: extern FILE *fopen (const char *  __filename, */
 struct sf___IO_FILE* fopen(const char*, const char*);
+/* C++: extern FILE *freopen (const char *  __filename, */
 struct sf___IO_FILE* freopen(const char*, const char*, struct sf___IO_FILE*);
+/* C++: extern FILE *fdopen (int __fd, const char *__modes) */
 struct sf___IO_FILE* fdopen(int, const char*);
+/* C++: extern FILE *fopencookie (void *  __magic_cookie, */
 struct sf___IO_FILE* fopencookie(void*, const char*, struct sf___IO_cookie_io_functions_t);
+/* C++: extern FILE *fmemopen (void *__s, size_t __len, const char *__modes) */
 struct sf___IO_FILE* fmemopen(void*, long, const char*);
+/* C++: extern FILE *open_memstream (char **__bufloc, size_t *__sizeloc) */
 struct sf___IO_FILE* open_memstream(char**, long*);
+/* C++: extern __FILE *open_wmemstream (wchar_t **__bufloc, size_t *__sizeloc) */
 struct sf___IO_FILE* open_wmemstream(wchar_t**, long*);
+/* C++: extern void setbuf (FILE *  __stream, char *  __buf) */
 void setbuf(struct sf___IO_FILE*, char*);
+/* C++: extern int setvbuf (FILE *  __stream, char *  __buf, */
 int setvbuf(struct sf___IO_FILE*, char*, int, long);
+/* C++: extern void setbuffer (FILE *  __stream, char *  __buf, */
 void setbuffer(struct sf___IO_FILE*, char*, long);
+/* C++: extern void setlinebuf (FILE *__stream)    ; */
 void setlinebuf(struct sf___IO_FILE*);
+/* C++: extern int fprintf (FILE *  __stream, */
 int fprintf(struct sf___IO_FILE*, const char*);
+/* C++: extern int printf (const char *  __format, ...); */
 int printf(const char*);
+/* C++: extern int sprintf (char *  __s, */
 int sprintf(char*, const char*);
+/* C++: extern int vfprintf (FILE *  __s, const char *  __format, */
 int vfprintf(struct sf___IO_FILE*, const char*, int);
+/* C++: extern int vprintf (const char *  __format, __gnuc_va_list __arg); */
 int vprintf(const char*, int);
+/* C++: extern int vsprintf (char *  __s, const char *  __format, */
 int vsprintf(char*, const char*, int);
+/* C++: extern int snprintf (char *  __s, size_t __maxlen, */
 int snprintf(char*, long, const char*);
+/* C++: extern int vsnprintf (char *  __s, size_t __maxlen, */
 int vsnprintf(char*, long, const char*, int);
+/* C++: extern int vasprintf (char **  __ptr, const char *  __f, */
 int vasprintf(char**, const char*, int);
+/* C++: extern int __asprintf (char **  __ptr, */
 int __asprintf(char**, const char*);
+/* C++: extern int asprintf (char **  __ptr, */
 int asprintf(char**, const char*);
+/* C++: extern int vdprintf (int __fd, const char *  __fmt, */
 int vdprintf(int, const char*, int);
+/* C++: extern int dprintf (int __fd, const char *  __fmt, ...) */
 int dprintf(int, const char*);
+/* C++: extern int fscanf (FILE *  __stream, */
 int fscanf(struct sf___IO_FILE*, const char*);
+/* C++: extern int scanf (const char *  __format, ...)  ; */
 int scanf(const char*);
+/* C++: extern int sscanf (const char *  __s, */
 int sscanf(const char*, const char*);
+/* C++: extern int __isoc99_fscanf (FILE *  __stream, */
 int __isoc99_fscanf(struct sf___IO_FILE*, const char*);
+/* C++: extern int __isoc99_scanf (const char *  __format, ...)  ; */
 int __isoc99_scanf(const char*);
+/* C++: extern int __isoc99_sscanf (const char *  __s, */
 int __isoc99_sscanf(const char*, const char*);
+/* C++: extern int vfscanf (FILE *  __s, const char *  __format, */
 int vfscanf(struct sf___IO_FILE*, const char*, int);
+/* C++: extern int vscanf (const char *  __format, __gnuc_va_list __arg) */
 int vscanf(const char*, int);
+/* C++: extern int vsscanf (const char *  __s, */
 int vsscanf(const char*, const char*, int);
+/* C++: extern int __isoc99_vfscanf (FILE *  __s, */
 int __isoc99_vfscanf(struct sf___IO_FILE*, const char*, int);
+/* C++: extern int __isoc99_vscanf (const char *  __format, */
 int __isoc99_vscanf(const char*, int);
+/* C++: extern int __isoc99_vsscanf (const char *  __s, */
 int __isoc99_vsscanf(const char*, const char*, int);
+/* C++: extern int fgetc (FILE *__stream)  ; */
 int fgetc(struct sf___IO_FILE*);
+/* C++: extern int getc (FILE *__stream)  ; */
 int getc(struct sf___IO_FILE*);
+/* C++: extern int getchar (void); */
 int getchar(void);
+/* C++: extern int getc_unlocked (FILE *__stream)  ; */
 int getc_unlocked(struct sf___IO_FILE*);
+/* C++: extern int getchar_unlocked (void); */
 int getchar_unlocked(void);
+/* C++: extern int fgetc_unlocked (FILE *__stream)  ; */
 int fgetc_unlocked(struct sf___IO_FILE*);
+/* C++: extern int fputc (int __c, FILE *__stream)  ; */
 int fputc(int, struct sf___IO_FILE*);
+/* C++: extern int putc (int __c, FILE *__stream)  ; */
 int putc(int, struct sf___IO_FILE*);
+/* C++: extern int putchar (int __c); */
 int putchar(int);
+/* C++: extern int fputc_unlocked (int __c, FILE *__stream)  ; */
 int fputc_unlocked(int, struct sf___IO_FILE*);
+/* C++: extern int putc_unlocked (int __c, FILE *__stream)  ; */
 int putc_unlocked(int, struct sf___IO_FILE*);
+/* C++: extern int putchar_unlocked (int __c); */
 int putchar_unlocked(int);
+/* C++: extern int getw (FILE *__stream)  ; */
 int getw(struct sf___IO_FILE*);
+/* C++: extern int putw (int __w, FILE *__stream)  ; */
 int putw(int, struct sf___IO_FILE*);
+/* C++: extern char *fgets (char *  __s, int __n, FILE *  __stream) */
 char* fgets(char*, int, struct sf___IO_FILE*);
+/* C++: extern char *gets (char *__s)    ; */
 char* gets(char*);
+/* C++: extern __ssize_t __getdelim (char **  __lineptr, */
 long __getdelim(char**, long*, int, struct sf___IO_FILE*);
+/* C++: extern __ssize_t getdelim (char **  __lineptr, */
 long getdelim(char**, long*, int, struct sf___IO_FILE*);
+/* C++: extern __ssize_t getline (char **  __lineptr, */
 long getline(char**, long*, struct sf___IO_FILE*);
+/* C++: extern int fputs (const char *  __s, FILE *  __stream) */
 int fputs(const char*, struct sf___IO_FILE*);
+/* C++: extern int puts (const char *__s); */
 int puts(const char*);
+/* C++: extern int ungetc (int __c, FILE *__stream)  ; */
 int ungetc(int, struct sf___IO_FILE*);
+/* C++: extern size_t fread (void *  __ptr, size_t __size, */
 long fread(void*, long, long, struct sf___IO_FILE*);
+/* C++: extern size_t fwrite (const void *  __ptr, size_t __size, */
 long fwrite(const void*, long, long, struct sf___IO_FILE*);
+/* C++: extern size_t fread_unlocked (void *  __ptr, size_t __size, */
 long fread_unlocked(void*, long, long, struct sf___IO_FILE*);
+/* C++: extern size_t fwrite_unlocked (const void *  __ptr, size_t __size, */
 long fwrite_unlocked(const void*, long, long, struct sf___IO_FILE*);
+/* C++: extern int fseek (FILE *__stream, long int __off, int __whence) */
 int fseek(struct sf___IO_FILE*, long, int);
+/* C++: extern long int ftell (FILE *__stream)    ; */
 long ftell(struct sf___IO_FILE*);
+/* C++: extern void rewind (FILE *__stream)  ; */
 void rewind(struct sf___IO_FILE*);
+/* C++: extern int fseeko (FILE *__stream, __off_t __off, int __whence) */
 int fseeko(struct sf___IO_FILE*, long, int);
+/* C++: extern __off_t ftello (FILE *__stream)    ; */
 long ftello(struct sf___IO_FILE*);
+/* C++: extern int fgetpos (FILE *  __stream, fpos_t *  __pos) */
 int fgetpos(struct sf___IO_FILE*, struct sf___G_fpos_t*);
+/* C++: extern int fsetpos (FILE *__stream, const fpos_t *__pos)  ; */
 int fsetpos(struct sf___IO_FILE*, const struct sf___G_fpos_t*);
+/* C++: extern void clearerr (FILE *__stream)    ; */
 void clearerr(struct sf___IO_FILE*);
+/* C++: extern int feof (FILE *__stream)      ; */
 int feof(struct sf___IO_FILE*);
+/* C++: extern int ferror (FILE *__stream)      ; */
 int ferror(struct sf___IO_FILE*);
+/* C++: extern void clearerr_unlocked (FILE *__stream)    ; */
 void clearerr_unlocked(struct sf___IO_FILE*);
+/* C++: extern int feof_unlocked (FILE *__stream)      ; */
 int feof_unlocked(struct sf___IO_FILE*);
+/* C++: extern int ferror_unlocked (FILE *__stream)      ; */
 int ferror_unlocked(struct sf___IO_FILE*);
+/* C++: extern void perror (const char *__s)  ; */
 void perror(const char*);
+/* C++: extern int fileno (FILE *__stream)      ; */
 int fileno(struct sf___IO_FILE*);
+/* C++: extern int fileno_unlocked (FILE *__stream)      ; */
 int fileno_unlocked(struct sf___IO_FILE*);
+/* C++: extern int pclose (FILE *__stream)  ; */
 int pclose(struct sf___IO_FILE*);
+/* C++: extern FILE *popen (const char *__command, const char *__modes) */
 struct sf___IO_FILE* popen(const char*, const char*);
+/* C++: extern char *ctermid (char *__s) */
 char* ctermid(char*);
+/* C++: extern void flockfile (FILE *__stream)    ; */
 void flockfile(struct sf___IO_FILE*);
+/* C++: extern int ftrylockfile (FILE *__stream)      ; */
 int ftrylockfile(struct sf___IO_FILE*);
+/* C++: extern void funlockfile (FILE *__stream)    ; */
 void funlockfile(struct sf___IO_FILE*);
+/* C++: extern int __uflow (FILE *); */
 int __uflow(struct sf___IO_FILE*);
+/* C++: extern int __overflow (FILE *, int); */
 int __overflow(struct sf___IO_FILE*, int);
 
 
 
 
+/* C++: extern int *__errno_location (void)    ; */
 int* __errno_location(void);
 
 
 
-/* C++:   stoi(const string& __str, size_t* __idx = 0, int __base = 10) */
+/* C++: stoi(const string& __str, size_t* __idx = 0, int __base = 10) */
 int stoi(const struct sf__basic_string* __str, long* __idx, int __base) {
     return /* expr */((&/* expr */), "stoi", __str.c_str(), __idx, __base);
 }
-/* C++:   stol(const string& __str, size_t* __idx = 0, int __base = 10) */
+/* C++: stol(const string& __str, size_t* __idx = 0, int __base = 10) */
 long stol(const struct sf__basic_string* __str, long* __idx, int __base) {
     return /* expr */((&/* expr */), "stol", __str.c_str(), __idx, __base);
 }
-/* C++:   stoul(const string& __str, size_t* __idx = 0, int __base = 10) */
+/* C++: stoul(const string& __str, size_t* __idx = 0, int __base = 10) */
 unsigned long stoul(const struct sf__basic_string* __str, long* __idx, int __base) {
     return /* expr */((&/* expr */), "stoul", __str.c_str(), __idx, __base);
 }
-/* C++:   stoll(const string& __str, size_t* __idx = 0, int __base = 10) */
+/* C++: stoll(const string& __str, size_t* __idx = 0, int __base = 10) */
 long long stoll(const struct sf__basic_string* __str, long* __idx, int __base) {
     return /* expr */((&/* expr */), "stoll", __str.c_str(), __idx, __base);
 }
-/* C++:   stoull(const string& __str, size_t* __idx = 0, int __base = 10) */
+/* C++: stoull(const string& __str, size_t* __idx = 0, int __base = 10) */
 unsigned long long stoull(const struct sf__basic_string* __str, long* __idx, int __base) {
     return /* expr */((&/* expr */), "stoull", __str.c_str(), __idx, __base);
 }
-/* C++:   stof(const string& __str, size_t* __idx = 0) */
+/* C++: stof(const string& __str, size_t* __idx = 0) */
 float stof(const struct sf__basic_string* __str, long* __idx) {
     return /* expr */((&/* expr */), "stof", __str.c_str(), __idx);
 }
-/* C++:   stod(const string& __str, size_t* __idx = 0) */
+/* C++: stod(const string& __str, size_t* __idx = 0) */
 double stod(const struct sf__basic_string* __str, long* __idx) {
     return /* expr */((&/* expr */), "stod", __str.c_str(), __idx);
 }
-/* C++:   stold(const string& __str, size_t* __idx = 0) */
+/* C++: stold(const string& __str, size_t* __idx = 0) */
 long double stold(const struct sf__basic_string* __str, long* __idx) {
     return /* expr */((&/* expr */), "stold", __str.c_str(), __idx);
 }
-/* C++:   to_string(int __val) */
+/* C++: to_string(int __val) */
 struct sf__basic_string to_string(int __val) {
     const _Bool __neg = (__val < 0);
     const unsigned int __uval = (__neg ? ((unsigned int)(~__val) + 1) : __val);
@@ -6043,14 +6439,14 @@ struct sf__basic_string to_string(int __val) {
     /* expr */((&__str[__neg]), __len, __uval);
     return __str;
 }
-/* C++:   to_string(unsigned __val) */
+/* C++: to_string(unsigned __val) */
 struct sf__basic_string to_string(unsigned int __val) {
     struct sf__basic_string __str;
     sf__basic_string__ctor(&__str, /* expr */(__val), '\0');
     /* expr */((&__str[0]), sf__basic_string__size(&__str), __val);
     return __str;
 }
-/* C++:   to_string(long __val) */
+/* C++: to_string(long __val) */
 struct sf__basic_string to_string(long __val) {
     const _Bool __neg = (__val < 0);
     const unsigned long __uval = (__neg ? ((unsigned long)(~__val) + 1) : __val);
@@ -6060,14 +6456,14 @@ struct sf__basic_string to_string(long __val) {
     /* expr */((&__str[__neg]), __len, __uval);
     return __str;
 }
-/* C++:   to_string(unsigned long __val) */
+/* C++: to_string(unsigned long __val) */
 struct sf__basic_string to_string(unsigned long __val) {
     struct sf__basic_string __str;
     sf__basic_string__ctor(&__str, /* expr */(__val), '\0');
     /* expr */((&__str[0]), sf__basic_string__size(&__str), __val);
     return __str;
 }
-/* C++:   to_string(long long __val) */
+/* C++: to_string(long long __val) */
 struct sf__basic_string to_string(long long __val) {
     const _Bool __neg = (__val < 0);
     const unsigned long long __uval = (__neg ? ((unsigned long long)(~__val) + 1) : __val);
@@ -6077,118 +6473,122 @@ struct sf__basic_string to_string(long long __val) {
     /* expr */((&__str[__neg]), __len, __uval);
     return __str;
 }
-/* C++:   to_string(unsigned long long __val) */
+/* C++: to_string(unsigned long long __val) */
 struct sf__basic_string to_string(unsigned long long __val) {
     struct sf__basic_string __str;
     sf__basic_string__ctor(&__str, /* expr */(__val), '\0');
     /* expr */((&__str[0]), sf__basic_string__size(&__str), __val);
     return __str;
 }
-/* C++:   to_string(float __val) */
+/* C++: to_string(float __val) */
 struct sf__basic_string to_string(float __val) {
     const int __n = (/* expr */ + 20);
     return /* expr */((&/* expr */), __n, "%f", __val);
 }
-/* C++:   to_string(double __val) */
+/* C++: to_string(double __val) */
 struct sf__basic_string to_string(double __val) {
     const int __n = (/* expr */ + 20);
     return /* expr */((&/* expr */), __n, "%f", __val);
 }
-/* C++:   to_string(long double __val) */
+/* C++: to_string(long double __val) */
 struct sf__basic_string to_string(long double __val) {
     const int __n = (/* expr */ + 20);
     return /* expr */((&/* expr */), __n, "%Lf", __val);
 }
-/* C++:   stoi(const wstring& __str, size_t* __idx = 0, int __base = 10) */
+/* C++: stoi(const wstring& __str, size_t* __idx = 0, int __base = 10) */
 int stoi(const struct sf__basic_string* __str, long* __idx, int __base) {
     return /* expr */((&/* expr */), "stoi", __str.c_str(), __idx, __base);
 }
-/* C++:   stol(const wstring& __str, size_t* __idx = 0, int __base = 10) */
+/* C++: stol(const wstring& __str, size_t* __idx = 0, int __base = 10) */
 long stol(const struct sf__basic_string* __str, long* __idx, int __base) {
     return /* expr */((&/* expr */), "stol", __str.c_str(), __idx, __base);
 }
-/* C++:   stoul(const wstring& __str, size_t* __idx = 0, int __base = 10) */
+/* C++: stoul(const wstring& __str, size_t* __idx = 0, int __base = 10) */
 unsigned long stoul(const struct sf__basic_string* __str, long* __idx, int __base) {
     return /* expr */((&/* expr */), "stoul", __str.c_str(), __idx, __base);
 }
-/* C++:   stoll(const wstring& __str, size_t* __idx = 0, int __base = 10) */
+/* C++: stoll(const wstring& __str, size_t* __idx = 0, int __base = 10) */
 long long stoll(const struct sf__basic_string* __str, long* __idx, int __base) {
     return /* expr */((&/* expr */), "stoll", __str.c_str(), __idx, __base);
 }
-/* C++:   stoull(const wstring& __str, size_t* __idx = 0, int __base = 10) */
+/* C++: stoull(const wstring& __str, size_t* __idx = 0, int __base = 10) */
 unsigned long long stoull(const struct sf__basic_string* __str, long* __idx, int __base) {
     return /* expr */((&/* expr */), "stoull", __str.c_str(), __idx, __base);
 }
-/* C++:   stof(const wstring& __str, size_t* __idx = 0) */
+/* C++: stof(const wstring& __str, size_t* __idx = 0) */
 float stof(const struct sf__basic_string* __str, long* __idx) {
     return /* expr */((&/* expr */), "stof", __str.c_str(), __idx);
 }
-/* C++:   stod(const wstring& __str, size_t* __idx = 0) */
+/* C++: stod(const wstring& __str, size_t* __idx = 0) */
 double stod(const struct sf__basic_string* __str, long* __idx) {
     return /* expr */((&/* expr */), "stod", __str.c_str(), __idx);
 }
-/* C++:   stold(const wstring& __str, size_t* __idx = 0) */
+/* C++: stold(const wstring& __str, size_t* __idx = 0) */
 long double stold(const struct sf__basic_string* __str, long* __idx) {
     return /* expr */((&/* expr */), "stold", __str.c_str(), __idx);
 }
-/* C++:   to_wstring(int __val) */
+/* C++: to_wstring(int __val) */
 struct sf__basic_string to_wstring(int __val) {
     return /* expr */((&/* expr */), (4 * /* expr */), L"%d", __val);
 }
-/* C++:   to_wstring(unsigned __val) */
+/* C++: to_wstring(unsigned __val) */
 struct sf__basic_string to_wstring(unsigned int __val) {
     return /* expr */((&/* expr */), (4 * /* expr */), L"%u", __val);
 }
-/* C++:   to_wstring(long __val) */
+/* C++: to_wstring(long __val) */
 struct sf__basic_string to_wstring(long __val) {
     return /* expr */((&/* expr */), (4 * /* expr */), L"%ld", __val);
 }
-/* C++:   to_wstring(unsigned long __val) */
+/* C++: to_wstring(unsigned long __val) */
 struct sf__basic_string to_wstring(unsigned long __val) {
     return /* expr */((&/* expr */), (4 * /* expr */), L"%lu", __val);
 }
-/* C++:   to_wstring(long long __val) */
+/* C++: to_wstring(long long __val) */
 struct sf__basic_string to_wstring(long long __val) {
     return /* expr */((&/* expr */), (4 * /* expr */), L"%lld", __val);
 }
-/* C++:   to_wstring(unsigned long long __val) */
+/* C++: to_wstring(unsigned long long __val) */
 struct sf__basic_string to_wstring(unsigned long long __val) {
     return /* expr */((&/* expr */), (4 * /* expr */), L"%llu", __val);
 }
-/* C++:   to_wstring(float __val) */
+/* C++: to_wstring(float __val) */
 struct sf__basic_string to_wstring(float __val) {
     const int __n = (/* expr */ + 20);
     return /* expr */((&/* expr */), __n, L"%f", __val);
 }
-/* C++:   to_wstring(double __val) */
+/* C++: to_wstring(double __val) */
 struct sf__basic_string to_wstring(double __val) {
     const int __n = (/* expr */ + 20);
     return /* expr */((&/* expr */), __n, L"%f", __val);
 }
-/* C++:   to_wstring(long double __val) */
+/* C++: to_wstring(long double __val) */
 struct sf__basic_string to_wstring(long double __val) {
     const int __n = (/* expr */ + 20);
     return /* expr */((&/* expr */), __n, L"%Lf", __val);
 }
 
+/* C++: _Hash_bytes(const void* __ptr, size_t __len, size_t __seed); */
 long _Hash_bytes(const void*, long, long);
+/* C++: _Fnv_hash_bytes(const void* __ptr, size_t __len, size_t __seed); */
 long _Fnv_hash_bytes(const void*, long, long);
 
-/* C++:   struct _Hash_impl */
+/* C++: struct _Hash_impl */
 struct sf__std___Hash_impl {
 };
+/* C++: hash(const void* __ptr, size_t __clength, */
 __SF_INLINE long sf__std___Hash_impl__ctor(struct sf__std___Hash_impl *this, const void* __ptr, long __clength, long __seed);
-/* C++:     hash(const void* __ptr, size_t __clength, */
+/* C++: hash(const void* __ptr, size_t __clength, */
 __SF_INLINE long sf__std___Hash_impl__ctor(struct sf__std___Hash_impl *this, const void* __ptr, long __clength, long __seed) {
     {
         return _Hash_bytes(__ptr, __clength, __seed);
     }
 }
-/* C++:   struct _Fnv_hash_impl */
+/* C++: struct _Fnv_hash_impl */
 struct sf__std___Fnv_hash_impl {
 };
+/* C++: hash(const void* __ptr, size_t __clength, */
 __SF_INLINE long sf__std___Fnv_hash_impl__ctor(struct sf__std___Fnv_hash_impl *this, const void* __ptr, long __clength, long __seed);
-/* C++:     hash(const void* __ptr, size_t __clength, */
+/* C++: hash(const void* __ptr, size_t __clength, */
 __SF_INLINE long sf__std___Fnv_hash_impl__ctor(struct sf__std___Fnv_hash_impl *this, const void* __ptr, long __clength, long __seed) {
     {
         return _Fnv_hash_bytes(__ptr, __clength, __seed);

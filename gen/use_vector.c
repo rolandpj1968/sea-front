@@ -47,99 +47,169 @@ struct sf___Bvector_base_t_unknown_te_;
 struct sf___Bvector_base_t_bool_te_;
 struct sf____type_identity_t_bool_te_;
 struct sf____type_identity_t_unknown_te_;
-/* C++:     class vector<bool, _Alloc> : protected _Bvector_base<_Alloc> */
+/* C++: class vector<bool, _Alloc> : protected _Bvector_base<_Alloc> */
 struct sf__vector_t_int_te_ {
 };
+/* C++: get_allocator() const */
 __SF_INLINE int sf__vector_t_int_te___ctor(struct sf__vector_t_int_te_ *this);
+/* C++: vector() = default; */
 __SF_INLINE void sf__vector_t_int_te___ctor(struct sf__vector_t_int_te_ *this);
+/* C++: vector(const allocator_type& __a) */
 __SF_INLINE void sf__vector_t_int_te___ctor(struct sf__vector_t_int_te_ *this, const int* __a);
+/* C++: vector(size_type __n, const allocator_type& __a = allocator_type()) */
 __SF_INLINE void sf__vector_t_int_te___ctor(struct sf__vector_t_int_te_ *this, long __n, const int* __a);
+/* C++: vector(size_type __n, const bool& __value, */
 __SF_INLINE void sf__vector_t_int_te___ctor(struct sf__vector_t_int_te_ *this, long __n, const _Bool* __value, const int* __a);
+/* C++: vector(const vector& __x) */
 __SF_INLINE void sf__vector_t_int_te___ctor(struct sf__vector_t_int_te_ *this, const struct sf__std__vector* __x);
+/* C++: vector(vector&&) = default; */
 __SF_INLINE void sf__vector_t_int_te___ctor(struct sf__vector_t_int_te_ *this, struct sf__std__vector*);
+/* C++: vector(vector&& __x, const allocator_type& __a, true_type) noexcept */
 __SF_INLINE void sf__vector_t_int_te___ctor(struct sf__vector_t_int_te_ *this, struct sf__std__vector* __x, const int* __a, struct sf__integral_constant_t_bool_te_);
+/* C++: vector(vector&& __x, const allocator_type& __a, false_type) */
 __SF_INLINE void sf__vector_t_int_te___ctor(struct sf__vector_t_int_te_ *this, struct sf__std__vector* __x, const int* __a, struct sf__integral_constant_t_bool_te_);
+/* C++: vector(vector&& __x, const __type_identity_t<allocator_type>& __a) */
 __SF_INLINE void sf__vector_t_int_te___ctor(struct sf__vector_t_int_te_ *this, struct sf__std__vector* __x, const struct sf____type_identity_t* __a);
+/* C++: vector(const vector& __x, const __type_identity_t<allocator_type>& __a) */
 __SF_INLINE void sf__vector_t_int_te___ctor(struct sf__vector_t_int_te_ *this, const struct sf__std__vector* __x, const struct sf____type_identity_t* __a);
+/* C++: vector(initializer_list<bool> __l, */
 __SF_INLINE void sf__vector_t_int_te___ctor(struct sf__vector_t_int_te_ *this, struct sf__initializer_list_t_bool_te_ __l, const int* __a);
+/* C++: operator=(const vector& __x) */
 __SF_INLINE struct sf__std__vector* sf__vector_t_int_te___operator(struct sf__vector_t_int_te_ *this, const struct sf__std__vector* __x);
+/* C++: operator=(vector&& __x) noexcept(_Bit_alloc_traits::_S_nothrow_move()) */
 __SF_INLINE struct sf__std__vector* sf__vector_t_int_te___operator(struct sf__vector_t_int_te_ *this, struct sf__std__vector* __x);
+/* C++: operator=(initializer_list<bool> __l) */
 __SF_INLINE struct sf__std__vector* sf__vector_t_int_te___operator(struct sf__vector_t_int_te_ *this, struct sf__initializer_list_t_bool_te_ __l);
+/* C++: assign(size_type __n, const bool& __x) */
 __SF_INLINE void sf__vector_t_int_te___assign(struct sf__vector_t_int_te_ *this, long __n, const _Bool* __x);
+/* C++: assign(initializer_list<bool> __l) */
 __SF_INLINE void sf__vector_t_int_te___assign(struct sf__vector_t_int_te_ *this, struct sf__initializer_list_t_bool_te_ __l);
+/* C++: begin()  noexcept */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_int_te___begin(struct sf__vector_t_int_te_ *this);
+/* C++: begin() const  noexcept */
 __SF_INLINE struct sf__std___Bit_const_iterator sf__vector_t_int_te___begin(struct sf__vector_t_int_te_ *this);
+/* C++: end()  noexcept */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_int_te___end(struct sf__vector_t_int_te_ *this);
+/* C++: end() const  noexcept */
 __SF_INLINE struct sf__std___Bit_const_iterator sf__vector_t_int_te___end(struct sf__vector_t_int_te_ *this);
+/* C++: rbegin()  noexcept */
 __SF_INLINE struct sf__reverse_iterator_t__Bit_iterator_te_ sf__vector_t_int_te___rbegin(struct sf__vector_t_int_te_ *this);
+/* C++: rbegin() const  noexcept */
 __SF_INLINE struct sf__reverse_iterator_t__Bit_const_iterator_te_ sf__vector_t_int_te___rbegin(struct sf__vector_t_int_te_ *this);
+/* C++: rend()  noexcept */
 __SF_INLINE struct sf__reverse_iterator_t__Bit_iterator_te_ sf__vector_t_int_te___rend(struct sf__vector_t_int_te_ *this);
+/* C++: rend() const  noexcept */
 __SF_INLINE struct sf__reverse_iterator_t__Bit_const_iterator_te_ sf__vector_t_int_te___rend(struct sf__vector_t_int_te_ *this);
+/* C++: cbegin() const noexcept */
 __SF_INLINE struct sf__std___Bit_const_iterator sf__vector_t_int_te___cbegin(struct sf__vector_t_int_te_ *this);
+/* C++: cend() const noexcept */
 __SF_INLINE struct sf__std___Bit_const_iterator sf__vector_t_int_te___cend(struct sf__vector_t_int_te_ *this);
+/* C++: crbegin() const noexcept */
 __SF_INLINE struct sf__reverse_iterator_t__Bit_const_iterator_te_ sf__vector_t_int_te___crbegin(struct sf__vector_t_int_te_ *this);
+/* C++: crend() const noexcept */
 __SF_INLINE struct sf__reverse_iterator_t__Bit_const_iterator_te_ sf__vector_t_int_te___crend(struct sf__vector_t_int_te_ *this);
+/* C++: size() const  noexcept */
 __SF_INLINE long sf__vector_t_int_te___size(struct sf__vector_t_int_te_ *this);
+/* C++: max_size() const  noexcept */
 __SF_INLINE long sf__vector_t_int_te___max_size(struct sf__vector_t_int_te_ *this);
+/* C++: capacity() const  noexcept */
 __SF_INLINE long sf__vector_t_int_te___capacity(struct sf__vector_t_int_te_ *this);
+/* C++: empty() const  noexcept */
 __SF_INLINE _Bool sf__vector_t_int_te___empty(struct sf__vector_t_int_te_ *this);
+/* C++: operator[](size_type __n) */
 __SF_INLINE struct sf__std___Bit_reference sf__vector_t_int_te___operator(struct sf__vector_t_int_te_ *this, long __n);
+/* C++: operator[](size_type __n) const */
 __SF_INLINE _Bool sf__vector_t_int_te___operator(struct sf__vector_t_int_te_ *this, long __n);
+/* C++: _M_range_check(size_type __n) const */
 __SF_INLINE void sf__vector_t_int_te____M_range_check(struct sf__vector_t_int_te_ *this, long __n);
+/* C++: at(size_type __n) */
 __SF_INLINE struct sf__std___Bit_reference sf__vector_t_int_te___at(struct sf__vector_t_int_te_ *this, long __n);
+/* C++: at(size_type __n) const */
 __SF_INLINE _Bool sf__vector_t_int_te___at(struct sf__vector_t_int_te_ *this, long __n);
+/* C++: reserve(size_type __n) */
 __SF_INLINE void sf__vector_t_int_te___reserve(struct sf__vector_t_int_te_ *this, long __n);
+/* C++: front() */
 __SF_INLINE struct sf__std___Bit_reference sf__vector_t_int_te___front(struct sf__vector_t_int_te_ *this);
+/* C++: front() const */
 __SF_INLINE _Bool sf__vector_t_int_te___front(struct sf__vector_t_int_te_ *this);
+/* C++: back() */
 __SF_INLINE struct sf__std___Bit_reference sf__vector_t_int_te___back(struct sf__vector_t_int_te_ *this);
+/* C++: back() const */
 __SF_INLINE _Bool sf__vector_t_int_te___back(struct sf__vector_t_int_te_ *this);
+/* C++: push_back(bool __x) */
 __SF_INLINE void sf__vector_t_int_te___push_back(struct sf__vector_t_int_te_ *this, _Bool __x);
+/* C++: swap(vector& __x)  noexcept */
 __SF_INLINE void sf__vector_t_int_te___swap(struct sf__vector_t_int_te_ *this, struct sf__std__vector* __x);
+/* C++: swap(reference __x, reference __y)  noexcept */
 __SF_INLINE void sf__vector_t_int_te___swap(struct sf__vector_t_int_te_ *this, struct sf__std___Bit_reference __x, struct sf__std___Bit_reference __y);
+/* C++: insert(const_iterator __position, const bool& __x) */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_int_te___insert(struct sf__vector_t_int_te_ *this, struct sf__std___Bit_const_iterator __position, const _Bool* __x);
+/* C++: insert(const_iterator __position) */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_int_te___insert(struct sf__vector_t_int_te_ *this, struct sf__std___Bit_const_iterator __position);
+/* C++: insert(const_iterator __position, size_type __n, const bool& __x) */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_int_te___insert(struct sf__vector_t_int_te_ *this, struct sf__std___Bit_const_iterator __position, long __n, const _Bool* __x);
+/* C++: insert(const_iterator __p, initializer_list<bool> __l) */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_int_te___insert(struct sf__vector_t_int_te_ *this, struct sf__std___Bit_const_iterator __p, struct sf__initializer_list_t_bool_te_ __l);
+/* C++: pop_back() */
 __SF_INLINE void sf__vector_t_int_te___pop_back(struct sf__vector_t_int_te_ *this);
+/* C++: erase(const_iterator __position) */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_int_te___erase(struct sf__vector_t_int_te_ *this, struct sf__std___Bit_const_iterator __position);
+/* C++: erase(const_iterator __first, const_iterator __last) */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_int_te___erase(struct sf__vector_t_int_te_ *this, struct sf__std___Bit_const_iterator __first, struct sf__std___Bit_const_iterator __last);
+/* C++: resize(size_type __new_size, bool __x = bool()) */
 __SF_INLINE void sf__vector_t_int_te___resize(struct sf__vector_t_int_te_ *this, long __new_size, _Bool __x);
+/* C++: shrink_to_fit() */
 __SF_INLINE void sf__vector_t_int_te___shrink_to_fit(struct sf__vector_t_int_te_ *this);
+/* C++: flip()  noexcept */
 __SF_INLINE void sf__vector_t_int_te___flip(struct sf__vector_t_int_te_ *this);
+/* C++: clear()  noexcept */
 __SF_INLINE void sf__vector_t_int_te___clear(struct sf__vector_t_int_te_ *this);
+/* C++: _M_copy_aligned(const_iterator __first, const_iterator __last, */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_int_te____M_copy_aligned(struct sf__vector_t_int_te_ *this, struct sf__std___Bit_const_iterator __first, struct sf__std___Bit_const_iterator __last, struct sf__std___Bit_iterator __result);
+/* C++: _M_initialize(size_type __n) */
 __SF_INLINE void sf__vector_t_int_te____M_initialize(struct sf__vector_t_int_te_ *this, long __n);
+/* C++: _M_initialize_value(bool __x)  noexcept */
 __SF_INLINE void sf__vector_t_int_te____M_initialize_value(struct sf__vector_t_int_te_ *this, _Bool __x);
+/* C++: _M_reallocate(size_type __n); */
 __SF_INLINE void sf__vector_t_int_te____M_reallocate(struct sf__vector_t_int_te_ *this, long);
+/* C++: _M_shrink_to_fit(); */
 __SF_INLINE _Bool sf__vector_t_int_te____M_shrink_to_fit(struct sf__vector_t_int_te_ *this);
+/* C++: _M_fill_assign(size_t __n, bool __x) */
 __SF_INLINE void sf__vector_t_int_te____M_fill_assign(struct sf__vector_t_int_te_ *this, long __n, _Bool __x);
+/* C++: _M_fill_insert(iterator __position, size_type __n, bool __x); */
 __SF_INLINE void sf__vector_t_int_te____M_fill_insert(struct sf__vector_t_int_te_ *this, struct sf__std___Bit_iterator, long, _Bool);
+/* C++: _M_insert_aux(iterator __position, bool __x); */
 __SF_INLINE void sf__vector_t_int_te____M_insert_aux(struct sf__vector_t_int_te_ *this, struct sf__std___Bit_iterator, _Bool);
+/* C++: _M_check_len(size_type __n, const char* __s) const */
 __SF_INLINE long sf__vector_t_int_te____M_check_len(struct sf__vector_t_int_te_ *this, long __n, const char* __s);
+/* C++: _M_erase_at_end(iterator __pos) */
 __SF_INLINE void sf__vector_t_int_te____M_erase_at_end(struct sf__vector_t_int_te_ *this, struct sf__std___Bit_iterator __pos);
+/* C++: _M_erase(iterator __pos); */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_int_te____M_erase(struct sf__vector_t_int_te_ *this, struct sf__std___Bit_iterator);
+/* C++: _M_erase(iterator __first, iterator __last); */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_int_te____M_erase(struct sf__vector_t_int_te_ *this, struct sf__std___Bit_iterator, struct sf__std___Bit_iterator);
+/* C++: void data() = delete; */
 __SF_INLINE void sf__vector_t_int_te___data(struct sf__vector_t_int_te_ *this);
-/* C++:       get_allocator() const */
+/* C++: get_allocator() const */
 __SF_INLINE int sf__vector_t_int_te___ctor(struct sf__vector_t_int_te_ *this) {
     {
         return /* expr */();
     }
 }
-/* C++:       vector(const allocator_type& __a) */
+/* C++: vector(const allocator_type& __a) */
 __SF_INLINE void sf__vector_t_int_te___ctor(struct sf__vector_t_int_te_ *this, const int* __a) {
 }
-/* C++:       vector(size_type __n, const allocator_type& __a = allocator_type()) */
+/* C++: vector(size_type __n, const allocator_type& __a = allocator_type()) */
 __SF_INLINE void sf__vector_t_int_te___ctor(struct sf__vector_t_int_te_ *this, long __n, const int* __a) {
 }
-/* C++:       vector(size_type __n, const bool& __value, */
+/* C++: vector(size_type __n, const bool& __value, */
 __SF_INLINE void sf__vector_t_int_te___ctor(struct sf__vector_t_int_te_ *this, long __n, const _Bool* __value, const int* __a) {
     {
         this->_M_initialize(__n);
         this->_M_initialize_value(__value);
     }
 }
-/* C++:       vector(const vector& __x) */
+/* C++: vector(const vector& __x) */
 __SF_INLINE void sf__vector_t_int_te___ctor(struct sf__vector_t_int_te_ *this, const struct sf__std__vector* __x) {
     {
         {
@@ -150,10 +220,10 @@ __SF_INLINE void sf__vector_t_int_te___ctor(struct sf__vector_t_int_te_ *this, c
         this->_M_copy_aligned(__xbegin, __xend, this->begin());
     }
 }
-/* C++:       vector(vector&& __x, const allocator_type& __a, true_type) noexcept */
+/* C++: vector(vector&& __x, const allocator_type& __a, true_type) noexcept */
 __SF_INLINE void sf__vector_t_int_te___ctor(struct sf__vector_t_int_te_ *this, struct sf__std__vector* __x, const int* __a, struct sf__integral_constant_t_bool_te_) {
 }
-/* C++:       vector(vector&& __x, const allocator_type& __a, false_type) */
+/* C++: vector(vector&& __x, const allocator_type& __a, false_type) */
 __SF_INLINE void sf__vector_t_int_te___ctor(struct sf__vector_t_int_te_ *this, struct sf__std__vector* __x, const int* __a, struct sf__integral_constant_t_bool_te_) {
     {
         if ((__x.get_allocator() == __a)) this->_M_move_data(/* expr */(__x));
@@ -164,23 +234,23 @@ __SF_INLINE void sf__vector_t_int_te___ctor(struct sf__vector_t_int_te_ *this, s
         }
     }
 }
-/* C++:       vector(vector&& __x, const __type_identity_t<allocator_type>& __a) */
+/* C++: vector(vector&& __x, const __type_identity_t<allocator_type>& __a) */
 __SF_INLINE void sf__vector_t_int_te___ctor(struct sf__vector_t_int_te_ *this, struct sf__std__vector* __x, const struct sf____type_identity_t* __a) {
 }
-/* C++:       vector(const vector& __x, const __type_identity_t<allocator_type>& __a) */
+/* C++: vector(const vector& __x, const __type_identity_t<allocator_type>& __a) */
 __SF_INLINE void sf__vector_t_int_te___ctor(struct sf__vector_t_int_te_ *this, const struct sf__std__vector* __x, const struct sf____type_identity_t* __a) {
     {
         this->_M_initialize(__x.size());
         this->_M_copy_aligned(__x.begin(), __x.end(), this->begin());
     }
 }
-/* C++:       vector(initializer_list<bool> __l, */
+/* C++: vector(initializer_list<bool> __l, */
 __SF_INLINE void sf__vector_t_int_te___ctor(struct sf__vector_t_int_te_ *this, struct sf__initializer_list_t_bool_te_ __l, const int* __a) {
     {
         _M_initialize_range(sf__initializer_list_t_bool_te___begin(&__l), sf__initializer_list_t_bool_te___end(&__l), random_access_iterator_tag());
     }
 }
-/* C++:       operator=(const vector& __x) */
+/* C++: operator=(const vector& __x) */
 __SF_INLINE struct sf__std__vector* sf__vector_t_int_te___operator(struct sf__vector_t_int_te_ *this, const struct sf__std__vector* __x) {
     if (((&__x) == this)) return (*this);
     if (/* expr */) {
@@ -198,7 +268,7 @@ __SF_INLINE struct sf__std__vector* sf__vector_t_int_te___operator(struct sf__ve
     (this->_M_impl._M_finish = this->_M_copy_aligned(__x.begin(), __x.end(), this->begin()));
     return (*this);
 }
-/* C++:       operator=(vector&& __x) noexcept(_Bit_alloc_traits::_S_nothrow_move()) */
+/* C++: operator=(vector&& __x) noexcept(_Bit_alloc_traits::_S_nothrow_move()) */
 __SF_INLINE struct sf__std__vector* sf__vector_t_int_te___operator(struct sf__vector_t_int_te_ *this, struct sf__std__vector* __x) {
     if ((/* expr */() || (this->_M_get_Bit_allocator() == __x._M_get_Bit_allocator()))) {
         this->_M_deallocate();
@@ -215,134 +285,134 @@ __SF_INLINE struct sf__std__vector* sf__vector_t_int_te___operator(struct sf__ve
     }
     return (*this);
 }
-/* C++:       operator=(initializer_list<bool> __l) */
+/* C++: operator=(initializer_list<bool> __l) */
 __SF_INLINE struct sf__std__vector* sf__vector_t_int_te___operator(struct sf__vector_t_int_te_ *this, struct sf__initializer_list_t_bool_te_ __l) {
     this->assign(sf__initializer_list_t_bool_te___begin(&__l), sf__initializer_list_t_bool_te___end(&__l));
     return (*this);
 }
-/* C++:       assign(size_type __n, const bool& __x) */
+/* C++: assign(size_type __n, const bool& __x) */
 __SF_INLINE void sf__vector_t_int_te___assign(struct sf__vector_t_int_te_ *this, long __n, const _Bool* __x) {
     this->_M_fill_assign(__n, __x);
 }
-/* C++:       assign(initializer_list<bool> __l) */
+/* C++: assign(initializer_list<bool> __l) */
 __SF_INLINE void sf__vector_t_int_te___assign(struct sf__vector_t_int_te_ *this, struct sf__initializer_list_t_bool_te_ __l) {
     _M_assign_aux(sf__initializer_list_t_bool_te___begin(&__l), sf__initializer_list_t_bool_te___end(&__l), random_access_iterator_tag());
 }
-/* C++:       begin()  noexcept */
+/* C++: begin()  noexcept */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_int_te___begin(struct sf__vector_t_int_te_ *this) {
     return this->iterator(this->_M_impl._M_start._M_p, 0);
 }
-/* C++:       begin() const  noexcept */
+/* C++: begin() const  noexcept */
 __SF_INLINE struct sf__std___Bit_const_iterator sf__vector_t_int_te___begin(struct sf__vector_t_int_te_ *this) {
     return this->const_iterator(this->_M_impl._M_start._M_p, 0);
 }
-/* C++:       end()  noexcept */
+/* C++: end()  noexcept */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_int_te___end(struct sf__vector_t_int_te_ *this) {
     return this->_M_impl._M_finish;
 }
-/* C++:       end() const  noexcept */
+/* C++: end() const  noexcept */
 __SF_INLINE struct sf__std___Bit_const_iterator sf__vector_t_int_te___end(struct sf__vector_t_int_te_ *this) {
     return this->_M_impl._M_finish;
 }
-/* C++:       rbegin()  noexcept */
+/* C++: rbegin()  noexcept */
 __SF_INLINE struct sf__reverse_iterator_t__Bit_iterator_te_ sf__vector_t_int_te___rbegin(struct sf__vector_t_int_te_ *this) {
     return this->reverse_iterator(this->end());
 }
-/* C++:       rbegin() const  noexcept */
+/* C++: rbegin() const  noexcept */
 __SF_INLINE struct sf__reverse_iterator_t__Bit_const_iterator_te_ sf__vector_t_int_te___rbegin(struct sf__vector_t_int_te_ *this) {
     return this->const_reverse_iterator(this->end());
 }
-/* C++:       rend()  noexcept */
+/* C++: rend()  noexcept */
 __SF_INLINE struct sf__reverse_iterator_t__Bit_iterator_te_ sf__vector_t_int_te___rend(struct sf__vector_t_int_te_ *this) {
     return this->reverse_iterator(this->begin());
 }
-/* C++:       rend() const  noexcept */
+/* C++: rend() const  noexcept */
 __SF_INLINE struct sf__reverse_iterator_t__Bit_const_iterator_te_ sf__vector_t_int_te___rend(struct sf__vector_t_int_te_ *this) {
     return this->const_reverse_iterator(this->begin());
 }
-/* C++:       cbegin() const noexcept */
+/* C++: cbegin() const noexcept */
 __SF_INLINE struct sf__std___Bit_const_iterator sf__vector_t_int_te___cbegin(struct sf__vector_t_int_te_ *this) {
     return this->const_iterator(this->_M_impl._M_start._M_p, 0);
 }
-/* C++:       cend() const noexcept */
+/* C++: cend() const noexcept */
 __SF_INLINE struct sf__std___Bit_const_iterator sf__vector_t_int_te___cend(struct sf__vector_t_int_te_ *this) {
     return this->_M_impl._M_finish;
 }
-/* C++:       crbegin() const noexcept */
+/* C++: crbegin() const noexcept */
 __SF_INLINE struct sf__reverse_iterator_t__Bit_const_iterator_te_ sf__vector_t_int_te___crbegin(struct sf__vector_t_int_te_ *this) {
     return this->const_reverse_iterator(this->end());
 }
-/* C++:       crend() const noexcept */
+/* C++: crend() const noexcept */
 __SF_INLINE struct sf__reverse_iterator_t__Bit_const_iterator_te_ sf__vector_t_int_te___crend(struct sf__vector_t_int_te_ *this) {
     return this->const_reverse_iterator(this->begin());
 }
-/* C++:       size() const  noexcept */
+/* C++: size() const  noexcept */
 __SF_INLINE long sf__vector_t_int_te___size(struct sf__vector_t_int_te_ *this) {
     return this->size_type((this->end() - this->begin()));
 }
-/* C++:       max_size() const  noexcept */
+/* C++: max_size() const  noexcept */
 __SF_INLINE long sf__vector_t_int_te___max_size(struct sf__vector_t_int_te_ *this) {
     const long __isize = ((/* expr */ - (int)) + 1);
     const long __asize = /* expr */(_M_get_Bit_allocator());
     return ((__asize <= (__isize / (int))) ? (__asize * (int)) : __isize);
 }
-/* C++:       capacity() const  noexcept */
+/* C++: capacity() const  noexcept */
 __SF_INLINE long sf__vector_t_int_te___capacity(struct sf__vector_t_int_te_ *this) {
     return this->size_type((this->const_iterator(this->_M_impl._M_end_addr(), 0) - this->begin()));
 }
-/* C++:       empty() const  noexcept */
+/* C++: empty() const  noexcept */
 __SF_INLINE _Bool sf__vector_t_int_te___empty(struct sf__vector_t_int_te_ *this) {
     return (this->begin() == this->end());
 }
-/* C++:       operator[](size_type __n) */
+/* C++: operator[](size_type __n) */
 __SF_INLINE struct sf__std___Bit_reference sf__vector_t_int_te___operator(struct sf__vector_t_int_te_ *this, long __n) {
     return this->begin()[__n];
 }
-/* C++:       operator[](size_type __n) const */
+/* C++: operator[](size_type __n) const */
 __SF_INLINE _Bool sf__vector_t_int_te___operator(struct sf__vector_t_int_te_ *this, long __n) {
     return this->begin()[__n];
 }
-/* C++:       _M_range_check(size_type __n) const */
+/* C++: _M_range_check(size_type __n) const */
 __SF_INLINE void sf__vector_t_int_te____M_range_check(struct sf__vector_t_int_te_ *this, long __n) {
     if ((__n >= this->size())) __throw_out_of_range_fmt("vector<bool>::_M_range_check: __n ", __n, this->size());
 }
-/* C++:       at(size_type __n) */
+/* C++: at(size_type __n) */
 __SF_INLINE struct sf__std___Bit_reference sf__vector_t_int_te___at(struct sf__vector_t_int_te_ *this, long __n) {
     this->_M_range_check(__n);
     return (*this)[__n];
 }
-/* C++:       at(size_type __n) const */
+/* C++: at(size_type __n) const */
 __SF_INLINE _Bool sf__vector_t_int_te___at(struct sf__vector_t_int_te_ *this, long __n) {
     this->_M_range_check(__n);
     return (*this)[__n];
 }
-/* C++:       reserve(size_type __n) */
+/* C++: reserve(size_type __n) */
 __SF_INLINE void sf__vector_t_int_te___reserve(struct sf__vector_t_int_te_ *this, long __n) {
     if ((__n > this->max_size())) __throw_length_error("vector::reserve");
     if ((this->capacity() < __n)) sf__vector_t_int_te____M_reallocate(this, __n);
 }
-/* C++:       front() */
+/* C++: front() */
 __SF_INLINE struct sf__std___Bit_reference sf__vector_t_int_te___front(struct sf__vector_t_int_te_ *this) {
     return (*this->begin());
 }
-/* C++:       front() const */
+/* C++: front() const */
 __SF_INLINE _Bool sf__vector_t_int_te___front(struct sf__vector_t_int_te_ *this) {
     return (*this->begin());
 }
-/* C++:       back() */
+/* C++: back() */
 __SF_INLINE struct sf__std___Bit_reference sf__vector_t_int_te___back(struct sf__vector_t_int_te_ *this) {
     return (*(this->end() - 1));
 }
-/* C++:       back() const */
+/* C++: back() const */
 __SF_INLINE _Bool sf__vector_t_int_te___back(struct sf__vector_t_int_te_ *this) {
     return (*(this->end() - 1));
 }
-/* C++:       push_back(bool __x) */
+/* C++: push_back(bool __x) */
 __SF_INLINE void sf__vector_t_int_te___push_back(struct sf__vector_t_int_te_ *this, _Bool __x) {
     if ((this->_M_impl._M_finish._M_p != this->_M_impl._M_end_addr())) ((*(this->_M_impl._M_finish++)) = __x);
     else sf__vector_t_int_te____M_insert_aux(this, this->end(), __x);
 }
-/* C++:       swap(vector& __x)  noexcept */
+/* C++: swap(vector& __x)  noexcept */
 __SF_INLINE void sf__vector_t_int_te___swap(struct sf__vector_t_int_te_ *this, struct sf__std__vector* __x) {
     do {
         ;
@@ -351,69 +421,69 @@ __SF_INLINE void sf__vector_t_int_te___swap(struct sf__vector_t_int_te_ *this, s
     this->_M_impl._M_swap_data(__x._M_impl);
     /* expr */(_M_get_Bit_allocator(), __x._M_get_Bit_allocator());
 }
-/* C++:       swap(reference __x, reference __y)  noexcept */
+/* C++: swap(reference __x, reference __y)  noexcept */
 __SF_INLINE void sf__vector_t_int_te___swap(struct sf__vector_t_int_te_ *this, struct sf__std___Bit_reference __x, struct sf__std___Bit_reference __y) {
     _Bool __tmp = __x;
     (__x = __y);
     (__y = __tmp);
 }
-/* C++:       insert(const_iterator __position, const bool& __x) */
+/* C++: insert(const_iterator __position, const bool& __x) */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_int_te___insert(struct sf__vector_t_int_te_ *this, struct sf__std___Bit_const_iterator __position, const _Bool* __x) {
     const long __n = (__position - this->begin());
     if (((this->_M_impl._M_finish._M_p != this->_M_impl._M_end_addr()) && (__position == this->end()))) ((*(this->_M_impl._M_finish++)) = __x);
     else sf__vector_t_int_te____M_insert_aux(this, sf__std___Bit_const_iterator___M_const_cast(&__position), __x);
     return (this->begin() + __n);
 }
-/* C++:       insert(const_iterator __position) */
+/* C++: insert(const_iterator __position) */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_int_te___insert(struct sf__vector_t_int_te_ *this, struct sf__std___Bit_const_iterator __position) {
     return this->insert(sf__std___Bit_const_iterator___M_const_cast(&__position), false);
 }
-/* C++:       insert(const_iterator __position, size_type __n, const bool& __x) */
+/* C++: insert(const_iterator __position, size_type __n, const bool& __x) */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_int_te___insert(struct sf__vector_t_int_te_ *this, struct sf__std___Bit_const_iterator __position, long __n, const _Bool* __x) {
     long __offset = (__position - this->cbegin());
     sf__vector_t_int_te____M_fill_insert(this, sf__std___Bit_const_iterator___M_const_cast(&__position), __n, __x);
     return (this->begin() + __offset);
 }
-/* C++:       insert(const_iterator __p, initializer_list<bool> __l) */
+/* C++: insert(const_iterator __p, initializer_list<bool> __l) */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_int_te___insert(struct sf__vector_t_int_te_ *this, struct sf__std___Bit_const_iterator __p, struct sf__initializer_list_t_bool_te_ __l) {
     return this->insert(__p, sf__initializer_list_t_bool_te___begin(&__l), sf__initializer_list_t_bool_te___end(&__l));
 }
-/* C++:       pop_back() */
+/* C++: pop_back() */
 __SF_INLINE void sf__vector_t_int_te___pop_back(struct sf__vector_t_int_te_ *this) {
     (--this->_M_impl._M_finish);
 }
-/* C++:       erase(const_iterator __position) */
+/* C++: erase(const_iterator __position) */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_int_te___erase(struct sf__vector_t_int_te_ *this, struct sf__std___Bit_const_iterator __position) {
     return sf__vector_t_int_te____M_erase(this, sf__std___Bit_const_iterator___M_const_cast(&__position));
 }
-/* C++:       erase(const_iterator __first, const_iterator __last) */
+/* C++: erase(const_iterator __first, const_iterator __last) */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_int_te___erase(struct sf__vector_t_int_te_ *this, struct sf__std___Bit_const_iterator __first, struct sf__std___Bit_const_iterator __last) {
     return sf__vector_t_int_te____M_erase(this, sf__std___Bit_const_iterator___M_const_cast(&__first), sf__std___Bit_const_iterator___M_const_cast(&__last));
 }
-/* C++:       resize(size_type __new_size, bool __x = bool()) */
+/* C++: resize(size_type __new_size, bool __x = bool()) */
 __SF_INLINE void sf__vector_t_int_te___resize(struct sf__vector_t_int_te_ *this, long __new_size, _Bool __x) {
     if ((__new_size < this->size())) this->_M_erase_at_end((this->begin() + this->difference_type(__new_size)));
     else this->insert(this->end(), (__new_size - this->size()), __x);
 }
-/* C++:       shrink_to_fit() */
+/* C++: shrink_to_fit() */
 __SF_INLINE void sf__vector_t_int_te___shrink_to_fit(struct sf__vector_t_int_te_ *this) {
     sf__vector_t_int_te____M_shrink_to_fit(this);
 }
-/* C++:       flip()  noexcept */
+/* C++: flip()  noexcept */
 __SF_INLINE void sf__vector_t_int_te___flip(struct sf__vector_t_int_te_ *this) {
     const unsigned long* __end = this->_M_impl._M_end_addr();
     for (unsigned long* __p = this->_M_impl._M_start._M_p; (__p != __end); (++__p)) ((*__p) = (~(*__p)));
 }
-/* C++:       clear()  noexcept */
+/* C++: clear()  noexcept */
 __SF_INLINE void sf__vector_t_int_te___clear(struct sf__vector_t_int_te_ *this) {
     this->_M_erase_at_end(this->begin());
 }
-/* C++:       _M_copy_aligned(const_iterator __first, const_iterator __last, */
+/* C++: _M_copy_aligned(const_iterator __first, const_iterator __last, */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_int_te____M_copy_aligned(struct sf__vector_t_int_te_ *this, struct sf__std___Bit_const_iterator __first, struct sf__std___Bit_const_iterator __last, struct sf__std___Bit_iterator __result) {
     unsigned long* __q = /* expr */(__first._M_p, __last._M_p, __result._M_p);
     return /* expr */(this->const_iterator(__last._M_p, 0), __last, this->iterator(__q, 0));
 }
-/* C++:       _M_initialize(size_type __n) */
+/* C++: _M_initialize(size_type __n) */
 __SF_INLINE void sf__vector_t_int_te____M_initialize(struct sf__vector_t_int_te_ *this, long __n) {
     if (__n) {
         struct sf___Bit_pointer __q = this->_M_allocate(__n);
@@ -423,11 +493,11 @@ __SF_INLINE void sf__vector_t_int_te____M_initialize(struct sf__vector_t_int_te_
         (this->_M_impl._M_finish = (__start + this->difference_type(__n)));
     }
 }
-/* C++:       _M_initialize_value(bool __x)  noexcept */
+/* C++: _M_initialize_value(bool __x)  noexcept */
 __SF_INLINE void sf__vector_t_int_te____M_initialize_value(struct sf__vector_t_int_te_ *this, _Bool __x) {
     if (/* expr */) __fill_bvector_n(__p, (this->_M_impl._M_end_addr() - __p), __x);
 }
-/* C++:       _M_fill_assign(size_t __n, bool __x) */
+/* C++: _M_fill_assign(size_t __n, bool __x) */
 __SF_INLINE void sf__vector_t_int_te____M_fill_assign(struct sf__vector_t_int_te_ *this, long __n, _Bool __x) {
     if ((__n > this->size())) {
         this->_M_initialize_value(__x);
@@ -438,18 +508,18 @@ __SF_INLINE void sf__vector_t_int_te____M_fill_assign(struct sf__vector_t_int_te
         this->_M_initialize_value(__x);
     }
 }
-/* C++:       _M_check_len(size_type __n, const char* __s) const */
+/* C++: _M_check_len(size_type __n, const char* __s) const */
 __SF_INLINE long sf__vector_t_int_te____M_check_len(struct sf__vector_t_int_te_ *this, long __n, const char* __s) {
     if (((this->max_size() - this->size()) < __n)) __throw_length_error(__s);
     const long __len = (this->size() + /* expr */(this->size(), __n));
     return (((__len < this->size()) || (__len > this->max_size())) ? this->max_size() : __len);
 }
-/* C++:       _M_erase_at_end(iterator __pos) */
+/* C++: _M_erase_at_end(iterator __pos) */
 __SF_INLINE void sf__vector_t_int_te____M_erase_at_end(struct sf__vector_t_int_te_ *this, struct sf__std___Bit_iterator __pos) {
     (this->_M_impl._M_finish = __pos);
 }
 
-/* C++:     reserve(size_type __n) */
+/* C++: reserve(size_type __n) */
 __SF_INLINE void sf__vector_t_int_te___reserve(struct sf__vector_t_int_te_ *this, int __n) {
     if ((__n > this->max_size())) __throw_length_error("vector::reserve");
     if ((this->capacity() < __n)) {
@@ -471,7 +541,7 @@ __SF_INLINE void sf__vector_t_int_te___reserve(struct sf__vector_t_int_te_ *this
     }
 }
 
-/* C++:     insert(const_iterator __position, const value_type& __x) */
+/* C++: insert(const_iterator __position, const value_type& __x) */
 __SF_INLINE struct sf__vector_t_unknown_te_ sf__vector_t_int_te___insert(struct sf__vector_t_int_te_ *this, int __position, const int* __x) {
     const long __n = (__position - this->begin());
     if ((this->_M_impl._M_finish != this->_M_impl._M_end_of_storage)) {
@@ -496,7 +566,7 @@ __SF_INLINE struct sf__vector_t_unknown_te_ sf__vector_t_int_te___insert(struct 
     return this->iterator((this->_M_impl._M_start + __n));
 }
 
-/* C++:     _M_erase(iterator __position) */
+/* C++: _M_erase(iterator __position) */
 __SF_INLINE struct sf__vector_t_unknown_te_ sf__vector_t_int_te____M_erase(struct sf__vector_t_int_te_ *this, struct sf__std__iterator __position) {
     if (((__position + 1) != this->end())) /* expr */((__position + 1), this->end(), __position);
     (--this->_M_impl._M_finish);
@@ -505,7 +575,7 @@ __SF_INLINE struct sf__vector_t_unknown_te_ sf__vector_t_int_te____M_erase(struc
     return __position;
 }
 
-/* C++:     _M_erase(iterator __first, iterator __last) */
+/* C++: _M_erase(iterator __first, iterator __last) */
 __SF_INLINE struct sf__vector_t_unknown_te_ sf__vector_t_int_te____M_erase(struct sf__vector_t_int_te_ *this, struct sf__std__iterator __first, struct sf__std__iterator __last) {
     if ((__first != __last)) {
         if ((__last != this->end())) /* expr */(__last, this->end(), __first);
@@ -514,7 +584,7 @@ __SF_INLINE struct sf__vector_t_unknown_te_ sf__vector_t_int_te____M_erase(struc
     return __first;
 }
 
-/* C++:     _M_fill_assign(size_t __n, const value_type& __val) */
+/* C++: _M_fill_assign(size_t __n, const value_type& __val) */
 __SF_INLINE void sf__vector_t_int_te____M_fill_assign(struct sf__vector_t_int_te_ *this, long __n, const int* __val) {
     if ((__n > this->capacity())) {
         struct sf__std__vector __tmp;
@@ -531,7 +601,7 @@ __SF_INLINE void sf__vector_t_int_te____M_fill_assign(struct sf__vector_t_int_te
     else this->_M_erase_at_end(/* expr */(this->_M_impl._M_start, __n, __val));
 }
 
-/* C++:     _M_insert_rval(const_iterator __position, value_type&& __v) -> iterator */
+/* C++: _M_insert_rval(const_iterator __position, value_type&& __v) -> iterator */
 __SF_INLINE int sf__vector_t_int_te____M_insert_rval(struct sf__vector_t_int_te_ *this, int __position, int* __v) {
     const int __n = (__position - this->cbegin());
     if ((this->_M_impl._M_finish != this->_M_impl._M_end_of_storage)) if ((__position == this->cend())) {
@@ -545,7 +615,7 @@ __SF_INLINE int sf__vector_t_int_te____M_insert_rval(struct sf__vector_t_int_te_
     return this->iterator((this->_M_impl._M_start + __n));
 }
 
-/* C++:     _M_fill_insert(iterator __position, size_type __n, const value_type& __x) */
+/* C++: _M_fill_insert(iterator __position, size_type __n, const value_type& __x) */
 __SF_INLINE void sf__vector_t_int_te____M_fill_insert(struct sf__vector_t_int_te_ *this, struct sf__std__iterator __position, int __n, const int* __x) {
     if ((__n != 0)) {
         if ((this->size_type((this->_M_impl._M_end_of_storage - this->_M_impl._M_finish)) >= __n)) {
@@ -602,7 +672,7 @@ __SF_INLINE void sf__vector_t_int_te____M_fill_insert(struct sf__vector_t_int_te
     }
 }
 
-/* C++:     _M_default_append(size_type __n) */
+/* C++: _M_default_append(size_type __n) */
 __SF_INLINE void sf__vector_t_int_te____M_default_append(struct sf__vector_t_int_te_ *this, int __n) {
     if ((__n != 0)) {
         const long __size = this->size();
@@ -651,14 +721,14 @@ __SF_INLINE void sf__vector_t_int_te____M_default_append(struct sf__vector_t_int
     }
 }
 
-/* C++:     _M_shrink_to_fit() */
+/* C++: _M_shrink_to_fit() */
 __SF_INLINE _Bool sf__vector_t_int_te____M_shrink_to_fit(struct sf__vector_t_int_te_ *this) {
     if ((this->capacity() == this->size())) return false;
     ;
     return /* expr */((*this));
 }
 
-/* C++:     _M_reallocate(size_type __n) */
+/* C++: _M_reallocate(size_type __n) */
 __SF_INLINE void sf__vector_t_int_te____M_reallocate(struct sf__vector_t_int_te_ *this, int __n) {
     struct sf___Bit_pointer __q = this->_M_allocate(__n);
     struct sf__std___Bit_iterator __start;
@@ -671,7 +741,7 @@ __SF_INLINE void sf__vector_t_int_te____M_reallocate(struct sf__vector_t_int_te_
     (this->_M_impl._M_end_of_storage = (__q + _S_nword(__n)));
 }
 
-/* C++:     _M_fill_insert(iterator __position, size_type __n, bool __x) */
+/* C++: _M_fill_insert(iterator __position, size_type __n, bool __x) */
 __SF_INLINE void sf__vector_t_int_te____M_fill_insert(struct sf__vector_t_int_te_ *this, struct sf__std__iterator __position, int __n, _Bool __x) {
     if ((__n == 0)) return;
     if (((this->capacity() - this->size()) >= __n)) {
@@ -694,7 +764,7 @@ __SF_INLINE void sf__vector_t_int_te____M_fill_insert(struct sf__vector_t_int_te
     }
 }
 
-/* C++:     _M_insert_aux(iterator __position, bool __x) */
+/* C++: _M_insert_aux(iterator __position, bool __x) */
 __SF_INLINE void sf__vector_t_int_te____M_insert_aux(struct sf__vector_t_int_te_ *this, struct sf__std__iterator __position, _Bool __x) {
     if ((this->_M_impl._M_finish._M_p != this->_M_impl._M_end_addr())) {
         /* expr */(__position, this->_M_impl._M_finish, (this->_M_impl._M_finish + 1));
@@ -716,20 +786,20 @@ __SF_INLINE void sf__vector_t_int_te____M_insert_aux(struct sf__vector_t_int_te_
     }
 }
 
-/* C++:     _M_erase(iterator __position) */
+/* C++: _M_erase(iterator __position) */
 __SF_INLINE struct sf__vector_t_bool_te_ sf__vector_t_int_te____M_erase(struct sf__vector_t_int_te_ *this, struct sf__std__iterator __position) {
     if (((__position + 1) != this->end())) /* expr */((__position + 1), this->end(), __position);
     (--this->_M_impl._M_finish);
     return __position;
 }
 
-/* C++:     _M_erase(iterator __first, iterator __last) */
+/* C++: _M_erase(iterator __first, iterator __last) */
 __SF_INLINE struct sf__vector_t_bool_te_ sf__vector_t_int_te____M_erase(struct sf__vector_t_int_te_ *this, struct sf__std__iterator __first, struct sf__std__iterator __last) {
     if ((__first != __last)) this->_M_erase_at_end(/* expr */(__last, this->end(), __first));
     return __first;
 }
 
-/* C++:     _M_shrink_to_fit() */
+/* C++: _M_shrink_to_fit() */
 __SF_INLINE _Bool sf__vector_t_int_te____M_shrink_to_fit(struct sf__vector_t_int_te_ *this) {
     if (((this->capacity() - this->size()) < (int))) return false;
     if (true) {
@@ -745,109 +815,180 @@ __SF_INLINE _Bool sf__vector_t_int_te____M_shrink_to_fit(struct sf__vector_t_int
     }
 }
 
-/* C++:     struct integral_constant */
+/* C++: struct integral_constant */
 struct sf__integral_constant_t_bool_te_ {
     _Bool value = __v;
 };
+/* C++: constexpr operator value_type() const noexcept */
 __SF_INLINE void sf__integral_constant_t_bool_te___operator(struct sf__integral_constant_t_bool_te_ *this);
-/* C++:       constexpr operator value_type() const noexcept */
+/* C++: constexpr operator value_type() const noexcept */
 __SF_INLINE void sf__integral_constant_t_bool_te___operator(struct sf__integral_constant_t_bool_te_ *this) {
     return this->value;
 }
 
-/* C++:     class vector<bool, _Alloc> : protected _Bvector_base<_Alloc> */
+/* C++: class vector<bool, _Alloc> : protected _Bvector_base<_Alloc> */
 struct sf__vector_t_bool_te_ {
 };
+/* C++: get_allocator() const */
 __SF_INLINE _Bool sf__vector_t_bool_te___ctor(struct sf__vector_t_bool_te_ *this);
+/* C++: vector() = default; */
 __SF_INLINE void sf__vector_t_bool_te___ctor(struct sf__vector_t_bool_te_ *this);
+/* C++: vector(const allocator_type& __a) */
 __SF_INLINE void sf__vector_t_bool_te___ctor(struct sf__vector_t_bool_te_ *this, const _Bool* __a);
+/* C++: vector(size_type __n, const allocator_type& __a = allocator_type()) */
 __SF_INLINE void sf__vector_t_bool_te___ctor(struct sf__vector_t_bool_te_ *this, long __n, const _Bool* __a);
+/* C++: vector(size_type __n, const bool& __value, */
 __SF_INLINE void sf__vector_t_bool_te___ctor(struct sf__vector_t_bool_te_ *this, long __n, const _Bool* __value, const _Bool* __a);
+/* C++: vector(const vector& __x) */
 __SF_INLINE void sf__vector_t_bool_te___ctor(struct sf__vector_t_bool_te_ *this, const struct sf__std__vector* __x);
+/* C++: vector(vector&&) = default; */
 __SF_INLINE void sf__vector_t_bool_te___ctor(struct sf__vector_t_bool_te_ *this, struct sf__std__vector*);
+/* C++: vector(vector&& __x, const allocator_type& __a, true_type) noexcept */
 __SF_INLINE void sf__vector_t_bool_te___ctor(struct sf__vector_t_bool_te_ *this, struct sf__std__vector* __x, const _Bool* __a, struct sf__integral_constant_t_bool_te_);
+/* C++: vector(vector&& __x, const allocator_type& __a, false_type) */
 __SF_INLINE void sf__vector_t_bool_te___ctor(struct sf__vector_t_bool_te_ *this, struct sf__std__vector* __x, const _Bool* __a, struct sf__integral_constant_t_bool_te_);
+/* C++: vector(vector&& __x, const __type_identity_t<allocator_type>& __a) */
 __SF_INLINE void sf__vector_t_bool_te___ctor(struct sf__vector_t_bool_te_ *this, struct sf__std__vector* __x, const struct sf____type_identity_t* __a);
+/* C++: vector(const vector& __x, const __type_identity_t<allocator_type>& __a) */
 __SF_INLINE void sf__vector_t_bool_te___ctor(struct sf__vector_t_bool_te_ *this, const struct sf__std__vector* __x, const struct sf____type_identity_t* __a);
+/* C++: vector(initializer_list<bool> __l, */
 __SF_INLINE void sf__vector_t_bool_te___ctor(struct sf__vector_t_bool_te_ *this, struct sf__initializer_list_t_bool_te_ __l, const _Bool* __a);
+/* C++: operator=(const vector& __x) */
 __SF_INLINE struct sf__std__vector* sf__vector_t_bool_te___operator(struct sf__vector_t_bool_te_ *this, const struct sf__std__vector* __x);
+/* C++: operator=(vector&& __x) noexcept(_Bit_alloc_traits::_S_nothrow_move()) */
 __SF_INLINE struct sf__std__vector* sf__vector_t_bool_te___operator(struct sf__vector_t_bool_te_ *this, struct sf__std__vector* __x);
+/* C++: operator=(initializer_list<bool> __l) */
 __SF_INLINE struct sf__std__vector* sf__vector_t_bool_te___operator(struct sf__vector_t_bool_te_ *this, struct sf__initializer_list_t_bool_te_ __l);
+/* C++: assign(size_type __n, const bool& __x) */
 __SF_INLINE void sf__vector_t_bool_te___assign(struct sf__vector_t_bool_te_ *this, long __n, const _Bool* __x);
+/* C++: assign(initializer_list<bool> __l) */
 __SF_INLINE void sf__vector_t_bool_te___assign(struct sf__vector_t_bool_te_ *this, struct sf__initializer_list_t_bool_te_ __l);
+/* C++: begin()  noexcept */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_bool_te___begin(struct sf__vector_t_bool_te_ *this);
+/* C++: begin() const  noexcept */
 __SF_INLINE struct sf__std___Bit_const_iterator sf__vector_t_bool_te___begin(struct sf__vector_t_bool_te_ *this);
+/* C++: end()  noexcept */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_bool_te___end(struct sf__vector_t_bool_te_ *this);
+/* C++: end() const  noexcept */
 __SF_INLINE struct sf__std___Bit_const_iterator sf__vector_t_bool_te___end(struct sf__vector_t_bool_te_ *this);
+/* C++: rbegin()  noexcept */
 __SF_INLINE struct sf__reverse_iterator_t__Bit_iterator_te_ sf__vector_t_bool_te___rbegin(struct sf__vector_t_bool_te_ *this);
+/* C++: rbegin() const  noexcept */
 __SF_INLINE struct sf__reverse_iterator_t__Bit_const_iterator_te_ sf__vector_t_bool_te___rbegin(struct sf__vector_t_bool_te_ *this);
+/* C++: rend()  noexcept */
 __SF_INLINE struct sf__reverse_iterator_t__Bit_iterator_te_ sf__vector_t_bool_te___rend(struct sf__vector_t_bool_te_ *this);
+/* C++: rend() const  noexcept */
 __SF_INLINE struct sf__reverse_iterator_t__Bit_const_iterator_te_ sf__vector_t_bool_te___rend(struct sf__vector_t_bool_te_ *this);
+/* C++: cbegin() const noexcept */
 __SF_INLINE struct sf__std___Bit_const_iterator sf__vector_t_bool_te___cbegin(struct sf__vector_t_bool_te_ *this);
+/* C++: cend() const noexcept */
 __SF_INLINE struct sf__std___Bit_const_iterator sf__vector_t_bool_te___cend(struct sf__vector_t_bool_te_ *this);
+/* C++: crbegin() const noexcept */
 __SF_INLINE struct sf__reverse_iterator_t__Bit_const_iterator_te_ sf__vector_t_bool_te___crbegin(struct sf__vector_t_bool_te_ *this);
+/* C++: crend() const noexcept */
 __SF_INLINE struct sf__reverse_iterator_t__Bit_const_iterator_te_ sf__vector_t_bool_te___crend(struct sf__vector_t_bool_te_ *this);
+/* C++: size() const  noexcept */
 __SF_INLINE long sf__vector_t_bool_te___size(struct sf__vector_t_bool_te_ *this);
+/* C++: max_size() const  noexcept */
 __SF_INLINE long sf__vector_t_bool_te___max_size(struct sf__vector_t_bool_te_ *this);
+/* C++: capacity() const  noexcept */
 __SF_INLINE long sf__vector_t_bool_te___capacity(struct sf__vector_t_bool_te_ *this);
+/* C++: empty() const  noexcept */
 __SF_INLINE _Bool sf__vector_t_bool_te___empty(struct sf__vector_t_bool_te_ *this);
+/* C++: operator[](size_type __n) */
 __SF_INLINE struct sf__std___Bit_reference sf__vector_t_bool_te___operator(struct sf__vector_t_bool_te_ *this, long __n);
+/* C++: operator[](size_type __n) const */
 __SF_INLINE _Bool sf__vector_t_bool_te___operator(struct sf__vector_t_bool_te_ *this, long __n);
+/* C++: _M_range_check(size_type __n) const */
 __SF_INLINE void sf__vector_t_bool_te____M_range_check(struct sf__vector_t_bool_te_ *this, long __n);
+/* C++: at(size_type __n) */
 __SF_INLINE struct sf__std___Bit_reference sf__vector_t_bool_te___at(struct sf__vector_t_bool_te_ *this, long __n);
+/* C++: at(size_type __n) const */
 __SF_INLINE _Bool sf__vector_t_bool_te___at(struct sf__vector_t_bool_te_ *this, long __n);
+/* C++: reserve(size_type __n) */
 __SF_INLINE void sf__vector_t_bool_te___reserve(struct sf__vector_t_bool_te_ *this, long __n);
+/* C++: front() */
 __SF_INLINE struct sf__std___Bit_reference sf__vector_t_bool_te___front(struct sf__vector_t_bool_te_ *this);
+/* C++: front() const */
 __SF_INLINE _Bool sf__vector_t_bool_te___front(struct sf__vector_t_bool_te_ *this);
+/* C++: back() */
 __SF_INLINE struct sf__std___Bit_reference sf__vector_t_bool_te___back(struct sf__vector_t_bool_te_ *this);
+/* C++: back() const */
 __SF_INLINE _Bool sf__vector_t_bool_te___back(struct sf__vector_t_bool_te_ *this);
+/* C++: push_back(bool __x) */
 __SF_INLINE void sf__vector_t_bool_te___push_back(struct sf__vector_t_bool_te_ *this, _Bool __x);
+/* C++: swap(vector& __x)  noexcept */
 __SF_INLINE void sf__vector_t_bool_te___swap(struct sf__vector_t_bool_te_ *this, struct sf__std__vector* __x);
+/* C++: swap(reference __x, reference __y)  noexcept */
 __SF_INLINE void sf__vector_t_bool_te___swap(struct sf__vector_t_bool_te_ *this, struct sf__std___Bit_reference __x, struct sf__std___Bit_reference __y);
+/* C++: insert(const_iterator __position, const bool& __x) */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_bool_te___insert(struct sf__vector_t_bool_te_ *this, struct sf__std___Bit_const_iterator __position, const _Bool* __x);
+/* C++: insert(const_iterator __position) */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_bool_te___insert(struct sf__vector_t_bool_te_ *this, struct sf__std___Bit_const_iterator __position);
+/* C++: insert(const_iterator __position, size_type __n, const bool& __x) */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_bool_te___insert(struct sf__vector_t_bool_te_ *this, struct sf__std___Bit_const_iterator __position, long __n, const _Bool* __x);
+/* C++: insert(const_iterator __p, initializer_list<bool> __l) */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_bool_te___insert(struct sf__vector_t_bool_te_ *this, struct sf__std___Bit_const_iterator __p, struct sf__initializer_list_t_bool_te_ __l);
+/* C++: pop_back() */
 __SF_INLINE void sf__vector_t_bool_te___pop_back(struct sf__vector_t_bool_te_ *this);
+/* C++: erase(const_iterator __position) */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_bool_te___erase(struct sf__vector_t_bool_te_ *this, struct sf__std___Bit_const_iterator __position);
+/* C++: erase(const_iterator __first, const_iterator __last) */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_bool_te___erase(struct sf__vector_t_bool_te_ *this, struct sf__std___Bit_const_iterator __first, struct sf__std___Bit_const_iterator __last);
+/* C++: resize(size_type __new_size, bool __x = bool()) */
 __SF_INLINE void sf__vector_t_bool_te___resize(struct sf__vector_t_bool_te_ *this, long __new_size, _Bool __x);
+/* C++: shrink_to_fit() */
 __SF_INLINE void sf__vector_t_bool_te___shrink_to_fit(struct sf__vector_t_bool_te_ *this);
+/* C++: flip()  noexcept */
 __SF_INLINE void sf__vector_t_bool_te___flip(struct sf__vector_t_bool_te_ *this);
+/* C++: clear()  noexcept */
 __SF_INLINE void sf__vector_t_bool_te___clear(struct sf__vector_t_bool_te_ *this);
+/* C++: _M_copy_aligned(const_iterator __first, const_iterator __last, */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_bool_te____M_copy_aligned(struct sf__vector_t_bool_te_ *this, struct sf__std___Bit_const_iterator __first, struct sf__std___Bit_const_iterator __last, struct sf__std___Bit_iterator __result);
+/* C++: _M_initialize(size_type __n) */
 __SF_INLINE void sf__vector_t_bool_te____M_initialize(struct sf__vector_t_bool_te_ *this, long __n);
+/* C++: _M_initialize_value(bool __x)  noexcept */
 __SF_INLINE void sf__vector_t_bool_te____M_initialize_value(struct sf__vector_t_bool_te_ *this, _Bool __x);
+/* C++: _M_reallocate(size_type __n); */
 __SF_INLINE void sf__vector_t_bool_te____M_reallocate(struct sf__vector_t_bool_te_ *this, long);
+/* C++: _M_shrink_to_fit(); */
 __SF_INLINE _Bool sf__vector_t_bool_te____M_shrink_to_fit(struct sf__vector_t_bool_te_ *this);
+/* C++: _M_fill_assign(size_t __n, bool __x) */
 __SF_INLINE void sf__vector_t_bool_te____M_fill_assign(struct sf__vector_t_bool_te_ *this, long __n, _Bool __x);
+/* C++: _M_fill_insert(iterator __position, size_type __n, bool __x); */
 __SF_INLINE void sf__vector_t_bool_te____M_fill_insert(struct sf__vector_t_bool_te_ *this, struct sf__std___Bit_iterator, long, _Bool);
+/* C++: _M_insert_aux(iterator __position, bool __x); */
 __SF_INLINE void sf__vector_t_bool_te____M_insert_aux(struct sf__vector_t_bool_te_ *this, struct sf__std___Bit_iterator, _Bool);
+/* C++: _M_check_len(size_type __n, const char* __s) const */
 __SF_INLINE long sf__vector_t_bool_te____M_check_len(struct sf__vector_t_bool_te_ *this, long __n, const char* __s);
+/* C++: _M_erase_at_end(iterator __pos) */
 __SF_INLINE void sf__vector_t_bool_te____M_erase_at_end(struct sf__vector_t_bool_te_ *this, struct sf__std___Bit_iterator __pos);
+/* C++: _M_erase(iterator __pos); */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_bool_te____M_erase(struct sf__vector_t_bool_te_ *this, struct sf__std___Bit_iterator);
+/* C++: _M_erase(iterator __first, iterator __last); */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_bool_te____M_erase(struct sf__vector_t_bool_te_ *this, struct sf__std___Bit_iterator, struct sf__std___Bit_iterator);
+/* C++: void data() = delete; */
 __SF_INLINE void sf__vector_t_bool_te___data(struct sf__vector_t_bool_te_ *this);
-/* C++:       get_allocator() const */
+/* C++: get_allocator() const */
 __SF_INLINE _Bool sf__vector_t_bool_te___ctor(struct sf__vector_t_bool_te_ *this) {
     {
         return /* expr */();
     }
 }
-/* C++:       vector(const allocator_type& __a) */
+/* C++: vector(const allocator_type& __a) */
 __SF_INLINE void sf__vector_t_bool_te___ctor(struct sf__vector_t_bool_te_ *this, const _Bool* __a) {
 }
-/* C++:       vector(size_type __n, const allocator_type& __a = allocator_type()) */
+/* C++: vector(size_type __n, const allocator_type& __a = allocator_type()) */
 __SF_INLINE void sf__vector_t_bool_te___ctor(struct sf__vector_t_bool_te_ *this, long __n, const _Bool* __a) {
 }
-/* C++:       vector(size_type __n, const bool& __value, */
+/* C++: vector(size_type __n, const bool& __value, */
 __SF_INLINE void sf__vector_t_bool_te___ctor(struct sf__vector_t_bool_te_ *this, long __n, const _Bool* __value, const _Bool* __a) {
     {
         this->_M_initialize(__n);
         this->_M_initialize_value(__value);
     }
 }
-/* C++:       vector(const vector& __x) */
+/* C++: vector(const vector& __x) */
 __SF_INLINE void sf__vector_t_bool_te___ctor(struct sf__vector_t_bool_te_ *this, const struct sf__std__vector* __x) {
     {
         {
@@ -858,10 +999,10 @@ __SF_INLINE void sf__vector_t_bool_te___ctor(struct sf__vector_t_bool_te_ *this,
         this->_M_copy_aligned(__xbegin, __xend, this->begin());
     }
 }
-/* C++:       vector(vector&& __x, const allocator_type& __a, true_type) noexcept */
+/* C++: vector(vector&& __x, const allocator_type& __a, true_type) noexcept */
 __SF_INLINE void sf__vector_t_bool_te___ctor(struct sf__vector_t_bool_te_ *this, struct sf__std__vector* __x, const _Bool* __a, struct sf__integral_constant_t_bool_te_) {
 }
-/* C++:       vector(vector&& __x, const allocator_type& __a, false_type) */
+/* C++: vector(vector&& __x, const allocator_type& __a, false_type) */
 __SF_INLINE void sf__vector_t_bool_te___ctor(struct sf__vector_t_bool_te_ *this, struct sf__std__vector* __x, const _Bool* __a, struct sf__integral_constant_t_bool_te_) {
     {
         if ((__x.get_allocator() == __a)) this->_M_move_data(/* expr */(__x));
@@ -872,23 +1013,23 @@ __SF_INLINE void sf__vector_t_bool_te___ctor(struct sf__vector_t_bool_te_ *this,
         }
     }
 }
-/* C++:       vector(vector&& __x, const __type_identity_t<allocator_type>& __a) */
+/* C++: vector(vector&& __x, const __type_identity_t<allocator_type>& __a) */
 __SF_INLINE void sf__vector_t_bool_te___ctor(struct sf__vector_t_bool_te_ *this, struct sf__std__vector* __x, const struct sf____type_identity_t* __a) {
 }
-/* C++:       vector(const vector& __x, const __type_identity_t<allocator_type>& __a) */
+/* C++: vector(const vector& __x, const __type_identity_t<allocator_type>& __a) */
 __SF_INLINE void sf__vector_t_bool_te___ctor(struct sf__vector_t_bool_te_ *this, const struct sf__std__vector* __x, const struct sf____type_identity_t* __a) {
     {
         this->_M_initialize(__x.size());
         this->_M_copy_aligned(__x.begin(), __x.end(), this->begin());
     }
 }
-/* C++:       vector(initializer_list<bool> __l, */
+/* C++: vector(initializer_list<bool> __l, */
 __SF_INLINE void sf__vector_t_bool_te___ctor(struct sf__vector_t_bool_te_ *this, struct sf__initializer_list_t_bool_te_ __l, const _Bool* __a) {
     {
         _M_initialize_range(sf__initializer_list_t_bool_te___begin(&__l), sf__initializer_list_t_bool_te___end(&__l), random_access_iterator_tag());
     }
 }
-/* C++:       operator=(const vector& __x) */
+/* C++: operator=(const vector& __x) */
 __SF_INLINE struct sf__std__vector* sf__vector_t_bool_te___operator(struct sf__vector_t_bool_te_ *this, const struct sf__std__vector* __x) {
     if (((&__x) == this)) return (*this);
     if (/* expr */) {
@@ -906,7 +1047,7 @@ __SF_INLINE struct sf__std__vector* sf__vector_t_bool_te___operator(struct sf__v
     (this->_M_impl._M_finish = this->_M_copy_aligned(__x.begin(), __x.end(), this->begin()));
     return (*this);
 }
-/* C++:       operator=(vector&& __x) noexcept(_Bit_alloc_traits::_S_nothrow_move()) */
+/* C++: operator=(vector&& __x) noexcept(_Bit_alloc_traits::_S_nothrow_move()) */
 __SF_INLINE struct sf__std__vector* sf__vector_t_bool_te___operator(struct sf__vector_t_bool_te_ *this, struct sf__std__vector* __x) {
     if ((/* expr */() || (this->_M_get_Bit_allocator() == __x._M_get_Bit_allocator()))) {
         this->_M_deallocate();
@@ -923,134 +1064,134 @@ __SF_INLINE struct sf__std__vector* sf__vector_t_bool_te___operator(struct sf__v
     }
     return (*this);
 }
-/* C++:       operator=(initializer_list<bool> __l) */
+/* C++: operator=(initializer_list<bool> __l) */
 __SF_INLINE struct sf__std__vector* sf__vector_t_bool_te___operator(struct sf__vector_t_bool_te_ *this, struct sf__initializer_list_t_bool_te_ __l) {
     this->assign(sf__initializer_list_t_bool_te___begin(&__l), sf__initializer_list_t_bool_te___end(&__l));
     return (*this);
 }
-/* C++:       assign(size_type __n, const bool& __x) */
+/* C++: assign(size_type __n, const bool& __x) */
 __SF_INLINE void sf__vector_t_bool_te___assign(struct sf__vector_t_bool_te_ *this, long __n, const _Bool* __x) {
     this->_M_fill_assign(__n, __x);
 }
-/* C++:       assign(initializer_list<bool> __l) */
+/* C++: assign(initializer_list<bool> __l) */
 __SF_INLINE void sf__vector_t_bool_te___assign(struct sf__vector_t_bool_te_ *this, struct sf__initializer_list_t_bool_te_ __l) {
     _M_assign_aux(sf__initializer_list_t_bool_te___begin(&__l), sf__initializer_list_t_bool_te___end(&__l), random_access_iterator_tag());
 }
-/* C++:       begin()  noexcept */
+/* C++: begin()  noexcept */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_bool_te___begin(struct sf__vector_t_bool_te_ *this) {
     return this->iterator(this->_M_impl._M_start._M_p, 0);
 }
-/* C++:       begin() const  noexcept */
+/* C++: begin() const  noexcept */
 __SF_INLINE struct sf__std___Bit_const_iterator sf__vector_t_bool_te___begin(struct sf__vector_t_bool_te_ *this) {
     return this->const_iterator(this->_M_impl._M_start._M_p, 0);
 }
-/* C++:       end()  noexcept */
+/* C++: end()  noexcept */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_bool_te___end(struct sf__vector_t_bool_te_ *this) {
     return this->_M_impl._M_finish;
 }
-/* C++:       end() const  noexcept */
+/* C++: end() const  noexcept */
 __SF_INLINE struct sf__std___Bit_const_iterator sf__vector_t_bool_te___end(struct sf__vector_t_bool_te_ *this) {
     return this->_M_impl._M_finish;
 }
-/* C++:       rbegin()  noexcept */
+/* C++: rbegin()  noexcept */
 __SF_INLINE struct sf__reverse_iterator_t__Bit_iterator_te_ sf__vector_t_bool_te___rbegin(struct sf__vector_t_bool_te_ *this) {
     return this->reverse_iterator(this->end());
 }
-/* C++:       rbegin() const  noexcept */
+/* C++: rbegin() const  noexcept */
 __SF_INLINE struct sf__reverse_iterator_t__Bit_const_iterator_te_ sf__vector_t_bool_te___rbegin(struct sf__vector_t_bool_te_ *this) {
     return this->const_reverse_iterator(this->end());
 }
-/* C++:       rend()  noexcept */
+/* C++: rend()  noexcept */
 __SF_INLINE struct sf__reverse_iterator_t__Bit_iterator_te_ sf__vector_t_bool_te___rend(struct sf__vector_t_bool_te_ *this) {
     return this->reverse_iterator(this->begin());
 }
-/* C++:       rend() const  noexcept */
+/* C++: rend() const  noexcept */
 __SF_INLINE struct sf__reverse_iterator_t__Bit_const_iterator_te_ sf__vector_t_bool_te___rend(struct sf__vector_t_bool_te_ *this) {
     return this->const_reverse_iterator(this->begin());
 }
-/* C++:       cbegin() const noexcept */
+/* C++: cbegin() const noexcept */
 __SF_INLINE struct sf__std___Bit_const_iterator sf__vector_t_bool_te___cbegin(struct sf__vector_t_bool_te_ *this) {
     return this->const_iterator(this->_M_impl._M_start._M_p, 0);
 }
-/* C++:       cend() const noexcept */
+/* C++: cend() const noexcept */
 __SF_INLINE struct sf__std___Bit_const_iterator sf__vector_t_bool_te___cend(struct sf__vector_t_bool_te_ *this) {
     return this->_M_impl._M_finish;
 }
-/* C++:       crbegin() const noexcept */
+/* C++: crbegin() const noexcept */
 __SF_INLINE struct sf__reverse_iterator_t__Bit_const_iterator_te_ sf__vector_t_bool_te___crbegin(struct sf__vector_t_bool_te_ *this) {
     return this->const_reverse_iterator(this->end());
 }
-/* C++:       crend() const noexcept */
+/* C++: crend() const noexcept */
 __SF_INLINE struct sf__reverse_iterator_t__Bit_const_iterator_te_ sf__vector_t_bool_te___crend(struct sf__vector_t_bool_te_ *this) {
     return this->const_reverse_iterator(this->begin());
 }
-/* C++:       size() const  noexcept */
+/* C++: size() const  noexcept */
 __SF_INLINE long sf__vector_t_bool_te___size(struct sf__vector_t_bool_te_ *this) {
     return this->size_type((this->end() - this->begin()));
 }
-/* C++:       max_size() const  noexcept */
+/* C++: max_size() const  noexcept */
 __SF_INLINE long sf__vector_t_bool_te___max_size(struct sf__vector_t_bool_te_ *this) {
     const long __isize = ((/* expr */ - (int)) + 1);
     const long __asize = /* expr */(_M_get_Bit_allocator());
     return ((__asize <= (__isize / (int))) ? (__asize * (int)) : __isize);
 }
-/* C++:       capacity() const  noexcept */
+/* C++: capacity() const  noexcept */
 __SF_INLINE long sf__vector_t_bool_te___capacity(struct sf__vector_t_bool_te_ *this) {
     return this->size_type((this->const_iterator(this->_M_impl._M_end_addr(), 0) - this->begin()));
 }
-/* C++:       empty() const  noexcept */
+/* C++: empty() const  noexcept */
 __SF_INLINE _Bool sf__vector_t_bool_te___empty(struct sf__vector_t_bool_te_ *this) {
     return (this->begin() == this->end());
 }
-/* C++:       operator[](size_type __n) */
+/* C++: operator[](size_type __n) */
 __SF_INLINE struct sf__std___Bit_reference sf__vector_t_bool_te___operator(struct sf__vector_t_bool_te_ *this, long __n) {
     return this->begin()[__n];
 }
-/* C++:       operator[](size_type __n) const */
+/* C++: operator[](size_type __n) const */
 __SF_INLINE _Bool sf__vector_t_bool_te___operator(struct sf__vector_t_bool_te_ *this, long __n) {
     return this->begin()[__n];
 }
-/* C++:       _M_range_check(size_type __n) const */
+/* C++: _M_range_check(size_type __n) const */
 __SF_INLINE void sf__vector_t_bool_te____M_range_check(struct sf__vector_t_bool_te_ *this, long __n) {
     if ((__n >= this->size())) __throw_out_of_range_fmt("vector<bool>::_M_range_check: __n ", __n, this->size());
 }
-/* C++:       at(size_type __n) */
+/* C++: at(size_type __n) */
 __SF_INLINE struct sf__std___Bit_reference sf__vector_t_bool_te___at(struct sf__vector_t_bool_te_ *this, long __n) {
     this->_M_range_check(__n);
     return (*this)[__n];
 }
-/* C++:       at(size_type __n) const */
+/* C++: at(size_type __n) const */
 __SF_INLINE _Bool sf__vector_t_bool_te___at(struct sf__vector_t_bool_te_ *this, long __n) {
     this->_M_range_check(__n);
     return (*this)[__n];
 }
-/* C++:       reserve(size_type __n) */
+/* C++: reserve(size_type __n) */
 __SF_INLINE void sf__vector_t_bool_te___reserve(struct sf__vector_t_bool_te_ *this, long __n) {
     if ((__n > this->max_size())) __throw_length_error("vector::reserve");
     if ((this->capacity() < __n)) sf__vector_t_bool_te____M_reallocate(this, __n);
 }
-/* C++:       front() */
+/* C++: front() */
 __SF_INLINE struct sf__std___Bit_reference sf__vector_t_bool_te___front(struct sf__vector_t_bool_te_ *this) {
     return (*this->begin());
 }
-/* C++:       front() const */
+/* C++: front() const */
 __SF_INLINE _Bool sf__vector_t_bool_te___front(struct sf__vector_t_bool_te_ *this) {
     return (*this->begin());
 }
-/* C++:       back() */
+/* C++: back() */
 __SF_INLINE struct sf__std___Bit_reference sf__vector_t_bool_te___back(struct sf__vector_t_bool_te_ *this) {
     return (*(this->end() - 1));
 }
-/* C++:       back() const */
+/* C++: back() const */
 __SF_INLINE _Bool sf__vector_t_bool_te___back(struct sf__vector_t_bool_te_ *this) {
     return (*(this->end() - 1));
 }
-/* C++:       push_back(bool __x) */
+/* C++: push_back(bool __x) */
 __SF_INLINE void sf__vector_t_bool_te___push_back(struct sf__vector_t_bool_te_ *this, _Bool __x) {
     if ((this->_M_impl._M_finish._M_p != this->_M_impl._M_end_addr())) ((*(this->_M_impl._M_finish++)) = __x);
     else sf__vector_t_bool_te____M_insert_aux(this, this->end(), __x);
 }
-/* C++:       swap(vector& __x)  noexcept */
+/* C++: swap(vector& __x)  noexcept */
 __SF_INLINE void sf__vector_t_bool_te___swap(struct sf__vector_t_bool_te_ *this, struct sf__std__vector* __x) {
     do {
         ;
@@ -1059,69 +1200,69 @@ __SF_INLINE void sf__vector_t_bool_te___swap(struct sf__vector_t_bool_te_ *this,
     this->_M_impl._M_swap_data(__x._M_impl);
     /* expr */(_M_get_Bit_allocator(), __x._M_get_Bit_allocator());
 }
-/* C++:       swap(reference __x, reference __y)  noexcept */
+/* C++: swap(reference __x, reference __y)  noexcept */
 __SF_INLINE void sf__vector_t_bool_te___swap(struct sf__vector_t_bool_te_ *this, struct sf__std___Bit_reference __x, struct sf__std___Bit_reference __y) {
     _Bool __tmp = __x;
     (__x = __y);
     (__y = __tmp);
 }
-/* C++:       insert(const_iterator __position, const bool& __x) */
+/* C++: insert(const_iterator __position, const bool& __x) */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_bool_te___insert(struct sf__vector_t_bool_te_ *this, struct sf__std___Bit_const_iterator __position, const _Bool* __x) {
     const long __n = (__position - this->begin());
     if (((this->_M_impl._M_finish._M_p != this->_M_impl._M_end_addr()) && (__position == this->end()))) ((*(this->_M_impl._M_finish++)) = __x);
     else sf__vector_t_bool_te____M_insert_aux(this, sf__std___Bit_const_iterator___M_const_cast(&__position), __x);
     return (this->begin() + __n);
 }
-/* C++:       insert(const_iterator __position) */
+/* C++: insert(const_iterator __position) */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_bool_te___insert(struct sf__vector_t_bool_te_ *this, struct sf__std___Bit_const_iterator __position) {
     return this->insert(sf__std___Bit_const_iterator___M_const_cast(&__position), false);
 }
-/* C++:       insert(const_iterator __position, size_type __n, const bool& __x) */
+/* C++: insert(const_iterator __position, size_type __n, const bool& __x) */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_bool_te___insert(struct sf__vector_t_bool_te_ *this, struct sf__std___Bit_const_iterator __position, long __n, const _Bool* __x) {
     long __offset = (__position - this->cbegin());
     sf__vector_t_bool_te____M_fill_insert(this, sf__std___Bit_const_iterator___M_const_cast(&__position), __n, __x);
     return (this->begin() + __offset);
 }
-/* C++:       insert(const_iterator __p, initializer_list<bool> __l) */
+/* C++: insert(const_iterator __p, initializer_list<bool> __l) */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_bool_te___insert(struct sf__vector_t_bool_te_ *this, struct sf__std___Bit_const_iterator __p, struct sf__initializer_list_t_bool_te_ __l) {
     return this->insert(__p, sf__initializer_list_t_bool_te___begin(&__l), sf__initializer_list_t_bool_te___end(&__l));
 }
-/* C++:       pop_back() */
+/* C++: pop_back() */
 __SF_INLINE void sf__vector_t_bool_te___pop_back(struct sf__vector_t_bool_te_ *this) {
     (--this->_M_impl._M_finish);
 }
-/* C++:       erase(const_iterator __position) */
+/* C++: erase(const_iterator __position) */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_bool_te___erase(struct sf__vector_t_bool_te_ *this, struct sf__std___Bit_const_iterator __position) {
     return sf__vector_t_bool_te____M_erase(this, sf__std___Bit_const_iterator___M_const_cast(&__position));
 }
-/* C++:       erase(const_iterator __first, const_iterator __last) */
+/* C++: erase(const_iterator __first, const_iterator __last) */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_bool_te___erase(struct sf__vector_t_bool_te_ *this, struct sf__std___Bit_const_iterator __first, struct sf__std___Bit_const_iterator __last) {
     return sf__vector_t_bool_te____M_erase(this, sf__std___Bit_const_iterator___M_const_cast(&__first), sf__std___Bit_const_iterator___M_const_cast(&__last));
 }
-/* C++:       resize(size_type __new_size, bool __x = bool()) */
+/* C++: resize(size_type __new_size, bool __x = bool()) */
 __SF_INLINE void sf__vector_t_bool_te___resize(struct sf__vector_t_bool_te_ *this, long __new_size, _Bool __x) {
     if ((__new_size < this->size())) this->_M_erase_at_end((this->begin() + this->difference_type(__new_size)));
     else this->insert(this->end(), (__new_size - this->size()), __x);
 }
-/* C++:       shrink_to_fit() */
+/* C++: shrink_to_fit() */
 __SF_INLINE void sf__vector_t_bool_te___shrink_to_fit(struct sf__vector_t_bool_te_ *this) {
     sf__vector_t_bool_te____M_shrink_to_fit(this);
 }
-/* C++:       flip()  noexcept */
+/* C++: flip()  noexcept */
 __SF_INLINE void sf__vector_t_bool_te___flip(struct sf__vector_t_bool_te_ *this) {
     const unsigned long* __end = this->_M_impl._M_end_addr();
     for (unsigned long* __p = this->_M_impl._M_start._M_p; (__p != __end); (++__p)) ((*__p) = (~(*__p)));
 }
-/* C++:       clear()  noexcept */
+/* C++: clear()  noexcept */
 __SF_INLINE void sf__vector_t_bool_te___clear(struct sf__vector_t_bool_te_ *this) {
     this->_M_erase_at_end(this->begin());
 }
-/* C++:       _M_copy_aligned(const_iterator __first, const_iterator __last, */
+/* C++: _M_copy_aligned(const_iterator __first, const_iterator __last, */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_bool_te____M_copy_aligned(struct sf__vector_t_bool_te_ *this, struct sf__std___Bit_const_iterator __first, struct sf__std___Bit_const_iterator __last, struct sf__std___Bit_iterator __result) {
     unsigned long* __q = /* expr */(__first._M_p, __last._M_p, __result._M_p);
     return /* expr */(this->const_iterator(__last._M_p, 0), __last, this->iterator(__q, 0));
 }
-/* C++:       _M_initialize(size_type __n) */
+/* C++: _M_initialize(size_type __n) */
 __SF_INLINE void sf__vector_t_bool_te____M_initialize(struct sf__vector_t_bool_te_ *this, long __n) {
     if (__n) {
         struct sf___Bit_pointer __q = this->_M_allocate(__n);
@@ -1131,11 +1272,11 @@ __SF_INLINE void sf__vector_t_bool_te____M_initialize(struct sf__vector_t_bool_t
         (this->_M_impl._M_finish = (__start + this->difference_type(__n)));
     }
 }
-/* C++:       _M_initialize_value(bool __x)  noexcept */
+/* C++: _M_initialize_value(bool __x)  noexcept */
 __SF_INLINE void sf__vector_t_bool_te____M_initialize_value(struct sf__vector_t_bool_te_ *this, _Bool __x) {
     if (/* expr */) __fill_bvector_n(__p, (this->_M_impl._M_end_addr() - __p), __x);
 }
-/* C++:       _M_fill_assign(size_t __n, bool __x) */
+/* C++: _M_fill_assign(size_t __n, bool __x) */
 __SF_INLINE void sf__vector_t_bool_te____M_fill_assign(struct sf__vector_t_bool_te_ *this, long __n, _Bool __x) {
     if ((__n > this->size())) {
         this->_M_initialize_value(__x);
@@ -1146,18 +1287,18 @@ __SF_INLINE void sf__vector_t_bool_te____M_fill_assign(struct sf__vector_t_bool_
         this->_M_initialize_value(__x);
     }
 }
-/* C++:       _M_check_len(size_type __n, const char* __s) const */
+/* C++: _M_check_len(size_type __n, const char* __s) const */
 __SF_INLINE long sf__vector_t_bool_te____M_check_len(struct sf__vector_t_bool_te_ *this, long __n, const char* __s) {
     if (((this->max_size() - this->size()) < __n)) __throw_length_error(__s);
     const long __len = (this->size() + /* expr */(this->size(), __n));
     return (((__len < this->size()) || (__len > this->max_size())) ? this->max_size() : __len);
 }
-/* C++:       _M_erase_at_end(iterator __pos) */
+/* C++: _M_erase_at_end(iterator __pos) */
 __SF_INLINE void sf__vector_t_bool_te____M_erase_at_end(struct sf__vector_t_bool_te_ *this, struct sf__std___Bit_iterator __pos) {
     (this->_M_impl._M_finish = __pos);
 }
 
-/* C++:     reserve(size_type __n) */
+/* C++: reserve(size_type __n) */
 __SF_INLINE void sf__vector_t_bool_te___reserve(struct sf__vector_t_bool_te_ *this, int __n) {
     if ((__n > this->max_size())) __throw_length_error("vector::reserve");
     if ((this->capacity() < __n)) {
@@ -1179,7 +1320,7 @@ __SF_INLINE void sf__vector_t_bool_te___reserve(struct sf__vector_t_bool_te_ *th
     }
 }
 
-/* C++:     insert(const_iterator __position, const value_type& __x) */
+/* C++: insert(const_iterator __position, const value_type& __x) */
 __SF_INLINE struct sf__vector_t_unknown_te_ sf__vector_t_bool_te___insert(struct sf__vector_t_bool_te_ *this, int __position, const int* __x) {
     const long __n = (__position - this->begin());
     if ((this->_M_impl._M_finish != this->_M_impl._M_end_of_storage)) {
@@ -1204,7 +1345,7 @@ __SF_INLINE struct sf__vector_t_unknown_te_ sf__vector_t_bool_te___insert(struct
     return this->iterator((this->_M_impl._M_start + __n));
 }
 
-/* C++:     _M_erase(iterator __position) */
+/* C++: _M_erase(iterator __position) */
 __SF_INLINE struct sf__vector_t_unknown_te_ sf__vector_t_bool_te____M_erase(struct sf__vector_t_bool_te_ *this, struct sf__std__iterator __position) {
     if (((__position + 1) != this->end())) /* expr */((__position + 1), this->end(), __position);
     (--this->_M_impl._M_finish);
@@ -1213,7 +1354,7 @@ __SF_INLINE struct sf__vector_t_unknown_te_ sf__vector_t_bool_te____M_erase(stru
     return __position;
 }
 
-/* C++:     _M_erase(iterator __first, iterator __last) */
+/* C++: _M_erase(iterator __first, iterator __last) */
 __SF_INLINE struct sf__vector_t_unknown_te_ sf__vector_t_bool_te____M_erase(struct sf__vector_t_bool_te_ *this, struct sf__std__iterator __first, struct sf__std__iterator __last) {
     if ((__first != __last)) {
         if ((__last != this->end())) /* expr */(__last, this->end(), __first);
@@ -1222,7 +1363,7 @@ __SF_INLINE struct sf__vector_t_unknown_te_ sf__vector_t_bool_te____M_erase(stru
     return __first;
 }
 
-/* C++:     _M_fill_assign(size_t __n, const value_type& __val) */
+/* C++: _M_fill_assign(size_t __n, const value_type& __val) */
 __SF_INLINE void sf__vector_t_bool_te____M_fill_assign(struct sf__vector_t_bool_te_ *this, long __n, const int* __val) {
     if ((__n > this->capacity())) {
         struct sf__std__vector __tmp;
@@ -1239,7 +1380,7 @@ __SF_INLINE void sf__vector_t_bool_te____M_fill_assign(struct sf__vector_t_bool_
     else this->_M_erase_at_end(/* expr */(this->_M_impl._M_start, __n, __val));
 }
 
-/* C++:     _M_insert_rval(const_iterator __position, value_type&& __v) -> iterator */
+/* C++: _M_insert_rval(const_iterator __position, value_type&& __v) -> iterator */
 __SF_INLINE int sf__vector_t_bool_te____M_insert_rval(struct sf__vector_t_bool_te_ *this, int __position, int* __v) {
     const int __n = (__position - this->cbegin());
     if ((this->_M_impl._M_finish != this->_M_impl._M_end_of_storage)) if ((__position == this->cend())) {
@@ -1253,7 +1394,7 @@ __SF_INLINE int sf__vector_t_bool_te____M_insert_rval(struct sf__vector_t_bool_t
     return this->iterator((this->_M_impl._M_start + __n));
 }
 
-/* C++:     _M_fill_insert(iterator __position, size_type __n, const value_type& __x) */
+/* C++: _M_fill_insert(iterator __position, size_type __n, const value_type& __x) */
 __SF_INLINE void sf__vector_t_bool_te____M_fill_insert(struct sf__vector_t_bool_te_ *this, struct sf__std__iterator __position, int __n, const int* __x) {
     if ((__n != 0)) {
         if ((this->size_type((this->_M_impl._M_end_of_storage - this->_M_impl._M_finish)) >= __n)) {
@@ -1310,7 +1451,7 @@ __SF_INLINE void sf__vector_t_bool_te____M_fill_insert(struct sf__vector_t_bool_
     }
 }
 
-/* C++:     _M_default_append(size_type __n) */
+/* C++: _M_default_append(size_type __n) */
 __SF_INLINE void sf__vector_t_bool_te____M_default_append(struct sf__vector_t_bool_te_ *this, int __n) {
     if ((__n != 0)) {
         const long __size = this->size();
@@ -1359,14 +1500,14 @@ __SF_INLINE void sf__vector_t_bool_te____M_default_append(struct sf__vector_t_bo
     }
 }
 
-/* C++:     _M_shrink_to_fit() */
+/* C++: _M_shrink_to_fit() */
 __SF_INLINE _Bool sf__vector_t_bool_te____M_shrink_to_fit(struct sf__vector_t_bool_te_ *this) {
     if ((this->capacity() == this->size())) return false;
     ;
     return /* expr */((*this));
 }
 
-/* C++:     _M_reallocate(size_type __n) */
+/* C++: _M_reallocate(size_type __n) */
 __SF_INLINE void sf__vector_t_bool_te____M_reallocate(struct sf__vector_t_bool_te_ *this, int __n) {
     struct sf___Bit_pointer __q = this->_M_allocate(__n);
     struct sf__std___Bit_iterator __start;
@@ -1379,7 +1520,7 @@ __SF_INLINE void sf__vector_t_bool_te____M_reallocate(struct sf__vector_t_bool_t
     (this->_M_impl._M_end_of_storage = (__q + _S_nword(__n)));
 }
 
-/* C++:     _M_fill_insert(iterator __position, size_type __n, bool __x) */
+/* C++: _M_fill_insert(iterator __position, size_type __n, bool __x) */
 __SF_INLINE void sf__vector_t_bool_te____M_fill_insert(struct sf__vector_t_bool_te_ *this, struct sf__std__iterator __position, int __n, _Bool __x) {
     if ((__n == 0)) return;
     if (((this->capacity() - this->size()) >= __n)) {
@@ -1402,7 +1543,7 @@ __SF_INLINE void sf__vector_t_bool_te____M_fill_insert(struct sf__vector_t_bool_
     }
 }
 
-/* C++:     _M_insert_aux(iterator __position, bool __x) */
+/* C++: _M_insert_aux(iterator __position, bool __x) */
 __SF_INLINE void sf__vector_t_bool_te____M_insert_aux(struct sf__vector_t_bool_te_ *this, struct sf__std__iterator __position, _Bool __x) {
     if ((this->_M_impl._M_finish._M_p != this->_M_impl._M_end_addr())) {
         /* expr */(__position, this->_M_impl._M_finish, (this->_M_impl._M_finish + 1));
@@ -1424,20 +1565,20 @@ __SF_INLINE void sf__vector_t_bool_te____M_insert_aux(struct sf__vector_t_bool_t
     }
 }
 
-/* C++:     _M_erase(iterator __position) */
+/* C++: _M_erase(iterator __position) */
 __SF_INLINE struct sf__vector_t_bool_te_ sf__vector_t_bool_te____M_erase(struct sf__vector_t_bool_te_ *this, struct sf__std__iterator __position) {
     if (((__position + 1) != this->end())) /* expr */((__position + 1), this->end(), __position);
     (--this->_M_impl._M_finish);
     return __position;
 }
 
-/* C++:     _M_erase(iterator __first, iterator __last) */
+/* C++: _M_erase(iterator __first, iterator __last) */
 __SF_INLINE struct sf__vector_t_bool_te_ sf__vector_t_bool_te____M_erase(struct sf__vector_t_bool_te_ *this, struct sf__std__iterator __first, struct sf__std__iterator __last) {
     if ((__first != __last)) this->_M_erase_at_end(/* expr */(__last, this->end(), __first));
     return __first;
 }
 
-/* C++:     _M_shrink_to_fit() */
+/* C++: _M_shrink_to_fit() */
 __SF_INLINE _Bool sf__vector_t_bool_te____M_shrink_to_fit(struct sf__vector_t_bool_te_ *this) {
     if (((this->capacity() - this->size()) < (int))) return false;
     if (true) {
@@ -1453,99 +1594,169 @@ __SF_INLINE _Bool sf__vector_t_bool_te____M_shrink_to_fit(struct sf__vector_t_bo
     }
 }
 
-/* C++:     class vector<bool, _Alloc> : protected _Bvector_base<_Alloc> */
+/* C++: class vector<bool, _Alloc> : protected _Bvector_base<_Alloc> */
 struct sf__vector_t_unknown_te_ {
 };
+/* C++: get_allocator() const */
 __SF_INLINE /*dep:_Tp*/ int sf__vector_t_unknown_te___ctor(struct sf__vector_t_unknown_te_ *this);
+/* C++: vector() = default; */
 __SF_INLINE void sf__vector_t_unknown_te___ctor(struct sf__vector_t_unknown_te_ *this);
+/* C++: vector(const allocator_type& __a) */
 __SF_INLINE void sf__vector_t_unknown_te___ctor(struct sf__vector_t_unknown_te_ *this, const /*dep:_Tp*/ int* __a);
+/* C++: vector(size_type __n, const allocator_type& __a = allocator_type()) */
 __SF_INLINE void sf__vector_t_unknown_te___ctor(struct sf__vector_t_unknown_te_ *this, long __n, const /*dep:_Tp*/ int* __a);
+/* C++: vector(size_type __n, const bool& __value, */
 __SF_INLINE void sf__vector_t_unknown_te___ctor(struct sf__vector_t_unknown_te_ *this, long __n, const _Bool* __value, const /*dep:_Tp*/ int* __a);
+/* C++: vector(const vector& __x) */
 __SF_INLINE void sf__vector_t_unknown_te___ctor(struct sf__vector_t_unknown_te_ *this, const struct sf__std__vector* __x);
+/* C++: vector(vector&&) = default; */
 __SF_INLINE void sf__vector_t_unknown_te___ctor(struct sf__vector_t_unknown_te_ *this, struct sf__std__vector*);
+/* C++: vector(vector&& __x, const allocator_type& __a, true_type) noexcept */
 __SF_INLINE void sf__vector_t_unknown_te___ctor(struct sf__vector_t_unknown_te_ *this, struct sf__std__vector* __x, const /*dep:_Tp*/ int* __a, struct sf__integral_constant_t_bool_te_);
+/* C++: vector(vector&& __x, const allocator_type& __a, false_type) */
 __SF_INLINE void sf__vector_t_unknown_te___ctor(struct sf__vector_t_unknown_te_ *this, struct sf__std__vector* __x, const /*dep:_Tp*/ int* __a, struct sf__integral_constant_t_bool_te_);
+/* C++: vector(vector&& __x, const __type_identity_t<allocator_type>& __a) */
 __SF_INLINE void sf__vector_t_unknown_te___ctor(struct sf__vector_t_unknown_te_ *this, struct sf__std__vector* __x, const struct sf____type_identity_t* __a);
+/* C++: vector(const vector& __x, const __type_identity_t<allocator_type>& __a) */
 __SF_INLINE void sf__vector_t_unknown_te___ctor(struct sf__vector_t_unknown_te_ *this, const struct sf__std__vector* __x, const struct sf____type_identity_t* __a);
+/* C++: vector(initializer_list<bool> __l, */
 __SF_INLINE void sf__vector_t_unknown_te___ctor(struct sf__vector_t_unknown_te_ *this, struct sf__initializer_list_t_bool_te_ __l, const /*dep:_Tp*/ int* __a);
+/* C++: operator=(const vector& __x) */
 __SF_INLINE struct sf__std__vector* sf__vector_t_unknown_te___operator(struct sf__vector_t_unknown_te_ *this, const struct sf__std__vector* __x);
+/* C++: operator=(vector&& __x) noexcept(_Bit_alloc_traits::_S_nothrow_move()) */
 __SF_INLINE struct sf__std__vector* sf__vector_t_unknown_te___operator(struct sf__vector_t_unknown_te_ *this, struct sf__std__vector* __x);
+/* C++: operator=(initializer_list<bool> __l) */
 __SF_INLINE struct sf__std__vector* sf__vector_t_unknown_te___operator(struct sf__vector_t_unknown_te_ *this, struct sf__initializer_list_t_bool_te_ __l);
+/* C++: assign(size_type __n, const bool& __x) */
 __SF_INLINE void sf__vector_t_unknown_te___assign(struct sf__vector_t_unknown_te_ *this, long __n, const _Bool* __x);
+/* C++: assign(initializer_list<bool> __l) */
 __SF_INLINE void sf__vector_t_unknown_te___assign(struct sf__vector_t_unknown_te_ *this, struct sf__initializer_list_t_bool_te_ __l);
+/* C++: begin()  noexcept */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_unknown_te___begin(struct sf__vector_t_unknown_te_ *this);
+/* C++: begin() const  noexcept */
 __SF_INLINE struct sf__std___Bit_const_iterator sf__vector_t_unknown_te___begin(struct sf__vector_t_unknown_te_ *this);
+/* C++: end()  noexcept */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_unknown_te___end(struct sf__vector_t_unknown_te_ *this);
+/* C++: end() const  noexcept */
 __SF_INLINE struct sf__std___Bit_const_iterator sf__vector_t_unknown_te___end(struct sf__vector_t_unknown_te_ *this);
+/* C++: rbegin()  noexcept */
 __SF_INLINE struct sf__reverse_iterator_t__Bit_iterator_te_ sf__vector_t_unknown_te___rbegin(struct sf__vector_t_unknown_te_ *this);
+/* C++: rbegin() const  noexcept */
 __SF_INLINE struct sf__reverse_iterator_t__Bit_const_iterator_te_ sf__vector_t_unknown_te___rbegin(struct sf__vector_t_unknown_te_ *this);
+/* C++: rend()  noexcept */
 __SF_INLINE struct sf__reverse_iterator_t__Bit_iterator_te_ sf__vector_t_unknown_te___rend(struct sf__vector_t_unknown_te_ *this);
+/* C++: rend() const  noexcept */
 __SF_INLINE struct sf__reverse_iterator_t__Bit_const_iterator_te_ sf__vector_t_unknown_te___rend(struct sf__vector_t_unknown_te_ *this);
+/* C++: cbegin() const noexcept */
 __SF_INLINE struct sf__std___Bit_const_iterator sf__vector_t_unknown_te___cbegin(struct sf__vector_t_unknown_te_ *this);
+/* C++: cend() const noexcept */
 __SF_INLINE struct sf__std___Bit_const_iterator sf__vector_t_unknown_te___cend(struct sf__vector_t_unknown_te_ *this);
+/* C++: crbegin() const noexcept */
 __SF_INLINE struct sf__reverse_iterator_t__Bit_const_iterator_te_ sf__vector_t_unknown_te___crbegin(struct sf__vector_t_unknown_te_ *this);
+/* C++: crend() const noexcept */
 __SF_INLINE struct sf__reverse_iterator_t__Bit_const_iterator_te_ sf__vector_t_unknown_te___crend(struct sf__vector_t_unknown_te_ *this);
+/* C++: size() const  noexcept */
 __SF_INLINE long sf__vector_t_unknown_te___size(struct sf__vector_t_unknown_te_ *this);
+/* C++: max_size() const  noexcept */
 __SF_INLINE long sf__vector_t_unknown_te___max_size(struct sf__vector_t_unknown_te_ *this);
+/* C++: capacity() const  noexcept */
 __SF_INLINE long sf__vector_t_unknown_te___capacity(struct sf__vector_t_unknown_te_ *this);
+/* C++: empty() const  noexcept */
 __SF_INLINE _Bool sf__vector_t_unknown_te___empty(struct sf__vector_t_unknown_te_ *this);
+/* C++: operator[](size_type __n) */
 __SF_INLINE struct sf__std___Bit_reference sf__vector_t_unknown_te___operator(struct sf__vector_t_unknown_te_ *this, long __n);
+/* C++: operator[](size_type __n) const */
 __SF_INLINE _Bool sf__vector_t_unknown_te___operator(struct sf__vector_t_unknown_te_ *this, long __n);
+/* C++: _M_range_check(size_type __n) const */
 __SF_INLINE void sf__vector_t_unknown_te____M_range_check(struct sf__vector_t_unknown_te_ *this, long __n);
+/* C++: at(size_type __n) */
 __SF_INLINE struct sf__std___Bit_reference sf__vector_t_unknown_te___at(struct sf__vector_t_unknown_te_ *this, long __n);
+/* C++: at(size_type __n) const */
 __SF_INLINE _Bool sf__vector_t_unknown_te___at(struct sf__vector_t_unknown_te_ *this, long __n);
+/* C++: reserve(size_type __n) */
 __SF_INLINE void sf__vector_t_unknown_te___reserve(struct sf__vector_t_unknown_te_ *this, long __n);
+/* C++: front() */
 __SF_INLINE struct sf__std___Bit_reference sf__vector_t_unknown_te___front(struct sf__vector_t_unknown_te_ *this);
+/* C++: front() const */
 __SF_INLINE _Bool sf__vector_t_unknown_te___front(struct sf__vector_t_unknown_te_ *this);
+/* C++: back() */
 __SF_INLINE struct sf__std___Bit_reference sf__vector_t_unknown_te___back(struct sf__vector_t_unknown_te_ *this);
+/* C++: back() const */
 __SF_INLINE _Bool sf__vector_t_unknown_te___back(struct sf__vector_t_unknown_te_ *this);
+/* C++: push_back(bool __x) */
 __SF_INLINE void sf__vector_t_unknown_te___push_back(struct sf__vector_t_unknown_te_ *this, _Bool __x);
+/* C++: swap(vector& __x)  noexcept */
 __SF_INLINE void sf__vector_t_unknown_te___swap(struct sf__vector_t_unknown_te_ *this, struct sf__std__vector* __x);
+/* C++: swap(reference __x, reference __y)  noexcept */
 __SF_INLINE void sf__vector_t_unknown_te___swap(struct sf__vector_t_unknown_te_ *this, struct sf__std___Bit_reference __x, struct sf__std___Bit_reference __y);
+/* C++: insert(const_iterator __position, const bool& __x) */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_unknown_te___insert(struct sf__vector_t_unknown_te_ *this, struct sf__std___Bit_const_iterator __position, const _Bool* __x);
+/* C++: insert(const_iterator __position) */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_unknown_te___insert(struct sf__vector_t_unknown_te_ *this, struct sf__std___Bit_const_iterator __position);
+/* C++: insert(const_iterator __position, size_type __n, const bool& __x) */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_unknown_te___insert(struct sf__vector_t_unknown_te_ *this, struct sf__std___Bit_const_iterator __position, long __n, const _Bool* __x);
+/* C++: insert(const_iterator __p, initializer_list<bool> __l) */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_unknown_te___insert(struct sf__vector_t_unknown_te_ *this, struct sf__std___Bit_const_iterator __p, struct sf__initializer_list_t_bool_te_ __l);
+/* C++: pop_back() */
 __SF_INLINE void sf__vector_t_unknown_te___pop_back(struct sf__vector_t_unknown_te_ *this);
+/* C++: erase(const_iterator __position) */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_unknown_te___erase(struct sf__vector_t_unknown_te_ *this, struct sf__std___Bit_const_iterator __position);
+/* C++: erase(const_iterator __first, const_iterator __last) */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_unknown_te___erase(struct sf__vector_t_unknown_te_ *this, struct sf__std___Bit_const_iterator __first, struct sf__std___Bit_const_iterator __last);
+/* C++: resize(size_type __new_size, bool __x = bool()) */
 __SF_INLINE void sf__vector_t_unknown_te___resize(struct sf__vector_t_unknown_te_ *this, long __new_size, _Bool __x);
+/* C++: shrink_to_fit() */
 __SF_INLINE void sf__vector_t_unknown_te___shrink_to_fit(struct sf__vector_t_unknown_te_ *this);
+/* C++: flip()  noexcept */
 __SF_INLINE void sf__vector_t_unknown_te___flip(struct sf__vector_t_unknown_te_ *this);
+/* C++: clear()  noexcept */
 __SF_INLINE void sf__vector_t_unknown_te___clear(struct sf__vector_t_unknown_te_ *this);
+/* C++: _M_copy_aligned(const_iterator __first, const_iterator __last, */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_unknown_te____M_copy_aligned(struct sf__vector_t_unknown_te_ *this, struct sf__std___Bit_const_iterator __first, struct sf__std___Bit_const_iterator __last, struct sf__std___Bit_iterator __result);
+/* C++: _M_initialize(size_type __n) */
 __SF_INLINE void sf__vector_t_unknown_te____M_initialize(struct sf__vector_t_unknown_te_ *this, long __n);
+/* C++: _M_initialize_value(bool __x)  noexcept */
 __SF_INLINE void sf__vector_t_unknown_te____M_initialize_value(struct sf__vector_t_unknown_te_ *this, _Bool __x);
+/* C++: _M_reallocate(size_type __n); */
 __SF_INLINE void sf__vector_t_unknown_te____M_reallocate(struct sf__vector_t_unknown_te_ *this, long);
+/* C++: _M_shrink_to_fit(); */
 __SF_INLINE _Bool sf__vector_t_unknown_te____M_shrink_to_fit(struct sf__vector_t_unknown_te_ *this);
+/* C++: _M_fill_assign(size_t __n, bool __x) */
 __SF_INLINE void sf__vector_t_unknown_te____M_fill_assign(struct sf__vector_t_unknown_te_ *this, long __n, _Bool __x);
+/* C++: _M_fill_insert(iterator __position, size_type __n, bool __x); */
 __SF_INLINE void sf__vector_t_unknown_te____M_fill_insert(struct sf__vector_t_unknown_te_ *this, struct sf__std___Bit_iterator, long, _Bool);
+/* C++: _M_insert_aux(iterator __position, bool __x); */
 __SF_INLINE void sf__vector_t_unknown_te____M_insert_aux(struct sf__vector_t_unknown_te_ *this, struct sf__std___Bit_iterator, _Bool);
+/* C++: _M_check_len(size_type __n, const char* __s) const */
 __SF_INLINE long sf__vector_t_unknown_te____M_check_len(struct sf__vector_t_unknown_te_ *this, long __n, const char* __s);
+/* C++: _M_erase_at_end(iterator __pos) */
 __SF_INLINE void sf__vector_t_unknown_te____M_erase_at_end(struct sf__vector_t_unknown_te_ *this, struct sf__std___Bit_iterator __pos);
+/* C++: _M_erase(iterator __pos); */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_unknown_te____M_erase(struct sf__vector_t_unknown_te_ *this, struct sf__std___Bit_iterator);
+/* C++: _M_erase(iterator __first, iterator __last); */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_unknown_te____M_erase(struct sf__vector_t_unknown_te_ *this, struct sf__std___Bit_iterator, struct sf__std___Bit_iterator);
+/* C++: void data() = delete; */
 __SF_INLINE void sf__vector_t_unknown_te___data(struct sf__vector_t_unknown_te_ *this);
-/* C++:       get_allocator() const */
+/* C++: get_allocator() const */
 __SF_INLINE /*dep:_Tp*/ int sf__vector_t_unknown_te___ctor(struct sf__vector_t_unknown_te_ *this) {
     {
         return /* expr */();
     }
 }
-/* C++:       vector(const allocator_type& __a) */
+/* C++: vector(const allocator_type& __a) */
 __SF_INLINE void sf__vector_t_unknown_te___ctor(struct sf__vector_t_unknown_te_ *this, const /*dep:_Tp*/ int* __a) {
 }
-/* C++:       vector(size_type __n, const allocator_type& __a = allocator_type()) */
+/* C++: vector(size_type __n, const allocator_type& __a = allocator_type()) */
 __SF_INLINE void sf__vector_t_unknown_te___ctor(struct sf__vector_t_unknown_te_ *this, long __n, const /*dep:_Tp*/ int* __a) {
 }
-/* C++:       vector(size_type __n, const bool& __value, */
+/* C++: vector(size_type __n, const bool& __value, */
 __SF_INLINE void sf__vector_t_unknown_te___ctor(struct sf__vector_t_unknown_te_ *this, long __n, const _Bool* __value, const /*dep:_Tp*/ int* __a) {
     {
         this->_M_initialize(__n);
         this->_M_initialize_value(__value);
     }
 }
-/* C++:       vector(const vector& __x) */
+/* C++: vector(const vector& __x) */
 __SF_INLINE void sf__vector_t_unknown_te___ctor(struct sf__vector_t_unknown_te_ *this, const struct sf__std__vector* __x) {
     {
         {
@@ -1556,10 +1767,10 @@ __SF_INLINE void sf__vector_t_unknown_te___ctor(struct sf__vector_t_unknown_te_ 
         this->_M_copy_aligned(__xbegin, __xend, this->begin());
     }
 }
-/* C++:       vector(vector&& __x, const allocator_type& __a, true_type) noexcept */
+/* C++: vector(vector&& __x, const allocator_type& __a, true_type) noexcept */
 __SF_INLINE void sf__vector_t_unknown_te___ctor(struct sf__vector_t_unknown_te_ *this, struct sf__std__vector* __x, const /*dep:_Tp*/ int* __a, struct sf__integral_constant_t_bool_te_) {
 }
-/* C++:       vector(vector&& __x, const allocator_type& __a, false_type) */
+/* C++: vector(vector&& __x, const allocator_type& __a, false_type) */
 __SF_INLINE void sf__vector_t_unknown_te___ctor(struct sf__vector_t_unknown_te_ *this, struct sf__std__vector* __x, const /*dep:_Tp*/ int* __a, struct sf__integral_constant_t_bool_te_) {
     {
         if ((__x.get_allocator() == __a)) this->_M_move_data(/* expr */(__x));
@@ -1570,23 +1781,23 @@ __SF_INLINE void sf__vector_t_unknown_te___ctor(struct sf__vector_t_unknown_te_ 
         }
     }
 }
-/* C++:       vector(vector&& __x, const __type_identity_t<allocator_type>& __a) */
+/* C++: vector(vector&& __x, const __type_identity_t<allocator_type>& __a) */
 __SF_INLINE void sf__vector_t_unknown_te___ctor(struct sf__vector_t_unknown_te_ *this, struct sf__std__vector* __x, const struct sf____type_identity_t* __a) {
 }
-/* C++:       vector(const vector& __x, const __type_identity_t<allocator_type>& __a) */
+/* C++: vector(const vector& __x, const __type_identity_t<allocator_type>& __a) */
 __SF_INLINE void sf__vector_t_unknown_te___ctor(struct sf__vector_t_unknown_te_ *this, const struct sf__std__vector* __x, const struct sf____type_identity_t* __a) {
     {
         this->_M_initialize(__x.size());
         this->_M_copy_aligned(__x.begin(), __x.end(), this->begin());
     }
 }
-/* C++:       vector(initializer_list<bool> __l, */
+/* C++: vector(initializer_list<bool> __l, */
 __SF_INLINE void sf__vector_t_unknown_te___ctor(struct sf__vector_t_unknown_te_ *this, struct sf__initializer_list_t_bool_te_ __l, const /*dep:_Tp*/ int* __a) {
     {
         _M_initialize_range(sf__initializer_list_t_bool_te___begin(&__l), sf__initializer_list_t_bool_te___end(&__l), random_access_iterator_tag());
     }
 }
-/* C++:       operator=(const vector& __x) */
+/* C++: operator=(const vector& __x) */
 __SF_INLINE struct sf__std__vector* sf__vector_t_unknown_te___operator(struct sf__vector_t_unknown_te_ *this, const struct sf__std__vector* __x) {
     if (((&__x) == this)) return (*this);
     if (/* expr */) {
@@ -1604,7 +1815,7 @@ __SF_INLINE struct sf__std__vector* sf__vector_t_unknown_te___operator(struct sf
     (this->_M_impl._M_finish = this->_M_copy_aligned(__x.begin(), __x.end(), this->begin()));
     return (*this);
 }
-/* C++:       operator=(vector&& __x) noexcept(_Bit_alloc_traits::_S_nothrow_move()) */
+/* C++: operator=(vector&& __x) noexcept(_Bit_alloc_traits::_S_nothrow_move()) */
 __SF_INLINE struct sf__std__vector* sf__vector_t_unknown_te___operator(struct sf__vector_t_unknown_te_ *this, struct sf__std__vector* __x) {
     if ((/* expr */() || (this->_M_get_Bit_allocator() == __x._M_get_Bit_allocator()))) {
         this->_M_deallocate();
@@ -1621,134 +1832,134 @@ __SF_INLINE struct sf__std__vector* sf__vector_t_unknown_te___operator(struct sf
     }
     return (*this);
 }
-/* C++:       operator=(initializer_list<bool> __l) */
+/* C++: operator=(initializer_list<bool> __l) */
 __SF_INLINE struct sf__std__vector* sf__vector_t_unknown_te___operator(struct sf__vector_t_unknown_te_ *this, struct sf__initializer_list_t_bool_te_ __l) {
     this->assign(sf__initializer_list_t_bool_te___begin(&__l), sf__initializer_list_t_bool_te___end(&__l));
     return (*this);
 }
-/* C++:       assign(size_type __n, const bool& __x) */
+/* C++: assign(size_type __n, const bool& __x) */
 __SF_INLINE void sf__vector_t_unknown_te___assign(struct sf__vector_t_unknown_te_ *this, long __n, const _Bool* __x) {
     this->_M_fill_assign(__n, __x);
 }
-/* C++:       assign(initializer_list<bool> __l) */
+/* C++: assign(initializer_list<bool> __l) */
 __SF_INLINE void sf__vector_t_unknown_te___assign(struct sf__vector_t_unknown_te_ *this, struct sf__initializer_list_t_bool_te_ __l) {
     _M_assign_aux(sf__initializer_list_t_bool_te___begin(&__l), sf__initializer_list_t_bool_te___end(&__l), random_access_iterator_tag());
 }
-/* C++:       begin()  noexcept */
+/* C++: begin()  noexcept */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_unknown_te___begin(struct sf__vector_t_unknown_te_ *this) {
     return this->iterator(this->_M_impl._M_start._M_p, 0);
 }
-/* C++:       begin() const  noexcept */
+/* C++: begin() const  noexcept */
 __SF_INLINE struct sf__std___Bit_const_iterator sf__vector_t_unknown_te___begin(struct sf__vector_t_unknown_te_ *this) {
     return this->const_iterator(this->_M_impl._M_start._M_p, 0);
 }
-/* C++:       end()  noexcept */
+/* C++: end()  noexcept */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_unknown_te___end(struct sf__vector_t_unknown_te_ *this) {
     return this->_M_impl._M_finish;
 }
-/* C++:       end() const  noexcept */
+/* C++: end() const  noexcept */
 __SF_INLINE struct sf__std___Bit_const_iterator sf__vector_t_unknown_te___end(struct sf__vector_t_unknown_te_ *this) {
     return this->_M_impl._M_finish;
 }
-/* C++:       rbegin()  noexcept */
+/* C++: rbegin()  noexcept */
 __SF_INLINE struct sf__reverse_iterator_t__Bit_iterator_te_ sf__vector_t_unknown_te___rbegin(struct sf__vector_t_unknown_te_ *this) {
     return this->reverse_iterator(this->end());
 }
-/* C++:       rbegin() const  noexcept */
+/* C++: rbegin() const  noexcept */
 __SF_INLINE struct sf__reverse_iterator_t__Bit_const_iterator_te_ sf__vector_t_unknown_te___rbegin(struct sf__vector_t_unknown_te_ *this) {
     return this->const_reverse_iterator(this->end());
 }
-/* C++:       rend()  noexcept */
+/* C++: rend()  noexcept */
 __SF_INLINE struct sf__reverse_iterator_t__Bit_iterator_te_ sf__vector_t_unknown_te___rend(struct sf__vector_t_unknown_te_ *this) {
     return this->reverse_iterator(this->begin());
 }
-/* C++:       rend() const  noexcept */
+/* C++: rend() const  noexcept */
 __SF_INLINE struct sf__reverse_iterator_t__Bit_const_iterator_te_ sf__vector_t_unknown_te___rend(struct sf__vector_t_unknown_te_ *this) {
     return this->const_reverse_iterator(this->begin());
 }
-/* C++:       cbegin() const noexcept */
+/* C++: cbegin() const noexcept */
 __SF_INLINE struct sf__std___Bit_const_iterator sf__vector_t_unknown_te___cbegin(struct sf__vector_t_unknown_te_ *this) {
     return this->const_iterator(this->_M_impl._M_start._M_p, 0);
 }
-/* C++:       cend() const noexcept */
+/* C++: cend() const noexcept */
 __SF_INLINE struct sf__std___Bit_const_iterator sf__vector_t_unknown_te___cend(struct sf__vector_t_unknown_te_ *this) {
     return this->_M_impl._M_finish;
 }
-/* C++:       crbegin() const noexcept */
+/* C++: crbegin() const noexcept */
 __SF_INLINE struct sf__reverse_iterator_t__Bit_const_iterator_te_ sf__vector_t_unknown_te___crbegin(struct sf__vector_t_unknown_te_ *this) {
     return this->const_reverse_iterator(this->end());
 }
-/* C++:       crend() const noexcept */
+/* C++: crend() const noexcept */
 __SF_INLINE struct sf__reverse_iterator_t__Bit_const_iterator_te_ sf__vector_t_unknown_te___crend(struct sf__vector_t_unknown_te_ *this) {
     return this->const_reverse_iterator(this->begin());
 }
-/* C++:       size() const  noexcept */
+/* C++: size() const  noexcept */
 __SF_INLINE long sf__vector_t_unknown_te___size(struct sf__vector_t_unknown_te_ *this) {
     return this->size_type((this->end() - this->begin()));
 }
-/* C++:       max_size() const  noexcept */
+/* C++: max_size() const  noexcept */
 __SF_INLINE long sf__vector_t_unknown_te___max_size(struct sf__vector_t_unknown_te_ *this) {
     const long __isize = ((/* expr */ - (int)) + 1);
     const long __asize = /* expr */(_M_get_Bit_allocator());
     return ((__asize <= (__isize / (int))) ? (__asize * (int)) : __isize);
 }
-/* C++:       capacity() const  noexcept */
+/* C++: capacity() const  noexcept */
 __SF_INLINE long sf__vector_t_unknown_te___capacity(struct sf__vector_t_unknown_te_ *this) {
     return this->size_type((this->const_iterator(this->_M_impl._M_end_addr(), 0) - this->begin()));
 }
-/* C++:       empty() const  noexcept */
+/* C++: empty() const  noexcept */
 __SF_INLINE _Bool sf__vector_t_unknown_te___empty(struct sf__vector_t_unknown_te_ *this) {
     return (this->begin() == this->end());
 }
-/* C++:       operator[](size_type __n) */
+/* C++: operator[](size_type __n) */
 __SF_INLINE struct sf__std___Bit_reference sf__vector_t_unknown_te___operator(struct sf__vector_t_unknown_te_ *this, long __n) {
     return this->begin()[__n];
 }
-/* C++:       operator[](size_type __n) const */
+/* C++: operator[](size_type __n) const */
 __SF_INLINE _Bool sf__vector_t_unknown_te___operator(struct sf__vector_t_unknown_te_ *this, long __n) {
     return this->begin()[__n];
 }
-/* C++:       _M_range_check(size_type __n) const */
+/* C++: _M_range_check(size_type __n) const */
 __SF_INLINE void sf__vector_t_unknown_te____M_range_check(struct sf__vector_t_unknown_te_ *this, long __n) {
     if ((__n >= this->size())) __throw_out_of_range_fmt("vector<bool>::_M_range_check: __n ", __n, this->size());
 }
-/* C++:       at(size_type __n) */
+/* C++: at(size_type __n) */
 __SF_INLINE struct sf__std___Bit_reference sf__vector_t_unknown_te___at(struct sf__vector_t_unknown_te_ *this, long __n) {
     this->_M_range_check(__n);
     return (*this)[__n];
 }
-/* C++:       at(size_type __n) const */
+/* C++: at(size_type __n) const */
 __SF_INLINE _Bool sf__vector_t_unknown_te___at(struct sf__vector_t_unknown_te_ *this, long __n) {
     this->_M_range_check(__n);
     return (*this)[__n];
 }
-/* C++:       reserve(size_type __n) */
+/* C++: reserve(size_type __n) */
 __SF_INLINE void sf__vector_t_unknown_te___reserve(struct sf__vector_t_unknown_te_ *this, long __n) {
     if ((__n > this->max_size())) __throw_length_error("vector::reserve");
     if ((this->capacity() < __n)) sf__vector_t_unknown_te____M_reallocate(this, __n);
 }
-/* C++:       front() */
+/* C++: front() */
 __SF_INLINE struct sf__std___Bit_reference sf__vector_t_unknown_te___front(struct sf__vector_t_unknown_te_ *this) {
     return (*this->begin());
 }
-/* C++:       front() const */
+/* C++: front() const */
 __SF_INLINE _Bool sf__vector_t_unknown_te___front(struct sf__vector_t_unknown_te_ *this) {
     return (*this->begin());
 }
-/* C++:       back() */
+/* C++: back() */
 __SF_INLINE struct sf__std___Bit_reference sf__vector_t_unknown_te___back(struct sf__vector_t_unknown_te_ *this) {
     return (*(this->end() - 1));
 }
-/* C++:       back() const */
+/* C++: back() const */
 __SF_INLINE _Bool sf__vector_t_unknown_te___back(struct sf__vector_t_unknown_te_ *this) {
     return (*(this->end() - 1));
 }
-/* C++:       push_back(bool __x) */
+/* C++: push_back(bool __x) */
 __SF_INLINE void sf__vector_t_unknown_te___push_back(struct sf__vector_t_unknown_te_ *this, _Bool __x) {
     if ((this->_M_impl._M_finish._M_p != this->_M_impl._M_end_addr())) ((*(this->_M_impl._M_finish++)) = __x);
     else sf__vector_t_unknown_te____M_insert_aux(this, this->end(), __x);
 }
-/* C++:       swap(vector& __x)  noexcept */
+/* C++: swap(vector& __x)  noexcept */
 __SF_INLINE void sf__vector_t_unknown_te___swap(struct sf__vector_t_unknown_te_ *this, struct sf__std__vector* __x) {
     do {
         ;
@@ -1757,69 +1968,69 @@ __SF_INLINE void sf__vector_t_unknown_te___swap(struct sf__vector_t_unknown_te_ 
     this->_M_impl._M_swap_data(__x._M_impl);
     /* expr */(_M_get_Bit_allocator(), __x._M_get_Bit_allocator());
 }
-/* C++:       swap(reference __x, reference __y)  noexcept */
+/* C++: swap(reference __x, reference __y)  noexcept */
 __SF_INLINE void sf__vector_t_unknown_te___swap(struct sf__vector_t_unknown_te_ *this, struct sf__std___Bit_reference __x, struct sf__std___Bit_reference __y) {
     _Bool __tmp = __x;
     (__x = __y);
     (__y = __tmp);
 }
-/* C++:       insert(const_iterator __position, const bool& __x) */
+/* C++: insert(const_iterator __position, const bool& __x) */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_unknown_te___insert(struct sf__vector_t_unknown_te_ *this, struct sf__std___Bit_const_iterator __position, const _Bool* __x) {
     const long __n = (__position - this->begin());
     if (((this->_M_impl._M_finish._M_p != this->_M_impl._M_end_addr()) && (__position == this->end()))) ((*(this->_M_impl._M_finish++)) = __x);
     else sf__vector_t_unknown_te____M_insert_aux(this, sf__std___Bit_const_iterator___M_const_cast(&__position), __x);
     return (this->begin() + __n);
 }
-/* C++:       insert(const_iterator __position) */
+/* C++: insert(const_iterator __position) */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_unknown_te___insert(struct sf__vector_t_unknown_te_ *this, struct sf__std___Bit_const_iterator __position) {
     return this->insert(sf__std___Bit_const_iterator___M_const_cast(&__position), false);
 }
-/* C++:       insert(const_iterator __position, size_type __n, const bool& __x) */
+/* C++: insert(const_iterator __position, size_type __n, const bool& __x) */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_unknown_te___insert(struct sf__vector_t_unknown_te_ *this, struct sf__std___Bit_const_iterator __position, long __n, const _Bool* __x) {
     long __offset = (__position - this->cbegin());
     sf__vector_t_unknown_te____M_fill_insert(this, sf__std___Bit_const_iterator___M_const_cast(&__position), __n, __x);
     return (this->begin() + __offset);
 }
-/* C++:       insert(const_iterator __p, initializer_list<bool> __l) */
+/* C++: insert(const_iterator __p, initializer_list<bool> __l) */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_unknown_te___insert(struct sf__vector_t_unknown_te_ *this, struct sf__std___Bit_const_iterator __p, struct sf__initializer_list_t_bool_te_ __l) {
     return this->insert(__p, sf__initializer_list_t_bool_te___begin(&__l), sf__initializer_list_t_bool_te___end(&__l));
 }
-/* C++:       pop_back() */
+/* C++: pop_back() */
 __SF_INLINE void sf__vector_t_unknown_te___pop_back(struct sf__vector_t_unknown_te_ *this) {
     (--this->_M_impl._M_finish);
 }
-/* C++:       erase(const_iterator __position) */
+/* C++: erase(const_iterator __position) */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_unknown_te___erase(struct sf__vector_t_unknown_te_ *this, struct sf__std___Bit_const_iterator __position) {
     return sf__vector_t_unknown_te____M_erase(this, sf__std___Bit_const_iterator___M_const_cast(&__position));
 }
-/* C++:       erase(const_iterator __first, const_iterator __last) */
+/* C++: erase(const_iterator __first, const_iterator __last) */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_unknown_te___erase(struct sf__vector_t_unknown_te_ *this, struct sf__std___Bit_const_iterator __first, struct sf__std___Bit_const_iterator __last) {
     return sf__vector_t_unknown_te____M_erase(this, sf__std___Bit_const_iterator___M_const_cast(&__first), sf__std___Bit_const_iterator___M_const_cast(&__last));
 }
-/* C++:       resize(size_type __new_size, bool __x = bool()) */
+/* C++: resize(size_type __new_size, bool __x = bool()) */
 __SF_INLINE void sf__vector_t_unknown_te___resize(struct sf__vector_t_unknown_te_ *this, long __new_size, _Bool __x) {
     if ((__new_size < this->size())) this->_M_erase_at_end((this->begin() + this->difference_type(__new_size)));
     else this->insert(this->end(), (__new_size - this->size()), __x);
 }
-/* C++:       shrink_to_fit() */
+/* C++: shrink_to_fit() */
 __SF_INLINE void sf__vector_t_unknown_te___shrink_to_fit(struct sf__vector_t_unknown_te_ *this) {
     sf__vector_t_unknown_te____M_shrink_to_fit(this);
 }
-/* C++:       flip()  noexcept */
+/* C++: flip()  noexcept */
 __SF_INLINE void sf__vector_t_unknown_te___flip(struct sf__vector_t_unknown_te_ *this) {
     const unsigned long* __end = this->_M_impl._M_end_addr();
     for (unsigned long* __p = this->_M_impl._M_start._M_p; (__p != __end); (++__p)) ((*__p) = (~(*__p)));
 }
-/* C++:       clear()  noexcept */
+/* C++: clear()  noexcept */
 __SF_INLINE void sf__vector_t_unknown_te___clear(struct sf__vector_t_unknown_te_ *this) {
     this->_M_erase_at_end(this->begin());
 }
-/* C++:       _M_copy_aligned(const_iterator __first, const_iterator __last, */
+/* C++: _M_copy_aligned(const_iterator __first, const_iterator __last, */
 __SF_INLINE struct sf__std___Bit_iterator sf__vector_t_unknown_te____M_copy_aligned(struct sf__vector_t_unknown_te_ *this, struct sf__std___Bit_const_iterator __first, struct sf__std___Bit_const_iterator __last, struct sf__std___Bit_iterator __result) {
     unsigned long* __q = /* expr */(__first._M_p, __last._M_p, __result._M_p);
     return /* expr */(this->const_iterator(__last._M_p, 0), __last, this->iterator(__q, 0));
 }
-/* C++:       _M_initialize(size_type __n) */
+/* C++: _M_initialize(size_type __n) */
 __SF_INLINE void sf__vector_t_unknown_te____M_initialize(struct sf__vector_t_unknown_te_ *this, long __n) {
     if (__n) {
         struct sf___Bit_pointer __q = this->_M_allocate(__n);
@@ -1829,11 +2040,11 @@ __SF_INLINE void sf__vector_t_unknown_te____M_initialize(struct sf__vector_t_unk
         (this->_M_impl._M_finish = (__start + this->difference_type(__n)));
     }
 }
-/* C++:       _M_initialize_value(bool __x)  noexcept */
+/* C++: _M_initialize_value(bool __x)  noexcept */
 __SF_INLINE void sf__vector_t_unknown_te____M_initialize_value(struct sf__vector_t_unknown_te_ *this, _Bool __x) {
     if (/* expr */) __fill_bvector_n(__p, (this->_M_impl._M_end_addr() - __p), __x);
 }
-/* C++:       _M_fill_assign(size_t __n, bool __x) */
+/* C++: _M_fill_assign(size_t __n, bool __x) */
 __SF_INLINE void sf__vector_t_unknown_te____M_fill_assign(struct sf__vector_t_unknown_te_ *this, long __n, _Bool __x) {
     if ((__n > this->size())) {
         this->_M_initialize_value(__x);
@@ -1844,18 +2055,18 @@ __SF_INLINE void sf__vector_t_unknown_te____M_fill_assign(struct sf__vector_t_un
         this->_M_initialize_value(__x);
     }
 }
-/* C++:       _M_check_len(size_type __n, const char* __s) const */
+/* C++: _M_check_len(size_type __n, const char* __s) const */
 __SF_INLINE long sf__vector_t_unknown_te____M_check_len(struct sf__vector_t_unknown_te_ *this, long __n, const char* __s) {
     if (((this->max_size() - this->size()) < __n)) __throw_length_error(__s);
     const long __len = (this->size() + /* expr */(this->size(), __n));
     return (((__len < this->size()) || (__len > this->max_size())) ? this->max_size() : __len);
 }
-/* C++:       _M_erase_at_end(iterator __pos) */
+/* C++: _M_erase_at_end(iterator __pos) */
 __SF_INLINE void sf__vector_t_unknown_te____M_erase_at_end(struct sf__vector_t_unknown_te_ *this, struct sf__std___Bit_iterator __pos) {
     (this->_M_impl._M_finish = __pos);
 }
 
-/* C++:     reserve(size_type __n) */
+/* C++: reserve(size_type __n) */
 __SF_INLINE void sf__vector_t_unknown_te___reserve(struct sf__vector_t_unknown_te_ *this, int __n) {
     if ((__n > this->max_size())) __throw_length_error("vector::reserve");
     if ((this->capacity() < __n)) {
@@ -1877,7 +2088,7 @@ __SF_INLINE void sf__vector_t_unknown_te___reserve(struct sf__vector_t_unknown_t
     }
 }
 
-/* C++:     insert(const_iterator __position, const value_type& __x) */
+/* C++: insert(const_iterator __position, const value_type& __x) */
 __SF_INLINE struct sf__vector_t_unknown_te_ sf__vector_t_unknown_te___insert(struct sf__vector_t_unknown_te_ *this, int __position, const int* __x) {
     const long __n = (__position - this->begin());
     if ((this->_M_impl._M_finish != this->_M_impl._M_end_of_storage)) {
@@ -1902,7 +2113,7 @@ __SF_INLINE struct sf__vector_t_unknown_te_ sf__vector_t_unknown_te___insert(str
     return this->iterator((this->_M_impl._M_start + __n));
 }
 
-/* C++:     _M_erase(iterator __position) */
+/* C++: _M_erase(iterator __position) */
 __SF_INLINE struct sf__vector_t_unknown_te_ sf__vector_t_unknown_te____M_erase(struct sf__vector_t_unknown_te_ *this, struct sf__std__iterator __position) {
     if (((__position + 1) != this->end())) /* expr */((__position + 1), this->end(), __position);
     (--this->_M_impl._M_finish);
@@ -1911,7 +2122,7 @@ __SF_INLINE struct sf__vector_t_unknown_te_ sf__vector_t_unknown_te____M_erase(s
     return __position;
 }
 
-/* C++:     _M_erase(iterator __first, iterator __last) */
+/* C++: _M_erase(iterator __first, iterator __last) */
 __SF_INLINE struct sf__vector_t_unknown_te_ sf__vector_t_unknown_te____M_erase(struct sf__vector_t_unknown_te_ *this, struct sf__std__iterator __first, struct sf__std__iterator __last) {
     if ((__first != __last)) {
         if ((__last != this->end())) /* expr */(__last, this->end(), __first);
@@ -1920,7 +2131,7 @@ __SF_INLINE struct sf__vector_t_unknown_te_ sf__vector_t_unknown_te____M_erase(s
     return __first;
 }
 
-/* C++:     _M_fill_assign(size_t __n, const value_type& __val) */
+/* C++: _M_fill_assign(size_t __n, const value_type& __val) */
 __SF_INLINE void sf__vector_t_unknown_te____M_fill_assign(struct sf__vector_t_unknown_te_ *this, long __n, const int* __val) {
     if ((__n > this->capacity())) {
         struct sf__std__vector __tmp;
@@ -1937,7 +2148,7 @@ __SF_INLINE void sf__vector_t_unknown_te____M_fill_assign(struct sf__vector_t_un
     else this->_M_erase_at_end(/* expr */(this->_M_impl._M_start, __n, __val));
 }
 
-/* C++:     _M_insert_rval(const_iterator __position, value_type&& __v) -> iterator */
+/* C++: _M_insert_rval(const_iterator __position, value_type&& __v) -> iterator */
 __SF_INLINE int sf__vector_t_unknown_te____M_insert_rval(struct sf__vector_t_unknown_te_ *this, int __position, int* __v) {
     const int __n = (__position - this->cbegin());
     if ((this->_M_impl._M_finish != this->_M_impl._M_end_of_storage)) if ((__position == this->cend())) {
@@ -1951,7 +2162,7 @@ __SF_INLINE int sf__vector_t_unknown_te____M_insert_rval(struct sf__vector_t_unk
     return this->iterator((this->_M_impl._M_start + __n));
 }
 
-/* C++:     _M_fill_insert(iterator __position, size_type __n, const value_type& __x) */
+/* C++: _M_fill_insert(iterator __position, size_type __n, const value_type& __x) */
 __SF_INLINE void sf__vector_t_unknown_te____M_fill_insert(struct sf__vector_t_unknown_te_ *this, struct sf__std__iterator __position, int __n, const int* __x) {
     if ((__n != 0)) {
         if ((this->size_type((this->_M_impl._M_end_of_storage - this->_M_impl._M_finish)) >= __n)) {
@@ -2008,7 +2219,7 @@ __SF_INLINE void sf__vector_t_unknown_te____M_fill_insert(struct sf__vector_t_un
     }
 }
 
-/* C++:     _M_default_append(size_type __n) */
+/* C++: _M_default_append(size_type __n) */
 __SF_INLINE void sf__vector_t_unknown_te____M_default_append(struct sf__vector_t_unknown_te_ *this, int __n) {
     if ((__n != 0)) {
         const long __size = this->size();
@@ -2057,14 +2268,14 @@ __SF_INLINE void sf__vector_t_unknown_te____M_default_append(struct sf__vector_t
     }
 }
 
-/* C++:     _M_shrink_to_fit() */
+/* C++: _M_shrink_to_fit() */
 __SF_INLINE _Bool sf__vector_t_unknown_te____M_shrink_to_fit(struct sf__vector_t_unknown_te_ *this) {
     if ((this->capacity() == this->size())) return false;
     ;
     return /* expr */((*this));
 }
 
-/* C++:     _M_reallocate(size_type __n) */
+/* C++: _M_reallocate(size_type __n) */
 __SF_INLINE void sf__vector_t_unknown_te____M_reallocate(struct sf__vector_t_unknown_te_ *this, int __n) {
     struct sf___Bit_pointer __q = this->_M_allocate(__n);
     struct sf__std___Bit_iterator __start;
@@ -2077,7 +2288,7 @@ __SF_INLINE void sf__vector_t_unknown_te____M_reallocate(struct sf__vector_t_unk
     (this->_M_impl._M_end_of_storage = (__q + _S_nword(__n)));
 }
 
-/* C++:     _M_fill_insert(iterator __position, size_type __n, bool __x) */
+/* C++: _M_fill_insert(iterator __position, size_type __n, bool __x) */
 __SF_INLINE void sf__vector_t_unknown_te____M_fill_insert(struct sf__vector_t_unknown_te_ *this, struct sf__std__iterator __position, int __n, _Bool __x) {
     if ((__n == 0)) return;
     if (((this->capacity() - this->size()) >= __n)) {
@@ -2100,7 +2311,7 @@ __SF_INLINE void sf__vector_t_unknown_te____M_fill_insert(struct sf__vector_t_un
     }
 }
 
-/* C++:     _M_insert_aux(iterator __position, bool __x) */
+/* C++: _M_insert_aux(iterator __position, bool __x) */
 __SF_INLINE void sf__vector_t_unknown_te____M_insert_aux(struct sf__vector_t_unknown_te_ *this, struct sf__std__iterator __position, _Bool __x) {
     if ((this->_M_impl._M_finish._M_p != this->_M_impl._M_end_addr())) {
         /* expr */(__position, this->_M_impl._M_finish, (this->_M_impl._M_finish + 1));
@@ -2122,20 +2333,20 @@ __SF_INLINE void sf__vector_t_unknown_te____M_insert_aux(struct sf__vector_t_unk
     }
 }
 
-/* C++:     _M_erase(iterator __position) */
+/* C++: _M_erase(iterator __position) */
 __SF_INLINE struct sf__vector_t_bool_te_ sf__vector_t_unknown_te____M_erase(struct sf__vector_t_unknown_te_ *this, struct sf__std__iterator __position) {
     if (((__position + 1) != this->end())) /* expr */((__position + 1), this->end(), __position);
     (--this->_M_impl._M_finish);
     return __position;
 }
 
-/* C++:     _M_erase(iterator __first, iterator __last) */
+/* C++: _M_erase(iterator __first, iterator __last) */
 __SF_INLINE struct sf__vector_t_bool_te_ sf__vector_t_unknown_te____M_erase(struct sf__vector_t_unknown_te_ *this, struct sf__std__iterator __first, struct sf__std__iterator __last) {
     if ((__first != __last)) this->_M_erase_at_end(/* expr */(__last, this->end(), __first));
     return __first;
 }
 
-/* C++:     _M_shrink_to_fit() */
+/* C++: _M_shrink_to_fit() */
 __SF_INLINE _Bool sf__vector_t_unknown_te____M_shrink_to_fit(struct sf__vector_t_unknown_te_ *this) {
     if (((this->capacity() - this->size()) < (int))) return false;
     if (true) {
@@ -2151,219 +2362,256 @@ __SF_INLINE _Bool sf__vector_t_unknown_te____M_shrink_to_fit(struct sf__vector_t
     }
 }
 
-/* C++:     class initializer_list */
+/* C++: class initializer_list */
 struct sf__initializer_list_t_bool_te_ {
     const _Bool* _M_array;
     long _M_len;
 };
+/* C++: constexpr initializer_list(const_iterator __a, size_type __l) */
 __SF_INLINE void sf__initializer_list_t_bool_te___ctor(struct sf__initializer_list_t_bool_te_ *this, const _Bool* __a, long __l);
+/* C++: constexpr initializer_list() noexcept */
 __SF_INLINE void sf__initializer_list_t_bool_te___ctor(struct sf__initializer_list_t_bool_te_ *this);
+/* C++: size() const noexcept */
 __SF_INLINE long sf__initializer_list_t_bool_te___size(struct sf__initializer_list_t_bool_te_ *this);
+/* C++: begin() const noexcept */
 __SF_INLINE const _Bool* sf__initializer_list_t_bool_te___begin(struct sf__initializer_list_t_bool_te_ *this);
+/* C++: end() const noexcept */
 __SF_INLINE const _Bool* sf__initializer_list_t_bool_te___end(struct sf__initializer_list_t_bool_te_ *this);
-/* C++:       constexpr initializer_list(const_iterator __a, size_type __l) */
+/* C++: constexpr initializer_list(const_iterator __a, size_type __l) */
 __SF_INLINE void sf__initializer_list_t_bool_te___ctor(struct sf__initializer_list_t_bool_te_ *this, const _Bool* __a, long __l) {
     this->_M_array = __a;
     this->_M_len = __l;
 }
-/* C++:       constexpr initializer_list() noexcept */
+/* C++: constexpr initializer_list() noexcept */
 __SF_INLINE void sf__initializer_list_t_bool_te___ctor(struct sf__initializer_list_t_bool_te_ *this) {
     this->_M_array = 0;
     this->_M_len = 0;
 }
-/* C++:       size() const noexcept */
+/* C++: size() const noexcept */
 __SF_INLINE long sf__initializer_list_t_bool_te___size(struct sf__initializer_list_t_bool_te_ *this) {
     return this->_M_len;
 }
-/* C++:       begin() const noexcept */
+/* C++: begin() const noexcept */
 __SF_INLINE const _Bool* sf__initializer_list_t_bool_te___begin(struct sf__initializer_list_t_bool_te_ *this) {
     return this->_M_array;
 }
-/* C++:       end() const noexcept */
+/* C++: end() const noexcept */
 __SF_INLINE const _Bool* sf__initializer_list_t_bool_te___end(struct sf__initializer_list_t_bool_te_ *this) {
     return (this->begin() + this->size());
 }
 
-/* C++:     class reverse_iterator */
+/* C++: class reverse_iterator */
 struct sf__reverse_iterator_t__Bit_const_iterator_te_ {
     struct sf__std___Bit_const_iterator current;
 };
+/* C++: reverse_iterator() */
 __SF_INLINE void sf__reverse_iterator_t__Bit_const_iterator_te___ctor(struct sf__reverse_iterator_t__Bit_const_iterator_te_ *this);
+/* C++: reverse_iterator(iterator_type __x) */
 __SF_INLINE void sf__reverse_iterator_t__Bit_const_iterator_te___ctor(struct sf__reverse_iterator_t__Bit_const_iterator_te_ *this, struct sf__std___Bit_const_iterator __x);
+/* C++: reverse_iterator(const reverse_iterator& __x) */
 __SF_INLINE void sf__reverse_iterator_t__Bit_const_iterator_te___ctor(struct sf__reverse_iterator_t__Bit_const_iterator_te_ *this, const struct sf__std__reverse_iterator* __x);
+/* C++: reverse_iterator& operator=(const reverse_iterator&) = default; */
 __SF_INLINE struct sf__std__reverse_iterator* sf__reverse_iterator_t__Bit_const_iterator_te___operator(struct sf__reverse_iterator_t__Bit_const_iterator_te_ *this, const struct sf__std__reverse_iterator*);
+/* C++: base() const */
 __SF_INLINE struct sf__std___Bit_const_iterator sf__reverse_iterator_t__Bit_const_iterator_te___base(struct sf__reverse_iterator_t__Bit_const_iterator_te_ *this);
+/* C++: operator*() const */
 __SF_INLINE struct sf__reference sf__reverse_iterator_t__Bit_const_iterator_te___operator(struct sf__reverse_iterator_t__Bit_const_iterator_te_ *this);
+/* C++: operator->() const */
 __SF_INLINE struct sf__pointer sf__reverse_iterator_t__Bit_const_iterator_te___operator(struct sf__reverse_iterator_t__Bit_const_iterator_te_ *this);
+/* C++: operator++() */
 __SF_INLINE struct sf__std__reverse_iterator* sf__reverse_iterator_t__Bit_const_iterator_te___operator(struct sf__reverse_iterator_t__Bit_const_iterator_te_ *this);
+/* C++: operator++(int) */
 __SF_INLINE struct sf__std__reverse_iterator sf__reverse_iterator_t__Bit_const_iterator_te___operator(struct sf__reverse_iterator_t__Bit_const_iterator_te_ *this, int);
+/* C++: operator--() */
 __SF_INLINE struct sf__std__reverse_iterator* sf__reverse_iterator_t__Bit_const_iterator_te___operator(struct sf__reverse_iterator_t__Bit_const_iterator_te_ *this);
+/* C++: operator--(int) */
 __SF_INLINE struct sf__std__reverse_iterator sf__reverse_iterator_t__Bit_const_iterator_te___operator(struct sf__reverse_iterator_t__Bit_const_iterator_te_ *this, int);
+/* C++: operator+(difference_type __n) const */
 __SF_INLINE struct sf__std__reverse_iterator sf__reverse_iterator_t__Bit_const_iterator_te___operator(struct sf__reverse_iterator_t__Bit_const_iterator_te_ *this, struct sf__difference_type __n);
+/* C++: operator+=(difference_type __n) */
 __SF_INLINE struct sf__std__reverse_iterator* sf__reverse_iterator_t__Bit_const_iterator_te___operator(struct sf__reverse_iterator_t__Bit_const_iterator_te_ *this, struct sf__difference_type __n);
+/* C++: operator-(difference_type __n) const */
 __SF_INLINE struct sf__std__reverse_iterator sf__reverse_iterator_t__Bit_const_iterator_te___operator(struct sf__reverse_iterator_t__Bit_const_iterator_te_ *this, struct sf__difference_type __n);
+/* C++: operator-=(difference_type __n) */
 __SF_INLINE struct sf__std__reverse_iterator* sf__reverse_iterator_t__Bit_const_iterator_te___operator(struct sf__reverse_iterator_t__Bit_const_iterator_te_ *this, struct sf__difference_type __n);
+/* C++: operator[](difference_type __n) const */
 __SF_INLINE struct sf__reference sf__reverse_iterator_t__Bit_const_iterator_te___operator(struct sf__reverse_iterator_t__Bit_const_iterator_te_ *this, struct sf__difference_type __n);
-/* C++:       reverse_iterator() */
+/* C++: reverse_iterator() */
 __SF_INLINE void sf__reverse_iterator_t__Bit_const_iterator_te___ctor(struct sf__reverse_iterator_t__Bit_const_iterator_te_ *this) {
     sf__std___Bit_const_iterator__ctor(&this->current);
 }
-/* C++:       reverse_iterator(iterator_type __x) */
+/* C++: reverse_iterator(iterator_type __x) */
 __SF_INLINE void sf__reverse_iterator_t__Bit_const_iterator_te___ctor(struct sf__reverse_iterator_t__Bit_const_iterator_te_ *this, struct sf__std___Bit_const_iterator __x) {
     sf__std___Bit_const_iterator__ctor(&this->current, __x);
 }
-/* C++:       reverse_iterator(const reverse_iterator& __x) */
+/* C++: reverse_iterator(const reverse_iterator& __x) */
 __SF_INLINE void sf__reverse_iterator_t__Bit_const_iterator_te___ctor(struct sf__reverse_iterator_t__Bit_const_iterator_te_ *this, const struct sf__std__reverse_iterator* __x) {
     sf__std___Bit_const_iterator__ctor(&this->current, __x.current);
 }
-/* C++:       base() const */
+/* C++: base() const */
 __SF_INLINE struct sf__std___Bit_const_iterator sf__reverse_iterator_t__Bit_const_iterator_te___base(struct sf__reverse_iterator_t__Bit_const_iterator_te_ *this) {
     return this->current;
 }
-/* C++:       operator*() const */
+/* C++: operator*() const */
 __SF_INLINE struct sf__reference sf__reverse_iterator_t__Bit_const_iterator_te___operator(struct sf__reverse_iterator_t__Bit_const_iterator_te_ *this) {
     struct sf__std___Bit_const_iterator __tmp = this->current;
     return (*(--__tmp));
 }
-/* C++:       operator->() const */
+/* C++: operator->() const */
 __SF_INLINE struct sf__pointer sf__reverse_iterator_t__Bit_const_iterator_te___operator(struct sf__reverse_iterator_t__Bit_const_iterator_te_ *this) {
     struct sf__std___Bit_const_iterator __tmp = this->current;
     (--__tmp);
     return _S_to_pointer(__tmp);
 }
-/* C++:       operator++() */
+/* C++: operator++() */
 __SF_INLINE struct sf__std__reverse_iterator* sf__reverse_iterator_t__Bit_const_iterator_te___operator(struct sf__reverse_iterator_t__Bit_const_iterator_te_ *this) {
     (--this->current);
     return (*this);
 }
-/* C++:       operator++(int) */
+/* C++: operator++(int) */
 __SF_INLINE struct sf__std__reverse_iterator sf__reverse_iterator_t__Bit_const_iterator_te___operator(struct sf__reverse_iterator_t__Bit_const_iterator_te_ *this, int) {
     struct sf__std__reverse_iterator __tmp = (*this);
     (--this->current);
     return __tmp;
 }
-/* C++:       operator--() */
+/* C++: operator--() */
 __SF_INLINE struct sf__std__reverse_iterator* sf__reverse_iterator_t__Bit_const_iterator_te___operator(struct sf__reverse_iterator_t__Bit_const_iterator_te_ *this) {
     (++this->current);
     return (*this);
 }
-/* C++:       operator--(int) */
+/* C++: operator--(int) */
 __SF_INLINE struct sf__std__reverse_iterator sf__reverse_iterator_t__Bit_const_iterator_te___operator(struct sf__reverse_iterator_t__Bit_const_iterator_te_ *this, int) {
     struct sf__std__reverse_iterator __tmp = (*this);
     (++this->current);
     return __tmp;
 }
-/* C++:       operator+(difference_type __n) const */
+/* C++: operator+(difference_type __n) const */
 __SF_INLINE struct sf__std__reverse_iterator sf__reverse_iterator_t__Bit_const_iterator_te___operator(struct sf__reverse_iterator_t__Bit_const_iterator_te_ *this, struct sf__difference_type __n) {
     return this->reverse_iterator((this->current - __n));
 }
-/* C++:       operator+=(difference_type __n) */
+/* C++: operator+=(difference_type __n) */
 __SF_INLINE struct sf__std__reverse_iterator* sf__reverse_iterator_t__Bit_const_iterator_te___operator(struct sf__reverse_iterator_t__Bit_const_iterator_te_ *this, struct sf__difference_type __n) {
     (this->current -= __n);
     return (*this);
 }
-/* C++:       operator-(difference_type __n) const */
+/* C++: operator-(difference_type __n) const */
 __SF_INLINE struct sf__std__reverse_iterator sf__reverse_iterator_t__Bit_const_iterator_te___operator(struct sf__reverse_iterator_t__Bit_const_iterator_te_ *this, struct sf__difference_type __n) {
     return this->reverse_iterator((this->current + __n));
 }
-/* C++:       operator-=(difference_type __n) */
+/* C++: operator-=(difference_type __n) */
 __SF_INLINE struct sf__std__reverse_iterator* sf__reverse_iterator_t__Bit_const_iterator_te___operator(struct sf__reverse_iterator_t__Bit_const_iterator_te_ *this, struct sf__difference_type __n) {
     (this->current += __n);
     return (*this);
 }
-/* C++:       operator[](difference_type __n) const */
+/* C++: operator[](difference_type __n) const */
 __SF_INLINE struct sf__reference sf__reverse_iterator_t__Bit_const_iterator_te___operator(struct sf__reverse_iterator_t__Bit_const_iterator_te_ *this, struct sf__difference_type __n) {
     return (*((*this) + __n));
 }
 
-/* C++:     class reverse_iterator */
+/* C++: class reverse_iterator */
 struct sf__reverse_iterator_t__Bit_iterator_te_ {
     struct sf__std___Bit_iterator current;
 };
+/* C++: reverse_iterator() */
 __SF_INLINE void sf__reverse_iterator_t__Bit_iterator_te___ctor(struct sf__reverse_iterator_t__Bit_iterator_te_ *this);
+/* C++: reverse_iterator(iterator_type __x) */
 __SF_INLINE void sf__reverse_iterator_t__Bit_iterator_te___ctor(struct sf__reverse_iterator_t__Bit_iterator_te_ *this, struct sf__std___Bit_iterator __x);
+/* C++: reverse_iterator(const reverse_iterator& __x) */
 __SF_INLINE void sf__reverse_iterator_t__Bit_iterator_te___ctor(struct sf__reverse_iterator_t__Bit_iterator_te_ *this, const struct sf__std__reverse_iterator* __x);
+/* C++: reverse_iterator& operator=(const reverse_iterator&) = default; */
 __SF_INLINE struct sf__std__reverse_iterator* sf__reverse_iterator_t__Bit_iterator_te___operator(struct sf__reverse_iterator_t__Bit_iterator_te_ *this, const struct sf__std__reverse_iterator*);
+/* C++: base() const */
 __SF_INLINE struct sf__std___Bit_iterator sf__reverse_iterator_t__Bit_iterator_te___base(struct sf__reverse_iterator_t__Bit_iterator_te_ *this);
+/* C++: operator*() const */
 __SF_INLINE struct sf__reference sf__reverse_iterator_t__Bit_iterator_te___operator(struct sf__reverse_iterator_t__Bit_iterator_te_ *this);
+/* C++: operator->() const */
 __SF_INLINE struct sf__pointer sf__reverse_iterator_t__Bit_iterator_te___operator(struct sf__reverse_iterator_t__Bit_iterator_te_ *this);
+/* C++: operator++() */
 __SF_INLINE struct sf__std__reverse_iterator* sf__reverse_iterator_t__Bit_iterator_te___operator(struct sf__reverse_iterator_t__Bit_iterator_te_ *this);
+/* C++: operator++(int) */
 __SF_INLINE struct sf__std__reverse_iterator sf__reverse_iterator_t__Bit_iterator_te___operator(struct sf__reverse_iterator_t__Bit_iterator_te_ *this, int);
+/* C++: operator--() */
 __SF_INLINE struct sf__std__reverse_iterator* sf__reverse_iterator_t__Bit_iterator_te___operator(struct sf__reverse_iterator_t__Bit_iterator_te_ *this);
+/* C++: operator--(int) */
 __SF_INLINE struct sf__std__reverse_iterator sf__reverse_iterator_t__Bit_iterator_te___operator(struct sf__reverse_iterator_t__Bit_iterator_te_ *this, int);
+/* C++: operator+(difference_type __n) const */
 __SF_INLINE struct sf__std__reverse_iterator sf__reverse_iterator_t__Bit_iterator_te___operator(struct sf__reverse_iterator_t__Bit_iterator_te_ *this, struct sf__difference_type __n);
+/* C++: operator+=(difference_type __n) */
 __SF_INLINE struct sf__std__reverse_iterator* sf__reverse_iterator_t__Bit_iterator_te___operator(struct sf__reverse_iterator_t__Bit_iterator_te_ *this, struct sf__difference_type __n);
+/* C++: operator-(difference_type __n) const */
 __SF_INLINE struct sf__std__reverse_iterator sf__reverse_iterator_t__Bit_iterator_te___operator(struct sf__reverse_iterator_t__Bit_iterator_te_ *this, struct sf__difference_type __n);
+/* C++: operator-=(difference_type __n) */
 __SF_INLINE struct sf__std__reverse_iterator* sf__reverse_iterator_t__Bit_iterator_te___operator(struct sf__reverse_iterator_t__Bit_iterator_te_ *this, struct sf__difference_type __n);
+/* C++: operator[](difference_type __n) const */
 __SF_INLINE struct sf__reference sf__reverse_iterator_t__Bit_iterator_te___operator(struct sf__reverse_iterator_t__Bit_iterator_te_ *this, struct sf__difference_type __n);
-/* C++:       reverse_iterator() */
+/* C++: reverse_iterator() */
 __SF_INLINE void sf__reverse_iterator_t__Bit_iterator_te___ctor(struct sf__reverse_iterator_t__Bit_iterator_te_ *this) {
     sf__std___Bit_iterator__ctor(&this->current);
 }
-/* C++:       reverse_iterator(iterator_type __x) */
+/* C++: reverse_iterator(iterator_type __x) */
 __SF_INLINE void sf__reverse_iterator_t__Bit_iterator_te___ctor(struct sf__reverse_iterator_t__Bit_iterator_te_ *this, struct sf__std___Bit_iterator __x) {
     sf__std___Bit_iterator__ctor(&this->current, __x);
 }
-/* C++:       reverse_iterator(const reverse_iterator& __x) */
+/* C++: reverse_iterator(const reverse_iterator& __x) */
 __SF_INLINE void sf__reverse_iterator_t__Bit_iterator_te___ctor(struct sf__reverse_iterator_t__Bit_iterator_te_ *this, const struct sf__std__reverse_iterator* __x) {
     sf__std___Bit_iterator__ctor(&this->current, __x.current);
 }
-/* C++:       base() const */
+/* C++: base() const */
 __SF_INLINE struct sf__std___Bit_iterator sf__reverse_iterator_t__Bit_iterator_te___base(struct sf__reverse_iterator_t__Bit_iterator_te_ *this) {
     return this->current;
 }
-/* C++:       operator*() const */
+/* C++: operator*() const */
 __SF_INLINE struct sf__reference sf__reverse_iterator_t__Bit_iterator_te___operator(struct sf__reverse_iterator_t__Bit_iterator_te_ *this) {
     struct sf__std___Bit_iterator __tmp = this->current;
     return (*(--__tmp));
 }
-/* C++:       operator->() const */
+/* C++: operator->() const */
 __SF_INLINE struct sf__pointer sf__reverse_iterator_t__Bit_iterator_te___operator(struct sf__reverse_iterator_t__Bit_iterator_te_ *this) {
     struct sf__std___Bit_iterator __tmp = this->current;
     (--__tmp);
     return _S_to_pointer(__tmp);
 }
-/* C++:       operator++() */
+/* C++: operator++() */
 __SF_INLINE struct sf__std__reverse_iterator* sf__reverse_iterator_t__Bit_iterator_te___operator(struct sf__reverse_iterator_t__Bit_iterator_te_ *this) {
     (--this->current);
     return (*this);
 }
-/* C++:       operator++(int) */
+/* C++: operator++(int) */
 __SF_INLINE struct sf__std__reverse_iterator sf__reverse_iterator_t__Bit_iterator_te___operator(struct sf__reverse_iterator_t__Bit_iterator_te_ *this, int) {
     struct sf__std__reverse_iterator __tmp = (*this);
     (--this->current);
     return __tmp;
 }
-/* C++:       operator--() */
+/* C++: operator--() */
 __SF_INLINE struct sf__std__reverse_iterator* sf__reverse_iterator_t__Bit_iterator_te___operator(struct sf__reverse_iterator_t__Bit_iterator_te_ *this) {
     (++this->current);
     return (*this);
 }
-/* C++:       operator--(int) */
+/* C++: operator--(int) */
 __SF_INLINE struct sf__std__reverse_iterator sf__reverse_iterator_t__Bit_iterator_te___operator(struct sf__reverse_iterator_t__Bit_iterator_te_ *this, int) {
     struct sf__std__reverse_iterator __tmp = (*this);
     (++this->current);
     return __tmp;
 }
-/* C++:       operator+(difference_type __n) const */
+/* C++: operator+(difference_type __n) const */
 __SF_INLINE struct sf__std__reverse_iterator sf__reverse_iterator_t__Bit_iterator_te___operator(struct sf__reverse_iterator_t__Bit_iterator_te_ *this, struct sf__difference_type __n) {
     return this->reverse_iterator((this->current - __n));
 }
-/* C++:       operator+=(difference_type __n) */
+/* C++: operator+=(difference_type __n) */
 __SF_INLINE struct sf__std__reverse_iterator* sf__reverse_iterator_t__Bit_iterator_te___operator(struct sf__reverse_iterator_t__Bit_iterator_te_ *this, struct sf__difference_type __n) {
     (this->current -= __n);
     return (*this);
 }
-/* C++:       operator-(difference_type __n) const */
+/* C++: operator-(difference_type __n) const */
 __SF_INLINE struct sf__std__reverse_iterator sf__reverse_iterator_t__Bit_iterator_te___operator(struct sf__reverse_iterator_t__Bit_iterator_te_ *this, struct sf__difference_type __n) {
     return this->reverse_iterator((this->current + __n));
 }
-/* C++:       operator-=(difference_type __n) */
+/* C++: operator-=(difference_type __n) */
 __SF_INLINE struct sf__std__reverse_iterator* sf__reverse_iterator_t__Bit_iterator_te___operator(struct sf__reverse_iterator_t__Bit_iterator_te_ *this, struct sf__difference_type __n) {
     (this->current += __n);
     return (*this);
 }
-/* C++:       operator[](difference_type __n) const */
+/* C++: operator[](difference_type __n) const */
 __SF_INLINE struct sf__reference sf__reverse_iterator_t__Bit_iterator_te___operator(struct sf__reverse_iterator_t__Bit_iterator_te_ *this, struct sf__difference_type __n) {
     return (*((*this) + __n));
 }
@@ -2372,47 +2620,58 @@ __SF_INLINE struct sf__reference sf__reverse_iterator_t__Bit_iterator_te___opera
 
 /* unsupported top-level */
 
-/* C++:     struct _Bvector_base */
+/* C++: struct _Bvector_base */
 struct sf___Bvector_base_t_int_te_ {
     struct sf__std___Bvector_impl _M_impl;
 };
+/* C++: _M_get_Bit_allocator()  noexcept */
 __SF_INLINE struct sf__other* sf___Bvector_base_t_int_te____M_get_Bit_allocator(struct sf___Bvector_base_t_int_te_ *this);
+/* C++: _M_get_Bit_allocator() const  noexcept */
 __SF_INLINE const struct sf__other* sf___Bvector_base_t_int_te____M_get_Bit_allocator(struct sf___Bvector_base_t_int_te_ *this);
+/* C++: get_allocator() const  noexcept */
 __SF_INLINE int sf___Bvector_base_t_int_te___get_allocator(struct sf___Bvector_base_t_int_te_ *this);
+/* C++: _Bvector_base() = default; */
 __SF_INLINE void sf___Bvector_base_t_int_te___ctor(struct sf___Bvector_base_t_int_te_ *this);
+/* C++: _Bvector_base(const allocator_type& __a) */
 __SF_INLINE void sf___Bvector_base_t_int_te___ctor(struct sf___Bvector_base_t_int_te_ *this, const int* __a);
+/* C++: _Bvector_base(_Bvector_base&&) = default; */
 __SF_INLINE void sf___Bvector_base_t_int_te___ctor(struct sf___Bvector_base_t_int_te_ *this, struct sf__std___Bvector_base*);
+/* C++: _Bvector_base(_Bvector_base&& __x, const allocator_type& __a) noexcept */
 __SF_INLINE void sf___Bvector_base_t_int_te___ctor(struct sf___Bvector_base_t_int_te_ *this, struct sf__std___Bvector_base* __x, const int* __a);
+/* C++: _M_allocate(size_t __n) */
 __SF_INLINE struct sf__pointer sf___Bvector_base_t_int_te____M_allocate(struct sf___Bvector_base_t_int_te_ *this, long __n);
+/* C++: _M_deallocate() */
 __SF_INLINE void sf___Bvector_base_t_int_te____M_deallocate(struct sf___Bvector_base_t_int_te_ *this);
+/* C++: _M_move_data(_Bvector_base&& __x) noexcept */
 __SF_INLINE void sf___Bvector_base_t_int_te____M_move_data(struct sf___Bvector_base_t_int_te_ *this, struct sf__std___Bvector_base* __x);
+/* C++: _S_nword(size_t __n) */
 __SF_INLINE long sf___Bvector_base_t_int_te____S_nword(struct sf___Bvector_base_t_int_te_ *this, long __n);
-/* C++:       _M_get_Bit_allocator()  noexcept */
+/* C++: _M_get_Bit_allocator()  noexcept */
 __SF_INLINE struct sf__other* sf___Bvector_base_t_int_te____M_get_Bit_allocator(struct sf___Bvector_base_t_int_te_ *this) {
     return this->_M_impl;
 }
-/* C++:       _M_get_Bit_allocator() const  noexcept */
+/* C++: _M_get_Bit_allocator() const  noexcept */
 __SF_INLINE const struct sf__other* sf___Bvector_base_t_int_te____M_get_Bit_allocator(struct sf___Bvector_base_t_int_te_ *this) {
     return this->_M_impl;
 }
-/* C++:       get_allocator() const  noexcept */
+/* C++: get_allocator() const  noexcept */
 __SF_INLINE int sf___Bvector_base_t_int_te___get_allocator(struct sf___Bvector_base_t_int_te_ *this) {
     return this->allocator_type(this->_M_get_Bit_allocator());
 }
-/* C++:       _Bvector_base(const allocator_type& __a) */
+/* C++: _Bvector_base(const allocator_type& __a) */
 __SF_INLINE void sf___Bvector_base_t_int_te___ctor(struct sf___Bvector_base_t_int_te_ *this, const int* __a) {
     sf__std___Bvector_impl__ctor(&this->_M_impl, __a);
 }
-/* C++:       _Bvector_base(_Bvector_base&& __x, const allocator_type& __a) noexcept */
+/* C++: _Bvector_base(_Bvector_base&& __x, const allocator_type& __a) noexcept */
 __SF_INLINE void sf___Bvector_base_t_int_te___ctor(struct sf___Bvector_base_t_int_te_ *this, struct sf__std___Bvector_base* __x, const int* __a) {
     sf__std___Bvector_impl__ctor(&this->_M_impl, _Bit_alloc_type(__a), /* expr */(__x._M_impl));
 }
-/* C++:       _M_allocate(size_t __n) */
+/* C++: _M_allocate(size_t __n) */
 __SF_INLINE struct sf__pointer sf___Bvector_base_t_int_te____M_allocate(struct sf___Bvector_base_t_int_te_ *this, long __n) {
     struct sf__pointer __p = /* expr */(this->_M_impl, this->_S_nword(__n));
     return __p;
 }
-/* C++:       _M_deallocate() */
+/* C++: _M_deallocate() */
 __SF_INLINE void sf___Bvector_base_t_int_te____M_deallocate(struct sf___Bvector_base_t_int_te_ *this) {
     if (this->_M_impl._M_start._M_p) {
         const long __n = (sf__std___Bvector_impl___M_end_addr(&this->_M_impl) - this->_M_impl._M_start._M_p);
@@ -2420,11 +2679,11 @@ __SF_INLINE void sf___Bvector_base_t_int_te____M_deallocate(struct sf___Bvector_
         sf__std___Bvector_impl___M_reset(&this->_M_impl);
     }
 }
-/* C++:       _M_move_data(_Bvector_base&& __x) noexcept */
+/* C++: _M_move_data(_Bvector_base&& __x) noexcept */
 __SF_INLINE void sf___Bvector_base_t_int_te____M_move_data(struct sf___Bvector_base_t_int_te_ *this, struct sf__std___Bvector_base* __x) {
     sf__std___Bvector_impl___M_move_data(&this->_M_impl, /* expr */(__x._M_impl));
 }
-/* C++:       _S_nword(size_t __n) */
+/* C++: _S_nword(size_t __n) */
 __SF_INLINE long sf___Bvector_base_t_int_te____S_nword(struct sf___Bvector_base_t_int_te_ *this, long __n) {
     return (((__n + (int)) - 1) / (int));
 }
@@ -2433,54 +2692,61 @@ __SF_INLINE long sf___Bvector_base_t_int_te____S_nword(struct sf___Bvector_base_
 
 /* unsupported top-level */
 
-/* C++:   struct __alloc_traits */
+/* C++: struct __alloc_traits */
 struct sf____alloc_traits_t_other_te_ {
 };
+/* C++: static constexpr _Alloc _S_select_on_copy(const _Alloc& __a) */
 __SF_INLINE struct sf__other sf____alloc_traits_t_other_te____S_select_on_copy(struct sf____alloc_traits_t_other_te_ *this, const struct sf__other* __a);
+/* C++: static   void _S_on_swap(_Alloc& __a, _Alloc& __b) */
 __SF_INLINE void sf____alloc_traits_t_other_te____S_on_swap(struct sf____alloc_traits_t_other_te_ *this, struct sf__other* __a, struct sf__other* __b);
+/* C++: static constexpr bool _S_propagate_on_copy_assign() */
 __SF_INLINE _Bool sf____alloc_traits_t_other_te____S_propagate_on_copy_assign(struct sf____alloc_traits_t_other_te_ *this);
+/* C++: static constexpr bool _S_propagate_on_move_assign() */
 __SF_INLINE _Bool sf____alloc_traits_t_other_te____S_propagate_on_move_assign(struct sf____alloc_traits_t_other_te_ *this);
+/* C++: static constexpr bool _S_propagate_on_swap() */
 __SF_INLINE _Bool sf____alloc_traits_t_other_te____S_propagate_on_swap(struct sf____alloc_traits_t_other_te_ *this);
+/* C++: static constexpr bool _S_always_equal() */
 __SF_INLINE _Bool sf____alloc_traits_t_other_te____S_always_equal(struct sf____alloc_traits_t_other_te_ *this);
+/* C++: static constexpr bool _S_nothrow_move() */
 __SF_INLINE _Bool sf____alloc_traits_t_other_te____S_nothrow_move(struct sf____alloc_traits_t_other_te_ *this);
-/* C++:     static constexpr _Alloc _S_select_on_copy(const _Alloc& __a) */
+/* C++: static constexpr _Alloc _S_select_on_copy(const _Alloc& __a) */
 __SF_INLINE struct sf__other sf____alloc_traits_t_other_te____S_select_on_copy(struct sf____alloc_traits_t_other_te_ *this, const struct sf__other* __a) {
     return /* expr */(__a);
 }
-/* C++:     static   void _S_on_swap(_Alloc& __a, _Alloc& __b) */
+/* C++: static   void _S_on_swap(_Alloc& __a, _Alloc& __b) */
 __SF_INLINE void sf____alloc_traits_t_other_te____S_on_swap(struct sf____alloc_traits_t_other_te_ *this, struct sf__other* __a, struct sf__other* __b) {
     /* expr */(__a, __b);
 }
-/* C++:     static constexpr bool _S_propagate_on_copy_assign() */
+/* C++: static constexpr bool _S_propagate_on_copy_assign() */
 __SF_INLINE _Bool sf____alloc_traits_t_other_te____S_propagate_on_copy_assign(struct sf____alloc_traits_t_other_te_ *this) {
     return /* expr */;
 }
-/* C++:     static constexpr bool _S_propagate_on_move_assign() */
+/* C++: static constexpr bool _S_propagate_on_move_assign() */
 __SF_INLINE _Bool sf____alloc_traits_t_other_te____S_propagate_on_move_assign(struct sf____alloc_traits_t_other_te_ *this) {
     return /* expr */;
 }
-/* C++:     static constexpr bool _S_propagate_on_swap() */
+/* C++: static constexpr bool _S_propagate_on_swap() */
 __SF_INLINE _Bool sf____alloc_traits_t_other_te____S_propagate_on_swap(struct sf____alloc_traits_t_other_te_ *this) {
     return /* expr */;
 }
-/* C++:     static constexpr bool _S_always_equal() */
+/* C++: static constexpr bool _S_always_equal() */
 __SF_INLINE _Bool sf____alloc_traits_t_other_te____S_always_equal(struct sf____alloc_traits_t_other_te_ *this) {
     return /* expr */;
 }
-/* C++:     static constexpr bool _S_nothrow_move() */
+/* C++: static constexpr bool _S_nothrow_move() */
 __SF_INLINE _Bool sf____alloc_traits_t_other_te____S_nothrow_move(struct sf____alloc_traits_t_other_te_ *this) {
     return (this->_S_propagate_on_move_assign() || this->_S_always_equal());
 }
 
-/* C++:     struct __type_identity */
+/* C++: struct __type_identity */
 struct sf____type_identity_t_int_te_ {
 };
 
-/* C++:     struct iterator_traits<const _Tp*> */
+/* C++: struct iterator_traits<const _Tp*> */
 struct sf__iterator_traits_t__Bit_iterator_te_ {
 };
 
-/* C++:     struct iterator_traits<const _Tp*> */
+/* C++: struct iterator_traits<const _Tp*> */
 struct sf__iterator_traits_t__Bit_const_iterator_te_ {
 };
 
@@ -2488,47 +2754,58 @@ struct sf__iterator_traits_t__Bit_const_iterator_te_ {
 
 /* unsupported top-level */
 
-/* C++:     struct _Bvector_base */
+/* C++: struct _Bvector_base */
 struct sf___Bvector_base_t_unknown_te_ {
     struct sf__std___Bvector_impl _M_impl;
 };
+/* C++: _M_get_Bit_allocator()  noexcept */
 __SF_INLINE struct sf__other* sf___Bvector_base_t_unknown_te____M_get_Bit_allocator(struct sf___Bvector_base_t_unknown_te_ *this);
+/* C++: _M_get_Bit_allocator() const  noexcept */
 __SF_INLINE const struct sf__other* sf___Bvector_base_t_unknown_te____M_get_Bit_allocator(struct sf___Bvector_base_t_unknown_te_ *this);
+/* C++: get_allocator() const  noexcept */
 __SF_INLINE /*dep:_Tp*/ int sf___Bvector_base_t_unknown_te___get_allocator(struct sf___Bvector_base_t_unknown_te_ *this);
+/* C++: _Bvector_base() = default; */
 __SF_INLINE void sf___Bvector_base_t_unknown_te___ctor(struct sf___Bvector_base_t_unknown_te_ *this);
+/* C++: _Bvector_base(const allocator_type& __a) */
 __SF_INLINE void sf___Bvector_base_t_unknown_te___ctor(struct sf___Bvector_base_t_unknown_te_ *this, const /*dep:_Tp*/ int* __a);
+/* C++: _Bvector_base(_Bvector_base&&) = default; */
 __SF_INLINE void sf___Bvector_base_t_unknown_te___ctor(struct sf___Bvector_base_t_unknown_te_ *this, struct sf__std___Bvector_base*);
+/* C++: _Bvector_base(_Bvector_base&& __x, const allocator_type& __a) noexcept */
 __SF_INLINE void sf___Bvector_base_t_unknown_te___ctor(struct sf___Bvector_base_t_unknown_te_ *this, struct sf__std___Bvector_base* __x, const /*dep:_Tp*/ int* __a);
+/* C++: _M_allocate(size_t __n) */
 __SF_INLINE struct sf__pointer sf___Bvector_base_t_unknown_te____M_allocate(struct sf___Bvector_base_t_unknown_te_ *this, long __n);
+/* C++: _M_deallocate() */
 __SF_INLINE void sf___Bvector_base_t_unknown_te____M_deallocate(struct sf___Bvector_base_t_unknown_te_ *this);
+/* C++: _M_move_data(_Bvector_base&& __x) noexcept */
 __SF_INLINE void sf___Bvector_base_t_unknown_te____M_move_data(struct sf___Bvector_base_t_unknown_te_ *this, struct sf__std___Bvector_base* __x);
+/* C++: _S_nword(size_t __n) */
 __SF_INLINE long sf___Bvector_base_t_unknown_te____S_nword(struct sf___Bvector_base_t_unknown_te_ *this, long __n);
-/* C++:       _M_get_Bit_allocator()  noexcept */
+/* C++: _M_get_Bit_allocator()  noexcept */
 __SF_INLINE struct sf__other* sf___Bvector_base_t_unknown_te____M_get_Bit_allocator(struct sf___Bvector_base_t_unknown_te_ *this) {
     return this->_M_impl;
 }
-/* C++:       _M_get_Bit_allocator() const  noexcept */
+/* C++: _M_get_Bit_allocator() const  noexcept */
 __SF_INLINE const struct sf__other* sf___Bvector_base_t_unknown_te____M_get_Bit_allocator(struct sf___Bvector_base_t_unknown_te_ *this) {
     return this->_M_impl;
 }
-/* C++:       get_allocator() const  noexcept */
+/* C++: get_allocator() const  noexcept */
 __SF_INLINE /*dep:_Tp*/ int sf___Bvector_base_t_unknown_te___get_allocator(struct sf___Bvector_base_t_unknown_te_ *this) {
     return this->allocator_type(this->_M_get_Bit_allocator());
 }
-/* C++:       _Bvector_base(const allocator_type& __a) */
+/* C++: _Bvector_base(const allocator_type& __a) */
 __SF_INLINE void sf___Bvector_base_t_unknown_te___ctor(struct sf___Bvector_base_t_unknown_te_ *this, const /*dep:_Tp*/ int* __a) {
     sf__std___Bvector_impl__ctor(&this->_M_impl, __a);
 }
-/* C++:       _Bvector_base(_Bvector_base&& __x, const allocator_type& __a) noexcept */
+/* C++: _Bvector_base(_Bvector_base&& __x, const allocator_type& __a) noexcept */
 __SF_INLINE void sf___Bvector_base_t_unknown_te___ctor(struct sf___Bvector_base_t_unknown_te_ *this, struct sf__std___Bvector_base* __x, const /*dep:_Tp*/ int* __a) {
     sf__std___Bvector_impl__ctor(&this->_M_impl, _Bit_alloc_type(__a), /* expr */(__x._M_impl));
 }
-/* C++:       _M_allocate(size_t __n) */
+/* C++: _M_allocate(size_t __n) */
 __SF_INLINE struct sf__pointer sf___Bvector_base_t_unknown_te____M_allocate(struct sf___Bvector_base_t_unknown_te_ *this, long __n) {
     struct sf__pointer __p = /* expr */(this->_M_impl, this->_S_nword(__n));
     return __p;
 }
-/* C++:       _M_deallocate() */
+/* C++: _M_deallocate() */
 __SF_INLINE void sf___Bvector_base_t_unknown_te____M_deallocate(struct sf___Bvector_base_t_unknown_te_ *this) {
     if (this->_M_impl._M_start._M_p) {
         const long __n = (sf__std___Bvector_impl___M_end_addr(&this->_M_impl) - this->_M_impl._M_start._M_p);
@@ -2536,11 +2813,11 @@ __SF_INLINE void sf___Bvector_base_t_unknown_te____M_deallocate(struct sf___Bvec
         sf__std___Bvector_impl___M_reset(&this->_M_impl);
     }
 }
-/* C++:       _M_move_data(_Bvector_base&& __x) noexcept */
+/* C++: _M_move_data(_Bvector_base&& __x) noexcept */
 __SF_INLINE void sf___Bvector_base_t_unknown_te____M_move_data(struct sf___Bvector_base_t_unknown_te_ *this, struct sf__std___Bvector_base* __x) {
     sf__std___Bvector_impl___M_move_data(&this->_M_impl, /* expr */(__x._M_impl));
 }
-/* C++:       _S_nword(size_t __n) */
+/* C++: _S_nword(size_t __n) */
 __SF_INLINE long sf___Bvector_base_t_unknown_te____S_nword(struct sf___Bvector_base_t_unknown_te_ *this, long __n) {
     return (((__n + (int)) - 1) / (int));
 }
@@ -2549,47 +2826,58 @@ __SF_INLINE long sf___Bvector_base_t_unknown_te____S_nword(struct sf___Bvector_b
 
 /* unsupported top-level */
 
-/* C++:     struct _Bvector_base */
+/* C++: struct _Bvector_base */
 struct sf___Bvector_base_t_bool_te_ {
     struct sf__std___Bvector_impl _M_impl;
 };
+/* C++: _M_get_Bit_allocator()  noexcept */
 __SF_INLINE struct sf__other* sf___Bvector_base_t_bool_te____M_get_Bit_allocator(struct sf___Bvector_base_t_bool_te_ *this);
+/* C++: _M_get_Bit_allocator() const  noexcept */
 __SF_INLINE const struct sf__other* sf___Bvector_base_t_bool_te____M_get_Bit_allocator(struct sf___Bvector_base_t_bool_te_ *this);
+/* C++: get_allocator() const  noexcept */
 __SF_INLINE _Bool sf___Bvector_base_t_bool_te___get_allocator(struct sf___Bvector_base_t_bool_te_ *this);
+/* C++: _Bvector_base() = default; */
 __SF_INLINE void sf___Bvector_base_t_bool_te___ctor(struct sf___Bvector_base_t_bool_te_ *this);
+/* C++: _Bvector_base(const allocator_type& __a) */
 __SF_INLINE void sf___Bvector_base_t_bool_te___ctor(struct sf___Bvector_base_t_bool_te_ *this, const _Bool* __a);
+/* C++: _Bvector_base(_Bvector_base&&) = default; */
 __SF_INLINE void sf___Bvector_base_t_bool_te___ctor(struct sf___Bvector_base_t_bool_te_ *this, struct sf__std___Bvector_base*);
+/* C++: _Bvector_base(_Bvector_base&& __x, const allocator_type& __a) noexcept */
 __SF_INLINE void sf___Bvector_base_t_bool_te___ctor(struct sf___Bvector_base_t_bool_te_ *this, struct sf__std___Bvector_base* __x, const _Bool* __a);
+/* C++: _M_allocate(size_t __n) */
 __SF_INLINE struct sf__pointer sf___Bvector_base_t_bool_te____M_allocate(struct sf___Bvector_base_t_bool_te_ *this, long __n);
+/* C++: _M_deallocate() */
 __SF_INLINE void sf___Bvector_base_t_bool_te____M_deallocate(struct sf___Bvector_base_t_bool_te_ *this);
+/* C++: _M_move_data(_Bvector_base&& __x) noexcept */
 __SF_INLINE void sf___Bvector_base_t_bool_te____M_move_data(struct sf___Bvector_base_t_bool_te_ *this, struct sf__std___Bvector_base* __x);
+/* C++: _S_nword(size_t __n) */
 __SF_INLINE long sf___Bvector_base_t_bool_te____S_nword(struct sf___Bvector_base_t_bool_te_ *this, long __n);
-/* C++:       _M_get_Bit_allocator()  noexcept */
+/* C++: _M_get_Bit_allocator()  noexcept */
 __SF_INLINE struct sf__other* sf___Bvector_base_t_bool_te____M_get_Bit_allocator(struct sf___Bvector_base_t_bool_te_ *this) {
     return this->_M_impl;
 }
-/* C++:       _M_get_Bit_allocator() const  noexcept */
+/* C++: _M_get_Bit_allocator() const  noexcept */
 __SF_INLINE const struct sf__other* sf___Bvector_base_t_bool_te____M_get_Bit_allocator(struct sf___Bvector_base_t_bool_te_ *this) {
     return this->_M_impl;
 }
-/* C++:       get_allocator() const  noexcept */
+/* C++: get_allocator() const  noexcept */
 __SF_INLINE _Bool sf___Bvector_base_t_bool_te___get_allocator(struct sf___Bvector_base_t_bool_te_ *this) {
     return this->allocator_type(this->_M_get_Bit_allocator());
 }
-/* C++:       _Bvector_base(const allocator_type& __a) */
+/* C++: _Bvector_base(const allocator_type& __a) */
 __SF_INLINE void sf___Bvector_base_t_bool_te___ctor(struct sf___Bvector_base_t_bool_te_ *this, const _Bool* __a) {
     sf__std___Bvector_impl__ctor(&this->_M_impl, __a);
 }
-/* C++:       _Bvector_base(_Bvector_base&& __x, const allocator_type& __a) noexcept */
+/* C++: _Bvector_base(_Bvector_base&& __x, const allocator_type& __a) noexcept */
 __SF_INLINE void sf___Bvector_base_t_bool_te___ctor(struct sf___Bvector_base_t_bool_te_ *this, struct sf__std___Bvector_base* __x, const _Bool* __a) {
     sf__std___Bvector_impl__ctor(&this->_M_impl, _Bit_alloc_type(__a), /* expr */(__x._M_impl));
 }
-/* C++:       _M_allocate(size_t __n) */
+/* C++: _M_allocate(size_t __n) */
 __SF_INLINE struct sf__pointer sf___Bvector_base_t_bool_te____M_allocate(struct sf___Bvector_base_t_bool_te_ *this, long __n) {
     struct sf__pointer __p = /* expr */(this->_M_impl, this->_S_nword(__n));
     return __p;
 }
-/* C++:       _M_deallocate() */
+/* C++: _M_deallocate() */
 __SF_INLINE void sf___Bvector_base_t_bool_te____M_deallocate(struct sf___Bvector_base_t_bool_te_ *this) {
     if (this->_M_impl._M_start._M_p) {
         const long __n = (sf__std___Bvector_impl___M_end_addr(&this->_M_impl) - this->_M_impl._M_start._M_p);
@@ -2597,11 +2885,11 @@ __SF_INLINE void sf___Bvector_base_t_bool_te____M_deallocate(struct sf___Bvector
         sf__std___Bvector_impl___M_reset(&this->_M_impl);
     }
 }
-/* C++:       _M_move_data(_Bvector_base&& __x) noexcept */
+/* C++: _M_move_data(_Bvector_base&& __x) noexcept */
 __SF_INLINE void sf___Bvector_base_t_bool_te____M_move_data(struct sf___Bvector_base_t_bool_te_ *this, struct sf__std___Bvector_base* __x) {
     sf__std___Bvector_impl___M_move_data(&this->_M_impl, /* expr */(__x._M_impl));
 }
-/* C++:       _S_nword(size_t __n) */
+/* C++: _S_nword(size_t __n) */
 __SF_INLINE long sf___Bvector_base_t_bool_te____S_nword(struct sf___Bvector_base_t_bool_te_ *this, long __n) {
     return (((__n + (int)) - 1) / (int));
 }
@@ -2618,22 +2906,26 @@ __SF_INLINE long sf___Bvector_base_t_bool_te____S_nword(struct sf___Bvector_base
 
 /* unsupported top-level */
 
-/* C++:     struct __type_identity */
+/* C++: struct __type_identity */
 struct sf____type_identity_t_bool_te_ {
 };
 
-/* C++:     struct __type_identity */
+/* C++: struct __type_identity */
 struct sf____type_identity_t_unknown_te_ {
 };
 
-/* C++:     struct allocator_traits<allocator<void>> */
+/* C++: struct allocator_traits<allocator<void>> */
 struct sf__allocator_traits {
 };
+/* C++: allocate(allocator_type&, size_type, const void* = nullptr) = delete; */
 __SF_INLINE void* sf__allocator_traits__allocate(struct sf__allocator_traits *this, struct sf__allocator*, long, const void*);
+/* C++: deallocate(allocator_type&, void*, size_type) = delete; */
 __SF_INLINE void sf__allocator_traits__deallocate(struct sf__allocator_traits *this, struct sf__allocator*, void*, long);
+/* C++: max_size(const allocator_type&) = delete; */
 __SF_INLINE long sf__allocator_traits__max_size(struct sf__allocator_traits *this, const struct sf__allocator*);
+/* C++: select_on_container_copy_construction(const allocator_type& __rhs) */
 __SF_INLINE struct sf__allocator sf__allocator_traits__select_on_container_copy_construction(struct sf__allocator_traits *this, const struct sf__allocator* __rhs);
-/* C++:       select_on_container_copy_construction(const allocator_type& __rhs) */
+/* C++: select_on_container_copy_construction(const allocator_type& __rhs) */
 __SF_INLINE struct sf__allocator sf__allocator_traits__select_on_container_copy_construction(struct sf__allocator_traits *this, const struct sf__allocator* __rhs) {
     return __rhs;
 }
@@ -3495,7 +3787,7 @@ struct sf__allocator ;
 /* unsupported top-level */
 /* unsupported top-level */
 /* unsupported top-level */
-/* C++:   inline void __terminate()  noexcept */
+/* C++: inline void __terminate()  noexcept */
 void __terminate(void) {
     /*?*/ int terminate;
     terminate();
@@ -3503,40 +3795,60 @@ void __terminate(void) {
 
 
 
-/* C++:   __is_constant_evaluated()  noexcept */
+/* C++: __is_constant_evaluated()  noexcept */
 _Bool __is_constant_evaluated(void) {
     return false;
 }
 
+/* C++: __throw_bad_exception(void)  ; */
 void __throw_bad_exception(void);
+/* C++: __throw_bad_alloc(void)  ; */
 void __throw_bad_alloc(void);
+/* C++: __throw_bad_array_new_length(void)  ; */
 void __throw_bad_array_new_length(void);
+/* C++: __throw_bad_cast(void)  ; */
 void __throw_bad_cast(void);
+/* C++: __throw_bad_typeid(void)  ; */
 void __throw_bad_typeid(void);
+/* C++: __throw_logic_error(const char*)  ; */
 void __throw_logic_error(const char*);
+/* C++: __throw_domain_error(const char*)  ; */
 void __throw_domain_error(const char*);
+/* C++: __throw_invalid_argument(const char*)  ; */
 void __throw_invalid_argument(const char*);
+/* C++: __throw_length_error(const char*)  ; */
 void __throw_length_error(const char*);
+/* C++: __throw_out_of_range(const char*)  ; */
 void __throw_out_of_range(const char*);
+/* C++: __throw_out_of_range_fmt(const char*, ...) */
 void __throw_out_of_range_fmt(const char*);
+/* C++: __throw_runtime_error(const char*)  ; */
 void __throw_runtime_error(const char*);
+/* C++: __throw_range_error(const char*)  ; */
 void __throw_range_error(const char*);
+/* C++: __throw_overflow_error(const char*)  ; */
 void __throw_overflow_error(const char*);
+/* C++: __throw_underflow_error(const char*)  ; */
 void __throw_underflow_error(const char*);
+/* C++: __throw_ios_failure(const char*)  ; */
 void __throw_ios_failure(const char*);
+/* C++: __throw_ios_failure(const char*, int)  ; */
 void __throw_ios_failure(const char*, int);
+/* C++: __throw_system_error(int)  ; */
 void __throw_system_error(int);
+/* C++: __throw_future_error(int)  ; */
 void __throw_future_error(int);
+/* C++: __throw_bad_function_call()  ; */
 void __throw_bad_function_call(void);
 
-/* C++:   struct __true_type */
+/* C++: struct __true_type */
 struct sf__std____true_type {
 };
-/* C++:   struct __false_type */
+/* C++: struct __false_type */
 struct sf__std____false_type {
 };
 
-/* C++:   __is_null_pointer(std::nullptr_t) */
+/* C++: __is_null_pointer(std::nullptr_t) */
 _Bool __is_null_pointer(int) {
     return true;
 }
@@ -3544,76 +3856,80 @@ _Bool __is_null_pointer(int) {
 
 /* unsupported top-level */
 /* unsupported top-level */
-/* C++:   struct __do_is_destructible_impl */
+/* C++: struct __do_is_destructible_impl */
 struct sf__std____do_is_destructible_impl {
 };
-/* C++:   struct __do_is_nt_destructible_impl */
+/* C++: struct __do_is_nt_destructible_impl */
 struct sf__std____do_is_nt_destructible_impl {
 };
-/* C++:   struct __do_is_implicitly_default_constructible_impl */
+/* C++: struct __do_is_implicitly_default_constructible_impl */
 struct sf__std____do_is_implicitly_default_constructible_impl {
 };
+/* C++: static false_type __test(...); */
 __SF_INLINE struct sf__integral_constant_t_bool_te_ sf__std____do_is_implicitly_default_constructible_impl____test(struct sf__std____do_is_implicitly_default_constructible_impl *this);
-/* C++:   class __make_unsigned_selector_base */
+/* C++: class __make_unsigned_selector_base */
 struct sf__std____make_unsigned_selector_base {
 };
-/* C++:   struct __failure_type */
+/* C++: struct __failure_type */
 struct sf__std____failure_type {
 };
-/* C++:   struct __do_common_type_impl */
+/* C++: struct __do_common_type_impl */
 struct sf__std____do_common_type_impl {
 };
-/* C++:   struct __invoke_memfun_ref */
+/* C++: struct __invoke_memfun_ref */
 struct sf__std____invoke_memfun_ref {
 };
-/* C++:   struct __invoke_memfun_deref */
+/* C++: struct __invoke_memfun_deref */
 struct sf__std____invoke_memfun_deref {
 };
-/* C++:   struct __invoke_memobj_ref */
+/* C++: struct __invoke_memobj_ref */
 struct sf__std____invoke_memobj_ref {
 };
-/* C++:   struct __invoke_memobj_deref */
+/* C++: struct __invoke_memobj_deref */
 struct sf__std____invoke_memobj_deref {
 };
-/* C++:   struct __invoke_other */
+/* C++: struct __invoke_other */
 struct sf__std____invoke_other {
 };
-/* C++:   struct __result_of_memfun_ref_impl */
+/* C++: struct __result_of_memfun_ref_impl */
 struct sf__std____result_of_memfun_ref_impl {
 };
-/* C++:   struct __result_of_memfun_deref_impl */
+/* C++: struct __result_of_memfun_deref_impl */
 struct sf__std____result_of_memfun_deref_impl {
 };
-/* C++:   struct __result_of_memobj_ref_impl */
+/* C++: struct __result_of_memobj_ref_impl */
 struct sf__std____result_of_memobj_ref_impl {
 };
-/* C++:   struct __result_of_memobj_deref_impl */
+/* C++: struct __result_of_memobj_deref_impl */
 struct sf__std____result_of_memobj_deref_impl {
 };
-/* C++:   struct __result_of_other_impl */
+/* C++: struct __result_of_other_impl */
 struct sf__std____result_of_other_impl {
 };
-/* C++:     struct __do_is_swappable_impl */
+/* C++: struct __do_is_swappable_impl */
 struct sf__std____swappable_details____do_is_swappable_impl {
 };
-/* C++:     struct __do_is_nothrow_swappable_impl */
+/* C++: struct __do_is_nothrow_swappable_impl */
 struct sf__std____swappable_details____do_is_nothrow_swappable_impl {
 };
-/* C++:     struct __do_is_swappable_with_impl */
+/* C++: struct __do_is_swappable_with_impl */
 struct sf__std____swappable_with_details____do_is_swappable_with_impl {
 };
-/* C++:     struct __do_is_nothrow_swappable_with_impl */
+/* C++: struct __do_is_nothrow_swappable_with_impl */
 struct sf__std____swappable_with_details____do_is_nothrow_swappable_with_impl {
 };
-/* C++:   struct __nonesuchbase */
+/* C++: struct __nonesuchbase */
 struct sf__std____nonesuchbase {
 };
-/* C++:   struct __nonesuch : private __nonesuchbase */
+/* C++: struct __nonesuch : private __nonesuchbase */
 struct sf__std____nonesuch {
     struct sf__std____nonesuchbase __sf_base;
 };
+/* C++: ~__nonesuch() = delete; */
 __SF_INLINE void sf__std____nonesuch__dtor_body(struct sf__std____nonesuch *this);
+/* C++: __nonesuch(__nonesuch const&) = delete; */
 __SF_INLINE void sf__std____nonesuch__ctor(struct sf__std____nonesuch *this, const struct sf__std____nonesuch*);
+/* C++: void operator=(__nonesuch const&) = delete; */
 __SF_INLINE void sf__std____nonesuch__operator(struct sf__std____nonesuch *this, const struct sf__std____nonesuch*);
 __SF_INLINE void sf__std____nonesuch__dtor(struct sf__std____nonesuch *this);
 __SF_INLINE void sf__std____nonesuch__dtor(struct sf__std____nonesuch *this) {
@@ -3622,27 +3938,28 @@ __SF_INLINE void sf__std____nonesuch__dtor(struct sf__std____nonesuch *this) {
 
 
 
-/* C++:   struct piecewise_construct_t */
+/* C++: struct piecewise_construct_t */
 struct sf__std__piecewise_construct_t {
 };
+/* C++: struct piecewise_construct_t */
 __SF_INLINE void sf__std__piecewise_construct_t__ctor(struct sf__std__piecewise_construct_t *this);
 struct sf__std__piecewise_construct_t piecewise_construct = piecewise_construct_t();
 
-/* C++:   struct input_iterator_tag */
+/* C++: struct input_iterator_tag */
 struct sf__std__input_iterator_tag {
 };
-/* C++:   struct output_iterator_tag */
+/* C++: struct output_iterator_tag */
 struct sf__std__output_iterator_tag {
 };
-/* C++:   struct forward_iterator_tag : public input_iterator_tag */
+/* C++: struct forward_iterator_tag : public input_iterator_tag */
 struct sf__std__forward_iterator_tag {
     struct sf__std__input_iterator_tag __sf_base;
 };
-/* C++:   struct bidirectional_iterator_tag : public forward_iterator_tag */
+/* C++: struct bidirectional_iterator_tag : public forward_iterator_tag */
 struct sf__std__bidirectional_iterator_tag {
     struct sf__std__forward_iterator_tag __sf_base;
 };
-/* C++:   struct random_access_iterator_tag : public bidirectional_iterator_tag */
+/* C++: struct random_access_iterator_tag : public bidirectional_iterator_tag */
 struct sf__std__random_access_iterator_tag {
     struct sf__std__bidirectional_iterator_tag __sf_base;
 };
@@ -3655,74 +3972,78 @@ struct sf____undefined ;
 
 
 
-/* C++:   struct _Iter_less_iter */
+/* C++: struct _Iter_less_iter */
 struct sf____gnu_cxx____ops___Iter_less_iter {
 };
-/* C++:   __iter_less_iter() */
+/* C++: __iter_less_iter() */
 struct sf____gnu_cxx____ops___Iter_less_iter __iter_less_iter(void) {
     struct sf____gnu_cxx____ops___Iter_less_iter __SF_temp_0;
     sf____gnu_cxx____ops___Iter_less_iter__ctor(&__SF_temp_0);
     return __SF_temp_0;
 }
-/* C++:   struct _Iter_less_val */
+/* C++: struct _Iter_less_val */
 struct sf____gnu_cxx____ops___Iter_less_val {
 };
+/* C++: constexpr _Iter_less_val() = default; */
 __SF_INLINE void sf____gnu_cxx____ops___Iter_less_val__ctor(struct sf____gnu_cxx____ops___Iter_less_val *this);
+/* C++: _Iter_less_val(_Iter_less_iter) */
 __SF_INLINE void sf____gnu_cxx____ops___Iter_less_val__ctor(struct sf____gnu_cxx____ops___Iter_less_val *this, struct sf____gnu_cxx____ops___Iter_less_iter);
-/* C++:     _Iter_less_val(_Iter_less_iter) */
+/* C++: _Iter_less_val(_Iter_less_iter) */
 __SF_INLINE void sf____gnu_cxx____ops___Iter_less_val__ctor(struct sf____gnu_cxx____ops___Iter_less_val *this, struct sf____gnu_cxx____ops___Iter_less_iter) {
 }
-/* C++:   __iter_less_val() */
+/* C++: __iter_less_val() */
 struct sf____gnu_cxx____ops___Iter_less_val __iter_less_val(void) {
     struct sf____gnu_cxx____ops___Iter_less_val __SF_temp_0;
     sf____gnu_cxx____ops___Iter_less_val__ctor(&__SF_temp_0);
     return __SF_temp_0;
 }
-/* C++:   __iter_comp_val(_Iter_less_iter) */
+/* C++: __iter_comp_val(_Iter_less_iter) */
 struct sf____gnu_cxx____ops___Iter_less_val __iter_comp_val(struct sf____gnu_cxx____ops___Iter_less_iter) {
     struct sf____gnu_cxx____ops___Iter_less_val __SF_temp_0;
     sf____gnu_cxx____ops___Iter_less_val__ctor(&__SF_temp_0);
     return __SF_temp_0;
 }
-/* C++:   struct _Val_less_iter */
+/* C++: struct _Val_less_iter */
 struct sf____gnu_cxx____ops___Val_less_iter {
 };
+/* C++: constexpr _Val_less_iter() = default; */
 __SF_INLINE void sf____gnu_cxx____ops___Val_less_iter__ctor(struct sf____gnu_cxx____ops___Val_less_iter *this);
+/* C++: _Val_less_iter(_Iter_less_iter) */
 __SF_INLINE void sf____gnu_cxx____ops___Val_less_iter__ctor(struct sf____gnu_cxx____ops___Val_less_iter *this, struct sf____gnu_cxx____ops___Iter_less_iter);
-/* C++:     _Val_less_iter(_Iter_less_iter) */
+/* C++: _Val_less_iter(_Iter_less_iter) */
 __SF_INLINE void sf____gnu_cxx____ops___Val_less_iter__ctor(struct sf____gnu_cxx____ops___Val_less_iter *this, struct sf____gnu_cxx____ops___Iter_less_iter) {
 }
-/* C++:   __val_less_iter() */
+/* C++: __val_less_iter() */
 struct sf____gnu_cxx____ops___Val_less_iter __val_less_iter(void) {
     struct sf____gnu_cxx____ops___Val_less_iter __SF_temp_0;
     sf____gnu_cxx____ops___Val_less_iter__ctor(&__SF_temp_0);
     return __SF_temp_0;
 }
-/* C++:   __val_comp_iter(_Iter_less_iter) */
+/* C++: __val_comp_iter(_Iter_less_iter) */
 struct sf____gnu_cxx____ops___Val_less_iter __val_comp_iter(struct sf____gnu_cxx____ops___Iter_less_iter) {
     struct sf____gnu_cxx____ops___Val_less_iter __SF_temp_0;
     sf____gnu_cxx____ops___Val_less_iter__ctor(&__SF_temp_0);
     return __SF_temp_0;
 }
-/* C++:   struct _Iter_equal_to_iter */
+/* C++: struct _Iter_equal_to_iter */
 struct sf____gnu_cxx____ops___Iter_equal_to_iter {
 };
-/* C++:   __iter_equal_to_iter() */
+/* C++: __iter_equal_to_iter() */
 struct sf____gnu_cxx____ops___Iter_equal_to_iter __iter_equal_to_iter(void) {
     struct sf____gnu_cxx____ops___Iter_equal_to_iter __SF_temp_0;
     sf____gnu_cxx____ops___Iter_equal_to_iter__ctor(&__SF_temp_0);
     return __SF_temp_0;
 }
-/* C++:   struct _Iter_equal_to_val */
+/* C++: struct _Iter_equal_to_val */
 struct sf____gnu_cxx____ops___Iter_equal_to_val {
 };
-/* C++:   __iter_equal_to_val() */
+/* C++: __iter_equal_to_val() */
 struct sf____gnu_cxx____ops___Iter_equal_to_val __iter_equal_to_val(void) {
     struct sf____gnu_cxx____ops___Iter_equal_to_val __SF_temp_0;
     sf____gnu_cxx____ops___Iter_equal_to_val__ctor(&__SF_temp_0);
     return __SF_temp_0;
 }
-/* C++:   __iter_comp_val(_Iter_equal_to_iter) */
+/* C++: __iter_comp_val(_Iter_equal_to_iter) */
 struct sf____gnu_cxx____ops___Iter_equal_to_val __iter_comp_val(struct sf____gnu_cxx____ops___Iter_equal_to_iter) {
     struct sf____gnu_cxx____ops___Iter_equal_to_val __SF_temp_0;
     sf____gnu_cxx____ops___Iter_equal_to_val__ctor(&__SF_temp_0);
@@ -3730,55 +4051,63 @@ struct sf____gnu_cxx____ops___Iter_equal_to_val __iter_comp_val(struct sf____gnu
 }
 
 struct sf___Bit_iterator ;
+/* C++: __fill_a1( std ::_Bit_iterator,  std ::_Bit_iterator, */
 void __fill_a1(struct sf___Bit_iterator, struct sf___Bit_iterator, const _Bool*);
-/* C++:   __size_to_integer(int __n) */
+/* C++: __size_to_integer(int __n) */
 int __size_to_integer(int __n) {
     return __n;
 }
-/* C++:   __size_to_integer(unsigned __n) */
+/* C++: __size_to_integer(unsigned __n) */
 unsigned int __size_to_integer(unsigned int __n) {
     return __n;
 }
-/* C++:   __size_to_integer(long __n) */
+/* C++: __size_to_integer(long __n) */
 long __size_to_integer(long __n) {
     return __n;
 }
-/* C++:   __size_to_integer(unsigned long __n) */
+/* C++: __size_to_integer(unsigned long __n) */
 unsigned long __size_to_integer(unsigned long __n) {
     return __n;
 }
-/* C++:   __size_to_integer(long long __n) */
+/* C++: __size_to_integer(long long __n) */
 long long __size_to_integer(long long __n) {
     return __n;
 }
-/* C++:   __size_to_integer(unsigned long long __n) */
+/* C++: __size_to_integer(unsigned long long __n) */
 unsigned long long __size_to_integer(unsigned long long __n) {
     return __n;
 }
-/* C++:   __size_to_integer(float __n) */
+/* C++: __size_to_integer(float __n) */
 long long __size_to_integer(float __n) {
     return (long long)__n;
 }
-/* C++:   __size_to_integer(double __n) */
+/* C++: __size_to_integer(double __n) */
 long long __size_to_integer(double __n) {
     return (long long)__n;
 }
-/* C++:   __size_to_integer(long double __n) */
+/* C++: __size_to_integer(long double __n) */
 long long __size_to_integer(long double __n) {
     return (long long)__n;
 }
 
-/* C++:   class exception */
+/* C++: class exception */
 struct sf__std__exception__vtable;
 struct sf__std__exception {
     const struct sf__std__exception__vtable *__sf_vptr;
 };
+/* C++: exception()  noexcept */
 __SF_INLINE void sf__std__exception__ctor(struct sf__std__exception *this);
+/* C++: virtual ~exception()    noexcept ; */
 __SF_INLINE void sf__std__exception__dtor_body(struct sf__std__exception *this);
+/* C++: exception(const exception&) = default; */
 __SF_INLINE void sf__std__exception__ctor(struct sf__std__exception *this, const struct sf__std__exception*);
+/* C++: exception& operator=(const exception&) = default; */
 __SF_INLINE struct sf__std__exception* sf__std__exception__operator(struct sf__std__exception *this, const struct sf__std__exception*);
+/* C++: exception(exception&&) = default; */
 __SF_INLINE void sf__std__exception__ctor(struct sf__std__exception *this, struct sf__std__exception*);
+/* C++: exception& operator=(exception&&) = default; */
 __SF_INLINE struct sf__std__exception* sf__std__exception__operator(struct sf__std__exception *this, struct sf__std__exception*);
+/* C++: what() const    noexcept ; */
 __SF_INLINE const char* sf__std__exception__what(struct sf__std__exception *this);
 __SF_INLINE void sf__std__exception__dtor(struct sf__std__exception *this);
 struct sf__std__exception__vtable {
@@ -3787,7 +4116,7 @@ struct sf__std__exception__vtable {
 static const struct sf__std__exception__vtable sf__std__exception__vtable_instance = {
     sf__std__exception__what,
 };
-/* C++:     exception()  noexcept */
+/* C++: exception()  noexcept */
 __SF_INLINE void sf__std__exception__ctor(struct sf__std__exception *this) {
     this->__sf_vptr = &sf__std__exception__vtable_instance;
 }
@@ -3795,15 +4124,20 @@ __SF_INLINE void sf__std__exception__dtor(struct sf__std__exception *this) {
     sf__std__exception__dtor_body(this);
 }
 
-/* C++:   class bad_alloc : public exception */
+/* C++: class bad_alloc : public exception */
 struct sf__std__bad_alloc__vtable;
 struct sf__std__bad_alloc {
     struct sf__std__exception __sf_base;
 };
+/* C++: bad_alloc() throw() */
 __SF_INLINE void sf__std__bad_alloc__ctor(struct sf__std__bad_alloc *this);
+/* C++: bad_alloc(const bad_alloc&) = default; */
 __SF_INLINE void sf__std__bad_alloc__ctor(struct sf__std__bad_alloc *this, const struct sf__std__bad_alloc*);
+/* C++: bad_alloc& operator=(const bad_alloc&) = default; */
 __SF_INLINE struct sf__std__bad_alloc* sf__std__bad_alloc__operator(struct sf__std__bad_alloc *this, const struct sf__std__bad_alloc*);
+/* C++: virtual ~bad_alloc() throw(); */
 __SF_INLINE void sf__std__bad_alloc__dtor_body(struct sf__std__bad_alloc *this);
+/* C++: virtual const char* what() const throw(); */
 __SF_INLINE const char* sf__std__bad_alloc__what(struct sf__std__bad_alloc *this);
 __SF_INLINE void sf__std__bad_alloc__dtor(struct sf__std__bad_alloc *this);
 struct sf__std__bad_alloc__vtable {
@@ -3812,7 +4146,7 @@ struct sf__std__bad_alloc__vtable {
 static const struct sf__std__bad_alloc__vtable sf__std__bad_alloc__vtable_instance = {
     sf__std__bad_alloc__what,
 };
-/* C++:     bad_alloc() throw() */
+/* C++: bad_alloc() throw() */
 __SF_INLINE void sf__std__bad_alloc__ctor(struct sf__std__bad_alloc *this) {
     sf__std__exception__ctor(&this->__sf_base);
     this->__sf_vptr = &sf__std__bad_alloc__vtable_instance;
@@ -3821,13 +4155,16 @@ __SF_INLINE void sf__std__bad_alloc__dtor(struct sf__std__bad_alloc *this) {
     sf__std__bad_alloc__dtor_body(this);
     sf__std__exception__dtor(&this->__sf_base);
 }
-/* C++:   class bad_array_new_length : public bad_alloc */
+/* C++: class bad_array_new_length : public bad_alloc */
 struct sf__std__bad_array_new_length__vtable;
 struct sf__std__bad_array_new_length {
     struct sf__std__bad_alloc __sf_base;
 };
+/* C++: bad_array_new_length() throw() */
 __SF_INLINE void sf__std__bad_array_new_length__ctor(struct sf__std__bad_array_new_length *this);
+/* C++: virtual ~bad_array_new_length() throw(); */
 __SF_INLINE void sf__std__bad_array_new_length__dtor_body(struct sf__std__bad_array_new_length *this);
+/* C++: virtual const char* what() const throw(); */
 __SF_INLINE const char* sf__std__bad_array_new_length__what(struct sf__std__bad_array_new_length *this);
 __SF_INLINE void sf__std__bad_array_new_length__dtor(struct sf__std__bad_array_new_length *this);
 struct sf__std__bad_array_new_length__vtable {
@@ -3836,7 +4173,7 @@ struct sf__std__bad_array_new_length__vtable {
 static const struct sf__std__bad_array_new_length__vtable sf__std__bad_array_new_length__vtable_instance = {
     sf__std__bad_array_new_length__what,
 };
-/* C++:     bad_array_new_length() throw() */
+/* C++: bad_array_new_length() throw() */
 __SF_INLINE void sf__std__bad_array_new_length__ctor(struct sf__std__bad_array_new_length *this) {
     sf__std__bad_alloc__ctor(&this->__sf_base);
     this->__sf_vptr = &sf__std__bad_array_new_length__vtable_instance;
@@ -3845,27 +4182,38 @@ __SF_INLINE void sf__std__bad_array_new_length__dtor(struct sf__std__bad_array_n
     sf__std__bad_array_new_length__dtor_body(this);
     sf__std__bad_alloc__dtor(&this->__sf_base);
 }
-/* C++:   struct nothrow_t */
+/* C++: struct nothrow_t */
 struct sf__std__nothrow_t {
 };
+/* C++: explicit nothrow_t() = default; */
 __SF_INLINE void sf__std__nothrow_t__ctor(struct sf__std__nothrow_t *this);
 const struct sf__std__nothrow_t nothrow;
 /* unsupported top-level */
+/* C++: new_handler set_new_handler(new_handler) throw(); */
 /*?*/ int set_new_handler(/*?*/ int);
+/* C++: new_handler get_new_handler() noexcept; */
 /*?*/ int get_new_handler(void);
+/* C++: void* operator new(std::size_t) */
 void* operator(long);
+/* C++: void* operator new[](std::size_t) */
 void* operator(long);
+/* C++: void operator delete(void*)  noexcept */
 void operator(void*);
+/* C++: void operator delete[](void*)  noexcept */
 void operator(void*);
+/* C++: void* operator new(std::size_t, const std::nothrow_t&)  noexcept */
 void* operator(long, const struct sf__std__nothrow_t*);
+/* C++: void* operator new[](std::size_t, const std::nothrow_t&)  noexcept */
 void* operator(long, const struct sf__std__nothrow_t*);
+/* C++: void operator delete(void*, const std::nothrow_t&)  noexcept */
 void operator(void*, const struct sf__std__nothrow_t*);
+/* C++: void operator delete[](void*, const std::nothrow_t&)  noexcept */
 void operator(void*, const struct sf__std__nothrow_t*);
-/* C++:  inline void* operator new(std::size_t, void* __p)  noexcept */
+/* C++: inline void* operator new(std::size_t, void* __p)  noexcept */
 void* operator(long, void* __p) {
     return __p;
 }
-/* C++:  inline void* operator new[](std::size_t, void* __p)  noexcept */
+/* C++: inline void* operator new[](std::size_t, void* __p)  noexcept */
 void* operator(long, void* __p) {
     return __p;
 }
@@ -3881,7 +4229,7 @@ void operator(void*, void*) {
 
 
 
-/* C++:   struct __allocator_traits_base */
+/* C++: struct __allocator_traits_base */
 struct sf__std____allocator_traits_base {
 };
 
@@ -3889,24 +4237,28 @@ struct sf__std____allocator_traits_base {
 
 
 
+/* C++: _Hash_bytes(const void* __ptr, size_t __len, size_t __seed); */
 long _Hash_bytes(const void*, long, long);
+/* C++: _Fnv_hash_bytes(const void* __ptr, size_t __len, size_t __seed); */
 long _Fnv_hash_bytes(const void*, long, long);
 
-/* C++:   struct _Hash_impl */
+/* C++: struct _Hash_impl */
 struct sf__std___Hash_impl {
 };
+/* C++: hash(const void* __ptr, size_t __clength, */
 __SF_INLINE long sf__std___Hash_impl__ctor(struct sf__std___Hash_impl *this, const void* __ptr, long __clength, long __seed);
-/* C++:     hash(const void* __ptr, size_t __clength, */
+/* C++: hash(const void* __ptr, size_t __clength, */
 __SF_INLINE long sf__std___Hash_impl__ctor(struct sf__std___Hash_impl *this, const void* __ptr, long __clength, long __seed) {
     {
         return _Hash_bytes(__ptr, __clength, __seed);
     }
 }
-/* C++:   struct _Fnv_hash_impl */
+/* C++: struct _Fnv_hash_impl */
 struct sf__std___Fnv_hash_impl {
 };
+/* C++: hash(const void* __ptr, size_t __clength, */
 __SF_INLINE long sf__std___Fnv_hash_impl__ctor(struct sf__std___Fnv_hash_impl *this, const void* __ptr, long __clength, long __seed);
-/* C++:     hash(const void* __ptr, size_t __clength, */
+/* C++: hash(const void* __ptr, size_t __clength, */
 __SF_INLINE long sf__std___Fnv_hash_impl__ctor(struct sf__std___Fnv_hash_impl *this, const void* __ptr, long __clength, long __seed) {
     {
         return _Fnv_hash_bytes(__ptr, __clength, __seed);
@@ -3915,76 +4267,91 @@ __SF_INLINE long sf__std___Fnv_hash_impl__ctor(struct sf__std___Fnv_hash_impl *t
 
 /* unsupported top-level */
 enum  ;
+/* C++: __fill_bvector_n(_Bit_type*, size_t, bool)  noexcept ; */
 void __fill_bvector_n(unsigned long*, long, _Bool);
-/* C++:   struct _Bit_reference */
+/* C++: struct _Bit_reference */
 struct sf__std___Bit_reference {
     unsigned long* _M_p;
     unsigned long _M_mask;
 };
+/* C++: _Bit_reference(_Bit_type * __x, _Bit_type __y) */
 __SF_INLINE void sf__std___Bit_reference__ctor(struct sf__std___Bit_reference *this, unsigned long* __x, unsigned long __y);
+/* C++: _Bit_reference()  noexcept  : _M_p(0), _M_mask(0) */
 __SF_INLINE void sf__std___Bit_reference__ctor(struct sf__std___Bit_reference *this);
+/* C++: _Bit_reference(const _Bit_reference&) = default; */
 __SF_INLINE void sf__std___Bit_reference__ctor(struct sf__std___Bit_reference *this, const struct sf__std___Bit_reference*);
+/* C++: operator bool() const  noexcept */
 __SF_INLINE void sf__std___Bit_reference__operator(struct sf__std___Bit_reference *this);
+/* C++: operator=(bool __x)  noexcept */
 __SF_INLINE struct sf__std___Bit_reference* sf__std___Bit_reference__operator(struct sf__std___Bit_reference *this, _Bool __x);
+/* C++: operator=(const _Bit_reference& __x)  noexcept */
 __SF_INLINE struct sf__std___Bit_reference* sf__std___Bit_reference__operator(struct sf__std___Bit_reference *this, const struct sf__std___Bit_reference* __x);
+/* C++: operator==(const _Bit_reference& __x) const */
 __SF_INLINE _Bool sf__std___Bit_reference__operator(struct sf__std___Bit_reference *this, const struct sf__std___Bit_reference* __x);
+/* C++: operator<(const _Bit_reference& __x) const */
 __SF_INLINE _Bool sf__std___Bit_reference__operator(struct sf__std___Bit_reference *this, const struct sf__std___Bit_reference* __x);
+/* C++: flip()  noexcept */
 __SF_INLINE void sf__std___Bit_reference__flip(struct sf__std___Bit_reference *this);
-/* C++:     _Bit_reference(_Bit_type * __x, _Bit_type __y) */
+/* C++: _Bit_reference(_Bit_type * __x, _Bit_type __y) */
 __SF_INLINE void sf__std___Bit_reference__ctor(struct sf__std___Bit_reference *this, unsigned long* __x, unsigned long __y) {
     this->_M_p = __x;
     this->_M_mask = __y;
 }
-/* C++:     _Bit_reference()  noexcept  : _M_p(0), _M_mask(0) */
+/* C++: _Bit_reference()  noexcept  : _M_p(0), _M_mask(0) */
 __SF_INLINE void sf__std___Bit_reference__ctor(struct sf__std___Bit_reference *this) {
     this->_M_p = 0;
     this->_M_mask = 0;
 }
-/* C++:     operator bool() const  noexcept */
+/* C++: operator bool() const  noexcept */
 __SF_INLINE void sf__std___Bit_reference__operator(struct sf__std___Bit_reference *this) {
     return (!(!((*this->_M_p) & this->_M_mask)));
 }
-/* C++:     operator=(bool __x)  noexcept */
+/* C++: operator=(bool __x)  noexcept */
 __SF_INLINE struct sf__std___Bit_reference* sf__std___Bit_reference__operator(struct sf__std___Bit_reference *this, _Bool __x) {
     if (__x) ((*this->_M_p) |= this->_M_mask);
     else ((*this->_M_p) &= (~this->_M_mask));
     return (*this);
 }
-/* C++:     operator=(const _Bit_reference& __x)  noexcept */
+/* C++: operator=(const _Bit_reference& __x)  noexcept */
 __SF_INLINE struct sf__std___Bit_reference* sf__std___Bit_reference__operator(struct sf__std___Bit_reference *this, const struct sf__std___Bit_reference* __x) {
     return ((*this) = (_Bool));
 }
-/* C++:     operator==(const _Bit_reference& __x) const */
+/* C++: operator==(const _Bit_reference& __x) const */
 __SF_INLINE _Bool sf__std___Bit_reference__operator(struct sf__std___Bit_reference *this, const struct sf__std___Bit_reference* __x) {
     return ((_Bool) == (_Bool));
 }
-/* C++:     operator<(const _Bit_reference& __x) const */
+/* C++: operator<(const _Bit_reference& __x) const */
 __SF_INLINE _Bool sf__std___Bit_reference__operator(struct sf__std___Bit_reference *this, const struct sf__std___Bit_reference* __x) {
     return ((!(_Bool)) && (_Bool));
 }
-/* C++:     flip()  noexcept */
+/* C++: flip()  noexcept */
 __SF_INLINE void sf__std___Bit_reference__flip(struct sf__std___Bit_reference *this) {
     ((*this->_M_p) ^= this->_M_mask);
 }
-/* C++:   struct _Bit_iterator_base */
+/* C++: struct _Bit_iterator_base */
 struct sf__std___Bit_iterator_base {
     unsigned long* _M_p;
     unsigned int _M_offset;
 };
+/* C++: _M_assume_normalized() const */
 __SF_INLINE void sf__std___Bit_iterator_base___M_assume_normalized(struct sf__std___Bit_iterator_base *this);
+/* C++: _Bit_iterator_base(_Bit_type * __x, unsigned int __y) */
 __SF_INLINE void sf__std___Bit_iterator_base__ctor(struct sf__std___Bit_iterator_base *this, unsigned long* __x, unsigned int __y);
+/* C++: _M_bump_up() */
 __SF_INLINE void sf__std___Bit_iterator_base___M_bump_up(struct sf__std___Bit_iterator_base *this);
+/* C++: _M_bump_down() */
 __SF_INLINE void sf__std___Bit_iterator_base___M_bump_down(struct sf__std___Bit_iterator_base *this);
+/* C++: _M_incr(ptrdiff_t __i) */
 __SF_INLINE void sf__std___Bit_iterator_base___M_incr(struct sf__std___Bit_iterator_base *this, long __i);
-/* C++:     _M_assume_normalized() const */
+/* C++: _M_assume_normalized() const */
 __SF_INLINE void sf__std___Bit_iterator_base___M_assume_normalized(struct sf__std___Bit_iterator_base *this) {
 }
-/* C++:     _Bit_iterator_base(_Bit_type * __x, unsigned int __y) */
+/* C++: _Bit_iterator_base(_Bit_type * __x, unsigned int __y) */
 __SF_INLINE void sf__std___Bit_iterator_base__ctor(struct sf__std___Bit_iterator_base *this, unsigned long* __x, unsigned int __y) {
     this->_M_p = __x;
     this->_M_offset = __y;
 }
-/* C++:     _M_bump_up() */
+/* C++: _M_bump_up() */
 __SF_INLINE void sf__std___Bit_iterator_base___M_bump_up(struct sf__std___Bit_iterator_base *this) {
     sf__std___Bit_iterator_base___M_assume_normalized(this);
     if (((this->_M_offset++) == ((int) - 1))) {
@@ -3992,7 +4359,7 @@ __SF_INLINE void sf__std___Bit_iterator_base___M_bump_up(struct sf__std___Bit_it
         (++this->_M_p);
     }
 }
-/* C++:     _M_bump_down() */
+/* C++: _M_bump_down() */
 __SF_INLINE void sf__std___Bit_iterator_base___M_bump_down(struct sf__std___Bit_iterator_base *this) {
     sf__std___Bit_iterator_base___M_assume_normalized(this);
     if (((this->_M_offset--) == 0)) {
@@ -4000,7 +4367,7 @@ __SF_INLINE void sf__std___Bit_iterator_base___M_bump_down(struct sf__std___Bit_
         (--this->_M_p);
     }
 }
-/* C++:     _M_incr(ptrdiff_t __i) */
+/* C++: _M_incr(ptrdiff_t __i) */
 __SF_INLINE void sf__std___Bit_iterator_base___M_incr(struct sf__std___Bit_iterator_base *this, long __i) {
     sf__std___Bit_iterator_base___M_assume_normalized(this);
     int __n = (__i + this->_M_offset);
@@ -4012,149 +4379,172 @@ __SF_INLINE void sf__std___Bit_iterator_base___M_incr(struct sf__std___Bit_itera
     }
     (this->_M_offset = (unsigned int)__n);
 }
-/* C++:   struct _Bit_iterator : public _Bit_iterator_base */
+/* C++: struct _Bit_iterator : public _Bit_iterator_base */
 struct sf__std___Bit_iterator {
     struct sf__std___Bit_iterator_base __sf_base;
 };
+/* C++: _Bit_iterator() : _Bit_iterator_base(0, 0) */
 __SF_INLINE void sf__std___Bit_iterator__ctor(struct sf__std___Bit_iterator *this);
+/* C++: _Bit_iterator(_Bit_type * __x, unsigned int __y) */
 __SF_INLINE void sf__std___Bit_iterator__ctor(struct sf__std___Bit_iterator *this, unsigned long* __x, unsigned int __y);
+/* C++: _M_const_cast() const */
 __SF_INLINE struct sf__std___Bit_iterator sf__std___Bit_iterator___M_const_cast(struct sf__std___Bit_iterator *this);
+/* C++: operator*() const */
 __SF_INLINE struct sf__std___Bit_reference sf__std___Bit_iterator__operator(struct sf__std___Bit_iterator *this);
+/* C++: operator++() */
 __SF_INLINE struct sf__std___Bit_iterator* sf__std___Bit_iterator__operator(struct sf__std___Bit_iterator *this);
+/* C++: operator++(int) */
 __SF_INLINE struct sf__std___Bit_iterator sf__std___Bit_iterator__operator(struct sf__std___Bit_iterator *this, int);
+/* C++: operator--() */
 __SF_INLINE struct sf__std___Bit_iterator* sf__std___Bit_iterator__operator(struct sf__std___Bit_iterator *this);
+/* C++: operator--(int) */
 __SF_INLINE struct sf__std___Bit_iterator sf__std___Bit_iterator__operator(struct sf__std___Bit_iterator *this, int);
+/* C++: operator+=(difference_type __i) */
 __SF_INLINE struct sf__std___Bit_iterator* sf__std___Bit_iterator__operator(struct sf__std___Bit_iterator *this, int __i);
+/* C++: operator-=(difference_type __i) */
 __SF_INLINE struct sf__std___Bit_iterator* sf__std___Bit_iterator__operator(struct sf__std___Bit_iterator *this, int __i);
+/* C++: operator[](difference_type __i) const */
 __SF_INLINE struct sf__std___Bit_reference sf__std___Bit_iterator__operator(struct sf__std___Bit_iterator *this, int __i);
-/* C++:     _Bit_iterator() : _Bit_iterator_base(0, 0) */
+/* C++: _Bit_iterator() : _Bit_iterator_base(0, 0) */
 __SF_INLINE void sf__std___Bit_iterator__ctor(struct sf__std___Bit_iterator *this) {
 }
-/* C++:     _Bit_iterator(_Bit_type * __x, unsigned int __y) */
+/* C++: _Bit_iterator(_Bit_type * __x, unsigned int __y) */
 __SF_INLINE void sf__std___Bit_iterator__ctor(struct sf__std___Bit_iterator *this, unsigned long* __x, unsigned int __y) {
 }
-/* C++:     _M_const_cast() const */
+/* C++: _M_const_cast() const */
 __SF_INLINE struct sf__std___Bit_iterator sf__std___Bit_iterator___M_const_cast(struct sf__std___Bit_iterator *this) {
     return (*this);
 }
-/* C++:     operator*() const */
+/* C++: operator*() const */
 __SF_INLINE struct sf__std___Bit_reference sf__std___Bit_iterator__operator(struct sf__std___Bit_iterator *this) {
     sf__std___Bit_iterator_base___M_assume_normalized(&this->__sf_base);
     struct sf__std___Bit_reference __SF_temp_0;
     sf__std___Bit_reference__ctor(&__SF_temp_0, this->__sf_base._M_p, (1 << this->__sf_base._M_offset));
     return __SF_temp_0;
 }
-/* C++:     operator++() */
+/* C++: operator++() */
 __SF_INLINE struct sf__std___Bit_iterator* sf__std___Bit_iterator__operator(struct sf__std___Bit_iterator *this) {
     sf__std___Bit_iterator_base___M_bump_up(&this->__sf_base);
     return (*this);
 }
-/* C++:     operator++(int) */
+/* C++: operator++(int) */
 __SF_INLINE struct sf__std___Bit_iterator sf__std___Bit_iterator__operator(struct sf__std___Bit_iterator *this, int) {
     struct sf__std___Bit_iterator __tmp = (*this);
     sf__std___Bit_iterator_base___M_bump_up(&this->__sf_base);
     return __tmp;
 }
-/* C++:     operator--() */
+/* C++: operator--() */
 __SF_INLINE struct sf__std___Bit_iterator* sf__std___Bit_iterator__operator(struct sf__std___Bit_iterator *this) {
     sf__std___Bit_iterator_base___M_bump_down(&this->__sf_base);
     return (*this);
 }
-/* C++:     operator--(int) */
+/* C++: operator--(int) */
 __SF_INLINE struct sf__std___Bit_iterator sf__std___Bit_iterator__operator(struct sf__std___Bit_iterator *this, int) {
     struct sf__std___Bit_iterator __tmp = (*this);
     sf__std___Bit_iterator_base___M_bump_down(&this->__sf_base);
     return __tmp;
 }
-/* C++:     operator+=(difference_type __i) */
+/* C++: operator+=(difference_type __i) */
 __SF_INLINE struct sf__std___Bit_iterator* sf__std___Bit_iterator__operator(struct sf__std___Bit_iterator *this, int __i) {
     sf__std___Bit_iterator_base___M_incr(&this->__sf_base, __i);
     return (*this);
 }
-/* C++:     operator-=(difference_type __i) */
+/* C++: operator-=(difference_type __i) */
 __SF_INLINE struct sf__std___Bit_iterator* sf__std___Bit_iterator__operator(struct sf__std___Bit_iterator *this, int __i) {
     ((*this) += (-__i));
     return (*this);
 }
-/* C++:     operator[](difference_type __i) const */
+/* C++: operator[](difference_type __i) const */
 __SF_INLINE struct sf__std___Bit_reference sf__std___Bit_iterator__operator(struct sf__std___Bit_iterator *this, int __i) {
     return (*((*this) + __i));
 }
-/* C++:   struct _Bit_const_iterator : public _Bit_iterator_base */
+/* C++: struct _Bit_const_iterator : public _Bit_iterator_base */
 struct sf__std___Bit_const_iterator {
     struct sf__std___Bit_iterator_base __sf_base;
 };
+/* C++: _Bit_const_iterator() : _Bit_iterator_base(0, 0) */
 __SF_INLINE void sf__std___Bit_const_iterator__ctor(struct sf__std___Bit_const_iterator *this);
+/* C++: _Bit_const_iterator(_Bit_type * __x, unsigned int __y) */
 __SF_INLINE void sf__std___Bit_const_iterator__ctor(struct sf__std___Bit_const_iterator *this, unsigned long* __x, unsigned int __y);
+/* C++: _Bit_const_iterator(const _Bit_iterator& __x) */
 __SF_INLINE void sf__std___Bit_const_iterator__ctor(struct sf__std___Bit_const_iterator *this, const struct sf__std___Bit_iterator* __x);
+/* C++: _M_const_cast() const */
 __SF_INLINE struct sf__std___Bit_iterator sf__std___Bit_const_iterator___M_const_cast(struct sf__std___Bit_const_iterator *this);
+/* C++: operator*() const */
 __SF_INLINE _Bool sf__std___Bit_const_iterator__operator(struct sf__std___Bit_const_iterator *this);
+/* C++: operator++() */
 __SF_INLINE struct sf__std___Bit_const_iterator* sf__std___Bit_const_iterator__operator(struct sf__std___Bit_const_iterator *this);
+/* C++: operator++(int) */
 __SF_INLINE struct sf__std___Bit_const_iterator sf__std___Bit_const_iterator__operator(struct sf__std___Bit_const_iterator *this, int);
+/* C++: operator--() */
 __SF_INLINE struct sf__std___Bit_const_iterator* sf__std___Bit_const_iterator__operator(struct sf__std___Bit_const_iterator *this);
+/* C++: operator--(int) */
 __SF_INLINE struct sf__std___Bit_const_iterator sf__std___Bit_const_iterator__operator(struct sf__std___Bit_const_iterator *this, int);
+/* C++: operator+=(difference_type __i) */
 __SF_INLINE struct sf__std___Bit_const_iterator* sf__std___Bit_const_iterator__operator(struct sf__std___Bit_const_iterator *this, int __i);
+/* C++: operator-=(difference_type __i) */
 __SF_INLINE struct sf__std___Bit_const_iterator* sf__std___Bit_const_iterator__operator(struct sf__std___Bit_const_iterator *this, int __i);
+/* C++: operator[](difference_type __i) const */
 __SF_INLINE _Bool sf__std___Bit_const_iterator__operator(struct sf__std___Bit_const_iterator *this, int __i);
-/* C++:     _Bit_const_iterator() : _Bit_iterator_base(0, 0) */
+/* C++: _Bit_const_iterator() : _Bit_iterator_base(0, 0) */
 __SF_INLINE void sf__std___Bit_const_iterator__ctor(struct sf__std___Bit_const_iterator *this) {
 }
-/* C++:     _Bit_const_iterator(_Bit_type * __x, unsigned int __y) */
+/* C++: _Bit_const_iterator(_Bit_type * __x, unsigned int __y) */
 __SF_INLINE void sf__std___Bit_const_iterator__ctor(struct sf__std___Bit_const_iterator *this, unsigned long* __x, unsigned int __y) {
 }
-/* C++:     _Bit_const_iterator(const _Bit_iterator& __x) */
+/* C++: _Bit_const_iterator(const _Bit_iterator& __x) */
 __SF_INLINE void sf__std___Bit_const_iterator__ctor(struct sf__std___Bit_const_iterator *this, const struct sf__std___Bit_iterator* __x) {
 }
-/* C++:     _M_const_cast() const */
+/* C++: _M_const_cast() const */
 __SF_INLINE struct sf__std___Bit_iterator sf__std___Bit_const_iterator___M_const_cast(struct sf__std___Bit_const_iterator *this) {
     struct sf__std___Bit_iterator __SF_temp_0;
     sf__std___Bit_iterator__ctor(&__SF_temp_0, this->__sf_base._M_p, this->__sf_base._M_offset);
     return __SF_temp_0;
 }
-/* C++:     operator*() const */
+/* C++: operator*() const */
 __SF_INLINE _Bool sf__std___Bit_const_iterator__operator(struct sf__std___Bit_const_iterator *this) {
     sf__std___Bit_iterator_base___M_assume_normalized(&this->__sf_base);
     struct sf__std___Bit_reference __SF_temp_0;
     sf__std___Bit_reference__ctor(&__SF_temp_0, this->__sf_base._M_p, (1 << this->__sf_base._M_offset));
     return __SF_temp_0;
 }
-/* C++:     operator++() */
+/* C++: operator++() */
 __SF_INLINE struct sf__std___Bit_const_iterator* sf__std___Bit_const_iterator__operator(struct sf__std___Bit_const_iterator *this) {
     sf__std___Bit_iterator_base___M_bump_up(&this->__sf_base);
     return (*this);
 }
-/* C++:     operator++(int) */
+/* C++: operator++(int) */
 __SF_INLINE struct sf__std___Bit_const_iterator sf__std___Bit_const_iterator__operator(struct sf__std___Bit_const_iterator *this, int) {
     struct sf__std___Bit_const_iterator __tmp = (*this);
     sf__std___Bit_iterator_base___M_bump_up(&this->__sf_base);
     return __tmp;
 }
-/* C++:     operator--() */
+/* C++: operator--() */
 __SF_INLINE struct sf__std___Bit_const_iterator* sf__std___Bit_const_iterator__operator(struct sf__std___Bit_const_iterator *this) {
     sf__std___Bit_iterator_base___M_bump_down(&this->__sf_base);
     return (*this);
 }
-/* C++:     operator--(int) */
+/* C++: operator--(int) */
 __SF_INLINE struct sf__std___Bit_const_iterator sf__std___Bit_const_iterator__operator(struct sf__std___Bit_const_iterator *this, int) {
     struct sf__std___Bit_const_iterator __tmp = (*this);
     sf__std___Bit_iterator_base___M_bump_down(&this->__sf_base);
     return __tmp;
 }
-/* C++:     operator+=(difference_type __i) */
+/* C++: operator+=(difference_type __i) */
 __SF_INLINE struct sf__std___Bit_const_iterator* sf__std___Bit_const_iterator__operator(struct sf__std___Bit_const_iterator *this, int __i) {
     sf__std___Bit_iterator_base___M_incr(&this->__sf_base, __i);
     return (*this);
 }
-/* C++:     operator-=(difference_type __i) */
+/* C++: operator-=(difference_type __i) */
 __SF_INLINE struct sf__std___Bit_const_iterator* sf__std___Bit_const_iterator__operator(struct sf__std___Bit_const_iterator *this, int __i) {
     ((*this) += (-__i));
     return (*this);
 }
-/* C++:     operator[](difference_type __i) const */
+/* C++: operator[](difference_type __i) const */
 __SF_INLINE _Bool sf__std___Bit_const_iterator__operator(struct sf__std___Bit_const_iterator *this, int __i) {
     return (*((*this) + __i));
 }
-/* C++:   __fill_bvector(_Bit_type* __v, unsigned int __first, unsigned int __last, */
+/* C++: __fill_bvector(_Bit_type* __v, unsigned int __first, unsigned int __last, */
 void __fill_bvector(unsigned long* __v, unsigned int __first, unsigned int __last, _Bool __x) {
     const unsigned long __fmask = ((~0) << __first);
     const unsigned long __lmask = ((~0) >> (_S_word_bit - __last));
@@ -4162,11 +4552,11 @@ void __fill_bvector(unsigned long* __v, unsigned int __first, unsigned int __las
     if (__x) ((*__v) |= __mask);
     else ((*__v) &= (~__mask));
 }
-/* C++:   __fill_bvector_n(_Bit_type* __p, size_t __n, bool __x)  noexcept */
+/* C++: __fill_bvector_n(_Bit_type* __p, size_t __n, bool __x)  noexcept */
 void __fill_bvector_n(unsigned long* __p, long __n, _Bool __x) {
     __builtin_memset;
 }
-/* C++:   __fill_a1( std ::_Bit_iterator __first, */
+/* C++: __fill_a1( std ::_Bit_iterator __first, */
 void __fill_a1(struct sf__std___Bit_iterator __first, struct sf__std___Bit_iterator __last, const _Bool* __x) {
     if ((__first._M_p != __last._M_p)) {
         unsigned long* __first_p = __first._M_p;
