@@ -221,10 +221,11 @@ static void collect_from_node(InstCollector *col, Node *n) {
         break;
 
     case ND_TEMPLATE_DECL:
-        /* Walk into the template body to find nested template-id
-         * usages (e.g. a class template whose member is another
-         * template instantiation). */
-        collect_from_node(col, n->template_decl.decl);
+        /* Do NOT walk into template bodies during collection — their
+         * template-id usages reference dependent types (TY_DEPENDENT)
+         * that haven't been substituted yet. The instantiated copy of
+         * the template will be scanned for transitive dependencies
+         * after cloning in Phase 3. */
         break;
 
     case ND_BLOCK:
@@ -719,31 +720,32 @@ void template_instantiate(Node *tu, Arena *arena) {
     for (int i = 0; i < tu->tu.ndecls; i++)
         build_registry(&reg, tu->tu.decls[i]);
 
-    /* Phase 2: collect instantiation requests */
+    /* Phases 2+3 loop: collect instantiation requests and instantiate.
+     * Iterate until no new instantiations are produced — this handles
+     * transitive dependencies (e.g. Outer<int> instantiates Box<int>
+     * as a member, which itself needs instantiation).
+     *
+     * Deduplication: a hash set keyed by (template-name, arg-types)
+     * ensures each unique instantiation is cloned exactly once. */
+    DedupSet ds = {0};
+    ds.arena = arena;
+
+    /* Total instantiated across all iterations */
+    int total_inst = 0;
+    enum { MAX_INST = 4096 };
+    Node **all_instantiated = arena_alloc(arena, MAX_INST * sizeof(Node *));
+
+    for (int iteration = 0; iteration < 32; iteration++) {
+    /* Phase 2: collect instantiation requests from current TU */
     InstCollector col = {0};
     col.arena = arena;
     col.reg = &reg;
     for (int i = 0; i < tu->tu.ndecls; i++)
         collect_from_node(&col, tu->tu.decls[i]);
+    if (col.count == 0) break;
 
-    /* Phase 3: instantiate each unique request and prepend to the TU.
-     *
-     * We build an array of instantiated declarations, then prepend
-     * them all before the existing TU declarations so that
-     * instantiated types are defined before user code that uses them.
-     *
-     * Deduplication: a hash set keyed by (template-name, arg-types)
-     * ensures each unique instantiation is cloned exactly once. If a
-     * duplicate is found, we just patch the usage-site type to point
-     * at the existing instantiation. */
-    if (col.count == 0) return;
-
-    DedupSet ds = {0};
-    ds.arena = arena;
-
-    /* Collect instantiated nodes and patch usage-site types */
-    int ninst = 0;
-    Node **instantiated = arena_alloc(arena, col.count * sizeof(Node *));
+    /* Phase 3: instantiate and patch */
+    int ninst_this_round = 0;
     for (InstRequest *req = col.head; req; req = req->next) {
         /* Build a temporary SubstMap to compute the dedup key
          * (includes defaults). This is rebuilt inside instantiate_one
@@ -784,7 +786,9 @@ void template_instantiate(Node *tu, Arena *arena) {
 
         Node *inst = instantiate_one(req->tmpl_def, req->template_id, arena);
         if (inst) {
-            instantiated[ninst++] = inst;
+            if (total_inst < MAX_INST)
+                all_instantiated[total_inst++] = inst;
+            ninst_this_round++;
             /* Patch the usage-site type so codegen mangles it
              * with template args (e.g. sf__Box_t_int_te_). */
             if (inst->kind == ND_CLASS_DEF && inst->class_def.ty &&
@@ -801,19 +805,21 @@ void template_instantiate(Node *tu, Arena *arena) {
             }
         }
     }
-    if (ninst == 0) return;
+    if (ninst_this_round == 0) break;
 
-    /* Prepend instantiated declarations before existing TU decls */
+    /* Prepend this round's instantiations to the TU so the next
+     * iteration's collection phase can scan them for transitive
+     * template-id usages. */
     int old_n = tu->tu.ndecls;
-    int new_n = old_n + ninst;
+    int new_n = old_n + ninst_this_round;
     Node **new_decls = arena_alloc(arena, new_n * sizeof(Node *));
-    /* Instantiated first (reverse the linked-list order so they
-     * appear in source-encounter order) */
-    for (int i = 0; i < ninst; i++)
-        new_decls[i] = instantiated[ninst - 1 - i];
-    /* Then original declarations */
+    /* New instantiations at the front */
+    int idx = 0;
+    for (int i = total_inst - ninst_this_round; i < total_inst; i++)
+        new_decls[idx++] = all_instantiated[i];
     for (int i = 0; i < old_n; i++)
-        new_decls[ninst + i] = tu->tu.decls[i];
+        new_decls[idx++] = tu->tu.decls[i];
     tu->tu.decls  = new_decls;
     tu->tu.ndecls = new_n;
+    } /* end iteration loop */
 }

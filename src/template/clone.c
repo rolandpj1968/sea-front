@@ -107,9 +107,45 @@ Type *subst_type(Type *ty, SubstMap *map, Arena *arena) {
         if (new_params) copy->params = new_params;
         return copy;
     }
+    case TY_STRUCT: case TY_UNION:
+        /* If this struct type has a template_id_node (e.g. Box<T>
+         * inside a template body), substitute the template args
+         * so the instantiation pass can transitively instantiate
+         * the inner template with concrete types. */
+        if (ty->template_id_node &&
+            ty->template_id_node->kind == ND_TEMPLATE_ID) {
+            Node *tid = ty->template_id_node;
+            bool changed = false;
+            Node **new_args = arena_alloc(arena,
+                tid->template_id.nargs * sizeof(Node *));
+            for (int i = 0; i < tid->template_id.nargs; i++) {
+                Node *arg = tid->template_id.args[i];
+                if (arg && arg->kind == ND_VAR_DECL && arg->var_decl.ty) {
+                    Type *new_ty = subst_type(arg->var_decl.ty, map, arena);
+                    if (new_ty != arg->var_decl.ty) {
+                        Node *new_arg = arena_alloc(arena, sizeof(Node));
+                        *new_arg = *arg;
+                        new_arg->var_decl.ty = new_ty;
+                        new_args[i] = new_arg;
+                        changed = true;
+                        continue;
+                    }
+                }
+                new_args[i] = arg;
+            }
+            if (changed) {
+                Node *new_tid = arena_alloc(arena, sizeof(Node));
+                *new_tid = *tid;
+                new_tid->template_id.args = new_args;
+                Type *copy = arena_alloc(arena, sizeof(Type));
+                *copy = *ty;
+                copy->template_id_node = new_tid;
+                return copy;
+            }
+        }
+        return ty;
     default:
-        /* Fundamental types, TY_STRUCT, TY_UNION, TY_ENUM — no
-         * dependent children to substitute. Return as-is. */
+        /* Fundamental types, TY_ENUM — no dependent children. */
         return ty;
     }
 }
