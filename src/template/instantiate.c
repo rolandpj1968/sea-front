@@ -962,6 +962,101 @@ void template_instantiate(Node *tu, Arena *arena) {
     tu->tu.ndecls = new_n;
     } /* end iteration loop */
 
+    /* Reverse the instantiated array so that transitive dependencies
+     * (discovered in later rounds) appear before the types that
+     * reference them. This is a simple heuristic that works because
+     * the fixpoint loop discovers leaf types (e.g. holder<int>)
+     * AFTER the containing types (e.g. container<int>).
+     *
+     * Also do a topological sort: reorder all_instantiated so that template
+     * instantiations that are used as by-value members of other
+     * instantiations come first. Simple O(n^2) approach: for each
+     * pair, check if A's struct definition contains a by-value
+     * member whose mangled tag matches B. If so, B must come before A.
+     *
+     * We use a simple bubble-sort-like pass: move items forward if
+     * they have no unresolved dependencies. Repeat until stable. */
+    for (int pass = 0; pass < total_inst; pass++) {
+        bool changed = false;
+        for (int i = 0; i < total_inst; i++) {
+            Node *a = all_instantiated[i];
+            if (!a || a->kind != ND_CLASS_DEF || !a->class_def.ty) continue;
+            /* Find any later class def that A depends on */
+            for (int j = i + 1; j < total_inst; j++) {
+                Node *b = all_instantiated[j];
+                if (!b || b->kind != ND_CLASS_DEF || !b->class_def.ty) continue;
+                Type *bty = b->class_def.ty;
+            /* Check if A contains B as a by-value member.
+             * Simple approach: check if any struct/union member of A
+             * has the same base tag name as B and also has
+             * template_id_node or template_args (i.e., it's a
+             * template instantiation of the same template). */
+            bool a_needs_b = false;
+            for (int m = 0; m < a->class_def.nmembers && !a_needs_b; m++) {
+                Node *mem = a->class_def.members[m];
+                if (!mem || mem->kind != ND_VAR_DECL) continue;
+                Type *mty = mem->var_decl.ty;
+                if (!mty) continue;
+                if (mty->kind != TY_STRUCT && mty->kind != TY_UNION)
+                    continue;
+                /* Match by tag name — if the member is an
+                 * instantiation of the same template as B, A depends
+                 * on B (or another instantiation with the same tag,
+                 * which is close enough for ordering). */
+                if (mty->tag && bty->tag &&
+                    mty->tag->len == bty->tag->len &&
+                    memcmp(mty->tag->loc, bty->tag->loc,
+                           mty->tag->len) == 0)
+                    a_needs_b = true;
+            }
+            if (a_needs_b) {
+                /* Move B to just before A by shifting elements */
+                Node *save = all_instantiated[j];
+                for (int k = j; k > i; k--)
+                    all_instantiated[k] = all_instantiated[k - 1];
+                all_instantiated[i] = save;
+                changed = true;
+                break;  /* restart inner loop for A's new position */
+            }
+            }
+        }
+        if (!changed) break;
+    }
+
+    /* Rebuild the TU decl list with sorted instantiations at front */
+    {
+        int old_n = tu->tu.ndecls;
+        /* Count non-instantiated decls */
+        int user_n = 0;
+        for (int i = 0; i < old_n; i++) {
+            bool is_inst = false;
+            for (int j = 0; j < total_inst; j++) {
+                if (tu->tu.decls[i] == all_instantiated[j]) {
+                    is_inst = true;
+                    break;
+                }
+            }
+            if (!is_inst) user_n++;
+        }
+        int new_n = total_inst + user_n;
+        Node **new_decls = arena_alloc(arena, new_n * sizeof(Node *));
+        int idx = 0;
+        for (int i = 0; i < total_inst; i++)
+            new_decls[idx++] = all_instantiated[i];
+        for (int i = 0; i < old_n; i++) {
+            bool is_inst = false;
+            for (int j = 0; j < total_inst; j++) {
+                if (tu->tu.decls[i] == all_instantiated[j]) {
+                    is_inst = true;
+                    break;
+                }
+            }
+            if (!is_inst) new_decls[idx++] = tu->tu.decls[i];
+        }
+        tu->tu.decls = new_decls;
+        tu->tu.ndecls = new_n;
+    }
+
     /* Post-instantiation: walk the ENTIRE AST and patch every Type
      * with a template_id_node to point at the correct instantiated
      * class_region / template_args. This catches Types that weren't

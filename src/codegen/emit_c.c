@@ -2646,6 +2646,24 @@ static void emit_prelude(void) {
 void emit_c(Node *tu) {
     if (!tu || tu->kind != ND_TRANSLATION_UNIT) return;
     emit_prelude();
+
+    /* Forward-declare all template-instantiated struct types so
+     * ordering between instantiations doesn't matter. Without
+     * this, a container<T, allocator<T>> instantiation that appears
+     * before allocator<T>'s instantiation would fail to compile
+     * because its by-value member has an incomplete type. The
+     * forward declarations make all instantiated struct names
+     * visible before any full definitions are emitted. */
+    for (int i = 0; i < tu->tu.ndecls; i++) {
+        Node *n = tu->tu.decls[i];
+        if (!n || n->kind != ND_CLASS_DEF) continue;
+        Type *ty = n->class_def.ty;
+        if (!ty || ty->n_template_args <= 0) continue;
+        fputs("struct ", stdout);
+        emit_mangled_class_tag(ty);
+        fputs(";\n", stdout);
+    }
+
     for (int i = 0; i < tu->tu.ndecls; i++) {
         if (i > 0) fputc('\n', stdout);  /* blank line between top-level decls */
         emit_top_level(tu->tu.decls[i]);
