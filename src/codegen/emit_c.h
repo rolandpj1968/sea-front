@@ -14,6 +14,13 @@
 
 #include "../parse/parse.h"
 
+/* When true (the default), emit #line directives mapping the C
+ * output back to the original C++ source positions. Gcc error
+ * messages and gdb will reference the C++ source, not the
+ * generated C. Disable with --no-line-directives when debugging
+ * the emitted C itself. */
+extern bool g_emit_line_directives;
+
 void emit_c(Node *tu);
 
 #endif

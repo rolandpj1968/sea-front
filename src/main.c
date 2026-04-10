@@ -62,7 +62,7 @@ static void dump_tokens(TokenArray ta) {
 }
 
 static void usage(void) {
-    fprintf(stderr, "usage: sea-front [--dump-tokens] [--dump-ast] [--std=c++17|20|23] <file>\n");
+    fprintf(stderr, "usage: sea-front [--dump-tokens] [--dump-ast] [--emit-c] [--no-lines] [--std=c++17|20|23] <file>\n");
     exit(1);
 }
 
@@ -80,6 +80,8 @@ int main(int argc, char **argv) {
             do_dump_ast = true;
         } else if (strcmp(argv[i], "--emit-c") == 0) {
             do_emit_c = true;
+        } else if (strcmp(argv[i], "--no-lines") == 0) {
+            g_emit_line_directives = false;
         } else if (strcmp(argv[i], "--std=c++17") == 0) {
             std = CPP17;
         } else if (strcmp(argv[i], "--std=c++20") == 0) {

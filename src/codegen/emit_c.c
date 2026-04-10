@@ -52,6 +52,8 @@
 #include "mangle.h"
 #include "../sea-front.h"
 
+bool g_emit_line_directives = true;
+
 static int g_indent = 0;
 /* Currently-emitting class definition (for ctor member-init walking
  * and inherited-member access rewriting). Set by emit_class_def
@@ -195,6 +197,17 @@ static void emit_source_comment(Token *tok) {
         }
     }
     fputs(" */\n", stdout);
+    if (g_emit_line_directives && tok->line > 0) {
+        /* Standard C #line directive: tells the C compiler that the
+         * NEXT line came from the given source position. The file
+         * name comes from the Token's file field if available,
+         * otherwise we omit it (line-only form). */
+        if (tok->file && tok->file->name)
+            fprintf(stdout, "#line %d \"%s\"\n", tok->line,
+                    tok->file->name);
+        else
+            fprintf(stdout, "#line %d\n", tok->line);
+    }
 }
 
 /* Slice D-Hoist temp materialization.
