@@ -35,6 +35,19 @@ hex0 → ... → mescc → tcc → gcc 4.7.4
 **Active development.** The lexer, parser, semantic analysis, template
 instantiation, and C code generator are all working.
 
+### Bootstrap Targets
+
+| Stage | Target | C++ Standard | Status |
+|-------|--------|-------------|--------|
+| **A** | gcc 4.8 (bootstrap bridge) | C++03 | In progress — core templates working |
+| **B** | Modern gcc | C++14 | Grammar ready, features incremental |
+| **C** | LLVM/Clang | C++17 | Grammar ready, features incremental |
+
+Stage A is the immediate goal: transpile gcc 4.8's C++ source to C,
+producing the first C++ compiler in the trusted bootstrap chain.
+Stages B and C extend upward to modern compilers. See
+[Trusted Bootstrap Design](doc/trusted-bootstrap-design.md) for details.
+
 | Component | Status |
 |-----------|--------|
 | Lexer | Complete — handles all C++17 tokens, string prefixes, raw strings, digraphs |

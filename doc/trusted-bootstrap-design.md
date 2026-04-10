@@ -109,6 +109,40 @@ from being built by the trusted chain. Sea-front compiled by a modern
 gcc has no more trust than gcc itself — the whole point is that
 sea-front inherits the mescc/tcc lineage.
 
+### Staged C++ Targets
+
+Sea-front's grammar covers C++17 with C++20/23 annotations, but the
+C++ *features* needed at each stage are incremental:
+
+| Stage | Target | C++ Standard | Key Features Needed |
+|-------|--------|-------------|---------------------|
+| **A** | gcc 4.8 | C++03 | Classes, single inheritance, virtual functions, basic templates, namespaces. gcc 4.8 was written to bootstrap from a minimal C++03 compiler — no lambdas, no `auto`, no move semantics in the bootstrap path. |
+| **B** | Modern gcc | C++14 | Lambdas, `auto`, `decltype`, move semantics, `constexpr`, variadic templates, SFINAE, `<type_traits>`. |
+| **C** | LLVM/Clang | C++17 | `if constexpr`, fold expressions, structured bindings, `std::optional`, CTAD. |
+
+**Stage A is the bootstrap bridge** — the minimum viable product that
+breaks the C/C++ chasm. It requires the least C++ feature support and
+targets the most constrained codebase (gcc 4.8's deliberately minimal
+C++ usage).
+
+**Stages B and C extend the chain upward.** Once Stage A produces a
+working gcc 4.8 binary, that binary can compile more modern gcc
+versions. But sea-front can also be used to directly transpile modern
+gcc or LLVM source to C, bypassing the intermediate gcc versions. This
+requires progressively more C++ features but the same architecture.
+
+The grammar is complete for all stages (C++17 with C++20/23 deltas).
+The work is in sema, template instantiation depth, and codegen — not
+in parsing.
+
+**C++ backwards compatibility**: C++ is mostly but not perfectly
+backwards compatible. Each revision adds features (additive) but also
+deprecates and removes some (e.g., C++11 changed `auto` from storage
+class to type deduction; C++17 removed trigraphs and `register` as a
+storage class). For sea-front this is largely irrelevant: we process
+valid source already compiled by gcc/clang, so we accept the superset
+grammar and don't need to diagnose deprecated features.
+
 ### What This Project Is NOT
 
 - **Not a production compiler.** It doesn't need to be fast, generate optimised
