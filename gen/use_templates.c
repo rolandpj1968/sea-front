@@ -37,84 +37,106 @@ struct sf__cached_t_long_holder_t_long_te__te_;
 struct sf__cached_t_int_holder_t_int_te__te_;
 struct sf__entry_t_int_long_te_;
 /* C++: struct holder */
+#line 8 "/tmp/use_templates.i"
 struct sf__holder_t_int_te_ {
     int value;
 };
 /* C++: T get() */
+#line 10 "/tmp/use_templates.i"
 __SF_INLINE int sf__holder_t_int_te___get(struct sf__holder_t_int_te_ *this);
 /* C++: void set(T v) */
+#line 11 "/tmp/use_templates.i"
 __SF_INLINE void sf__holder_t_int_te___set(struct sf__holder_t_int_te_ *this, int v);
 /* C++: T get() */
+#line 10 "/tmp/use_templates.i"
 __SF_INLINE int sf__holder_t_int_te___get(struct sf__holder_t_int_te_ *this) {
     return this->value;
 }
 /* C++: void set(T v) */
+#line 11 "/tmp/use_templates.i"
 __SF_INLINE void sf__holder_t_int_te___set(struct sf__holder_t_int_te_ *this, int v) {
     (this->value = v);
 }
 
 /* C++: struct holder */
+#line 8 "/tmp/use_templates.i"
 struct sf__holder_t_long_te_ {
     long value;
 };
 /* C++: T get() */
+#line 10 "/tmp/use_templates.i"
 __SF_INLINE long sf__holder_t_long_te___get(struct sf__holder_t_long_te_ *this);
 /* C++: void set(T v) */
+#line 11 "/tmp/use_templates.i"
 __SF_INLINE void sf__holder_t_long_te___set(struct sf__holder_t_long_te_ *this, long v);
 /* C++: T get() */
+#line 10 "/tmp/use_templates.i"
 __SF_INLINE long sf__holder_t_long_te___get(struct sf__holder_t_long_te_ *this) {
     return this->value;
 }
 /* C++: void set(T v) */
+#line 11 "/tmp/use_templates.i"
 __SF_INLINE void sf__holder_t_long_te___set(struct sf__holder_t_long_te_ *this, long v) {
     (this->value = v);
 }
 
 /* C++: struct cached */
+#line 22 "/tmp/use_templates.i"
 struct sf__cached_t_long_holder_t_long_te__te_ {
     struct sf__holder_t_long_te_ store;
     int valid;
 };
 /* C++: void put(T v) */
+#line 25 "/tmp/use_templates.i"
 __SF_INLINE void sf__cached_t_long_holder_t_long_te__te___put(struct sf__cached_t_long_holder_t_long_te__te_ *this, long v);
 /* C++: T fetch() */
+#line 26 "/tmp/use_templates.i"
 __SF_INLINE long sf__cached_t_long_holder_t_long_te__te___fetch(struct sf__cached_t_long_holder_t_long_te__te_ *this);
 /* C++: void put(T v) */
+#line 25 "/tmp/use_templates.i"
 __SF_INLINE void sf__cached_t_long_holder_t_long_te__te___put(struct sf__cached_t_long_holder_t_long_te__te_ *this, long v) {
     sf__holder_t_long_te___set(&this->store, v);
     (this->valid = 1);
 }
 /* C++: T fetch() */
+#line 26 "/tmp/use_templates.i"
 __SF_INLINE long sf__cached_t_long_holder_t_long_te__te___fetch(struct sf__cached_t_long_holder_t_long_te__te_ *this) {
     return sf__holder_t_long_te___get(&this->store);
 }
 
 /* C++: T max_of(T a, T b) */
+#line 30 "/tmp/use_templates.i"
 int max_of_t_i_te_(int a, int b) {
     if ((a > b)) return a;
     return b;
 }
 
 /* C++: struct cached */
+#line 22 "/tmp/use_templates.i"
 struct sf__cached_t_int_holder_t_int_te__te_ {
     struct sf__holder_t_int_te_ store;
     int valid;
 };
 /* C++: void put(T v) */
+#line 25 "/tmp/use_templates.i"
 __SF_INLINE void sf__cached_t_int_holder_t_int_te__te___put(struct sf__cached_t_int_holder_t_int_te__te_ *this, int v);
 /* C++: T fetch() */
+#line 26 "/tmp/use_templates.i"
 __SF_INLINE int sf__cached_t_int_holder_t_int_te__te___fetch(struct sf__cached_t_int_holder_t_int_te__te_ *this);
 /* C++: void put(T v) */
+#line 25 "/tmp/use_templates.i"
 __SF_INLINE void sf__cached_t_int_holder_t_int_te__te___put(struct sf__cached_t_int_holder_t_int_te__te_ *this, int v) {
     sf__holder_t_int_te___set(&this->store, v);
     (this->valid = 1);
 }
 /* C++: T fetch() */
+#line 26 "/tmp/use_templates.i"
 __SF_INLINE int sf__cached_t_int_holder_t_int_te__te___fetch(struct sf__cached_t_int_holder_t_int_te__te_ *this) {
     return sf__holder_t_int_te___get(&this->store);
 }
 
 /* C++: struct entry */
+#line 16 "/tmp/use_templates.i"
 struct sf__entry_t_int_long_te_ {
     int key;
     long val;
@@ -125,6 +147,7 @@ struct sf__entry_t_int_long_te_ {
 
 
 /* C++: int main() */
+#line 35 "/tmp/use_templates.i"
 int main(void) {
     struct sf__entry_t_int_long_te_ e;
     (e.key = 1);

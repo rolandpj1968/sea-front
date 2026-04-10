@@ -168,80 +168,105 @@ struct sf__basic_streambuf ;
 struct sf__basic_ios ;
 
 /* C++: struct integral_constant */
+#line 1162 "/tmp/use_string.i"
 struct sf__integral_constant_t_bool_te_ {
     _Bool value = __v;
 };
 /* C++: constexpr operator value_type() const noexcept */
+#line 1167 "/tmp/use_string.i"
 __SF_INLINE void sf__integral_constant_t_bool_te___operator(struct sf__integral_constant_t_bool_te_ *this);
 /* C++: constexpr operator value_type() const noexcept */
+#line 1167 "/tmp/use_string.i"
 __SF_INLINE void sf__integral_constant_t_bool_te___operator(struct sf__integral_constant_t_bool_te_ *this) {
     return this->value;
 }
 
 /* C++: class fpos */
+#line 1001 "/tmp/use_string.i"
 struct sf__fpos_t_anon_te_ {
     long long _M_off;
     struct ? _M_state;
 };
 /* C++: fpos() */
+#line 1012 "/tmp/use_string.i"
 __SF_INLINE void sf__fpos_t_anon_te___ctor(struct sf__fpos_t_anon_te_ *this);
 /* C++: fpos(streamoff __off) */
+#line 1022 "/tmp/use_string.i"
 __SF_INLINE void sf__fpos_t_anon_te___ctor(struct sf__fpos_t_anon_te_ *this, long long __off);
 /* C++: fpos(const fpos&) = default; */
+#line 1026 "/tmp/use_string.i"
 __SF_INLINE void sf__fpos_t_anon_te___ctor(struct sf__fpos_t_anon_te_ *this, const struct sf__std__fpos*);
 /* C++: fpos& operator=(const fpos&) = default; */
+#line 1027 "/tmp/use_string.i"
 __SF_INLINE struct sf__std__fpos* sf__fpos_t_anon_te___operator(struct sf__fpos_t_anon_te_ *this, const struct sf__std__fpos*);
 /* C++: ~fpos() = default; */
+#line 1028 "/tmp/use_string.i"
 __SF_INLINE void sf__fpos_t_anon_te___dtor_body(struct sf__fpos_t_anon_te_ *this);
 /* C++: operator streamoff() const */
+#line 1032 "/tmp/use_string.i"
 __SF_INLINE void sf__fpos_t_anon_te___operator(struct sf__fpos_t_anon_te_ *this);
 /* C++: state(_StateT __st) */
+#line 1036 "/tmp/use_string.i"
 __SF_INLINE void sf__fpos_t_anon_te___state(struct sf__fpos_t_anon_te_ *this, struct ? __st);
 /* C++: state() const */
+#line 1041 "/tmp/use_string.i"
 __SF_INLINE struct ? sf__fpos_t_anon_te___state(struct sf__fpos_t_anon_te_ *this);
 /* C++: operator+=(streamoff __off) */
+#line 1049 "/tmp/use_string.i"
 __SF_INLINE struct sf__std__fpos* sf__fpos_t_anon_te___operator(struct sf__fpos_t_anon_te_ *this, long long __off);
 /* C++: operator-=(streamoff __off) */
+#line 1060 "/tmp/use_string.i"
 __SF_INLINE struct sf__std__fpos* sf__fpos_t_anon_te___operator(struct sf__fpos_t_anon_te_ *this, long long __off);
 /* C++: operator+(streamoff __off) const */
+#line 1073 "/tmp/use_string.i"
 __SF_INLINE struct sf__std__fpos sf__fpos_t_anon_te___operator(struct sf__fpos_t_anon_te_ *this, long long __off);
 /* C++: operator-(streamoff __off) const */
+#line 1087 "/tmp/use_string.i"
 __SF_INLINE struct sf__std__fpos sf__fpos_t_anon_te___operator(struct sf__fpos_t_anon_te_ *this, long long __off);
 /* C++: operator-(const fpos& __other) const */
+#line 1100 "/tmp/use_string.i"
 __SF_INLINE long long sf__fpos_t_anon_te___operator(struct sf__fpos_t_anon_te_ *this, const struct sf__std__fpos* __other);
 /* C++: fpos() */
+#line 1012 "/tmp/use_string.i"
 __SF_INLINE void sf__fpos_t_anon_te___ctor(struct sf__fpos_t_anon_te_ *this) {
     this->_M_off = 0;
     sf__anon__ctor(&this->_M_state);
 }
 /* C++: fpos(streamoff __off) */
+#line 1022 "/tmp/use_string.i"
 __SF_INLINE void sf__fpos_t_anon_te___ctor(struct sf__fpos_t_anon_te_ *this, long long __off) {
     this->_M_off = __off;
     sf__anon__ctor(&this->_M_state);
 }
 /* C++: operator streamoff() const */
+#line 1032 "/tmp/use_string.i"
 __SF_INLINE void sf__fpos_t_anon_te___operator(struct sf__fpos_t_anon_te_ *this) {
     return this->_M_off;
 }
 /* C++: state(_StateT __st) */
+#line 1036 "/tmp/use_string.i"
 __SF_INLINE void sf__fpos_t_anon_te___state(struct sf__fpos_t_anon_te_ *this, struct ? __st) {
     (this->_M_state = __st);
 }
 /* C++: state() const */
+#line 1041 "/tmp/use_string.i"
 __SF_INLINE struct ? sf__fpos_t_anon_te___state(struct sf__fpos_t_anon_te_ *this) {
     return this->_M_state;
 }
 /* C++: operator+=(streamoff __off) */
+#line 1049 "/tmp/use_string.i"
 __SF_INLINE struct sf__std__fpos* sf__fpos_t_anon_te___operator(struct sf__fpos_t_anon_te_ *this, long long __off) {
     (this->_M_off += __off);
     return (*this);
 }
 /* C++: operator-=(streamoff __off) */
+#line 1060 "/tmp/use_string.i"
 __SF_INLINE struct sf__std__fpos* sf__fpos_t_anon_te___operator(struct sf__fpos_t_anon_te_ *this, long long __off) {
     (this->_M_off -= __off);
     return (*this);
 }
 /* C++: operator+(streamoff __off) const */
+#line 1073 "/tmp/use_string.i"
 __SF_INLINE struct sf__std__fpos sf__fpos_t_anon_te___operator(struct sf__fpos_t_anon_te_ *this, long long __off) {
     struct sf__std__fpos __pos;
     sf__std__fpos__ctor(&__pos, (*this));
@@ -249,6 +274,7 @@ __SF_INLINE struct sf__std__fpos sf__fpos_t_anon_te___operator(struct sf__fpos_t
     return __pos;
 }
 /* C++: operator-(streamoff __off) const */
+#line 1087 "/tmp/use_string.i"
 __SF_INLINE struct sf__std__fpos sf__fpos_t_anon_te___operator(struct sf__fpos_t_anon_te_ *this, long long __off) {
     struct sf__std__fpos __pos;
     sf__std__fpos__ctor(&__pos, (*this));
@@ -256,6 +282,7 @@ __SF_INLINE struct sf__std__fpos sf__fpos_t_anon_te___operator(struct sf__fpos_t
     return __pos;
 }
 /* C++: operator-(const fpos& __other) const */
+#line 1100 "/tmp/use_string.i"
 __SF_INLINE long long sf__fpos_t_anon_te___operator(struct sf__fpos_t_anon_te_ *this, const struct sf__std__fpos* __other) {
     return (this->_M_off - __other._M_off);
 }
@@ -4856,6 +4883,7 @@ struct sf__basic_string ;
 /* unsupported top-level */
 /* unsupported top-level */
 /* C++: inline void __terminate()  noexcept */
+#line 245 "/tmp/use_string.i"
 void __terminate(void) {
     /*?*/ int terminate;
     terminate();
@@ -4864,6 +4892,7 @@ void __terminate(void) {
 
 
 /* C++: __is_constant_evaluated()  noexcept */
+#line 272 "/tmp/use_string.i"
 _Bool __is_constant_evaluated(void) {
     return false;
 }
@@ -4903,6 +4932,7 @@ struct sf___IO_FILE ;
 /* unsupported top-level */
 
 /* C++: struct __locale_struct */
+#line 488 "/tmp/use_string.i"
 struct sf____locale_struct {
     struct sf____locale_data** __locales;
     const unsigned short* __ctype_b;
@@ -4917,186 +4947,272 @@ struct sf____locale_struct {
 
 struct sf__tm ;
 /* C++: extern wchar_t *wcscpy (wchar_t *  __dest, */
+#line 514 "/tmp/use_string.i"
 wchar_t* wcscpy(wchar_t*, const wchar_t*);
 /* C++: extern wchar_t *wcsncpy (wchar_t *  __dest, */
+#line 519 "/tmp/use_string.i"
 wchar_t* wcsncpy(wchar_t*, const wchar_t*, long);
 /* C++: extern size_t wcslcpy (wchar_t *  __dest, */
+#line 525 "/tmp/use_string.i"
 long wcslcpy(wchar_t*, const wchar_t*, long);
 /* C++: extern size_t wcslcat (wchar_t *  __dest, */
+#line 529 "/tmp/use_string.i"
 long wcslcat(wchar_t*, const wchar_t*, long);
 /* C++: extern wchar_t *wcscat (wchar_t *  __dest, */
+#line 535 "/tmp/use_string.i"
 wchar_t* wcscat(wchar_t*, const wchar_t*);
 /* C++: extern wchar_t *wcsncat (wchar_t *  __dest, */
+#line 539 "/tmp/use_string.i"
 wchar_t* wcsncat(wchar_t*, const wchar_t*, long);
 /* C++: extern int wcscmp (const wchar_t *__s1, const wchar_t *__s2) */
+#line 544 "/tmp/use_string.i"
 int wcscmp(const wchar_t*, const wchar_t*);
 /* C++: extern int wcsncmp (const wchar_t *__s1, const wchar_t *__s2, size_t __n) */
+#line 547 "/tmp/use_string.i"
 int wcsncmp(const wchar_t*, const wchar_t*, long);
 /* C++: extern int wcscasecmp (const wchar_t *__s1, const wchar_t *__s2)  ; */
+#line 552 "/tmp/use_string.i"
 int wcscasecmp(const wchar_t*, const wchar_t*);
 /* C++: extern int wcsncasecmp (const wchar_t *__s1, const wchar_t *__s2, */
+#line 555 "/tmp/use_string.i"
 int wcsncasecmp(const wchar_t*, const wchar_t*, long);
 /* C++: extern int wcscasecmp_l (const wchar_t *__s1, const wchar_t *__s2, */
+#line 558 "/tmp/use_string.i"
 int wcscasecmp_l(const wchar_t*, const wchar_t*, struct sf____locale_struct*);
 /* C++: extern int wcsncasecmp_l (const wchar_t *__s1, const wchar_t *__s2, */
+#line 561 "/tmp/use_string.i"
 int wcsncasecmp_l(const wchar_t*, const wchar_t*, long, struct sf____locale_struct*);
 /* C++: extern int wcscoll (const wchar_t *__s1, const wchar_t *__s2)  ; */
+#line 564 "/tmp/use_string.i"
 int wcscoll(const wchar_t*, const wchar_t*);
 /* C++: extern size_t wcsxfrm (wchar_t *  __s1, */
+#line 566 "/tmp/use_string.i"
 long wcsxfrm(wchar_t*, const wchar_t*, long);
 /* C++: extern int wcscoll_l (const wchar_t *__s1, const wchar_t *__s2, */
+#line 569 "/tmp/use_string.i"
 int wcscoll_l(const wchar_t*, const wchar_t*, struct sf____locale_struct*);
 /* C++: extern size_t wcsxfrm_l (wchar_t *__s1, const wchar_t *__s2, */
+#line 572 "/tmp/use_string.i"
 long wcsxfrm_l(wchar_t*, const wchar_t*, long, struct sf____locale_struct*);
 /* C++: extern wchar_t *wcsdup (const wchar_t *__s) */
+#line 576 "/tmp/use_string.i"
 wchar_t* wcsdup(const wchar_t*);
 /* C++: extern wchar_t *wcschr (const wchar_t *__wcs, wchar_t __wc) */
+#line 587 "/tmp/use_string.i"
 wchar_t* wcschr(const wchar_t*, wchar_t);
 /* C++: extern wchar_t *wcsrchr (const wchar_t *__wcs, wchar_t __wc) */
+#line 597 "/tmp/use_string.i"
 wchar_t* wcsrchr(const wchar_t*, wchar_t);
 /* C++: extern size_t wcscspn (const wchar_t *__wcs, const wchar_t *__reject) */
+#line 600 "/tmp/use_string.i"
 long wcscspn(const wchar_t*, const wchar_t*);
 /* C++: extern size_t wcsspn (const wchar_t *__wcs, const wchar_t *__accept) */
+#line 603 "/tmp/use_string.i"
 long wcsspn(const wchar_t*, const wchar_t*);
 /* C++: extern wchar_t *wcspbrk (const wchar_t *__wcs, const wchar_t *__accept) */
+#line 613 "/tmp/use_string.i"
 wchar_t* wcspbrk(const wchar_t*, const wchar_t*);
 /* C++: extern wchar_t *wcsstr (const wchar_t *__haystack, const wchar_t *__needle) */
+#line 624 "/tmp/use_string.i"
 wchar_t* wcsstr(const wchar_t*, const wchar_t*);
 /* C++: extern wchar_t *wcstok (wchar_t *  __s, */
+#line 629 "/tmp/use_string.i"
 wchar_t* wcstok(wchar_t*, const wchar_t*, wchar_t**);
 /* C++: extern size_t wcslen (const wchar_t *__s)    ; */
+#line 634 "/tmp/use_string.i"
 long wcslen(const wchar_t*);
 /* C++: extern size_t wcsnlen (const wchar_t *__s, size_t __maxlen) */
+#line 636 "/tmp/use_string.i"
 long wcsnlen(const wchar_t*, long);
 /* C++: extern wchar_t *wmemchr (const wchar_t *__s, wchar_t __c, size_t __n) */
+#line 639 "/tmp/use_string.i"
 wchar_t* wmemchr(const wchar_t*, wchar_t, long);
 /* C++: extern int wmemcmp (const wchar_t *__s1, const wchar_t *__s2, size_t __n) */
+#line 644 "/tmp/use_string.i"
 int wmemcmp(const wchar_t*, const wchar_t*, long);
 /* C++: extern wchar_t *wmemcpy (wchar_t *  __s1, */
+#line 648 "/tmp/use_string.i"
 wchar_t* wmemcpy(wchar_t*, const wchar_t*, long);
 /* C++: extern wchar_t *wmemmove (wchar_t *__s1, const wchar_t *__s2, size_t __n) */
+#line 651 "/tmp/use_string.i"
 wchar_t* wmemmove(wchar_t*, const wchar_t*, long);
 /* C++: extern wchar_t *wmemset (wchar_t *__s, wchar_t __c, size_t __n)  ; */
+#line 655 "/tmp/use_string.i"
 wchar_t* wmemset(wchar_t*, wchar_t, long);
 /* C++: extern wint_t btowc (int __c)  ; */
+#line 657 "/tmp/use_string.i"
 int btowc(int);
 /* C++: extern int wctob (wint_t __c)  ; */
+#line 659 "/tmp/use_string.i"
 int wctob(int);
 /* C++: extern int mbsinit (const mbstate_t *__ps)    ; */
+#line 661 "/tmp/use_string.i"
 int mbsinit(const struct ?*);
 /* C++: extern size_t mbrtowc (wchar_t *  __pwc, */
+#line 663 "/tmp/use_string.i"
 long mbrtowc(wchar_t*, const char*, long, struct ?*);
 /* C++: extern size_t wcrtomb (char *  __s, wchar_t __wc, */
+#line 668 "/tmp/use_string.i"
 long wcrtomb(char*, wchar_t, struct ?*);
 /* C++: extern size_t __mbrlen (const char *  __s, size_t __n, */
+#line 672 "/tmp/use_string.i"
 long __mbrlen(const char*, long, struct ?*);
 /* C++: extern size_t mbrlen (const char *  __s, size_t __n, */
+#line 674 "/tmp/use_string.i"
 long mbrlen(const char*, long, struct ?*);
 /* C++: extern size_t mbsrtowcs (wchar_t *  __dst, */
+#line 677 "/tmp/use_string.i"
 long mbsrtowcs(wchar_t*, const char**, long, struct ?*);
 /* C++: extern size_t wcsrtombs (char *  __dst, */
+#line 681 "/tmp/use_string.i"
 long wcsrtombs(char*, const wchar_t**, long, struct ?*);
 /* C++: extern size_t mbsnrtowcs (wchar_t *  __dst, */
+#line 685 "/tmp/use_string.i"
 long mbsnrtowcs(wchar_t*, const char**, long, long, struct ?*);
 /* C++: extern size_t wcsnrtombs (char *  __dst, */
+#line 689 "/tmp/use_string.i"
 long wcsnrtombs(char*, const wchar_t**, long, long, struct ?*);
 /* C++: extern double wcstod (const wchar_t *  __nptr, */
+#line 694 "/tmp/use_string.i"
 double wcstod(const wchar_t*, wchar_t**);
 /* C++: extern float wcstof (const wchar_t *  __nptr, */
+#line 699 "/tmp/use_string.i"
 float wcstof(const wchar_t*, wchar_t**);
 /* C++: extern long double wcstold (const wchar_t *  __nptr, */
+#line 701 "/tmp/use_string.i"
 long double wcstold(const wchar_t*, wchar_t**);
 /* C++: extern long int wcstol (const wchar_t *  __nptr, */
+#line 704 "/tmp/use_string.i"
 long wcstol(const wchar_t*, wchar_t**, int);
 /* C++: extern unsigned long int wcstoul (const wchar_t *  __nptr, */
+#line 707 "/tmp/use_string.i"
 unsigned long wcstoul(const wchar_t*, wchar_t**, int);
 /* C++: extern long long int wcstoll (const wchar_t *  __nptr, */
+#line 712 "/tmp/use_string.i"
 long long wcstoll(const wchar_t*, wchar_t**, int);
 /* C++: extern unsigned long long int wcstoull (const wchar_t *  __nptr, */
+#line 717 "/tmp/use_string.i"
 unsigned long long wcstoull(const wchar_t*, wchar_t**, int);
 /* C++: extern wchar_t *wcpcpy (wchar_t *  __dest, */
+#line 721 "/tmp/use_string.i"
 wchar_t* wcpcpy(wchar_t*, const wchar_t*);
 /* C++: extern wchar_t *wcpncpy (wchar_t *  __dest, */
+#line 724 "/tmp/use_string.i"
 wchar_t* wcpncpy(wchar_t*, const wchar_t*, long);
 /* C++: extern __FILE *open_wmemstream (wchar_t **__bufloc, size_t *__sizeloc) */
+#line 728 "/tmp/use_string.i"
 struct sf___IO_FILE* open_wmemstream(wchar_t**, long*);
 /* C++: extern int fwide (__FILE *__fp, int __mode)  ; */
+#line 735 "/tmp/use_string.i"
 int fwide(struct sf___IO_FILE*, int);
 /* C++: extern int fwprintf (__FILE *  __stream, */
+#line 737 "/tmp/use_string.i"
 int fwprintf(struct sf___IO_FILE*, const wchar_t*);
 /* C++: extern int wprintf (const wchar_t *  __format, ...) */
+#line 741 "/tmp/use_string.i"
 int wprintf(const wchar_t*);
 /* C++: extern int swprintf (wchar_t *  __s, size_t __n, */
+#line 744 "/tmp/use_string.i"
 int swprintf(wchar_t*, long, const wchar_t*);
 /* C++: extern int vfwprintf (__FILE *  __s, */
+#line 748 "/tmp/use_string.i"
 int vfwprintf(struct sf___IO_FILE*, const wchar_t*, int);
 /* C++: extern int vwprintf (const wchar_t *  __format, */
+#line 753 "/tmp/use_string.i"
 int vwprintf(const wchar_t*, int);
 /* C++: extern int vswprintf (wchar_t *  __s, size_t __n, */
+#line 757 "/tmp/use_string.i"
 int vswprintf(wchar_t*, long, const wchar_t*, int);
 /* C++: extern int fwscanf (__FILE *  __stream, */
+#line 762 "/tmp/use_string.i"
 int fwscanf(struct sf___IO_FILE*, const wchar_t*);
 /* C++: extern int wscanf (const wchar_t *  __format, ...) */
+#line 766 "/tmp/use_string.i"
 int wscanf(const wchar_t*);
 /* C++: extern int swscanf (const wchar_t *  __s, */
+#line 769 "/tmp/use_string.i"
 int swscanf(const wchar_t*, const wchar_t*);
 /* C++: extern int __isoc99_fwscanf (__FILE *  __stream, */
+#line 773 "/tmp/use_string.i"
 int __isoc99_fwscanf(struct sf___IO_FILE*, const wchar_t*);
 /* C++: extern int __isoc99_wscanf (const wchar_t *  __format, ...); */
+#line 775 "/tmp/use_string.i"
 int __isoc99_wscanf(const wchar_t*);
 /* C++: extern int __isoc99_swscanf (const wchar_t *  __s, */
+#line 776 "/tmp/use_string.i"
 int __isoc99_swscanf(const wchar_t*, const wchar_t*);
 /* C++: extern int vfwscanf (__FILE *  __s, */
+#line 780 "/tmp/use_string.i"
 int vfwscanf(struct sf___IO_FILE*, const wchar_t*, int);
 /* C++: extern int vwscanf (const wchar_t *  __format, */
+#line 785 "/tmp/use_string.i"
 int vwscanf(const wchar_t*, int);
 /* C++: extern int vswscanf (const wchar_t *  __s, */
+#line 789 "/tmp/use_string.i"
 int vswscanf(const wchar_t*, const wchar_t*, int);
 /* C++: extern int __isoc99_vfwscanf (__FILE *  __s, */
+#line 794 "/tmp/use_string.i"
 int __isoc99_vfwscanf(struct sf___IO_FILE*, const wchar_t*, int);
 /* C++: extern int __isoc99_vwscanf (const wchar_t *  __format, */
+#line 797 "/tmp/use_string.i"
 int __isoc99_vwscanf(const wchar_t*, int);
 /* C++: extern int __isoc99_vswscanf (const wchar_t *  __s, */
+#line 799 "/tmp/use_string.i"
 int __isoc99_vswscanf(const wchar_t*, const wchar_t*, int);
 /* C++: extern wint_t fgetwc (__FILE *__stream); */
+#line 803 "/tmp/use_string.i"
 int fgetwc(struct sf___IO_FILE*);
 /* C++: extern wint_t getwc (__FILE *__stream); */
+#line 804 "/tmp/use_string.i"
 int getwc(struct sf___IO_FILE*);
 /* C++: extern wint_t getwchar (void); */
+#line 806 "/tmp/use_string.i"
 int getwchar(void);
 /* C++: extern wint_t fputwc (wchar_t __wc, __FILE *__stream); */
+#line 808 "/tmp/use_string.i"
 int fputwc(wchar_t, struct sf___IO_FILE*);
 /* C++: extern wint_t putwc (wchar_t __wc, __FILE *__stream); */
+#line 809 "/tmp/use_string.i"
 int putwc(wchar_t, struct sf___IO_FILE*);
 /* C++: extern wint_t putwchar (wchar_t __wc); */
+#line 811 "/tmp/use_string.i"
 int putwchar(wchar_t);
 /* C++: extern wchar_t *fgetws (wchar_t *  __ws, int __n, */
+#line 813 "/tmp/use_string.i"
 wchar_t* fgetws(wchar_t*, int, struct sf___IO_FILE*);
 /* C++: extern int fputws (const wchar_t *  __ws, */
+#line 816 "/tmp/use_string.i"
 int fputws(const wchar_t*, struct sf___IO_FILE*);
 /* C++: extern wint_t ungetwc (wint_t __wc, __FILE *__stream); */
+#line 819 "/tmp/use_string.i"
 int ungetwc(int, struct sf___IO_FILE*);
 /* C++: extern size_t wcsftime (wchar_t *  __s, size_t __maxsize, */
+#line 821 "/tmp/use_string.i"
 long wcsftime(wchar_t*, long, const wchar_t*, const struct sf__tm*);
 
 
 /* C++: wcschr(wchar_t* __p, wchar_t __c) */
+#line 912 "/tmp/use_string.i"
 wchar_t* wcschr(wchar_t* __p, wchar_t __c) {
     return wcschr((const wchar_t*)__p, __c);
 }
 /* C++: wcspbrk(wchar_t* __s1, const wchar_t* __s2) */
+#line 916 "/tmp/use_string.i"
 wchar_t* wcspbrk(wchar_t* __s1, const wchar_t* __s2) {
     return wcspbrk((const wchar_t*)__s1, __s2);
 }
 /* C++: wcsrchr(wchar_t* __p, wchar_t __c) */
+#line 920 "/tmp/use_string.i"
 wchar_t* wcsrchr(wchar_t* __p, wchar_t __c) {
     return wcsrchr((const wchar_t*)__p, __c);
 }
 /* C++: wcsstr(wchar_t* __s1, const wchar_t* __s2) */
+#line 924 "/tmp/use_string.i"
 wchar_t* wcsstr(wchar_t* __s1, const wchar_t* __s2) {
     return wcsstr((const wchar_t*)__s1, __s2);
 }
 /* C++: wmemchr(wchar_t* __p, wchar_t __c, size_t __n) */
+#line 928 "/tmp/use_string.i"
 wchar_t* wmemchr(wchar_t* __p, wchar_t __c, long __n) {
     return wmemchr((const wchar_t*)__p, __c, __n);
 }
@@ -5114,79 +5230,105 @@ wchar_t* wmemchr(wchar_t* __p, wchar_t __c, long __n) {
 /* unsupported top-level */
 /* unsupported top-level */
 /* C++: struct __do_is_destructible_impl */
+#line 1811 "/tmp/use_string.i"
 struct sf__std____do_is_destructible_impl {
 };
 /* C++: struct __do_is_nt_destructible_impl */
+#line 1864 "/tmp/use_string.i"
 struct sf__std____do_is_nt_destructible_impl {
 };
 /* C++: struct __do_is_implicitly_default_constructible_impl */
+#line 2114 "/tmp/use_string.i"
 struct sf__std____do_is_implicitly_default_constructible_impl {
 };
 /* C++: static false_type __test(...); */
+#line 2123 "/tmp/use_string.i"
 __SF_INLINE struct sf__integral_constant_t_bool_te_ sf__std____do_is_implicitly_default_constructible_impl____test(struct sf__std____do_is_implicitly_default_constructible_impl *this);
 /* C++: class __make_unsigned_selector_base */
+#line 2492 "/tmp/use_string.i"
 struct sf__std____make_unsigned_selector_base {
 };
 /* C++: struct __failure_type */
+#line 2893 "/tmp/use_string.i"
 struct sf__std____failure_type {
 };
 /* C++: struct __do_common_type_impl */
+#line 2896 "/tmp/use_string.i"
 struct sf__std____do_common_type_impl {
 };
 /* C++: struct __invoke_memfun_ref */
+#line 3022 "/tmp/use_string.i"
 struct sf__std____invoke_memfun_ref {
 };
 /* C++: struct __invoke_memfun_deref */
+#line 3023 "/tmp/use_string.i"
 struct sf__std____invoke_memfun_deref {
 };
 /* C++: struct __invoke_memobj_ref */
+#line 3024 "/tmp/use_string.i"
 struct sf__std____invoke_memobj_ref {
 };
 /* C++: struct __invoke_memobj_deref */
+#line 3025 "/tmp/use_string.i"
 struct sf__std____invoke_memobj_deref {
 };
 /* C++: struct __invoke_other */
+#line 3026 "/tmp/use_string.i"
 struct sf__std____invoke_other {
 };
 /* C++: struct __result_of_memfun_ref_impl */
+#line 3034 "/tmp/use_string.i"
 struct sf__std____result_of_memfun_ref_impl {
 };
 /* C++: struct __result_of_memfun_deref_impl */
+#line 3053 "/tmp/use_string.i"
 struct sf__std____result_of_memfun_deref_impl {
 };
 /* C++: struct __result_of_memobj_ref_impl */
+#line 3072 "/tmp/use_string.i"
 struct sf__std____result_of_memobj_ref_impl {
 };
 /* C++: struct __result_of_memobj_deref_impl */
+#line 3091 "/tmp/use_string.i"
 struct sf__std____result_of_memobj_deref_impl {
 };
 /* C++: struct __result_of_other_impl */
+#line 3174 "/tmp/use_string.i"
 struct sf__std____result_of_other_impl {
 };
 /* C++: struct __do_is_swappable_impl */
+#line 3280 "/tmp/use_string.i"
 struct sf__std____swappable_details____do_is_swappable_impl {
 };
 /* C++: struct __do_is_nothrow_swappable_impl */
+#line 3290 "/tmp/use_string.i"
 struct sf__std____swappable_details____do_is_nothrow_swappable_impl {
 };
 /* C++: struct __do_is_swappable_with_impl */
+#line 3353 "/tmp/use_string.i"
 struct sf__std____swappable_with_details____do_is_swappable_with_impl {
 };
 /* C++: struct __do_is_nothrow_swappable_with_impl */
+#line 3365 "/tmp/use_string.i"
 struct sf__std____swappable_with_details____do_is_nothrow_swappable_with_impl {
 };
 /* C++: struct __nonesuchbase */
+#line 3559 "/tmp/use_string.i"
 struct sf__std____nonesuchbase {
 };
 /* C++: struct __nonesuch : private __nonesuchbase */
+#line 3560 "/tmp/use_string.i"
 struct sf__std____nonesuch {
     struct sf__std____nonesuchbase __sf_base;
 };
 /* C++: ~__nonesuch() = delete; */
+#line 3561 "/tmp/use_string.i"
 __SF_INLINE void sf__std____nonesuch__dtor_body(struct sf__std____nonesuch *this);
 /* C++: __nonesuch(__nonesuch const&) = delete; */
+#line 3562 "/tmp/use_string.i"
 __SF_INLINE void sf__std____nonesuch__ctor(struct sf__std____nonesuch *this, const struct sf__std____nonesuch*);
 /* C++: void operator=(__nonesuch const&) = delete; */
+#line 3563 "/tmp/use_string.i"
 __SF_INLINE void sf__std____nonesuch__operator(struct sf__std____nonesuch *this, const struct sf__std____nonesuch*);
 __SF_INLINE void sf__std____nonesuch__dtor(struct sf__std____nonesuch *this);
 __SF_INLINE void sf__std____nonesuch__dtor(struct sf__std____nonesuch *this) {
@@ -5198,23 +5340,31 @@ __SF_INLINE void sf__std____nonesuch__dtor(struct sf__std____nonesuch *this) {
 
 
 /* C++: class exception */
+#line 4273 "/tmp/use_string.i"
 struct sf__std__exception__vtable;
 struct sf__std__exception {
     const struct sf__std__exception__vtable *__sf_vptr;
 };
 /* C++: exception()  noexcept */
+#line 4276 "/tmp/use_string.i"
 __SF_INLINE void sf__std__exception__ctor(struct sf__std__exception *this);
 /* C++: virtual ~exception()    noexcept ; */
+#line 4277 "/tmp/use_string.i"
 __SF_INLINE void sf__std__exception__dtor_body(struct sf__std__exception *this);
 /* C++: exception(const exception&) = default; */
+#line 4279 "/tmp/use_string.i"
 __SF_INLINE void sf__std__exception__ctor(struct sf__std__exception *this, const struct sf__std__exception*);
 /* C++: exception& operator=(const exception&) = default; */
+#line 4280 "/tmp/use_string.i"
 __SF_INLINE struct sf__std__exception* sf__std__exception__operator(struct sf__std__exception *this, const struct sf__std__exception*);
 /* C++: exception(exception&&) = default; */
+#line 4281 "/tmp/use_string.i"
 __SF_INLINE void sf__std__exception__ctor(struct sf__std__exception *this, struct sf__std__exception*);
 /* C++: exception& operator=(exception&&) = default; */
+#line 4282 "/tmp/use_string.i"
 __SF_INLINE struct sf__std__exception* sf__std__exception__operator(struct sf__std__exception *this, struct sf__std__exception*);
 /* C++: what() const    noexcept ; */
+#line 4285 "/tmp/use_string.i"
 __SF_INLINE const char* sf__std__exception__what(struct sf__std__exception *this);
 __SF_INLINE void sf__std__exception__dtor(struct sf__std__exception *this);
 struct sf__std__exception__vtable {
@@ -5224,6 +5374,7 @@ static const struct sf__std__exception__vtable sf__std__exception__vtable_instan
     sf__std__exception__what,
 };
 /* C++: exception()  noexcept */
+#line 4276 "/tmp/use_string.i"
 __SF_INLINE void sf__std__exception__ctor(struct sf__std__exception *this) {
     this->__sf_vptr = &sf__std__exception__vtable_instance;
 }
@@ -5232,19 +5383,25 @@ __SF_INLINE void sf__std__exception__dtor(struct sf__std__exception *this) {
 }
 
 /* C++: class bad_alloc : public exception */
+#line 4302 "/tmp/use_string.i"
 struct sf__std__bad_alloc__vtable;
 struct sf__std__bad_alloc {
     struct sf__std__exception __sf_base;
 };
 /* C++: bad_alloc() throw() */
+#line 4305 "/tmp/use_string.i"
 __SF_INLINE void sf__std__bad_alloc__ctor(struct sf__std__bad_alloc *this);
 /* C++: bad_alloc(const bad_alloc&) = default; */
+#line 4308 "/tmp/use_string.i"
 __SF_INLINE void sf__std__bad_alloc__ctor(struct sf__std__bad_alloc *this, const struct sf__std__bad_alloc*);
 /* C++: bad_alloc& operator=(const bad_alloc&) = default; */
+#line 4309 "/tmp/use_string.i"
 __SF_INLINE struct sf__std__bad_alloc* sf__std__bad_alloc__operator(struct sf__std__bad_alloc *this, const struct sf__std__bad_alloc*);
 /* C++: virtual ~bad_alloc() throw(); */
+#line 4314 "/tmp/use_string.i"
 __SF_INLINE void sf__std__bad_alloc__dtor_body(struct sf__std__bad_alloc *this);
 /* C++: virtual const char* what() const throw(); */
+#line 4317 "/tmp/use_string.i"
 __SF_INLINE const char* sf__std__bad_alloc__what(struct sf__std__bad_alloc *this);
 __SF_INLINE void sf__std__bad_alloc__dtor(struct sf__std__bad_alloc *this);
 struct sf__std__bad_alloc__vtable {
@@ -5254,6 +5411,7 @@ static const struct sf__std__bad_alloc__vtable sf__std__bad_alloc__vtable_instan
     sf__std__bad_alloc__what,
 };
 /* C++: bad_alloc() throw() */
+#line 4305 "/tmp/use_string.i"
 __SF_INLINE void sf__std__bad_alloc__ctor(struct sf__std__bad_alloc *this) {
     sf__std__exception__ctor(&this->__sf_base);
     this->__sf_vptr = &sf__std__bad_alloc__vtable_instance;
@@ -5263,15 +5421,19 @@ __SF_INLINE void sf__std__bad_alloc__dtor(struct sf__std__bad_alloc *this) {
     sf__std__exception__dtor(&this->__sf_base);
 }
 /* C++: class bad_array_new_length : public bad_alloc */
+#line 4321 "/tmp/use_string.i"
 struct sf__std__bad_array_new_length__vtable;
 struct sf__std__bad_array_new_length {
     struct sf__std__bad_alloc __sf_base;
 };
 /* C++: bad_array_new_length() throw() */
+#line 4324 "/tmp/use_string.i"
 __SF_INLINE void sf__std__bad_array_new_length__ctor(struct sf__std__bad_array_new_length *this);
 /* C++: virtual ~bad_array_new_length() throw(); */
+#line 4328 "/tmp/use_string.i"
 __SF_INLINE void sf__std__bad_array_new_length__dtor_body(struct sf__std__bad_array_new_length *this);
 /* C++: virtual const char* what() const throw(); */
+#line 4331 "/tmp/use_string.i"
 __SF_INLINE const char* sf__std__bad_array_new_length__what(struct sf__std__bad_array_new_length *this);
 __SF_INLINE void sf__std__bad_array_new_length__dtor(struct sf__std__bad_array_new_length *this);
 struct sf__std__bad_array_new_length__vtable {
@@ -5281,6 +5443,7 @@ static const struct sf__std__bad_array_new_length__vtable sf__std__bad_array_new
     sf__std__bad_array_new_length__what,
 };
 /* C++: bad_array_new_length() throw() */
+#line 4324 "/tmp/use_string.i"
 __SF_INLINE void sf__std__bad_array_new_length__ctor(struct sf__std__bad_array_new_length *this) {
     sf__std__bad_alloc__ctor(&this->__sf_base);
     this->__sf_vptr = &sf__std__bad_array_new_length__vtable_instance;
@@ -5290,86 +5453,122 @@ __SF_INLINE void sf__std__bad_array_new_length__dtor(struct sf__std__bad_array_n
     sf__std__bad_alloc__dtor(&this->__sf_base);
 }
 /* C++: struct nothrow_t */
+#line 4334 "/tmp/use_string.i"
 struct sf__std__nothrow_t {
 };
 /* C++: explicit nothrow_t() = default; */
+#line 4337 "/tmp/use_string.i"
 __SF_INLINE void sf__std__nothrow_t__ctor(struct sf__std__nothrow_t *this);
 const struct sf__std__nothrow_t nothrow;
 /* unsupported top-level */
 /* C++: new_handler set_new_handler(new_handler) throw(); */
+#line 4347 "/tmp/use_string.i"
 /*?*/ int set_new_handler(/*?*/ int);
 /* C++: new_handler get_new_handler() noexcept; */
+#line 4351 "/tmp/use_string.i"
 /*?*/ int get_new_handler(void);
 /* C++: void* operator new(std::size_t) */
+#line 4355 "/tmp/use_string.i"
 void* operator(long);
 /* C++: void* operator new[](std::size_t) */
+#line 4357 "/tmp/use_string.i"
 void* operator(long);
 /* C++: void operator delete(void*)  noexcept */
+#line 4359 "/tmp/use_string.i"
 void operator(void*);
 /* C++: void operator delete[](void*)  noexcept */
+#line 4361 "/tmp/use_string.i"
 void operator(void*);
 /* C++: void* operator new(std::size_t, const std::nothrow_t&)  noexcept */
+#line 4364 "/tmp/use_string.i"
 void* operator(long, const struct sf__std__nothrow_t*);
 /* C++: void* operator new[](std::size_t, const std::nothrow_t&)  noexcept */
+#line 4366 "/tmp/use_string.i"
 void* operator(long, const struct sf__std__nothrow_t*);
 /* C++: void operator delete(void*, const std::nothrow_t&)  noexcept */
+#line 4368 "/tmp/use_string.i"
 void operator(void*, const struct sf__std__nothrow_t*);
 /* C++: void operator delete[](void*, const std::nothrow_t&)  noexcept */
+#line 4370 "/tmp/use_string.i"
 void operator(void*, const struct sf__std__nothrow_t*);
 /* C++: inline void* operator new(std::size_t, void* __p)  noexcept */
+#line 4373 "/tmp/use_string.i"
 void* operator(long, void* __p) {
     return __p;
 }
 /* C++: inline void* operator new[](std::size_t, void* __p)  noexcept */
+#line 4375 "/tmp/use_string.i"
 void* operator(long, void* __p) {
     return __p;
 }
 /* C++: inline void operator delete (void*, void*)  noexcept */
+#line 4379 "/tmp/use_string.i"
 void operator(void*, void*) {
 }
 /* C++: inline void operator delete[](void*, void*)  noexcept */
+#line 4380 "/tmp/use_string.i"
 void operator(void*, void*) {
 }
 
 /* C++: __throw_bad_exception(void)  ; */
+#line 4400 "/tmp/use_string.i"
 void __throw_bad_exception(void);
 /* C++: __throw_bad_alloc(void)  ; */
+#line 4404 "/tmp/use_string.i"
 void __throw_bad_alloc(void);
 /* C++: __throw_bad_array_new_length(void)  ; */
+#line 4407 "/tmp/use_string.i"
 void __throw_bad_array_new_length(void);
 /* C++: __throw_bad_cast(void)  ; */
+#line 4411 "/tmp/use_string.i"
 void __throw_bad_cast(void);
 /* C++: __throw_bad_typeid(void)  ; */
+#line 4414 "/tmp/use_string.i"
 void __throw_bad_typeid(void);
 /* C++: __throw_logic_error(const char*)  ; */
+#line 4418 "/tmp/use_string.i"
 void __throw_logic_error(const char*);
 /* C++: __throw_domain_error(const char*)  ; */
+#line 4421 "/tmp/use_string.i"
 void __throw_domain_error(const char*);
 /* C++: __throw_invalid_argument(const char*)  ; */
+#line 4424 "/tmp/use_string.i"
 void __throw_invalid_argument(const char*);
 /* C++: __throw_length_error(const char*)  ; */
+#line 4427 "/tmp/use_string.i"
 void __throw_length_error(const char*);
 /* C++: __throw_out_of_range(const char*)  ; */
+#line 4430 "/tmp/use_string.i"
 void __throw_out_of_range(const char*);
 /* C++: __throw_out_of_range_fmt(const char*, ...) */
+#line 4433 "/tmp/use_string.i"
 void __throw_out_of_range_fmt(const char*);
 /* C++: __throw_runtime_error(const char*)  ; */
+#line 4437 "/tmp/use_string.i"
 void __throw_runtime_error(const char*);
 /* C++: __throw_range_error(const char*)  ; */
+#line 4440 "/tmp/use_string.i"
 void __throw_range_error(const char*);
 /* C++: __throw_overflow_error(const char*)  ; */
+#line 4443 "/tmp/use_string.i"
 void __throw_overflow_error(const char*);
 /* C++: __throw_underflow_error(const char*)  ; */
+#line 4446 "/tmp/use_string.i"
 void __throw_underflow_error(const char*);
 /* C++: __throw_ios_failure(const char*)  ; */
+#line 4450 "/tmp/use_string.i"
 void __throw_ios_failure(const char*);
 /* C++: __throw_ios_failure(const char*, int)  ; */
+#line 4453 "/tmp/use_string.i"
 void __throw_ios_failure(const char*, int);
 /* C++: __throw_system_error(int)  ; */
+#line 4457 "/tmp/use_string.i"
 void __throw_system_error(int);
 /* C++: __throw_future_error(int)  ; */
+#line 4461 "/tmp/use_string.i"
 void __throw_future_error(int);
 /* C++: __throw_bad_function_call()  ; */
+#line 4465 "/tmp/use_string.i"
 void __throw_bad_function_call(void);
 
 
@@ -5377,13 +5576,16 @@ void __throw_bad_function_call(void);
 
 
 /* C++: struct __true_type */
+#line 4925 "/tmp/use_string.i"
 struct sf__std____true_type {
 };
 /* C++: struct __false_type */
+#line 4926 "/tmp/use_string.i"
 struct sf__std____false_type {
 };
 
 /* C++: struct lconv */
+#line 5354 "/tmp/use_string.i"
 struct sf__lconv {
     char* decimal_point;
     char* thousands_sep;
@@ -5411,16 +5613,22 @@ struct sf__lconv {
     char int_n_sign_posn;
 };
 /* C++: extern char *setlocale (int __category, const char *__locale)  ; */
+#line 5400 "/tmp/use_string.i"
 char* setlocale(int, const char*);
 /* C++: extern struct lconv *localeconv (void)  ; */
+#line 5403 "/tmp/use_string.i"
 struct sf__lconv* localeconv(void);
 /* C++: extern locale_t newlocale (int __category_mask, const char *__locale, */
+#line 5408 "/tmp/use_string.i"
 struct sf____locale_struct* newlocale(int, const char*, struct sf____locale_struct*);
 /* C++: extern locale_t duplocale (locale_t __dataset)  ; */
+#line 5411 "/tmp/use_string.i"
 struct sf____locale_struct* duplocale(struct sf____locale_struct*);
 /* C++: extern void freelocale (locale_t __dataset)  ; */
+#line 5413 "/tmp/use_string.i"
 void freelocale(struct sf____locale_struct*);
 /* C++: extern locale_t uselocale (locale_t __dataset)  ; */
+#line 5415 "/tmp/use_string.i"
 struct sf____locale_struct* uselocale(struct sf____locale_struct*);
 
 
@@ -5428,6 +5636,7 @@ int __uselocale;
 
 /* unsupported top-level */
 /* C++: __convert_from_v(const __c_locale& __cloc  , */
+#line 5457 "/tmp/use_string.i"
 int __convert_from_v(const struct sf____locale_struct** __cloc, char* __out, const int __size, const char* __fmt) {
     struct sf____locale_struct* __old = /* expr */(__cloc);
     int __args;
@@ -5468,78 +5677,115 @@ struct sf__ios_base ;
 
 enum  ;
 /* C++: extern const unsigned short int **__ctype_b_loc (void) */
+#line 5681 "/tmp/use_string.i"
 const unsigned short** __ctype_b_loc(void);
 /* C++: extern const __int32_t **__ctype_tolower_loc (void) */
+#line 5683 "/tmp/use_string.i"
 const int** __ctype_tolower_loc(void);
 /* C++: extern const __int32_t **__ctype_toupper_loc (void) */
+#line 5685 "/tmp/use_string.i"
 const int** __ctype_toupper_loc(void);
 /* C++: extern int isalnum (int) ; */
+#line 5688 "/tmp/use_string.i"
 int isalnum(int);
 /* C++: extern int isalpha (int) ; */
+#line 5689 "/tmp/use_string.i"
 int isalpha(int);
 /* C++: extern int iscntrl (int) ; */
+#line 5690 "/tmp/use_string.i"
 int iscntrl(int);
 /* C++: extern int isdigit (int) ; */
+#line 5691 "/tmp/use_string.i"
 int isdigit(int);
 /* C++: extern int islower (int) ; */
+#line 5692 "/tmp/use_string.i"
 int islower(int);
 /* C++: extern int isgraph (int) ; */
+#line 5693 "/tmp/use_string.i"
 int isgraph(int);
 /* C++: extern int isprint (int) ; */
+#line 5694 "/tmp/use_string.i"
 int isprint(int);
 /* C++: extern int ispunct (int) ; */
+#line 5695 "/tmp/use_string.i"
 int ispunct(int);
 /* C++: extern int isspace (int) ; */
+#line 5696 "/tmp/use_string.i"
 int isspace(int);
 /* C++: extern int isupper (int) ; */
+#line 5697 "/tmp/use_string.i"
 int isupper(int);
 /* C++: extern int isxdigit (int) ; */
+#line 5698 "/tmp/use_string.i"
 int isxdigit(int);
 /* C++: extern int tolower (int __c)  ; */
+#line 5702 "/tmp/use_string.i"
 int tolower(int);
 /* C++: extern int toupper (int __c)  ; */
+#line 5705 "/tmp/use_string.i"
 int toupper(int);
 /* C++: extern int isblank (int) ; */
+#line 5710 "/tmp/use_string.i"
 int isblank(int);
 /* C++: extern int isascii (int __c)  ; */
+#line 5712 "/tmp/use_string.i"
 int isascii(int);
 /* C++: extern int toascii (int __c)  ; */
+#line 5714 "/tmp/use_string.i"
 int toascii(int);
 /* C++: extern int _toupper (int) ; */
+#line 5716 "/tmp/use_string.i"
 int _toupper(int);
 /* C++: extern int _tolower (int) ; */
+#line 5717 "/tmp/use_string.i"
 int _tolower(int);
 /* C++: extern int isalnum_l (int, locale_t) ; */
+#line 5722 "/tmp/use_string.i"
 int isalnum_l(int, struct sf____locale_struct*);
 /* C++: extern int isalpha_l (int, locale_t) ; */
+#line 5723 "/tmp/use_string.i"
 int isalpha_l(int, struct sf____locale_struct*);
 /* C++: extern int iscntrl_l (int, locale_t) ; */
+#line 5724 "/tmp/use_string.i"
 int iscntrl_l(int, struct sf____locale_struct*);
 /* C++: extern int isdigit_l (int, locale_t) ; */
+#line 5725 "/tmp/use_string.i"
 int isdigit_l(int, struct sf____locale_struct*);
 /* C++: extern int islower_l (int, locale_t) ; */
+#line 5726 "/tmp/use_string.i"
 int islower_l(int, struct sf____locale_struct*);
 /* C++: extern int isgraph_l (int, locale_t) ; */
+#line 5727 "/tmp/use_string.i"
 int isgraph_l(int, struct sf____locale_struct*);
 /* C++: extern int isprint_l (int, locale_t) ; */
+#line 5728 "/tmp/use_string.i"
 int isprint_l(int, struct sf____locale_struct*);
 /* C++: extern int ispunct_l (int, locale_t) ; */
+#line 5729 "/tmp/use_string.i"
 int ispunct_l(int, struct sf____locale_struct*);
 /* C++: extern int isspace_l (int, locale_t) ; */
+#line 5730 "/tmp/use_string.i"
 int isspace_l(int, struct sf____locale_struct*);
 /* C++: extern int isupper_l (int, locale_t) ; */
+#line 5731 "/tmp/use_string.i"
 int isupper_l(int, struct sf____locale_struct*);
 /* C++: extern int isxdigit_l (int, locale_t) ; */
+#line 5732 "/tmp/use_string.i"
 int isxdigit_l(int, struct sf____locale_struct*);
 /* C++: extern int isblank_l (int, locale_t) ; */
+#line 5734 "/tmp/use_string.i"
 int isblank_l(int, struct sf____locale_struct*);
 /* C++: extern int __tolower_l (int __c, locale_t __l)  ; */
+#line 5738 "/tmp/use_string.i"
 int __tolower_l(int, struct sf____locale_struct*);
 /* C++: extern int tolower_l (int __c, locale_t __l)  ; */
+#line 5739 "/tmp/use_string.i"
 int tolower_l(int, struct sf____locale_struct*);
 /* C++: extern int __toupper_l (int __c, locale_t __l)  ; */
+#line 5742 "/tmp/use_string.i"
 int __toupper_l(int, struct sf____locale_struct*);
 /* C++: extern int toupper_l (int __c, locale_t __l)  ; */
+#line 5743 "/tmp/use_string.i"
 int toupper_l(int, struct sf____locale_struct*);
 
 
@@ -5552,13 +5798,16 @@ struct sf__money_base ;
 struct sf__messages_base ;
 
 /* C++: class __forced_unwind */
+#line 5952 "/tmp/use_string.i"
 struct sf____cxxabiv1____forced_unwind__vtable;
 struct sf____cxxabiv1____forced_unwind {
     const struct sf____cxxabiv1____forced_unwind__vtable *__sf_vptr;
 };
 /* C++: virtual ~__forced_unwind() throw(); */
+#line 5954 "/tmp/use_string.i"
 __SF_INLINE void sf____cxxabiv1____forced_unwind__dtor_body(struct sf____cxxabiv1____forced_unwind *this);
 /* C++: virtual void __pure_dummy() = 0; */
+#line 5957 "/tmp/use_string.i"
 __SF_INLINE void sf____cxxabiv1____forced_unwind____pure_dummy(struct sf____cxxabiv1____forced_unwind *this);
 __SF_INLINE void sf____cxxabiv1____forced_unwind__dtor(struct sf____cxxabiv1____forced_unwind *this);
 struct sf____cxxabiv1____forced_unwind__vtable {
@@ -5577,26 +5826,32 @@ __SF_INLINE void sf____cxxabiv1____forced_unwind__ctor(struct sf____cxxabiv1____
 
 
 /* C++: struct input_iterator_tag */
+#line 6091 "/tmp/use_string.i"
 struct sf__std__input_iterator_tag {
 };
 /* C++: struct output_iterator_tag */
+#line 6094 "/tmp/use_string.i"
 struct sf__std__output_iterator_tag {
 };
 /* C++: struct forward_iterator_tag : public input_iterator_tag */
+#line 6097 "/tmp/use_string.i"
 struct sf__std__forward_iterator_tag {
     struct sf__std__input_iterator_tag __sf_base;
 };
 /* C++: struct bidirectional_iterator_tag : public forward_iterator_tag */
+#line 6101 "/tmp/use_string.i"
 struct sf__std__bidirectional_iterator_tag {
     struct sf__std__forward_iterator_tag __sf_base;
 };
 /* C++: struct random_access_iterator_tag : public bidirectional_iterator_tag */
+#line 6105 "/tmp/use_string.i"
 struct sf__std__random_access_iterator_tag {
     struct sf__std__bidirectional_iterator_tag __sf_base;
 };
 
 
 /* C++: __is_null_pointer(std::nullptr_t) */
+#line 6513 "/tmp/use_string.i"
 _Bool __is_null_pointer(int) {
     return true;
 }
@@ -5611,86 +5866,107 @@ struct sf____undefined ;
 
 
 /* C++: struct piecewise_construct_t */
+#line 8804 "/tmp/use_string.i"
 struct sf__std__piecewise_construct_t {
 };
 /* C++: struct piecewise_construct_t */
+#line 8804 "/tmp/use_string.i"
 __SF_INLINE void sf__std__piecewise_construct_t__ctor(struct sf__std__piecewise_construct_t *this);
 struct sf__std__piecewise_construct_t piecewise_construct = piecewise_construct_t();
 
 
 
 /* C++: struct _Iter_less_iter */
+#line 9365 "/tmp/use_string.i"
 struct sf____gnu_cxx____ops___Iter_less_iter {
 };
 /* C++: __iter_less_iter() */
+#line 9376 "/tmp/use_string.i"
 struct sf____gnu_cxx____ops___Iter_less_iter __iter_less_iter(void) {
     struct sf____gnu_cxx____ops___Iter_less_iter __SF_temp_0;
     sf____gnu_cxx____ops___Iter_less_iter__ctor(&__SF_temp_0);
     return __SF_temp_0;
 }
 /* C++: struct _Iter_less_val */
+#line 9379 "/tmp/use_string.i"
 struct sf____gnu_cxx____ops___Iter_less_val {
 };
 /* C++: constexpr _Iter_less_val() = default; */
+#line 9382 "/tmp/use_string.i"
 __SF_INLINE void sf____gnu_cxx____ops___Iter_less_val__ctor(struct sf____gnu_cxx____ops___Iter_less_val *this);
 /* C++: _Iter_less_val(_Iter_less_iter) */
+#line 9386 "/tmp/use_string.i"
 __SF_INLINE void sf____gnu_cxx____ops___Iter_less_val__ctor(struct sf____gnu_cxx____ops___Iter_less_val *this, struct sf____gnu_cxx____ops___Iter_less_iter);
 /* C++: _Iter_less_val(_Iter_less_iter) */
+#line 9386 "/tmp/use_string.i"
 __SF_INLINE void sf____gnu_cxx____ops___Iter_less_val__ctor(struct sf____gnu_cxx____ops___Iter_less_val *this, struct sf____gnu_cxx____ops___Iter_less_iter) {
 }
 /* C++: __iter_less_val() */
+#line 9397 "/tmp/use_string.i"
 struct sf____gnu_cxx____ops___Iter_less_val __iter_less_val(void) {
     struct sf____gnu_cxx____ops___Iter_less_val __SF_temp_0;
     sf____gnu_cxx____ops___Iter_less_val__ctor(&__SF_temp_0);
     return __SF_temp_0;
 }
 /* C++: __iter_comp_val(_Iter_less_iter) */
+#line 9402 "/tmp/use_string.i"
 struct sf____gnu_cxx____ops___Iter_less_val __iter_comp_val(struct sf____gnu_cxx____ops___Iter_less_iter) {
     struct sf____gnu_cxx____ops___Iter_less_val __SF_temp_0;
     sf____gnu_cxx____ops___Iter_less_val__ctor(&__SF_temp_0);
     return __SF_temp_0;
 }
 /* C++: struct _Val_less_iter */
+#line 9405 "/tmp/use_string.i"
 struct sf____gnu_cxx____ops___Val_less_iter {
 };
 /* C++: constexpr _Val_less_iter() = default; */
+#line 9408 "/tmp/use_string.i"
 __SF_INLINE void sf____gnu_cxx____ops___Val_less_iter__ctor(struct sf____gnu_cxx____ops___Val_less_iter *this);
 /* C++: _Val_less_iter(_Iter_less_iter) */
+#line 9412 "/tmp/use_string.i"
 __SF_INLINE void sf____gnu_cxx____ops___Val_less_iter__ctor(struct sf____gnu_cxx____ops___Val_less_iter *this, struct sf____gnu_cxx____ops___Iter_less_iter);
 /* C++: _Val_less_iter(_Iter_less_iter) */
+#line 9412 "/tmp/use_string.i"
 __SF_INLINE void sf____gnu_cxx____ops___Val_less_iter__ctor(struct sf____gnu_cxx____ops___Val_less_iter *this, struct sf____gnu_cxx____ops___Iter_less_iter) {
 }
 /* C++: __val_less_iter() */
+#line 9423 "/tmp/use_string.i"
 struct sf____gnu_cxx____ops___Val_less_iter __val_less_iter(void) {
     struct sf____gnu_cxx____ops___Val_less_iter __SF_temp_0;
     sf____gnu_cxx____ops___Val_less_iter__ctor(&__SF_temp_0);
     return __SF_temp_0;
 }
 /* C++: __val_comp_iter(_Iter_less_iter) */
+#line 9428 "/tmp/use_string.i"
 struct sf____gnu_cxx____ops___Val_less_iter __val_comp_iter(struct sf____gnu_cxx____ops___Iter_less_iter) {
     struct sf____gnu_cxx____ops___Val_less_iter __SF_temp_0;
     sf____gnu_cxx____ops___Val_less_iter__ctor(&__SF_temp_0);
     return __SF_temp_0;
 }
 /* C++: struct _Iter_equal_to_iter */
+#line 9431 "/tmp/use_string.i"
 struct sf____gnu_cxx____ops___Iter_equal_to_iter {
 };
 /* C++: __iter_equal_to_iter() */
+#line 9442 "/tmp/use_string.i"
 struct sf____gnu_cxx____ops___Iter_equal_to_iter __iter_equal_to_iter(void) {
     struct sf____gnu_cxx____ops___Iter_equal_to_iter __SF_temp_0;
     sf____gnu_cxx____ops___Iter_equal_to_iter__ctor(&__SF_temp_0);
     return __SF_temp_0;
 }
 /* C++: struct _Iter_equal_to_val */
+#line 9445 "/tmp/use_string.i"
 struct sf____gnu_cxx____ops___Iter_equal_to_val {
 };
 /* C++: __iter_equal_to_val() */
+#line 9456 "/tmp/use_string.i"
 struct sf____gnu_cxx____ops___Iter_equal_to_val __iter_equal_to_val(void) {
     struct sf____gnu_cxx____ops___Iter_equal_to_val __SF_temp_0;
     sf____gnu_cxx____ops___Iter_equal_to_val__ctor(&__SF_temp_0);
     return __SF_temp_0;
 }
 /* C++: __iter_comp_val(_Iter_equal_to_iter) */
+#line 9461 "/tmp/use_string.i"
 struct sf____gnu_cxx____ops___Iter_equal_to_val __iter_comp_val(struct sf____gnu_cxx____ops___Iter_equal_to_iter) {
     struct sf____gnu_cxx____ops___Iter_equal_to_val __SF_temp_0;
     sf____gnu_cxx____ops___Iter_equal_to_val__ctor(&__SF_temp_0);
@@ -5699,40 +5975,50 @@ struct sf____gnu_cxx____ops___Iter_equal_to_val __iter_comp_val(struct sf____gnu
 
 struct sf___Bit_iterator ;
 /* C++: __fill_a1( std ::_Bit_iterator,  std ::_Bit_iterator, */
+#line 10387 "/tmp/use_string.i"
 void __fill_a1(struct sf___Bit_iterator, struct sf___Bit_iterator, const _Bool*);
 /* C++: __size_to_integer(int __n) */
+#line 10417 "/tmp/use_string.i"
 int __size_to_integer(int __n) {
     return __n;
 }
 /* C++: __size_to_integer(unsigned __n) */
+#line 10419 "/tmp/use_string.i"
 unsigned int __size_to_integer(unsigned int __n) {
     return __n;
 }
 /* C++: __size_to_integer(long __n) */
+#line 10421 "/tmp/use_string.i"
 long __size_to_integer(long __n) {
     return __n;
 }
 /* C++: __size_to_integer(unsigned long __n) */
+#line 10423 "/tmp/use_string.i"
 unsigned long __size_to_integer(unsigned long __n) {
     return __n;
 }
 /* C++: __size_to_integer(long long __n) */
+#line 10425 "/tmp/use_string.i"
 long long __size_to_integer(long long __n) {
     return __n;
 }
 /* C++: __size_to_integer(unsigned long long __n) */
+#line 10427 "/tmp/use_string.i"
 unsigned long long __size_to_integer(unsigned long long __n) {
     return __n;
 }
 /* C++: __size_to_integer(float __n) */
+#line 10430 "/tmp/use_string.i"
 long long __size_to_integer(float __n) {
     return (long long)__n;
 }
 /* C++: __size_to_integer(double __n) */
+#line 10432 "/tmp/use_string.i"
 long long __size_to_integer(double __n) {
     return (long long)__n;
 }
 /* C++: __size_to_integer(long double __n) */
+#line 10434 "/tmp/use_string.i"
 long long __size_to_integer(long double __n) {
     return (long long)__n;
 }
@@ -5743,6 +6029,7 @@ long long __size_to_integer(long double __n) {
 
 
 /* C++: struct __allocator_traits_base */
+#line 11870 "/tmp/use_string.i"
 struct sf__std____allocator_traits_base {
 };
 
@@ -5753,36 +6040,52 @@ struct sf__std____allocator_traits_base {
 /* unsupported top-level */
 /* unsupported top-level */
 /* C++: extern size_t __ctype_get_mb_cur_max (void)    ; */
+#line 14577 "/tmp/use_string.i"
 long __ctype_get_mb_cur_max(void);
 /* C++: extern double atof (const char *__nptr) */
+#line 14581 "/tmp/use_string.i"
 double atof(const char*);
 /* C++: extern int atoi (const char *__nptr) */
+#line 14584 "/tmp/use_string.i"
 int atoi(const char*);
 /* C++: extern long int atol (const char *__nptr) */
+#line 14587 "/tmp/use_string.i"
 long atol(const char*);
 /* C++: extern long long int atoll (const char *__nptr) */
+#line 14592 "/tmp/use_string.i"
 long long atoll(const char*);
 /* C++: extern double strtod (const char *  __nptr, */
+#line 14597 "/tmp/use_string.i"
 double strtod(const char*, char**);
 /* C++: extern float strtof (const char *  __nptr, */
+#line 14603 "/tmp/use_string.i"
 float strtof(const char*, char**);
 /* C++: extern long double strtold (const char *  __nptr, */
+#line 14606 "/tmp/use_string.i"
 long double strtold(const char*, char**);
 /* C++: extern long int strtol (const char *  __nptr, */
+#line 14610 "/tmp/use_string.i"
 long strtol(const char*, char**, int);
 /* C++: extern unsigned long int strtoul (const char *  __nptr, */
+#line 14614 "/tmp/use_string.i"
 unsigned long strtoul(const char*, char**, int);
 /* C++: extern long long int strtoq (const char *  __nptr, */
+#line 14621 "/tmp/use_string.i"
 long long strtoq(const char*, char**, int);
 /* C++: extern unsigned long long int strtouq (const char *  __nptr, */
+#line 14626 "/tmp/use_string.i"
 unsigned long long strtouq(const char*, char**, int);
 /* C++: extern long long int strtoll (const char *  __nptr, */
+#line 14634 "/tmp/use_string.i"
 long long strtoll(const char*, char**, int);
 /* C++: extern unsigned long long int strtoull (const char *  __nptr, */
+#line 14639 "/tmp/use_string.i"
 unsigned long long strtoull(const char*, char**, int);
 /* C++: extern char *l64a (long int __n)    ; */
+#line 14643 "/tmp/use_string.i"
 char* l64a(long);
 /* C++: extern long int a64l (const char *__s) */
+#line 14646 "/tmp/use_string.i"
 long a64l(const char*);
 /* unsupported top-level */
 /* unsupported top-level */
@@ -5818,37 +6121,45 @@ long a64l(const char*);
 /* unsupported top-level */
 /* unsupported top-level */
 /* C++: __bswap_16 (__uint16_t __bsx) */
+#line 14803 "/tmp/use_string.i"
 unsigned short __bswap_16(unsigned short __bsx) {
     return (unsigned short)(((__bsx >> 8) & 255) | ((__bsx & 255) << 8));
 }
 /* C++: __bswap_32 (__uint32_t __bsx) */
+#line 14813 "/tmp/use_string.i"
 unsigned int __bswap_32(unsigned int __bsx) {
     return (((((__bsx & 4278190080) >> 24) | ((__bsx & 16711680) >> 8)) | ((__bsx & 65280) << 8)) | ((__bsx & 255) << 24));
 }
 /* C++: __bswap_64 (__uint64_t __bsx) */
+#line 14823 "/tmp/use_string.i"
 unsigned long __bswap_64(unsigned long __bsx) {
     return (((((((((__bsx & -72057594037927936) >> 56) | ((__bsx & 71776119061217280) >> 40)) | ((__bsx & 280375465082880) >> 24)) | ((__bsx & 1095216660480) >> 8)) | ((__bsx & 4278190080) << 8)) | ((__bsx & 16711680) << 24)) | ((__bsx & 65280) << 40)) | ((__bsx & 255) << 56));
 }
 /* C++: __uint16_identity (__uint16_t __x) */
+#line 14838 "/tmp/use_string.i"
 unsigned short __uint16_identity(unsigned short __x) {
     return __x;
 }
 /* C++: __uint32_identity (__uint32_t __x) */
+#line 14844 "/tmp/use_string.i"
 unsigned int __uint32_identity(unsigned int __x) {
     return __x;
 }
 /* C++: __uint64_identity (__uint64_t __x) */
+#line 14850 "/tmp/use_string.i"
 unsigned long __uint64_identity(unsigned long __x) {
     return __x;
 }
 /* unsupported top-level */
 /* unsupported top-level */
 /* C++: struct timeval */
+#line 14892 "/tmp/use_string.i"
 struct sf__timeval {
     long tv_sec;
     long tv_usec;
 };
 /* C++: struct timespec */
+#line 14913 "/tmp/use_string.i"
 struct sf__timespec {
     long tv_sec;
     long tv_nsec;
@@ -5858,8 +6169,10 @@ struct sf__timespec {
 /* unsupported top-level */
 /* unsupported top-level */
 /* C++: extern int select (int __nfds, fd_set *  __readfds, */
+#line 14960 "/tmp/use_string.i"
 int select(int, struct ?*, struct ?*, struct ?*, struct sf__timeval*);
 /* C++: extern int pselect (int __nfds, fd_set *  __readfds, */
+#line 14965 "/tmp/use_string.i"
 int pselect(int, struct ?*, struct ?*, struct ?*, const struct sf__timespec*, const struct ?*);
 /* unsupported top-level */
 /* unsupported top-level */
@@ -5869,6 +6182,7 @@ int pselect(int, struct ?*, struct ?*, struct ?*, const struct sf__timespec*, co
 /* unsupported top-level */
 /* unsupported top-level */
 /* C++: struct __pthread_mutex_s */
+#line 15030 "/tmp/use_string.i"
 struct sf____pthread_mutex_s {
     int __lock;
     unsigned int __count;
@@ -5880,6 +6194,7 @@ struct sf____pthread_mutex_s {
     struct sf____pthread_internal_list __list;
 };
 /* C++: struct __pthread_rwlock_arch_t */
+#line 15049 "/tmp/use_string.i"
 struct sf____pthread_rwlock_arch_t {
     unsigned int __readers;
     unsigned int __writers;
@@ -5895,6 +6210,7 @@ struct sf____pthread_rwlock_arch_t {
     unsigned int __flags;
 };
 /* C++: struct __pthread_cond_s */
+#line 15078 "/tmp/use_string.i"
 struct sf____pthread_cond_s {
     union ? __wseq;
     union ? __g1_start;
@@ -5913,6 +6229,7 @@ struct sf____pthread_cond_s {
 /* unsupported top-level */
 /* unsupported top-level */
 /* C++: union pthread_attr_t */
+#line 15121 "/tmp/use_string.i"
 struct sf__pthread_attr_t {
     char* __size;
     long __align;
@@ -5926,14 +6243,19 @@ struct sf__pthread_attr_t {
 /* unsupported top-level */
 /* unsupported top-level */
 /* C++: extern long int random (void)  ; */
+#line 15183 "/tmp/use_string.i"
 long random(void);
 /* C++: extern void srandom (unsigned int __seed)  ; */
+#line 15186 "/tmp/use_string.i"
 void srandom(unsigned int);
 /* C++: extern char *initstate (unsigned int __seed, char *__statebuf, */
+#line 15188 "/tmp/use_string.i"
 char* initstate(unsigned int, char*, long);
 /* C++: extern char *setstate (char *__statebuf)    ; */
+#line 15191 "/tmp/use_string.i"
 char* setstate(char*);
 /* C++: struct random_data */
+#line 15193 "/tmp/use_string.i"
 struct sf__random_data {
     int* fptr;
     int* rptr;
@@ -5944,38 +6266,55 @@ struct sf__random_data {
     int* end_ptr;
 };
 /* C++: extern int random_r (struct random_data *  __buf, */
+#line 15204 "/tmp/use_string.i"
 int random_r(struct sf__random_data*, int*);
 /* C++: extern int srandom_r (unsigned int __seed, struct random_data *__buf) */
+#line 15207 "/tmp/use_string.i"
 int srandom_r(unsigned int, struct sf__random_data*);
 /* C++: extern int initstate_r (unsigned int __seed, char *  __statebuf, */
+#line 15210 "/tmp/use_string.i"
 int initstate_r(unsigned int, char*, long, struct sf__random_data*);
 /* C++: extern int setstate_r (char *  __statebuf, */
+#line 15215 "/tmp/use_string.i"
 int setstate_r(char*, struct sf__random_data*);
 /* C++: extern int rand (void)  ; */
+#line 15223 "/tmp/use_string.i"
 int rand(void);
 /* C++: extern void srand (unsigned int __seed)  ; */
+#line 15225 "/tmp/use_string.i"
 void srand(unsigned int);
 /* C++: extern int rand_r (unsigned int *__seed)  ; */
+#line 15229 "/tmp/use_string.i"
 int rand_r(unsigned int*);
 /* C++: extern double drand48 (void)  ; */
+#line 15237 "/tmp/use_string.i"
 double drand48(void);
 /* C++: extern double erand48 (unsigned short int __xsubi[3])    ; */
+#line 15238 "/tmp/use_string.i"
 double erand48(unsigned short*);
 /* C++: extern long int lrand48 (void)  ; */
+#line 15241 "/tmp/use_string.i"
 long lrand48(void);
 /* C++: extern long int nrand48 (unsigned short int __xsubi[3]) */
+#line 15242 "/tmp/use_string.i"
 long nrand48(unsigned short*);
 /* C++: extern long int mrand48 (void)  ; */
+#line 15246 "/tmp/use_string.i"
 long mrand48(void);
 /* C++: extern long int jrand48 (unsigned short int __xsubi[3]) */
+#line 15247 "/tmp/use_string.i"
 long jrand48(unsigned short*);
 /* C++: extern void srand48 (long int __seedval)  ; */
+#line 15251 "/tmp/use_string.i"
 void srand48(long);
 /* C++: extern unsigned short int *seed48 (unsigned short int __seed16v[3]) */
+#line 15252 "/tmp/use_string.i"
 unsigned short* seed48(unsigned short*);
 /* C++: extern void lcong48 (unsigned short int __param[7])    ; */
+#line 15254 "/tmp/use_string.i"
 void lcong48(unsigned short*);
 /* C++: struct drand48_data */
+#line 15256 "/tmp/use_string.i"
 struct sf__drand48_data {
     unsigned short* __x;
     unsigned short* __old_x;
@@ -5984,163 +6323,235 @@ struct sf__drand48_data {
     unsigned long long __a;
 };
 /* C++: extern int drand48_r (struct drand48_data *  __buffer, */
+#line 15267 "/tmp/use_string.i"
 int drand48_r(struct sf__drand48_data*, double*);
 /* C++: extern int erand48_r (unsigned short int __xsubi[3], */
+#line 15269 "/tmp/use_string.i"
 int erand48_r(unsigned short*, struct sf__drand48_data*, double*);
 /* C++: extern int lrand48_r (struct drand48_data *  __buffer, */
+#line 15274 "/tmp/use_string.i"
 int lrand48_r(struct sf__drand48_data*, long*);
 /* C++: extern int nrand48_r (unsigned short int __xsubi[3], */
+#line 15277 "/tmp/use_string.i"
 int nrand48_r(unsigned short*, struct sf__drand48_data*, long*);
 /* C++: extern int mrand48_r (struct drand48_data *  __buffer, */
+#line 15283 "/tmp/use_string.i"
 int mrand48_r(struct sf__drand48_data*, long*);
 /* C++: extern int jrand48_r (unsigned short int __xsubi[3], */
+#line 15286 "/tmp/use_string.i"
 int jrand48_r(unsigned short*, struct sf__drand48_data*, long*);
 /* C++: extern int srand48_r (long int __seedval, struct drand48_data *__buffer) */
+#line 15292 "/tmp/use_string.i"
 int srand48_r(long, struct sf__drand48_data*);
 /* C++: extern int seed48_r (unsigned short int __seed16v[3], */
+#line 15295 "/tmp/use_string.i"
 int seed48_r(unsigned short*, struct sf__drand48_data*);
 /* C++: extern int lcong48_r (unsigned short int __param[7], */
+#line 15298 "/tmp/use_string.i"
 int lcong48_r(unsigned short*, struct sf__drand48_data*);
 /* C++: extern __uint32_t arc4random (void) */
+#line 15303 "/tmp/use_string.i"
 unsigned int arc4random(void);
 /* C++: extern void arc4random_buf (void *__buf, size_t __size) */
+#line 15307 "/tmp/use_string.i"
 void arc4random_buf(void*, long);
 /* C++: extern __uint32_t arc4random_uniform (__uint32_t __upper_bound) */
+#line 15310 "/tmp/use_string.i"
 unsigned int arc4random_uniform(unsigned int);
 /* C++: extern void *malloc (size_t __size) */
+#line 15316 "/tmp/use_string.i"
 void* malloc(long);
 /* C++: extern void *calloc (size_t __nmemb, size_t __size) */
+#line 15319 "/tmp/use_string.i"
 void* calloc(long, long);
 /* C++: extern void *realloc (void *__ptr, size_t __size) */
+#line 15322 "/tmp/use_string.i"
 void* realloc(void*, long);
 /* C++: extern void free (void *__ptr)  ; */
+#line 15326 "/tmp/use_string.i"
 void free(void*);
 /* C++: extern void *reallocarray (void *__ptr, size_t __nmemb, size_t __size) */
+#line 15328 "/tmp/use_string.i"
 void* reallocarray(void*, long, long);
 /* C++: extern void *reallocarray (void *__ptr, size_t __nmemb, size_t __size) */
+#line 15334 "/tmp/use_string.i"
 void* reallocarray(void*, long, long);
 /* C++: extern void *alloca (size_t __size)  ; */
+#line 15351 "/tmp/use_string.i"
 void* alloca(long);
 /* C++: extern void *valloc (size_t __size) */
+#line 15356 "/tmp/use_string.i"
 void* valloc(long);
 /* C++: extern int posix_memalign (void **__memptr, size_t __alignment, size_t __size) */
+#line 15362 "/tmp/use_string.i"
 int posix_memalign(void**, long, long);
 /* C++: extern void abort (void)    ; */
+#line 15365 "/tmp/use_string.i"
 void abort(void);
 /* C++: extern int atexit (void (*__func) (void))    ; */
+#line 15369 "/tmp/use_string.i"
 int atexit(/*?*/ int);
 /* C++: extern "C++" int at_quick_exit (void (*__func) (void)) */
+#line 15374 "/tmp/use_string.i"
 int at_quick_exit(/*?*/ int);
 /* C++: extern int on_exit (void (*__func) (int __status, void *__arg), void *__arg) */
+#line 15377 "/tmp/use_string.i"
 int on_exit(/*?*/ int, void*);
 /* C++: extern void exit (int __status)    ; */
+#line 15380 "/tmp/use_string.i"
 void exit(int);
 /* C++: extern void quick_exit (int __status)    ; */
+#line 15382 "/tmp/use_string.i"
 void quick_exit(int);
 /* C++: extern void _Exit (int __status)    ; */
+#line 15384 "/tmp/use_string.i"
 void _Exit(int);
 /* C++: extern char *getenv (const char *__name)      ; */
+#line 15389 "/tmp/use_string.i"
 char* getenv(const char*);
 /* C++: extern int putenv (char *__string)    ; */
+#line 15391 "/tmp/use_string.i"
 int putenv(char*);
 /* C++: extern int setenv (const char *__name, const char *__value, int __replace) */
+#line 15393 "/tmp/use_string.i"
 int setenv(const char*, const char*, int);
 /* C++: extern int unsetenv (const char *__name)    ; */
+#line 15397 "/tmp/use_string.i"
 int unsetenv(const char*);
 /* C++: extern int clearenv (void)  ; */
+#line 15399 "/tmp/use_string.i"
 int clearenv(void);
 /* C++: extern char *mktemp (char *__template)    ; */
+#line 15401 "/tmp/use_string.i"
 char* mktemp(char*);
 /* C++: extern int mkstemp (char *__template)    ; */
+#line 15403 "/tmp/use_string.i"
 int mkstemp(char*);
 /* C++: extern int mkstemps (char *__template, int __suffixlen)    ; */
+#line 15405 "/tmp/use_string.i"
 int mkstemps(char*, int);
 /* C++: extern char *mkdtemp (char *__template)      ; */
+#line 15407 "/tmp/use_string.i"
 char* mkdtemp(char*);
 /* C++: extern int system (const char *__command)  ; */
+#line 15409 "/tmp/use_string.i"
 int system(const char*);
 /* C++: extern char *realpath (const char *  __name, */
+#line 15411 "/tmp/use_string.i"
 char* realpath(const char*, char*);
 /* unsupported top-level */
 /* C++: extern void *bsearch (const void *__key, const void *__base, */
+#line 15421 "/tmp/use_string.i"
 void* bsearch(const void*, const void*, long, long, /*?*/ int);
 /* C++: extern void qsort (void *__base, size_t __nmemb, size_t __size, */
+#line 15425 "/tmp/use_string.i"
 void qsort(void*, long, long, /*?*/ int);
 /* C++: extern int abs (int __x)      ; */
+#line 15428 "/tmp/use_string.i"
 int abs(int);
 /* C++: extern long int labs (long int __x)      ; */
+#line 15429 "/tmp/use_string.i"
 long labs(long);
 /* C++: extern long long int llabs (long long int __x) */
+#line 15432 "/tmp/use_string.i"
 long long llabs(long long);
 /* C++: extern div_t div (int __numer, int __denom) */
+#line 15435 "/tmp/use_string.i"
 struct ? div(int, int);
 /* C++: extern ldiv_t ldiv (long int __numer, long int __denom) */
+#line 15437 "/tmp/use_string.i"
 struct ? ldiv(long, long);
 /* C++: extern lldiv_t lldiv (long long int __numer, */
+#line 15441 "/tmp/use_string.i"
 struct ? lldiv(long long, long long);
 /* C++: extern char *ecvt (double __value, int __ndigit, int *  __decpt, */
+#line 15445 "/tmp/use_string.i"
 char* ecvt(double, int, int*, int*);
 /* C++: extern char *fcvt (double __value, int __ndigit, int *  __decpt, */
+#line 15448 "/tmp/use_string.i"
 char* fcvt(double, int, int*, int*);
 /* C++: extern char *gcvt (double __value, int __ndigit, char *__buf) */
+#line 15451 "/tmp/use_string.i"
 char* gcvt(double, int, char*);
 /* C++: extern char *qecvt (long double __value, int __ndigit, */
+#line 15457 "/tmp/use_string.i"
 char* qecvt(long double, int, int*, int*);
 /* C++: extern char *qfcvt (long double __value, int __ndigit, */
+#line 15460 "/tmp/use_string.i"
 char* qfcvt(long double, int, int*, int*);
 /* C++: extern char *qgcvt (long double __value, int __ndigit, char *__buf) */
+#line 15463 "/tmp/use_string.i"
 char* qgcvt(long double, int, char*);
 /* C++: extern int ecvt_r (double __value, int __ndigit, int *  __decpt, */
+#line 15466 "/tmp/use_string.i"
 int ecvt_r(double, int, int*, int*, char*, long);
 /* C++: extern int fcvt_r (double __value, int __ndigit, int *  __decpt, */
+#line 15469 "/tmp/use_string.i"
 int fcvt_r(double, int, int*, int*, char*, long);
 /* C++: extern int qecvt_r (long double __value, int __ndigit, */
+#line 15473 "/tmp/use_string.i"
 int qecvt_r(long double, int, int*, int*, char*, long);
 /* C++: extern int qfcvt_r (long double __value, int __ndigit, */
+#line 15477 "/tmp/use_string.i"
 int qfcvt_r(long double, int, int*, int*, char*, long);
 /* C++: extern int mblen (const char *__s, size_t __n)  ; */
+#line 15482 "/tmp/use_string.i"
 int mblen(const char*, long);
 /* C++: extern int mbtowc (wchar_t *  __pwc, */
+#line 15484 "/tmp/use_string.i"
 int mbtowc(wchar_t*, const char*, long);
 /* C++: extern int wctomb (char *__s, wchar_t __wchar)  ; */
+#line 15487 "/tmp/use_string.i"
 int wctomb(char*, wchar_t);
 /* C++: extern size_t mbstowcs (wchar_t *  __pwcs, */
+#line 15491 "/tmp/use_string.i"
 long mbstowcs(wchar_t*, const char*, long);
 /* C++: extern size_t wcstombs (char *  __s, */
+#line 15495 "/tmp/use_string.i"
 long wcstombs(char*, const wchar_t*, long);
 /* C++: extern int rpmatch (const char *__response)      ; */
+#line 15501 "/tmp/use_string.i"
 int rpmatch(const char*);
 /* C++: extern int getsubopt (char **  __optionp, */
+#line 15503 "/tmp/use_string.i"
 int getsubopt(char**, const char**, char**);
 /* C++: extern int getloadavg (double __loadavg[], int __nelem) */
+#line 15508 "/tmp/use_string.i"
 int getloadavg(double*, int);
 
 /* C++: abs(long __i) */
+#line 15540 "/tmp/use_string.i"
 long abs(long __i) {
     return __builtin_labs;
 }
 /* C++: abs(long long __x) */
+#line 15545 "/tmp/use_string.i"
 long long abs(long long __x) {
     return __builtin_llabs;
 }
 /* C++: abs(double __x) */
+#line 15555 "/tmp/use_string.i"
 double abs(double __x) {
     return __builtin_fabs;
 }
 /* C++: abs(float __x) */
+#line 15559 "/tmp/use_string.i"
 float abs(float __x) {
     return __builtin_fabsf;
 }
 /* C++: abs(long double __x) */
+#line 15563 "/tmp/use_string.i"
 long double abs(long double __x) {
     return __builtin_fabsl;
 }
 
 /* C++: div(long __i, long __j)  noexcept */
+#line 15625 "/tmp/use_string.i"
 struct ? div(long __i, long __j) {
     return ldiv(__i, __j);
 }
 /* C++: div(long long __n, long long __d) */
+#line 15646 "/tmp/use_string.i"
 struct ? div(long long __n, long long __d) {
     struct ? __q;
     (__q.quot = (__n / __d));
@@ -6156,6 +6567,7 @@ struct sf___IO_codecvt ;
 struct sf___IO_wide_data ;
 /* unsupported top-level */
 /* C++: struct _IO_FILE */
+#line 15759 "/tmp/use_string.i"
 struct sf___IO_FILE {
     int _flags;
     char* _IO_read_ptr;
@@ -6197,239 +6609,345 @@ struct sf___IO_FILE* stdin;
 struct sf___IO_FILE* stdout;
 struct sf___IO_FILE* stderr;
 /* C++: extern int remove (const char *__filename)  ; */
+#line 15848 "/tmp/use_string.i"
 int remove(const char*);
 /* C++: extern int rename (const char *__old, const char *__new)  ; */
+#line 15850 "/tmp/use_string.i"
 int rename(const char*, const char*);
 /* C++: extern int renameat (int __oldfd, const char *__old, int __newfd, */
+#line 15854 "/tmp/use_string.i"
 int renameat(int, const char*, int, const char*);
 /* C++: extern int fclose (FILE *__stream)  ; */
+#line 15857 "/tmp/use_string.i"
 int fclose(struct sf___IO_FILE*);
 /* C++: extern FILE *tmpfile (void) */
+#line 15859 "/tmp/use_string.i"
 struct sf___IO_FILE* tmpfile(void);
 /* C++: extern char *tmpnam (char[ 20 ])    ; */
+#line 15862 "/tmp/use_string.i"
 char* tmpnam(char*);
 /* C++: extern char *tmpnam_r (char __s[ 20 ])    ; */
+#line 15864 "/tmp/use_string.i"
 char* tmpnam_r(char*);
 /* C++: extern char *tempnam (const char *__dir, const char *__pfx) */
+#line 15866 "/tmp/use_string.i"
 char* tempnam(const char*, const char*);
 /* C++: extern int fflush (FILE *__stream); */
+#line 15869 "/tmp/use_string.i"
 int fflush(struct sf___IO_FILE*);
 /* C++: extern int fflush_unlocked (FILE *__stream); */
+#line 15871 "/tmp/use_string.i"
 int fflush_unlocked(struct sf___IO_FILE*);
 /* C++: extern FILE *fopen (const char *  __filename, */
+#line 15873 "/tmp/use_string.i"
 struct sf___IO_FILE* fopen(const char*, const char*);
 /* C++: extern FILE *freopen (const char *  __filename, */
+#line 15877 "/tmp/use_string.i"
 struct sf___IO_FILE* freopen(const char*, const char*, struct sf___IO_FILE*);
 /* C++: extern FILE *fdopen (int __fd, const char *__modes) */
+#line 15881 "/tmp/use_string.i"
 struct sf___IO_FILE* fdopen(int, const char*);
 /* C++: extern FILE *fopencookie (void *  __magic_cookie, */
+#line 15884 "/tmp/use_string.i"
 struct sf___IO_FILE* fopencookie(void*, const char*, struct sf___IO_cookie_io_functions_t);
 /* C++: extern FILE *fmemopen (void *__s, size_t __len, const char *__modes) */
+#line 15892 "/tmp/use_string.i"
 struct sf___IO_FILE* fmemopen(void*, long, const char*);
 /* C++: extern FILE *open_memstream (char **__bufloc, size_t *__sizeloc) */
+#line 15895 "/tmp/use_string.i"
 struct sf___IO_FILE* open_memstream(char**, long*);
 /* C++: extern __FILE *open_wmemstream (wchar_t **__bufloc, size_t *__sizeloc) */
+#line 15898 "/tmp/use_string.i"
 struct sf___IO_FILE* open_wmemstream(wchar_t**, long*);
 /* C++: extern void setbuf (FILE *  __stream, char *  __buf) */
+#line 15901 "/tmp/use_string.i"
 void setbuf(struct sf___IO_FILE*, char*);
 /* C++: extern int setvbuf (FILE *  __stream, char *  __buf, */
+#line 15904 "/tmp/use_string.i"
 int setvbuf(struct sf___IO_FILE*, char*, int, long);
 /* C++: extern void setbuffer (FILE *  __stream, char *  __buf, */
+#line 15907 "/tmp/use_string.i"
 void setbuffer(struct sf___IO_FILE*, char*, long);
 /* C++: extern void setlinebuf (FILE *__stream)    ; */
+#line 15911 "/tmp/use_string.i"
 void setlinebuf(struct sf___IO_FILE*);
 /* C++: extern int fprintf (FILE *  __stream, */
+#line 15913 "/tmp/use_string.i"
 int fprintf(struct sf___IO_FILE*, const char*);
 /* C++: extern int printf (const char *  __format, ...); */
+#line 15916 "/tmp/use_string.i"
 int printf(const char*);
 /* C++: extern int sprintf (char *  __s, */
+#line 15918 "/tmp/use_string.i"
 int sprintf(char*, const char*);
 /* C++: extern int vfprintf (FILE *  __s, const char *  __format, */
+#line 15921 "/tmp/use_string.i"
 int vfprintf(struct sf___IO_FILE*, const char*, int);
 /* C++: extern int vprintf (const char *  __format, __gnuc_va_list __arg); */
+#line 15924 "/tmp/use_string.i"
 int vprintf(const char*, int);
 /* C++: extern int vsprintf (char *  __s, const char *  __format, */
+#line 15926 "/tmp/use_string.i"
 int vsprintf(char*, const char*, int);
 /* C++: extern int snprintf (char *  __s, size_t __maxlen, */
+#line 15931 "/tmp/use_string.i"
 int snprintf(char*, long, const char*);
 /* C++: extern int vsnprintf (char *  __s, size_t __maxlen, */
+#line 15935 "/tmp/use_string.i"
 int vsnprintf(char*, long, const char*, int);
 /* C++: extern int vasprintf (char **  __ptr, const char *  __f, */
+#line 15939 "/tmp/use_string.i"
 int vasprintf(char**, const char*, int);
 /* C++: extern int __asprintf (char **  __ptr, */
+#line 15942 "/tmp/use_string.i"
 int __asprintf(char**, const char*);
 /* C++: extern int asprintf (char **  __ptr, */
+#line 15945 "/tmp/use_string.i"
 int asprintf(char**, const char*);
 /* C++: extern int vdprintf (int __fd, const char *  __fmt, */
+#line 15952 "/tmp/use_string.i"
 int vdprintf(int, const char*, int);
 /* C++: extern int dprintf (int __fd, const char *  __fmt, ...) */
+#line 15955 "/tmp/use_string.i"
 int dprintf(int, const char*);
 /* C++: extern int fscanf (FILE *  __stream, */
+#line 15958 "/tmp/use_string.i"
 int fscanf(struct sf___IO_FILE*, const char*);
 /* C++: extern int scanf (const char *  __format, ...)  ; */
+#line 15961 "/tmp/use_string.i"
 int scanf(const char*);
 /* C++: extern int sscanf (const char *  __s, */
+#line 15963 "/tmp/use_string.i"
 int sscanf(const char*, const char*);
 /* C++: extern int __isoc99_fscanf (FILE *  __stream, */
+#line 15969 "/tmp/use_string.i"
 int __isoc99_fscanf(struct sf___IO_FILE*, const char*);
 /* C++: extern int __isoc99_scanf (const char *  __format, ...)  ; */
+#line 15972 "/tmp/use_string.i"
 int __isoc99_scanf(const char*);
 /* C++: extern int __isoc99_sscanf (const char *  __s, */
+#line 15973 "/tmp/use_string.i"
 int __isoc99_sscanf(const char*, const char*);
 /* C++: extern int vfscanf (FILE *  __s, const char *  __format, */
+#line 15976 "/tmp/use_string.i"
 int vfscanf(struct sf___IO_FILE*, const char*, int);
 /* C++: extern int vscanf (const char *  __format, __gnuc_va_list __arg) */
+#line 15980 "/tmp/use_string.i"
 int vscanf(const char*, int);
 /* C++: extern int vsscanf (const char *  __s, */
+#line 15984 "/tmp/use_string.i"
 int vsscanf(const char*, const char*, int);
 /* C++: extern int __isoc99_vfscanf (FILE *  __s, */
+#line 15988 "/tmp/use_string.i"
 int __isoc99_vfscanf(struct sf___IO_FILE*, const char*, int);
 /* C++: extern int __isoc99_vscanf (const char *  __format, */
+#line 15991 "/tmp/use_string.i"
 int __isoc99_vscanf(const char*, int);
 /* C++: extern int __isoc99_vsscanf (const char *  __s, */
+#line 15993 "/tmp/use_string.i"
 int __isoc99_vsscanf(const char*, const char*, int);
 /* C++: extern int fgetc (FILE *__stream)  ; */
+#line 15997 "/tmp/use_string.i"
 int fgetc(struct sf___IO_FILE*);
 /* C++: extern int getc (FILE *__stream)  ; */
+#line 15998 "/tmp/use_string.i"
 int getc(struct sf___IO_FILE*);
 /* C++: extern int getchar (void); */
+#line 16000 "/tmp/use_string.i"
 int getchar(void);
 /* C++: extern int getc_unlocked (FILE *__stream)  ; */
+#line 16002 "/tmp/use_string.i"
 int getc_unlocked(struct sf___IO_FILE*);
 /* C++: extern int getchar_unlocked (void); */
+#line 16003 "/tmp/use_string.i"
 int getchar_unlocked(void);
 /* C++: extern int fgetc_unlocked (FILE *__stream)  ; */
+#line 16005 "/tmp/use_string.i"
 int fgetc_unlocked(struct sf___IO_FILE*);
 /* C++: extern int fputc (int __c, FILE *__stream)  ; */
+#line 16007 "/tmp/use_string.i"
 int fputc(int, struct sf___IO_FILE*);
 /* C++: extern int putc (int __c, FILE *__stream)  ; */
+#line 16008 "/tmp/use_string.i"
 int putc(int, struct sf___IO_FILE*);
 /* C++: extern int putchar (int __c); */
+#line 16010 "/tmp/use_string.i"
 int putchar(int);
 /* C++: extern int fputc_unlocked (int __c, FILE *__stream)  ; */
+#line 16012 "/tmp/use_string.i"
 int fputc_unlocked(int, struct sf___IO_FILE*);
 /* C++: extern int putc_unlocked (int __c, FILE *__stream)  ; */
+#line 16014 "/tmp/use_string.i"
 int putc_unlocked(int, struct sf___IO_FILE*);
 /* C++: extern int putchar_unlocked (int __c); */
+#line 16015 "/tmp/use_string.i"
 int putchar_unlocked(int);
 /* C++: extern int getw (FILE *__stream)  ; */
+#line 16017 "/tmp/use_string.i"
 int getw(struct sf___IO_FILE*);
 /* C++: extern int putw (int __w, FILE *__stream)  ; */
+#line 16020 "/tmp/use_string.i"
 int putw(int, struct sf___IO_FILE*);
 /* C++: extern char *fgets (char *  __s, int __n, FILE *  __stream) */
+#line 16022 "/tmp/use_string.i"
 char* fgets(char*, int, struct sf___IO_FILE*);
 /* C++: extern char *gets (char *__s)    ; */
+#line 16025 "/tmp/use_string.i"
 char* gets(char*);
 /* C++: extern __ssize_t __getdelim (char **  __lineptr, */
+#line 16027 "/tmp/use_string.i"
 long __getdelim(char**, long*, int, struct sf___IO_FILE*);
 /* C++: extern __ssize_t getdelim (char **  __lineptr, */
+#line 16030 "/tmp/use_string.i"
 long getdelim(char**, long*, int, struct sf___IO_FILE*);
 /* C++: extern __ssize_t getline (char **  __lineptr, */
+#line 16034 "/tmp/use_string.i"
 long getline(char**, long*, struct sf___IO_FILE*);
 /* C++: extern int fputs (const char *  __s, FILE *  __stream) */
+#line 16038 "/tmp/use_string.i"
 int fputs(const char*, struct sf___IO_FILE*);
 /* C++: extern int puts (const char *__s); */
+#line 16041 "/tmp/use_string.i"
 int puts(const char*);
 /* C++: extern int ungetc (int __c, FILE *__stream)  ; */
+#line 16043 "/tmp/use_string.i"
 int ungetc(int, struct sf___IO_FILE*);
 /* C++: extern size_t fread (void *  __ptr, size_t __size, */
+#line 16045 "/tmp/use_string.i"
 long fread(void*, long, long, struct sf___IO_FILE*);
 /* C++: extern size_t fwrite (const void *  __ptr, size_t __size, */
+#line 16049 "/tmp/use_string.i"
 long fwrite(const void*, long, long, struct sf___IO_FILE*);
 /* C++: extern size_t fread_unlocked (void *  __ptr, size_t __size, */
+#line 16052 "/tmp/use_string.i"
 long fread_unlocked(void*, long, long, struct sf___IO_FILE*);
 /* C++: extern size_t fwrite_unlocked (const void *  __ptr, size_t __size, */
+#line 16055 "/tmp/use_string.i"
 long fwrite_unlocked(const void*, long, long, struct sf___IO_FILE*);
 /* C++: extern int fseek (FILE *__stream, long int __off, int __whence) */
+#line 16059 "/tmp/use_string.i"
 int fseek(struct sf___IO_FILE*, long, int);
 /* C++: extern long int ftell (FILE *__stream)    ; */
+#line 16062 "/tmp/use_string.i"
 long ftell(struct sf___IO_FILE*);
 /* C++: extern void rewind (FILE *__stream)  ; */
+#line 16064 "/tmp/use_string.i"
 void rewind(struct sf___IO_FILE*);
 /* C++: extern int fseeko (FILE *__stream, __off_t __off, int __whence) */
+#line 16066 "/tmp/use_string.i"
 int fseeko(struct sf___IO_FILE*, long, int);
 /* C++: extern __off_t ftello (FILE *__stream)    ; */
+#line 16069 "/tmp/use_string.i"
 long ftello(struct sf___IO_FILE*);
 /* C++: extern int fgetpos (FILE *  __stream, fpos_t *  __pos) */
+#line 16071 "/tmp/use_string.i"
 int fgetpos(struct sf___IO_FILE*, struct sf___G_fpos_t*);
 /* C++: extern int fsetpos (FILE *__stream, const fpos_t *__pos)  ; */
+#line 16074 "/tmp/use_string.i"
 int fsetpos(struct sf___IO_FILE*, const struct sf___G_fpos_t*);
 /* C++: extern void clearerr (FILE *__stream)    ; */
+#line 16076 "/tmp/use_string.i"
 void clearerr(struct sf___IO_FILE*);
 /* C++: extern int feof (FILE *__stream)      ; */
+#line 16078 "/tmp/use_string.i"
 int feof(struct sf___IO_FILE*);
 /* C++: extern int ferror (FILE *__stream)      ; */
+#line 16080 "/tmp/use_string.i"
 int ferror(struct sf___IO_FILE*);
 /* C++: extern void clearerr_unlocked (FILE *__stream)    ; */
+#line 16084 "/tmp/use_string.i"
 void clearerr_unlocked(struct sf___IO_FILE*);
 /* C++: extern int feof_unlocked (FILE *__stream)      ; */
+#line 16085 "/tmp/use_string.i"
 int feof_unlocked(struct sf___IO_FILE*);
 /* C++: extern int ferror_unlocked (FILE *__stream)      ; */
+#line 16086 "/tmp/use_string.i"
 int ferror_unlocked(struct sf___IO_FILE*);
 /* C++: extern void perror (const char *__s)  ; */
+#line 16088 "/tmp/use_string.i"
 void perror(const char*);
 /* C++: extern int fileno (FILE *__stream)      ; */
+#line 16093 "/tmp/use_string.i"
 int fileno(struct sf___IO_FILE*);
 /* C++: extern int fileno_unlocked (FILE *__stream)      ; */
+#line 16098 "/tmp/use_string.i"
 int fileno_unlocked(struct sf___IO_FILE*);
 /* C++: extern int pclose (FILE *__stream)  ; */
+#line 16100 "/tmp/use_string.i"
 int pclose(struct sf___IO_FILE*);
 /* C++: extern FILE *popen (const char *__command, const char *__modes) */
+#line 16102 "/tmp/use_string.i"
 struct sf___IO_FILE* popen(const char*, const char*);
 /* C++: extern char *ctermid (char *__s) */
+#line 16110 "/tmp/use_string.i"
 char* ctermid(char*);
 /* C++: extern void flockfile (FILE *__stream)    ; */
+#line 16113 "/tmp/use_string.i"
 void flockfile(struct sf___IO_FILE*);
 /* C++: extern int ftrylockfile (FILE *__stream)      ; */
+#line 16115 "/tmp/use_string.i"
 int ftrylockfile(struct sf___IO_FILE*);
 /* C++: extern void funlockfile (FILE *__stream)    ; */
+#line 16118 "/tmp/use_string.i"
 void funlockfile(struct sf___IO_FILE*);
 /* C++: extern int __uflow (FILE *); */
+#line 16120 "/tmp/use_string.i"
 int __uflow(struct sf___IO_FILE*);
 /* C++: extern int __overflow (FILE *, int); */
+#line 16121 "/tmp/use_string.i"
 int __overflow(struct sf___IO_FILE*, int);
 
 
 
 
 /* C++: extern int *__errno_location (void)    ; */
+#line 16234 "/tmp/use_string.i"
 int* __errno_location(void);
 
 
 
 /* C++: stoi(const string& __str, size_t* __idx = 0, int __base = 10) */
+#line 16396 "/tmp/use_string.i"
 int stoi(const struct sf__basic_string* __str, long* __idx, int __base) {
     return /* expr */((&/* expr */), "stoi", __str.c_str(), __idx, __base);
 }
 /* C++: stol(const string& __str, size_t* __idx = 0, int __base = 10) */
+#line 16401 "/tmp/use_string.i"
 long stol(const struct sf__basic_string* __str, long* __idx, int __base) {
     return /* expr */((&/* expr */), "stol", __str.c_str(), __idx, __base);
 }
 /* C++: stoul(const string& __str, size_t* __idx = 0, int __base = 10) */
+#line 16406 "/tmp/use_string.i"
 unsigned long stoul(const struct sf__basic_string* __str, long* __idx, int __base) {
     return /* expr */((&/* expr */), "stoul", __str.c_str(), __idx, __base);
 }
 /* C++: stoll(const string& __str, size_t* __idx = 0, int __base = 10) */
+#line 16411 "/tmp/use_string.i"
 long long stoll(const struct sf__basic_string* __str, long* __idx, int __base) {
     return /* expr */((&/* expr */), "stoll", __str.c_str(), __idx, __base);
 }
 /* C++: stoull(const string& __str, size_t* __idx = 0, int __base = 10) */
+#line 16416 "/tmp/use_string.i"
 unsigned long long stoull(const struct sf__basic_string* __str, long* __idx, int __base) {
     return /* expr */((&/* expr */), "stoull", __str.c_str(), __idx, __base);
 }
 /* C++: stof(const string& __str, size_t* __idx = 0) */
+#line 16422 "/tmp/use_string.i"
 float stof(const struct sf__basic_string* __str, long* __idx) {
     return /* expr */((&/* expr */), "stof", __str.c_str(), __idx);
 }
 /* C++: stod(const string& __str, size_t* __idx = 0) */
+#line 16426 "/tmp/use_string.i"
 double stod(const struct sf__basic_string* __str, long* __idx) {
     return /* expr */((&/* expr */), "stod", __str.c_str(), __idx);
 }
 /* C++: stold(const string& __str, size_t* __idx = 0) */
+#line 16430 "/tmp/use_string.i"
 long double stold(const struct sf__basic_string* __str, long* __idx) {
     return /* expr */((&/* expr */), "stold", __str.c_str(), __idx);
 }
 /* C++: to_string(int __val) */
+#line 16438 "/tmp/use_string.i"
 struct sf__basic_string to_string(int __val) {
     const _Bool __neg = (__val < 0);
     const unsigned int __uval = (__neg ? ((unsigned int)(~__val) + 1) : __val);
@@ -6440,6 +6958,7 @@ struct sf__basic_string to_string(int __val) {
     return __str;
 }
 /* C++: to_string(unsigned __val) */
+#line 16453 "/tmp/use_string.i"
 struct sf__basic_string to_string(unsigned int __val) {
     struct sf__basic_string __str;
     sf__basic_string__ctor(&__str, /* expr */(__val), '\0');
@@ -6447,6 +6966,7 @@ struct sf__basic_string to_string(unsigned int __val) {
     return __str;
 }
 /* C++: to_string(long __val) */
+#line 16465 "/tmp/use_string.i"
 struct sf__basic_string to_string(long __val) {
     const _Bool __neg = (__val < 0);
     const unsigned long __uval = (__neg ? ((unsigned long)(~__val) + 1) : __val);
@@ -6457,6 +6977,7 @@ struct sf__basic_string to_string(long __val) {
     return __str;
 }
 /* C++: to_string(unsigned long __val) */
+#line 16480 "/tmp/use_string.i"
 struct sf__basic_string to_string(unsigned long __val) {
     struct sf__basic_string __str;
     sf__basic_string__ctor(&__str, /* expr */(__val), '\0');
@@ -6464,6 +6985,7 @@ struct sf__basic_string to_string(unsigned long __val) {
     return __str;
 }
 /* C++: to_string(long long __val) */
+#line 16492 "/tmp/use_string.i"
 struct sf__basic_string to_string(long long __val) {
     const _Bool __neg = (__val < 0);
     const unsigned long long __uval = (__neg ? ((unsigned long long)(~__val) + 1) : __val);
@@ -6474,6 +6996,7 @@ struct sf__basic_string to_string(long long __val) {
     return __str;
 }
 /* C++: to_string(unsigned long long __val) */
+#line 16505 "/tmp/use_string.i"
 struct sf__basic_string to_string(unsigned long long __val) {
     struct sf__basic_string __str;
     sf__basic_string__ctor(&__str, /* expr */(__val), '\0');
@@ -6481,114 +7004,142 @@ struct sf__basic_string to_string(unsigned long long __val) {
     return __str;
 }
 /* C++: to_string(float __val) */
+#line 16517 "/tmp/use_string.i"
 struct sf__basic_string to_string(float __val) {
     const int __n = (/* expr */ + 20);
     return /* expr */((&/* expr */), __n, "%f", __val);
 }
 /* C++: to_string(double __val) */
+#line 16527 "/tmp/use_string.i"
 struct sf__basic_string to_string(double __val) {
     const int __n = (/* expr */ + 20);
     return /* expr */((&/* expr */), __n, "%f", __val);
 }
 /* C++: to_string(long double __val) */
+#line 16537 "/tmp/use_string.i"
 struct sf__basic_string to_string(long double __val) {
     const int __n = (/* expr */ + 20);
     return /* expr */((&/* expr */), __n, "%Lf", __val);
 }
 /* C++: stoi(const wstring& __str, size_t* __idx = 0, int __base = 10) */
+#line 16548 "/tmp/use_string.i"
 int stoi(const struct sf__basic_string* __str, long* __idx, int __base) {
     return /* expr */((&/* expr */), "stoi", __str.c_str(), __idx, __base);
 }
 /* C++: stol(const wstring& __str, size_t* __idx = 0, int __base = 10) */
+#line 16553 "/tmp/use_string.i"
 long stol(const struct sf__basic_string* __str, long* __idx, int __base) {
     return /* expr */((&/* expr */), "stol", __str.c_str(), __idx, __base);
 }
 /* C++: stoul(const wstring& __str, size_t* __idx = 0, int __base = 10) */
+#line 16558 "/tmp/use_string.i"
 unsigned long stoul(const struct sf__basic_string* __str, long* __idx, int __base) {
     return /* expr */((&/* expr */), "stoul", __str.c_str(), __idx, __base);
 }
 /* C++: stoll(const wstring& __str, size_t* __idx = 0, int __base = 10) */
+#line 16563 "/tmp/use_string.i"
 long long stoll(const struct sf__basic_string* __str, long* __idx, int __base) {
     return /* expr */((&/* expr */), "stoll", __str.c_str(), __idx, __base);
 }
 /* C++: stoull(const wstring& __str, size_t* __idx = 0, int __base = 10) */
+#line 16568 "/tmp/use_string.i"
 unsigned long long stoull(const struct sf__basic_string* __str, long* __idx, int __base) {
     return /* expr */((&/* expr */), "stoull", __str.c_str(), __idx, __base);
 }
 /* C++: stof(const wstring& __str, size_t* __idx = 0) */
+#line 16574 "/tmp/use_string.i"
 float stof(const struct sf__basic_string* __str, long* __idx) {
     return /* expr */((&/* expr */), "stof", __str.c_str(), __idx);
 }
 /* C++: stod(const wstring& __str, size_t* __idx = 0) */
+#line 16578 "/tmp/use_string.i"
 double stod(const struct sf__basic_string* __str, long* __idx) {
     return /* expr */((&/* expr */), "stod", __str.c_str(), __idx);
 }
 /* C++: stold(const wstring& __str, size_t* __idx = 0) */
+#line 16582 "/tmp/use_string.i"
 long double stold(const struct sf__basic_string* __str, long* __idx) {
     return /* expr */((&/* expr */), "stold", __str.c_str(), __idx);
 }
 /* C++: to_wstring(int __val) */
+#line 16589 "/tmp/use_string.i"
 struct sf__basic_string to_wstring(int __val) {
     return /* expr */((&/* expr */), (4 * /* expr */), L"%d", __val);
 }
 /* C++: to_wstring(unsigned __val) */
+#line 16595 "/tmp/use_string.i"
 struct sf__basic_string to_wstring(unsigned int __val) {
     return /* expr */((&/* expr */), (4 * /* expr */), L"%u", __val);
 }
 /* C++: to_wstring(long __val) */
+#line 16602 "/tmp/use_string.i"
 struct sf__basic_string to_wstring(long __val) {
     return /* expr */((&/* expr */), (4 * /* expr */), L"%ld", __val);
 }
 /* C++: to_wstring(unsigned long __val) */
+#line 16608 "/tmp/use_string.i"
 struct sf__basic_string to_wstring(unsigned long __val) {
     return /* expr */((&/* expr */), (4 * /* expr */), L"%lu", __val);
 }
 /* C++: to_wstring(long long __val) */
+#line 16615 "/tmp/use_string.i"
 struct sf__basic_string to_wstring(long long __val) {
     return /* expr */((&/* expr */), (4 * /* expr */), L"%lld", __val);
 }
 /* C++: to_wstring(unsigned long long __val) */
+#line 16622 "/tmp/use_string.i"
 struct sf__basic_string to_wstring(unsigned long long __val) {
     return /* expr */((&/* expr */), (4 * /* expr */), L"%llu", __val);
 }
 /* C++: to_wstring(float __val) */
+#line 16629 "/tmp/use_string.i"
 struct sf__basic_string to_wstring(float __val) {
     const int __n = (/* expr */ + 20);
     return /* expr */((&/* expr */), __n, L"%f", __val);
 }
 /* C++: to_wstring(double __val) */
+#line 16639 "/tmp/use_string.i"
 struct sf__basic_string to_wstring(double __val) {
     const int __n = (/* expr */ + 20);
     return /* expr */((&/* expr */), __n, L"%f", __val);
 }
 /* C++: to_wstring(long double __val) */
+#line 16649 "/tmp/use_string.i"
 struct sf__basic_string to_wstring(long double __val) {
     const int __n = (/* expr */ + 20);
     return /* expr */((&/* expr */), __n, L"%Lf", __val);
 }
 
 /* C++: _Hash_bytes(const void* __ptr, size_t __len, size_t __seed); */
+#line 16686 "/tmp/use_string.i"
 long _Hash_bytes(const void*, long, long);
 /* C++: _Fnv_hash_bytes(const void* __ptr, size_t __len, size_t __seed); */
+#line 16693 "/tmp/use_string.i"
 long _Fnv_hash_bytes(const void*, long, long);
 
 /* C++: struct _Hash_impl */
+#line 16810 "/tmp/use_string.i"
 struct sf__std___Hash_impl {
 };
 /* C++: hash(const void* __ptr, size_t __clength, */
+#line 16813 "/tmp/use_string.i"
 __SF_INLINE long sf__std___Hash_impl__ctor(struct sf__std___Hash_impl *this, const void* __ptr, long __clength, long __seed);
 /* C++: hash(const void* __ptr, size_t __clength, */
+#line 16813 "/tmp/use_string.i"
 __SF_INLINE long sf__std___Hash_impl__ctor(struct sf__std___Hash_impl *this, const void* __ptr, long __clength, long __seed) {
     {
         return _Hash_bytes(__ptr, __clength, __seed);
     }
 }
 /* C++: struct _Fnv_hash_impl */
+#line 16829 "/tmp/use_string.i"
 struct sf__std___Fnv_hash_impl {
 };
 /* C++: hash(const void* __ptr, size_t __clength, */
+#line 16832 "/tmp/use_string.i"
 __SF_INLINE long sf__std___Fnv_hash_impl__ctor(struct sf__std___Fnv_hash_impl *this, const void* __ptr, long __clength, long __seed);
 /* C++: hash(const void* __ptr, size_t __clength, */
+#line 16832 "/tmp/use_string.i"
 __SF_INLINE long sf__std___Fnv_hash_impl__ctor(struct sf__std___Fnv_hash_impl *this, const void* __ptr, long __clength, long __seed) {
     {
         return _Fnv_hash_bytes(__ptr, __clength, __seed);
@@ -6598,6 +7149,7 @@ __SF_INLINE long sf__std___Fnv_hash_impl__ctor(struct sf__std___Fnv_hash_impl *t
 
 
 /* C++: int main() */
+#line 17848 "/tmp/use_string.i"
 int main(void) {
     struct sf__basic_string s;
     return 0;
