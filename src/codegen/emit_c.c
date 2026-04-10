@@ -173,8 +173,9 @@ static void emit_source_comment(Token *tok) {
     const char *line_start = tok->loc;
     while (line_start > tok->loc - 200 && line_start[-1] != '\n')
         line_start--;
-    /* Walk forward to find the end of the declaration part */
+    /* Skip leading whitespace */
     const char *p = line_start;
+    while (*p == ' ' || *p == '\t') p++;
     int len = 0;
     while (p[len] && p[len] != '\n' && p[len] != '{' && len < 200)
         len++;
@@ -2234,6 +2235,7 @@ static void emit_class_def(Node *n) {
             if (!class_type || !class_type->has_dtor) continue;
         }
         if (m->kind == ND_FUNC_DEF && class_type) {
+            emit_source_comment(m->tok);
             emit_method_signature(m, class_type);
             fputs(";\n", stdout);
         } else if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
@@ -2243,6 +2245,7 @@ static void emit_class_def(Node *n) {
              * the var-decl's type. Ctor/dtor declarations route
              * through mangle_class_ctor / mangle_class_dtor_body
              * instead of the regular mangle_class_method form. */
+            emit_source_comment(m->tok);
             Type *fty = m->var_decl.ty;
             if (m->var_decl.is_destructor) {
                 /* In-class declaration of a dtor whose body is
@@ -2555,6 +2558,7 @@ static void emit_top_level(Node *n) {
          * so we synthesize the C declaration shape directly here. */
         if (n->var_decl.ty && n->var_decl.ty->kind == TY_FUNC &&
             n->var_decl.name) {
+            emit_source_comment(n->tok);
             Type *fty = n->var_decl.ty;
             emit_type(fty->ret);
             fprintf(stdout, " %.*s(",
