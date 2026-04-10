@@ -938,12 +938,44 @@ static void emit_expr(Node *n) {
             fprintf(stdout, "%.*s",
                     n->member.member->len, n->member.member->loc);
         return;
-    case ND_SUBSCRIPT:
-        emit_expr(n->subscript.base);
-        fputc('[', stdout);
-        emit_expr(n->subscript.index);
-        fputc(']', stdout);
+    case ND_SUBSCRIPT: {
+        /* If the base is a struct/union type, this is an overloaded
+         * operator[] — emit as a method call. Otherwise, plain C
+         * array subscript. */
+        Type *base_ty = n->subscript.base ? n->subscript.base->resolved_type : NULL;
+        if (base_ty && base_ty->kind == TY_PTR) base_ty = base_ty->base;
+        if (base_ty && (base_ty->kind == TY_STRUCT || base_ty->kind == TY_UNION) &&
+            base_ty->tag) {
+            /* operator[] → mangled method call.
+             * If the operator returns a reference (TY_REF / TY_RVALREF
+             * → pointer in C), dereference the result. If it returns
+             * by value, emit the call directly. */
+            bool ref_return = false;
+            if (base_ty->class_region) {
+                Declaration *d = lookup_in_scope(base_ty->class_region,
+                    "operator", 8);
+                if (d && d->type && d->type->kind == TY_FUNC &&
+                    d->type->ret &&
+                    (d->type->ret->kind == TY_REF ||
+                     d->type->ret->kind == TY_RVALREF))
+                    ref_return = true;
+            }
+            if (ref_return) fputs("(*", stdout);
+            mangle_class_tag(base_ty);
+            fputs("__subscript(&", stdout);
+            emit_expr(n->subscript.base);
+            fputs(", ", stdout);
+            emit_expr(n->subscript.index);
+            fputc(')', stdout);
+            if (ref_return) fputc(')', stdout);
+        } else {
+            emit_expr(n->subscript.base);
+            fputc('[', stdout);
+            emit_expr(n->subscript.index);
+            fputc(']', stdout);
+        }
         return;
+    }
     default:
         fputs("/* expr */", stdout);
         return;
@@ -2089,6 +2121,65 @@ static void emit_func_def(Node *n) {
  * 'class_type' carries class_region for namespace walking; the bare
  * tag alone is not enough because two classes named the same in
  * different namespaces would collide. */
+/*
+ * Emit a mangled operator method name. 'operator[]' → '__subscript',
+ * 'operator=' → '__assign', 'operator==' → '__eq', etc. The name
+ * token for operator functions is the 'operator' keyword; the
+ * actual operator is the next token(s) in the source. We look at
+ * the token following 'operator' to determine the suffix.
+ *
+ * Falls back to '__operator' for unrecognised operators.
+ */
+static void emit_operator_method_name(Type *class_type, Token *name) {
+    /* The 'operator' keyword token — the operator symbol follows
+     * in the source. We can peek at the bytes after the token. */
+    const char *after = name->loc + name->len;
+    /* Skip whitespace */
+    while (*after == ' ' || *after == '\t') after++;
+
+    const char *suffix = "__operator";
+    if (after[0] == '[')       suffix = "__subscript";
+    else if (after[0] == '(' && after[1] == ')') suffix = "__call";
+    else if (after[0] == '=' && after[1] == '=') suffix = "__eq";
+    else if (after[0] == '!' && after[1] == '=') suffix = "__ne";
+    else if (after[0] == '<' && after[1] == '=') suffix = "__le";
+    else if (after[0] == '>' && after[1] == '=') suffix = "__ge";
+    else if (after[0] == '<' && after[1] != '<') suffix = "__lt";
+    else if (after[0] == '>' && after[1] != '>') suffix = "__gt";
+    else if (after[0] == '+' && after[1] == '=') suffix = "__plus_assign";
+    else if (after[0] == '-' && after[1] == '=') suffix = "__minus_assign";
+    else if (after[0] == '*' && after[1] == '=') suffix = "__mul_assign";
+    else if (after[0] == '/' && after[1] == '=') suffix = "__div_assign";
+    else if (after[0] == '+' && after[1] == '+') suffix = "__incr";
+    else if (after[0] == '-' && after[1] == '-') suffix = "__decr";
+    else if (after[0] == '+')  suffix = "__plus";
+    else if (after[0] == '-' && after[1] == '>') suffix = "__arrow";
+    else if (after[0] == '-')  suffix = "__minus";
+    else if (after[0] == '*')  suffix = "__deref";
+    else if (after[0] == '/')  suffix = "__div";
+    else if (after[0] == '%')  suffix = "__mod";
+    else if (after[0] == '&' && after[1] == '&') suffix = "__land";
+    else if (after[0] == '|' && after[1] == '|') suffix = "__lor";
+    else if (after[0] == '&')  suffix = "__bitand";
+    else if (after[0] == '|')  suffix = "__bitor";
+    else if (after[0] == '^')  suffix = "__xor";
+    else if (after[0] == '~')  suffix = "__compl";
+    else if (after[0] == '!')  suffix = "__not";
+    else if (after[0] == '<' && after[1] == '<') suffix = "__lshift";
+    else if (after[0] == '>' && after[1] == '>') suffix = "__rshift";
+    else if (after[0] == '=')  suffix = "__assign";
+
+    mangle_class_tag(class_type);
+    fputs(suffix, stdout);
+}
+
+/*
+ * Is this function name an operator keyword?
+ */
+static bool is_operator_name(Token *name) {
+    return name && name->kind == TK_KW_OPERATOR;
+}
+
 static void emit_method_signature(Node *func, Type *class_type) {
     if (!func || func->kind != ND_FUNC_DEF) return;
     if (!class_type || !class_type->tag || !func->func.name) return;
@@ -2116,6 +2207,8 @@ static void emit_method_signature(Node *func, Type *class_type) {
          * a parameter-type-encoded suffix; we'll add something
          * similar when we tackle overloading). */
         mangle_class_ctor(class_type);
+    } else if (is_operator_name(func->func.name)) {
+        emit_operator_method_name(class_type, func->func.name);
     } else {
         mangle_class_method(class_type, func->func.name);
     }
@@ -2302,6 +2395,8 @@ static void emit_class_def(Node *n) {
             fputc(' ', stdout);
             if (m->var_decl.is_constructor) {
                 mangle_class_ctor(class_type);
+            } else if (is_operator_name(m->var_decl.name)) {
+                emit_operator_method_name(class_type, m->var_decl.name);
             } else {
                 mangle_class_method(class_type, m->var_decl.name);
             }
