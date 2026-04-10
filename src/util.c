@@ -123,6 +123,22 @@ _Noreturn void error_at(const char *filename, const char *source,
 }
 
 _Noreturn void error_tok(Token *tok, const char *fmt, ...) {
+    if (!tok || !tok->file || !tok->file->contents || !tok->loc) {
+        va_list ap;
+        va_start(ap, fmt);
+        if (tok && tok->file && tok->file->name)
+            fprintf(stderr, "%s:%d: ", tok->file->name, tok->line);
+        else if (tok)
+            fprintf(stderr, "line %d: ", tok->line);
+        fprintf(stderr, "error: ");
+        vfprintf(stderr, fmt, ap);
+        if (tok && tok->loc)
+            fprintf(stderr, " (near '%.*s')", tok->len > 20 ? 20 : tok->len,
+                    tok->loc);
+        fprintf(stderr, "\n");
+        va_end(ap);
+        exit(2);
+    }
     /* Reformat as error_at */
     int line = 1;
     const char *line_start = tok->file->contents;
