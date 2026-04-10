@@ -21,7 +21,7 @@
 /* Hash function — FNV-1a                                             */
 /* ------------------------------------------------------------------ */
 
-static uint32_t hash_name(const char *name, int len) {
+uint32_t hash_name(const char *name, int len) {
     uint32_t h = 2166136261u;
     for (int i = 0; i < len; i++) {
         h ^= (uint8_t)name[i];
@@ -384,4 +384,119 @@ DeclarativeRegion *region_find_namespace(Parser *p, const char *name,
     Declaration *d = lookup_unqualified_kind(p, name, name_len,
                                              ENTITY_NAMESPACE);
     return d ? d->ns_region : NULL;
+}
+
+/* ------------------------------------------------------------------ */
+/* Shared helpers for declaration + region building (no Parser needed) */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Declare a name directly in a region (no Parser, no tentative check).
+ * Used by the template instantiation pass to build class_regions and
+ * param_scopes for cloned AST nodes.
+ */
+Declaration *region_declare_raw(DeclarativeRegion *r, Arena *arena,
+                                const char *name, int name_len,
+                                EntityKind entity, Type *type) {
+    uint32_t idx = hash_name(name, name_len) % REGION_HASH_SIZE;
+    Declaration *d = arena_alloc(arena, sizeof(Declaration));
+    d->name     = name;
+    d->name_len = name_len;
+    d->entity   = entity;
+    d->type     = type;
+    d->ns_region = NULL;
+    d->home     = r;
+    d->next     = r->buckets[idx];
+    r->buckets[idx] = d;
+    return d;
+}
+
+/*
+ * Look up a name in a SINGLE region's own buckets only — no base-class
+ * walk, no enclosing-scope walk. Returns the first match or NULL.
+ */
+Declaration *region_lookup_own(DeclarativeRegion *r,
+                                const char *name, int name_len) {
+    if (!r) return NULL;
+    uint32_t idx = hash_name(name, name_len) % REGION_HASH_SIZE;
+    for (Declaration *d = r->buckets[idx]; d; d = d->next) {
+        if (d->name_len == name_len && memcmp(d->name, name, name_len) == 0)
+            return d;
+    }
+    return NULL;
+}
+
+/*
+ * Add a base-class region to a class region (no Parser needed).
+ */
+void region_add_base_raw(DeclarativeRegion *r, DeclarativeRegion *base,
+                          Arena *arena) {
+    if (!r || !base) return;
+    if (r->nbases >= r->bases_cap) {
+        int new_cap = r->bases_cap < 4 ? 4 : r->bases_cap * 2;
+        DeclarativeRegion **new_arr = arena_alloc(arena,
+            new_cap * sizeof(DeclarativeRegion *));
+        if (r->bases)
+            memcpy(new_arr, r->bases,
+                   r->nbases * sizeof(DeclarativeRegion *));
+        r->bases = new_arr;
+        r->bases_cap = new_cap;
+    }
+    r->bases[r->nbases++] = base;
+}
+
+/*
+ * Build a class declarative region from a class_def node's members.
+ * Declares data members (ND_VAR_DECL) and methods (ND_FUNC_DEF) in
+ * the region. For methods, creates a TY_FUNC type so codegen can
+ * recognise them as callable.
+ */
+DeclarativeRegion *region_build_class(Node *class_def, Type *owner,
+                                       Arena *arena) {
+    DeclarativeRegion *cr = arena_alloc(arena, sizeof(DeclarativeRegion));
+    memset(cr, 0, sizeof(DeclarativeRegion));
+    cr->kind = REGION_CLASS;
+    cr->owner_type = owner;
+    for (int i = 0; i < class_def->class_def.nmembers; i++) {
+        Node *m = class_def->class_def.members[i];
+        if (!m) continue;
+        Token *mname = NULL;
+        Type  *mtype = NULL;
+        if (m->kind == ND_VAR_DECL || m->kind == ND_TYPEDEF) {
+            mname = m->var_decl.name;
+            mtype = m->var_decl.ty;
+        } else if (m->kind == ND_FUNC_DEF || m->kind == ND_FUNC_DECL) {
+            mname = m->func.name;
+            Type *fty = arena_alloc(arena, sizeof(Type));
+            memset(fty, 0, sizeof(Type));
+            fty->kind = TY_FUNC;
+            fty->ret = m->func.ret_ty;
+            mtype = fty;
+        }
+        if (mname && mname->kind == TK_IDENT)
+            region_declare_raw(cr, arena, mname->loc, mname->len,
+                                ENTITY_VARIABLE, mtype);
+    }
+    return cr;
+}
+
+/*
+ * Build a prototype scope for a function, declaring each parameter.
+ * Optionally chains to an enclosing region (e.g. class scope).
+ */
+DeclarativeRegion *region_build_prototype(Node *func,
+                                           DeclarativeRegion *enclosing,
+                                           Arena *arena) {
+    DeclarativeRegion *ps = arena_alloc(arena, sizeof(DeclarativeRegion));
+    memset(ps, 0, sizeof(DeclarativeRegion));
+    ps->kind = REGION_PROTOTYPE;
+    ps->enclosing = enclosing;
+    for (int i = 0; i < func->func.nparams; i++) {
+        Node *p = func->func.params[i];
+        if (!p || !p->param.name) continue;
+        region_declare_raw(ps, arena, p->param.name->loc,
+                            p->param.name->len, ENTITY_VARIABLE,
+                            p->param.ty);
+    }
+    return ps;
 }

@@ -12,8 +12,9 @@
 #include "instantiate.h"
 #include "clone.h"
 
-static void region_add_base_raw(DeclarativeRegion *r,
-                                 DeclarativeRegion *base, Arena *arena);
+/* region_add_base_raw, region_declare_raw, region_build_class,
+ * region_build_prototype, region_lookup_own, hash_name are all
+ * declared in parse.h and defined in lookup.c. */
 #include <stdio.h>
 #include <string.h>
 
@@ -36,14 +37,7 @@ typedef struct {
     Arena     *arena;
 } TmplRegistry;
 
-static uint32_t hash_name(const char *name, int len) {
-    uint32_t h = 2166136261u;
-    for (int i = 0; i < len; i++) {
-        h ^= (uint8_t)name[i];
-        h *= 16777619u;
-    }
-    return h;
-}
+/* hash_name is declared in parse.h and defined in lookup.c. */
 
 static void registry_add(TmplRegistry *reg, const char *name, int name_len,
                           Node *tmpl) {
@@ -505,13 +499,9 @@ typedef struct {
     Arena      *arena;
 } DedupSet;
 
+/* Reuse hash_name for dedup key hashing — same FNV-1a algorithm. */
 static uint32_t hash_key(const char *key, int len) {
-    uint32_t h = 2166136261u;
-    for (int i = 0; i < len; i++) {
-        h ^= (uint8_t)key[i];
-        h *= 16777619u;
-    }
-    return h;
+    return hash_name(key, len);
 }
 
 /* Returns the existing Type* if already instantiated, else NULL. */
@@ -661,50 +651,8 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
         }
 
         /* Build a class_region for the instantiated class so sema
-         * can resolve member references inside method bodies. Walk
-         * the cloned members and declare data members + methods. */
-        DeclarativeRegion *cr = arena_alloc(arena, sizeof(DeclarativeRegion));
-        memset(cr, 0, sizeof(DeclarativeRegion));
-        cr->kind = REGION_CLASS;
-        cr->owner_type = inst_ty;
-        for (int i = 0; i < cloned->class_def.nmembers; i++) {
-            Node *m = cloned->class_def.members[i];
-            if (!m) continue;
-            Token *mname = NULL;
-            Type  *mtype = NULL;
-            if (m->kind == ND_VAR_DECL || m->kind == ND_TYPEDEF) {
-                mname = m->var_decl.name;
-                mtype = m->var_decl.ty;
-            } else if (m->kind == ND_FUNC_DEF || m->kind == ND_FUNC_DECL) {
-                mname = m->func.name;
-                /* Build a TY_FUNC type so codegen recognises this
-                 * Declaration as a method (checks type->kind == TY_FUNC
-                 * for implicit_this method call lowering). */
-                Type *fty = arena_alloc(arena, sizeof(Type));
-                memset(fty, 0, sizeof(Type));
-                fty->kind = TY_FUNC;
-                fty->ret = m->func.ret_ty;
-                mtype = fty;
-            }
-            if (mname && mname->kind == TK_IDENT) {
-                /* Declare in the class region — use a minimal
-                 * inline declaration (no Parser needed). */
-                uint32_t idx = 2166136261u;
-                for (int j = 0; j < mname->len; j++) {
-                    idx ^= (uint8_t)mname->loc[j];
-                    idx *= 16777619u;
-                }
-                idx %= REGION_HASH_SIZE;
-                Declaration *d = arena_alloc(arena, sizeof(Declaration));
-                d->name     = mname->loc;
-                d->name_len = mname->len;
-                d->entity   = ENTITY_VARIABLE;
-                d->type     = mtype;
-                d->home     = cr;
-                d->next     = cr->buckets[idx];
-                cr->buckets[idx] = d;
-            }
-        }
+         * can resolve member references inside method bodies. */
+        DeclarativeRegion *cr = region_build_class(cloned, inst_ty, arena);
         inst_ty->class_region = cr;
         inst_ty->class_def = cloned;
         inst_ty->has_dtor = false;
@@ -730,43 +678,13 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
              * loop instantiates them and patch_all_types runs. */
         }
 
-        /* Wire up method param_scopes so sema can resolve member
-         * references inside method bodies. Each method gets a fresh
-         * REGION_PROTOTYPE whose enclosing is the class region, with
-         * its parameters declared so name lookup finds them. */
+        /* Wire up method param_scopes and class_type on each method. */
         for (int i = 0; i < cloned->class_def.nmembers; i++) {
             Node *m = cloned->class_def.members[i];
             if (!m || (m->kind != ND_FUNC_DEF && m->kind != ND_FUNC_DECL))
                 continue;
             if (!m->func.body) continue;
-            DeclarativeRegion *ps = arena_alloc(arena,
-                sizeof(DeclarativeRegion));
-            memset(ps, 0, sizeof(DeclarativeRegion));
-            ps->kind = REGION_PROTOTYPE;
-            ps->enclosing = cr;  /* class scope is the parent */
-            /* Declare each parameter in the prototype scope */
-            for (int j = 0; j < m->func.nparams; j++) {
-                Node *p = m->func.params[j];
-                if (!p || !p->param.name) continue;
-                Token *pn = p->param.name;
-                uint32_t pidx = 2166136261u;
-                for (int k = 0; k < pn->len; k++) {
-                    pidx ^= (uint8_t)pn->loc[k];
-                    pidx *= 16777619u;
-                }
-                pidx %= REGION_HASH_SIZE;
-                Declaration *pd = arena_alloc(arena, sizeof(Declaration));
-                pd->name     = pn->loc;
-                pd->name_len = pn->len;
-                pd->entity   = ENTITY_VARIABLE;
-                pd->type     = p->param.ty;
-                pd->home     = ps;
-                pd->next     = ps->buckets[pidx];
-                ps->buckets[pidx] = pd;
-            }
-            m->func.param_scope = ps;
-            /* Also set the class_type so codegen knows to mangle
-             * this as a method, not a free function. */
+            m->func.param_scope = region_build_prototype(m, cr, arena);
             m->func.class_type = inst_ty;
         }
 
@@ -797,32 +715,8 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
                         method_cloned->func.class_type = inst_ty;
                         /* Set up param scope for sema */
                         if (method_cloned->func.body) {
-                            DeclarativeRegion *ps = arena_alloc(arena,
-                                sizeof(DeclarativeRegion));
-                            memset(ps, 0, sizeof(DeclarativeRegion));
-                            ps->kind = REGION_PROTOTYPE;
-                            ps->enclosing = cr;
-                            for (int j = 0; j < method_cloned->func.nparams; j++) {
-                                Node *pp = method_cloned->func.params[j];
-                                if (!pp || !pp->param.name) continue;
-                                Token *pn = pp->param.name;
-                                uint32_t pidx = 2166136261u;
-                                for (int kk = 0; kk < pn->len; kk++) {
-                                    pidx ^= (uint8_t)pn->loc[kk];
-                                    pidx *= 16777619u;
-                                }
-                                pidx %= REGION_HASH_SIZE;
-                                Declaration *pd = arena_alloc(arena,
-                                    sizeof(Declaration));
-                                pd->name     = pn->loc;
-                                pd->name_len = pn->len;
-                                pd->entity   = ENTITY_VARIABLE;
-                                pd->type     = pp->param.ty;
-                                pd->home     = ps;
-                                pd->next     = ps->buckets[pidx];
-                                ps->buckets[pidx] = pd;
-                            }
-                            method_cloned->func.param_scope = ps;
+                            method_cloned->func.param_scope =
+                                region_build_prototype(method_cloned, cr, arena);
                         }
                         (*extra_out)[(*nextra)++] = method_cloned;
                     }
@@ -875,52 +769,15 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
         template_id->ident.resolved_decl = NULL;
 
         /* Set up param scope for sema */
-        if (cloned->func.body && cloned->func.nparams > 0) {
-            DeclarativeRegion *ps = arena_alloc(arena,
-                sizeof(DeclarativeRegion));
-            memset(ps, 0, sizeof(DeclarativeRegion));
-            ps->kind = REGION_PROTOTYPE;
-            for (int j = 0; j < cloned->func.nparams; j++) {
-                Node *p = cloned->func.params[j];
-                if (!p || !p->param.name) continue;
-                Token *pn = p->param.name;
-                uint32_t pidx = 2166136261u;
-                for (int k = 0; k < pn->len; k++) {
-                    pidx ^= (uint8_t)pn->loc[k];
-                    pidx *= 16777619u;
-                }
-                pidx %= REGION_HASH_SIZE;
-                Declaration *pd = arena_alloc(arena, sizeof(Declaration));
-                pd->name     = pn->loc;
-                pd->name_len = pn->len;
-                pd->entity   = ENTITY_VARIABLE;
-                pd->type     = p->param.ty;
-                pd->home     = ps;
-                pd->next     = ps->buckets[pidx];
-                ps->buckets[pidx] = pd;
-            }
-            cloned->func.param_scope = ps;
-        }
+        if (cloned->func.body && cloned->func.nparams > 0)
+            cloned->func.param_scope = region_build_prototype(
+                cloned, /*enclosing=*/NULL, arena);
     }
 
     return cloned;
 }
 
-static void region_add_base_raw(DeclarativeRegion *r,
-                                 DeclarativeRegion *base, Arena *arena) {
-    if (!r || !base) return;
-    if (r->nbases >= r->bases_cap) {
-        int new_cap = r->bases_cap < 4 ? 4 : r->bases_cap * 2;
-        DeclarativeRegion **new_arr = arena_alloc(arena,
-            new_cap * sizeof(DeclarativeRegion *));
-        if (r->bases)
-            memcpy(new_arr, r->bases,
-                   r->nbases * sizeof(DeclarativeRegion *));
-        r->bases = new_arr;
-        r->bases_cap = new_cap;
-    }
-    r->bases[r->nbases++] = base;
-}
+/* region_add_base_raw moved to lookup.c */
 
 /* Forward declarations for post-instantiation type patching */
 static void patch_all_types(Node *tu, DedupSet *ds, Arena *arena);
@@ -1030,40 +887,8 @@ void template_instantiate(Node *tu, Arena *arena) {
                     }
                     /* Build class_region if not already present */
                     if (!sty->class_region) {
-                        DeclarativeRegion *cr = arena_alloc(arena,
-                            sizeof(DeclarativeRegion));
-                        memset(cr, 0, sizeof(DeclarativeRegion));
-                        cr->kind = REGION_CLASS;
-                        cr->owner_type = sty;
-                        for (int i = 0; i < inst->class_def.nmembers; i++) {
-                            Node *m = inst->class_def.members[i];
-                            if (!m) continue;
-                            Token *mname = NULL;
-                            Type *mtype = NULL;
-                            if (m->kind == ND_VAR_DECL || m->kind == ND_TYPEDEF) {
-                                mname = m->var_decl.name;
-                                mtype = m->var_decl.ty;
-                            } else if (m->kind == ND_FUNC_DEF || m->kind == ND_FUNC_DECL) {
-                                mname = m->func.name;
-                                Type *fty = arena_alloc(arena, sizeof(Type));
-                                memset(fty, 0, sizeof(Type));
-                                fty->kind = TY_FUNC;
-                                fty->ret = m->func.ret_ty;
-                                mtype = fty;
-                            }
-                            if (mname && mname->kind == TK_IDENT) {
-                                uint32_t idx = hash_name(mname->loc, mname->len) % REGION_HASH_SIZE;
-                                Declaration *d = arena_alloc(arena, sizeof(Declaration));
-                                d->name = mname->loc;
-                                d->name_len = mname->len;
-                                d->entity = ENTITY_VARIABLE;
-                                d->type = mtype;
-                                d->home = cr;
-                                d->next = cr->buckets[idx];
-                                cr->buckets[idx] = d;
-                            }
-                        }
-                        sty->class_region = cr;
+                        sty->class_region = region_build_class(
+                            inst, sty, arena);
                         sty->class_def = inst;
                     }
                     /* Wire method param scopes */
@@ -1072,26 +897,8 @@ void template_instantiate(Node *tu, Arena *arena) {
                         if (!m || m->kind != ND_FUNC_DEF || !m->func.body)
                             continue;
                         if (m->func.param_scope) continue;
-                        DeclarativeRegion *ps = arena_alloc(arena,
-                            sizeof(DeclarativeRegion));
-                        memset(ps, 0, sizeof(DeclarativeRegion));
-                        ps->kind = REGION_PROTOTYPE;
-                        ps->enclosing = sty->class_region;
-                        for (int j = 0; j < m->func.nparams; j++) {
-                            Node *p = m->func.params[j];
-                            if (!p || !p->param.name) continue;
-                            Token *pn = p->param.name;
-                            uint32_t pidx = hash_name(pn->loc, pn->len) % REGION_HASH_SIZE;
-                            Declaration *pd = arena_alloc(arena, sizeof(Declaration));
-                            pd->name = pn->loc;
-                            pd->name_len = pn->len;
-                            pd->entity = ENTITY_VARIABLE;
-                            pd->type = p->param.ty;
-                            pd->home = ps;
-                            pd->next = ps->buckets[pidx];
-                            ps->buckets[pidx] = pd;
-                        }
-                        m->func.param_scope = ps;
+                        m->func.param_scope = region_build_prototype(
+                            m, sty->class_region, arena);
                         m->func.class_type = sty;
                     }
                 }

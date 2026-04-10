@@ -1232,6 +1232,25 @@ Declaration *lookup_in_scope(DeclarativeRegion *scope,
  */
 DeclarativeRegion *region_find_namespace(Parser *p, const char *name, int name_len);
 
+/*
+ * Shared helpers for declaration + region building (no Parser needed).
+ * Used by the template instantiation pass and codegen for building
+ * class_regions and param_scopes on cloned AST nodes.
+ */
+uint32_t hash_name(const char *name, int len);
+Declaration *region_declare_raw(DeclarativeRegion *r, Arena *arena,
+                                const char *name, int name_len,
+                                EntityKind entity, Type *type);
+Declaration *region_lookup_own(DeclarativeRegion *r,
+                                const char *name, int name_len);
+void region_add_base_raw(DeclarativeRegion *r, DeclarativeRegion *base,
+                          Arena *arena);
+DeclarativeRegion *region_build_class(Node *class_def, Type *owner,
+                                       Arena *arena);
+DeclarativeRegion *region_build_prototype(Node *func,
+                                           DeclarativeRegion *enclosing,
+                                           Arena *arena);
+
 /* ================================================================== */
 /* AST dump — ast_dump.c                                              */
 /* ================================================================== */

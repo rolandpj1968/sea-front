@@ -902,30 +902,19 @@ static void emit_expr(Node *n) {
                      * If so, mangle with the base class and pass
                      * &obj.__sf_base as the this pointer. */
                     Type *method_class = ot;
-                    int base_idx = -1;
+                    
                     if (ot->class_region) {
                         /* Not in own class? Check bases. */
-                        Declaration *own_d = NULL;
                         Token *mn = callee->member.member;
-                        uint32_t mi = 2166136261u;
-                        for (int k = 0; k < mn->len; k++) {
-                            mi ^= (uint8_t)mn->loc[k];
-                            mi *= 16777619u;
-                        }
-                        mi %= REGION_HASH_SIZE;
-                        for (Declaration *dd = ot->class_region->buckets[mi]; dd; dd = dd->next) {
-                            if (dd->name_len == mn->len &&
-                                memcmp(dd->name, mn->loc, mn->len) == 0) {
-                                own_d = dd; break;
-                            }
-                        }
+                        Declaration *own_d = region_lookup_own(
+                            ot->class_region, mn->loc, mn->len);
                         if (!own_d) {
                             for (int bi = 0; bi < ot->class_region->nbases; bi++) {
                                 DeclarativeRegion *br = ot->class_region->bases[bi];
                                 Declaration *bd = lookup_in_scope(br, mn->loc, mn->len);
                                 if (bd && br->owner_type) {
                                     method_class = br->owner_type;
-                                    base_idx = bi;
+                                    
                                     break;
                                 }
                             }
@@ -939,19 +928,8 @@ static void emit_expr(Node *n) {
                 int base_idx_for_this = -1;
                 if (ot->class_region && callee->member.member) {
                     Token *mn = callee->member.member;
-                    Declaration *own_d = NULL;
-                    uint32_t mi = 2166136261u;
-                    for (int k = 0; k < mn->len; k++) {
-                        mi ^= (uint8_t)mn->loc[k];
-                        mi *= 16777619u;
-                    }
-                    mi %= REGION_HASH_SIZE;
-                    for (Declaration *dd = ot->class_region->buckets[mi]; dd; dd = dd->next) {
-                        if (dd->name_len == mn->len &&
-                            memcmp(dd->name, mn->loc, mn->len) == 0) {
-                            own_d = dd; break;
-                        }
-                    }
+                    Declaration *own_d = region_lookup_own(
+                        ot->class_region, mn->loc, mn->len);
                     if (!own_d) {
                         for (int bi = 0; bi < ot->class_region->nbases; bi++) {
                             Declaration *bd = lookup_in_scope(
@@ -1006,23 +984,10 @@ static void emit_expr(Node *n) {
         if (obj_ty && (obj_ty->kind == TY_STRUCT || obj_ty->kind == TY_UNION) &&
             obj_ty->class_region && mem) {
             /* Check: is this member NOT in the class itself but in a base? */
-            Declaration *own = NULL;
-            uint32_t midx = 2166136261u;
-            for (int k = 0; k < mem->len; k++) {
-                midx ^= (uint8_t)mem->loc[k];
-                midx *= 16777619u;
-            }
-            midx %= REGION_HASH_SIZE;
-            for (Declaration *dd = obj_ty->class_region->buckets[midx]; dd; dd = dd->next) {
-                if (dd->name_len == mem->len &&
-                    memcmp(dd->name, mem->loc, mem->len) == 0) {
-                    own = dd;
-                    break;
-                }
-            }
+            Declaration *own = region_lookup_own(obj_ty->class_region,
+                                                  mem->loc, mem->len);
             if (!own) {
                 /* Not found in own class — check bases */
-                int path[8];
                 /* We need to find WHICH base has this member.
                  * Walk each base's region looking for the member. */
                 for (int bi = 0; bi < obj_ty->class_region->nbases; bi++) {
