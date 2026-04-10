@@ -898,11 +898,76 @@ static void emit_expr(Node *n) {
                             callee->member.member->len,
                             callee->member.member->loc);
                 } else {
-                    mangle_class_method(ot, callee->member.member);
+                    /* Check if the method is inherited from a base.
+                     * If so, mangle with the base class and pass
+                     * &obj.__sf_base as the this pointer. */
+                    Type *method_class = ot;
+                    int base_idx = -1;
+                    if (ot->class_region) {
+                        /* Not in own class? Check bases. */
+                        Declaration *own_d = NULL;
+                        Token *mn = callee->member.member;
+                        uint32_t mi = 2166136261u;
+                        for (int k = 0; k < mn->len; k++) {
+                            mi ^= (uint8_t)mn->loc[k];
+                            mi *= 16777619u;
+                        }
+                        mi %= REGION_HASH_SIZE;
+                        for (Declaration *dd = ot->class_region->buckets[mi]; dd; dd = dd->next) {
+                            if (dd->name_len == mn->len &&
+                                memcmp(dd->name, mn->loc, mn->len) == 0) {
+                                own_d = dd; break;
+                            }
+                        }
+                        if (!own_d) {
+                            for (int bi = 0; bi < ot->class_region->nbases; bi++) {
+                                DeclarativeRegion *br = ot->class_region->bases[bi];
+                                Declaration *bd = lookup_in_scope(br, mn->loc, mn->len);
+                                if (bd && br->owner_type) {
+                                    method_class = br->owner_type;
+                                    base_idx = bi;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    mangle_class_method(method_class, callee->member.member);
                     fputc('(', stdout);
                 }
-                /* this argument: address-of for value, as-is for pointer. */
-                if (obj_is_ptr) {
+                /* this argument: address-of for value, as-is for pointer.
+                 * For inherited methods, pass &obj.__sf_base instead. */
+                int base_idx_for_this = -1;
+                if (ot->class_region && callee->member.member) {
+                    Token *mn = callee->member.member;
+                    Declaration *own_d = NULL;
+                    uint32_t mi = 2166136261u;
+                    for (int k = 0; k < mn->len; k++) {
+                        mi ^= (uint8_t)mn->loc[k];
+                        mi *= 16777619u;
+                    }
+                    mi %= REGION_HASH_SIZE;
+                    for (Declaration *dd = ot->class_region->buckets[mi]; dd; dd = dd->next) {
+                        if (dd->name_len == mn->len &&
+                            memcmp(dd->name, mn->loc, mn->len) == 0) {
+                            own_d = dd; break;
+                        }
+                    }
+                    if (!own_d) {
+                        for (int bi = 0; bi < ot->class_region->nbases; bi++) {
+                            Declaration *bd = lookup_in_scope(
+                                ot->class_region->bases[bi],
+                                mn->loc, mn->len);
+                            if (bd) { base_idx_for_this = bi; break; }
+                        }
+                    }
+                }
+                if (base_idx_for_this >= 0) {
+                    fputs("&(", stdout);
+                    emit_expr(obj);
+                    fputs(").", stdout);
+                    if (base_idx_for_this == 0) fputs("__sf_base", stdout);
+                    else fprintf(stdout, "__sf_base%d", base_idx_for_this);
+                } else if (obj_is_ptr) {
                     emit_expr(obj);
                 } else {
                     fputc('&', stdout);
@@ -931,13 +996,58 @@ static void emit_expr(Node *n) {
         fputc(')', stdout);
         emit_expr(n->cast.operand);
         return;
-    case ND_MEMBER:
-        emit_expr(n->member.obj);
-        fputs(n->member.op == TK_ARROW ? "->" : ".", stdout);
-        if (n->member.member)
-            fprintf(stdout, "%.*s",
-                    n->member.member->len, n->member.member->loc);
+    case ND_MEMBER: {
+        /* Check if the member lives in a base class and needs
+         * __sf_base chain rewriting. */
+        Type *obj_ty = n->member.obj ? n->member.obj->resolved_type : NULL;
+        if (obj_ty && obj_ty->kind == TY_PTR) obj_ty = obj_ty->base;
+        Token *mem = n->member.member;
+        bool did_base_rewrite = false;
+        if (obj_ty && (obj_ty->kind == TY_STRUCT || obj_ty->kind == TY_UNION) &&
+            obj_ty->class_region && mem) {
+            /* Check: is this member NOT in the class itself but in a base? */
+            Declaration *own = NULL;
+            uint32_t midx = 2166136261u;
+            for (int k = 0; k < mem->len; k++) {
+                midx ^= (uint8_t)mem->loc[k];
+                midx *= 16777619u;
+            }
+            midx %= REGION_HASH_SIZE;
+            for (Declaration *dd = obj_ty->class_region->buckets[midx]; dd; dd = dd->next) {
+                if (dd->name_len == mem->len &&
+                    memcmp(dd->name, mem->loc, mem->len) == 0) {
+                    own = dd;
+                    break;
+                }
+            }
+            if (!own) {
+                /* Not found in own class — check bases */
+                int path[8];
+                /* We need to find WHICH base has this member.
+                 * Walk each base's region looking for the member. */
+                for (int bi = 0; bi < obj_ty->class_region->nbases; bi++) {
+                    DeclarativeRegion *base_r = obj_ty->class_region->bases[bi];
+                    Declaration *bd = lookup_in_scope(base_r, mem->loc, mem->len);
+                    if (bd) {
+                        emit_expr(n->member.obj);
+                        fputs(n->member.op == TK_ARROW ? "->" : ".", stdout);
+                        if (bi == 0) fputs("__sf_base.", stdout);
+                        else fprintf(stdout, "__sf_base%d.", bi);
+                        fprintf(stdout, "%.*s", mem->len, mem->loc);
+                        did_base_rewrite = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if (!did_base_rewrite) {
+            emit_expr(n->member.obj);
+            fputs(n->member.op == TK_ARROW ? "->" : ".", stdout);
+            if (mem)
+                fprintf(stdout, "%.*s", mem->len, mem->loc);
+        }
         return;
+    }
     case ND_SUBSCRIPT: {
         /* If the base is a struct/union type, this is an overloaded
          * operator[] — emit as a method call. Otherwise, plain C
