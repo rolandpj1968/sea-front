@@ -485,10 +485,59 @@ static Type *type_arg_from_node(Node *arg) {
 }
 
 /*
+ * Find out-of-class method templates for a given class template.
+ * These are top-level ND_TEMPLATE_DECL nodes wrapping ND_FUNC_DEF
+ * where func.class_type matches the class template's type.
+ * Collects into 'out' array, returns count.
+ */
+static int find_ool_methods(Node *tu, Type *class_type,
+                             Node **out, int max) {
+    int count = 0;
+    if (!tu || !class_type || !class_type->tag) return 0;
+    for (int i = 0; i < tu->tu.ndecls; i++) {
+        Node *n = tu->tu.decls[i];
+        if (!n) continue;
+        /* Recurse into namespace blocks */
+        if (n->kind == ND_BLOCK) {
+            for (int j = 0; j < n->block.nstmts; j++) {
+                Node *m = n->block.stmts[j];
+                if (!m || m->kind != ND_TEMPLATE_DECL) continue;
+                Node *inner = m->template_decl.decl;
+                if (!inner) continue;
+                if ((inner->kind == ND_FUNC_DEF || inner->kind == ND_FUNC_DECL) &&
+                    inner->func.class_type &&
+                    inner->func.class_type->tag &&
+                    inner->func.class_type->tag->len == class_type->tag->len &&
+                    memcmp(inner->func.class_type->tag->loc,
+                           class_type->tag->loc, class_type->tag->len) == 0) {
+                    if (count < max) out[count++] = m;
+                }
+            }
+            continue;
+        }
+        if (n->kind != ND_TEMPLATE_DECL) continue;
+        Node *inner = n->template_decl.decl;
+        if (!inner) continue;
+        if ((inner->kind == ND_FUNC_DEF || inner->kind == ND_FUNC_DECL) &&
+            inner->func.class_type &&
+            inner->func.class_type->tag &&
+            inner->func.class_type->tag->len == class_type->tag->len &&
+            memcmp(inner->func.class_type->tag->loc,
+                   class_type->tag->loc, class_type->tag->len) == 0) {
+            if (count < max) out[count++] = n;
+        }
+    }
+    return count;
+}
+
+/*
  * Instantiate one template for a given set of arguments.
  * Returns the cloned ND_CLASS_DEF / ND_FUNC_DEF, or NULL on failure.
+ * 'tu' is passed for finding out-of-class method templates.
  */
-static Node *instantiate_one(Node *tmpl, Node *template_id, Arena *arena) {
+static Node *instantiate_one(Node *tmpl, Node *template_id,
+                              Arena *arena, Node *tu,
+                              Node ***extra_out, int *nextra) {
     if (!tmpl || tmpl->kind != ND_TEMPLATE_DECL) return NULL;
 
     Node *inner = tmpl->template_decl.decl;
@@ -630,6 +679,63 @@ static Node *instantiate_one(Node *tmpl, Node *template_id, Arena *arena) {
 
         cloned->class_def.ty  = inst_ty;
         cloned->class_def.tag = template_id->template_id.name;
+
+        /* Instantiate out-of-class method definitions for this class
+         * template. These are separate ND_TEMPLATE_DECL nodes at top
+         * level whose inner ND_FUNC_DEF has class_type matching us. */
+        if (tu && extra_out && nextra) {
+            Type *orig_class_type = inner->kind == ND_CLASS_DEF ?
+                inner->class_def.ty : NULL;
+            if (orig_class_type) {
+                enum { MAX_OOL = 64 };
+                Node *ool[MAX_OOL];
+                int nool = find_ool_methods(tu, orig_class_type,
+                                             ool, MAX_OOL);
+                if (nool > 0) {
+                    *extra_out = arena_alloc(arena, nool * sizeof(Node *));
+                    *nextra = 0;
+                    for (int k = 0; k < nool; k++) {
+                        Node *method_tmpl = ool[k];
+                        Node *method_inner = method_tmpl->template_decl.decl;
+                        Node *method_cloned = clone_node(method_inner,
+                                                          &map, arena);
+                        if (!method_cloned) continue;
+                        /* Set class_type to the instantiated type */
+                        method_cloned->func.class_type = inst_ty;
+                        /* Set up param scope for sema */
+                        if (method_cloned->func.body) {
+                            DeclarativeRegion *ps = arena_alloc(arena,
+                                sizeof(DeclarativeRegion));
+                            memset(ps, 0, sizeof(DeclarativeRegion));
+                            ps->kind = REGION_PROTOTYPE;
+                            ps->enclosing = cr;
+                            for (int j = 0; j < method_cloned->func.nparams; j++) {
+                                Node *pp = method_cloned->func.params[j];
+                                if (!pp || !pp->param.name) continue;
+                                Token *pn = pp->param.name;
+                                uint32_t pidx = 2166136261u;
+                                for (int kk = 0; kk < pn->len; kk++) {
+                                    pidx ^= (uint8_t)pn->loc[kk];
+                                    pidx *= 16777619u;
+                                }
+                                pidx %= REGION_HASH_SIZE;
+                                Declaration *pd = arena_alloc(arena,
+                                    sizeof(Declaration));
+                                pd->name     = pn->loc;
+                                pd->name_len = pn->len;
+                                pd->entity   = ENTITY_VARIABLE;
+                                pd->type     = pp->param.ty;
+                                pd->home     = ps;
+                                pd->next     = ps->buckets[pidx];
+                                ps->buckets[pidx] = pd;
+                            }
+                            method_cloned->func.param_scope = ps;
+                        }
+                        (*extra_out)[(*nextra)++] = method_cloned;
+                    }
+                }
+            }
+        }
     }
 
     /* For function templates: set up a param scope and rewrite the
@@ -784,7 +890,10 @@ void template_instantiate(Node *tu, Arena *arena) {
             continue;
         }
 
-        Node *inst = instantiate_one(req->tmpl_def, req->template_id, arena);
+        Node **extra_methods = NULL;
+        int nextra = 0;
+        Node *inst = instantiate_one(req->tmpl_def, req->template_id,
+                                      arena, tu, &extra_methods, &nextra);
         if (inst) {
             if (total_inst < MAX_INST)
                 all_instantiated[total_inst++] = inst;
@@ -802,6 +911,12 @@ void template_instantiate(Node *tu, Arena *arena) {
                 req->usage_type->has_default_ctor  = inst_ty->has_default_ctor;
                 /* Register in dedup set */
                 dedup_add(&ds, key, key_len, inst_ty);
+            }
+            /* Add out-of-class method instantiations */
+            for (int e = 0; e < nextra; e++) {
+                if (total_inst < MAX_INST)
+                    all_instantiated[total_inst++] = extra_methods[e];
+                ninst_this_round++;
             }
         }
     }
