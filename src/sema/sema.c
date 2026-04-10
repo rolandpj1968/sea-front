@@ -391,6 +391,13 @@ static void visit(Sema *s, Node *n) {
     case ND_POSTFIX:   visit_unary(s, n);     return;
     case ND_ASSIGN:    visit_assign(s, n);    return;
     case ND_TERNARY:   visit_ternary(s, n);   return;
+    case ND_CAST:
+        if (n->cast.operand) visit(s, n->cast.operand);
+        return;
+    case ND_SIZEOF:
+        if (n->sizeof_.expr) visit(s, n->sizeof_.expr);
+        return;
+    case ND_COMMA:     visit_binary(s, n);    return;
 
     /* Statements */
     case ND_BLOCK:     visit_block(s, n);     return;

@@ -813,6 +813,9 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
     return cloned;
 }
 
+/* Forward declarations for post-instantiation type patching */
+static void patch_all_types(Node *tu, DedupSet *ds, Arena *arena);
+
 /* ------------------------------------------------------------------ */
 /* Main entry point                                                    */
 /* ------------------------------------------------------------------ */
@@ -909,8 +912,29 @@ void template_instantiate(Node *tu, Arena *arena) {
                 req->usage_type->class_def         = inst_ty->class_def;
                 req->usage_type->has_dtor          = inst_ty->has_dtor;
                 req->usage_type->has_default_ctor  = inst_ty->has_default_ctor;
-                /* Register in dedup set */
+                /* Register in dedup set — both the resolved key (for
+                 * dedup across explicit+defaulted args) and the raw
+                 * template-id key (for post-instantiation patching
+                 * which only has the raw args). */
                 dedup_add(&ds, key, key_len, inst_ty);
+                /* Also register by raw template-id args */
+                {
+                    char raw_key[MAX_DEDUP_KEY];
+                    int rpos = 0;
+                    if (req->name && rpos + req->name->len < MAX_DEDUP_KEY) {
+                        memcpy(raw_key, req->name->loc, req->name->len);
+                        rpos = req->name->len;
+                    }
+                    raw_key[rpos++] = '\0';
+                    for (int ri = 0; ri < req->template_id->template_id.nargs; ri++) {
+                        Node *rarg = req->template_id->template_id.args[ri];
+                        Type *rty = (rarg && rarg->kind == ND_VAR_DECL) ?
+                                    rarg->var_decl.ty : NULL;
+                        rpos = type_to_key(rty, raw_key, rpos, MAX_DEDUP_KEY);
+                        raw_key[rpos++] = '\0';
+                    }
+                    dedup_add(&ds, raw_key, rpos, inst_ty);
+                }
             }
             /* Add out-of-class method instantiations */
             for (int e = 0; e < nextra; e++) {
@@ -937,4 +961,171 @@ void template_instantiate(Node *tu, Arena *arena) {
     tu->tu.decls  = new_decls;
     tu->tu.ndecls = new_n;
     } /* end iteration loop */
+
+    /* Post-instantiation: walk the ENTIRE AST and patch every Type
+     * with a template_id_node to point at the correct instantiated
+     * class_region / template_args. This catches Types that weren't
+     * the exact pointer collected in Phase 2 (e.g. Declarations
+     * store a copy of the Type from parse_type_specifiers). */
+    patch_all_types(tu, &ds, arena);
+}
+
+/*
+ * Recursively walk all types in the AST and patch any TY_STRUCT with
+ * a template_id_node whose key matches an entry in the dedup set.
+ */
+static void patch_type(Type *ty, DedupSet *ds, Arena *arena) {
+    if (!ty) return;
+    /* Recurse into compound types */
+    switch (ty->kind) {
+    case TY_PTR: case TY_REF: case TY_RVALREF: case TY_ARRAY:
+        patch_type(ty->base, ds, arena);
+        return;
+    case TY_FUNC:
+        patch_type(ty->ret, ds, arena);
+        for (int i = 0; i < ty->nparams; i++)
+            patch_type(ty->params[i], ds, arena);
+        return;
+    default: break;
+    }
+    if (ty->kind != TY_STRUCT && ty->kind != TY_UNION) return;
+    if (!ty->template_id_node) return;
+    if (ty->class_region) return;  /* already patched */
+    /* already patched */
+    /* Build key and look up */
+    Node *tid = ty->template_id_node;
+    if (tid->kind != ND_TEMPLATE_ID || !tid->template_id.name)
+        return;
+    /* We need to build the same key that the dedup set uses.
+     * Reconstruct the SubstMap from the template definition. */
+    Token *tname = tid->template_id.name;
+    /* Simple key: just use template name + arg types */
+    char key[MAX_DEDUP_KEY];
+    int pos = 0;
+    if (tname && pos + tname->len < MAX_DEDUP_KEY) {
+        memcpy(key, tname->loc, tname->len);
+        pos = tname->len;
+    }
+    key[pos++] = '\0';
+    for (int i = 0; i < tid->template_id.nargs; i++) {
+        Node *arg = tid->template_id.args[i];
+        Type *arg_ty = (arg && arg->kind == ND_VAR_DECL) ?
+                        arg->var_decl.ty : NULL;
+        pos = type_to_key(arg_ty, key, pos, MAX_DEDUP_KEY);
+        key[pos++] = '\0';
+    }
+    Type *existing = dedup_find(ds, key, pos);
+    if (existing) {
+        ty->template_args    = existing->template_args;
+        ty->n_template_args  = existing->n_template_args;
+        ty->class_region     = existing->class_region;
+        ty->class_def        = existing->class_def;
+        ty->has_dtor         = existing->has_dtor;
+        ty->has_default_ctor = existing->has_default_ctor;
+    }
+}
+
+static void patch_node_types(Node *n, DedupSet *ds, Arena *arena) {
+    if (!n) return;
+    switch (n->kind) {
+    case ND_VAR_DECL: case ND_TYPEDEF:
+        patch_type(n->var_decl.ty, ds, arena);
+        patch_node_types(n->var_decl.init, ds, arena);
+        break;
+    case ND_PARAM:
+        patch_type(n->param.ty, ds, arena);
+        break;
+    case ND_FUNC_DEF: case ND_FUNC_DECL:
+        patch_type(n->func.ret_ty, ds, arena);
+        for (int i = 0; i < n->func.nparams; i++)
+            patch_node_types(n->func.params[i], ds, arena);
+        patch_node_types(n->func.body, ds, arena);
+        break;
+    case ND_CLASS_DEF:
+        for (int i = 0; i < n->class_def.nmembers; i++)
+            patch_node_types(n->class_def.members[i], ds, arena);
+        break;
+    case ND_BLOCK:
+        for (int i = 0; i < n->block.nstmts; i++)
+            patch_node_types(n->block.stmts[i], ds, arena);
+        break;
+    case ND_CAST:
+        patch_type(n->cast.ty, ds, arena);
+        patch_node_types(n->cast.operand, ds, arena);
+        break;
+    case ND_BINARY: case ND_ASSIGN: case ND_COMMA:
+        patch_node_types(n->binary.lhs, ds, arena);
+        patch_node_types(n->binary.rhs, ds, arena);
+        break;
+    case ND_UNARY: case ND_POSTFIX:
+        patch_node_types(n->unary.operand, ds, arena);
+        break;
+    case ND_TERNARY:
+        patch_node_types(n->ternary.cond, ds, arena);
+        patch_node_types(n->ternary.then_, ds, arena);
+        patch_node_types(n->ternary.else_, ds, arena);
+        break;
+    case ND_CALL:
+        patch_node_types(n->call.callee, ds, arena);
+        for (int i = 0; i < n->call.nargs; i++)
+            patch_node_types(n->call.args[i], ds, arena);
+        break;
+    case ND_MEMBER:
+        patch_node_types(n->member.obj, ds, arena);
+        break;
+    case ND_SUBSCRIPT:
+        patch_node_types(n->subscript.base, ds, arena);
+        patch_node_types(n->subscript.index, ds, arena);
+        break;
+    case ND_IF:
+        patch_node_types(n->if_.init, ds, arena);
+        patch_node_types(n->if_.cond, ds, arena);
+        patch_node_types(n->if_.then_, ds, arena);
+        patch_node_types(n->if_.else_, ds, arena);
+        break;
+    case ND_WHILE:
+        patch_node_types(n->while_.cond, ds, arena);
+        patch_node_types(n->while_.body, ds, arena);
+        break;
+    case ND_FOR:
+        patch_node_types(n->for_.init, ds, arena);
+        patch_node_types(n->for_.cond, ds, arena);
+        patch_node_types(n->for_.inc, ds, arena);
+        patch_node_types(n->for_.body, ds, arena);
+        break;
+    case ND_RETURN:
+        patch_node_types(n->ret.expr, ds, arena);
+        break;
+    case ND_EXPR_STMT:
+        patch_node_types(n->expr_stmt.expr, ds, arena);
+        break;
+    case ND_SWITCH:
+        patch_node_types(n->switch_.init, ds, arena);
+        patch_node_types(n->switch_.expr, ds, arena);
+        patch_node_types(n->switch_.body, ds, arena);
+        break;
+    case ND_CASE:
+        patch_node_types(n->case_.expr, ds, arena);
+        patch_node_types(n->case_.stmt, ds, arena);
+        break;
+    case ND_DEFAULT:
+        patch_node_types(n->default_.stmt, ds, arena);
+        break;
+    case ND_TEMPLATE_DECL:
+        /* Don't patch inside template bodies */
+        break;
+    case ND_FRIEND:
+        patch_node_types(n->friend_decl.decl, ds, arena);
+        break;
+    case ND_TRANSLATION_UNIT:
+        for (int i = 0; i < n->tu.ndecls; i++)
+            patch_node_types(n->tu.decls[i], ds, arena);
+        break;
+    default:
+        break;
+    }
+}
+
+static void patch_all_types(Node *tu, DedupSet *ds, Arena *arena) {
+    patch_node_types(tu, ds, arena);
 }
