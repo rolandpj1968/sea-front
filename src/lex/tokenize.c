@@ -1217,6 +1217,47 @@ TokenArray tokenize(File *file) {
         if (*ctx.p == '\0')
             break;
 
+        /* #line directives from the preprocessor (mcpp).
+         * Two forms: '#line N "file"' and '# N "file"'.
+         * Update ctx.line and ctx.file so subsequent tokens carry
+         * the original source position, not the .i file position. */
+        if (at_bol && *ctx.p == '#') {
+            const char *p = ctx.p + 1;
+            while (*p == ' ' || *p == '\t') p++;
+            /* Skip optional 'line' keyword */
+            if (p[0] == 'l' && p[1] == 'i' && p[2] == 'n' && p[3] == 'e' &&
+                (p[4] == ' ' || p[4] == '\t'))
+                p += 5;
+            while (*p == ' ' || *p == '\t') p++;
+            if (*p >= '0' && *p <= '9') {
+                int line_num = 0;
+                while (*p >= '0' && *p <= '9')
+                    line_num = line_num * 10 + (*p++ - '0');
+                ctx.line = line_num;
+                while (*p == ' ' || *p == '\t') p++;
+                if (*p == '"') {
+                    p++;  /* skip opening quote */
+                    const char *fname_start = p;
+                    while (*p && *p != '"' && *p != '\n') p++;
+                    int fname_len = (int)(p - fname_start);
+                    if (*p == '"') p++;
+                    /* Create or reuse a File entry for this name */
+                    File *f = xcalloc(1, sizeof(File));
+                    f->name = xcalloc(1, fname_len + 1);
+                    memcpy(f->name, fname_start, fname_len);
+                    f->name[fname_len] = '\0';
+                    ctx.file = f;
+                }
+                /* Skip rest of line */
+                while (*ctx.p && *ctx.p != '\n') ctx.p++;
+                if (*ctx.p == '\n') {
+                    ctx.p++;
+                    ctx.line_start = ctx.p;
+                }
+                continue;
+            }
+        }
+
         Token *tok;
 
         /* String/char literal with optional encoding prefix.

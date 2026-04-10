@@ -35,41 +35,41 @@ struct sf__pair_t_int_double_te_;
 struct sf__integral_constant_t_bool_te_;
 struct sf___PCC_t_int_te_;
 /* C++: struct pair */
-#line 3084 "/tmp/use_pair.i"
+#line 187 "/usr/include/c++/13/bits/stl_pair.h"
 struct sf__pair_t_int_double_te_ {
     int first;
     double second;
 };
 /* C++: constexpr pair(const pair&) = default; */
-#line 3094 "/tmp/use_pair.i"
+#line 197 "/usr/include/c++/13/bits/stl_pair.h"
 __SF_INLINE void sf__pair_t_int_double_te___ctor(struct sf__pair_t_int_double_te_ *this, const struct sf__std__pair*);
 /* C++: constexpr pair(pair&&) = default; */
-#line 3095 "/tmp/use_pair.i"
+#line 198 "/usr/include/c++/13/bits/stl_pair.h"
 __SF_INLINE void sf__pair_t_int_double_te___ctor(struct sf__pair_t_int_double_te_ *this, struct sf__std__pair*);
 /* C++: swap(pair& __p) */
-#line 3103 "/tmp/use_pair.i"
+#line 206 "/usr/include/c++/13/bits/stl_pair.h"
 __SF_INLINE void sf__pair_t_int_double_te___swap(struct sf__pair_t_int_double_te_ *this, struct sf__std__pair* __p);
 /* C++: operator=(__conditional_t<__and_<is_copy_assignable<_T1>, */
-#line 3312 "/tmp/use_pair.i"
+#line 727 "/usr/include/c++/13/bits/stl_pair.h"
 __SF_INLINE struct sf__std__pair* sf__pair_t_int_double_te___operator(struct sf__pair_t_int_double_te_ *this, struct sf____conditional_t __p);
 /* C++: operator=(__conditional_t<__and_<is_move_assignable<_T1>, */
-#line 3322 "/tmp/use_pair.i"
+#line 737 "/usr/include/c++/13/bits/stl_pair.h"
 __SF_INLINE struct sf__std__pair* sf__pair_t_int_double_te___operator(struct sf__pair_t_int_double_te_ *this, struct sf____conditional_t __p);
 /* C++: swap(pair& __p) */
-#line 3103 "/tmp/use_pair.i"
+#line 206 "/usr/include/c++/13/bits/stl_pair.h"
 __SF_INLINE void sf__pair_t_int_double_te___swap(struct sf__pair_t_int_double_te_ *this, struct sf__std__pair* __p) {
     this->swap(this->first, __p.first);
     this->swap(this->second, __p.second);
 }
 /* C++: operator=(__conditional_t<__and_<is_copy_assignable<_T1>, */
-#line 3312 "/tmp/use_pair.i"
+#line 727 "/usr/include/c++/13/bits/stl_pair.h"
 __SF_INLINE struct sf__std__pair* sf__pair_t_int_double_te___operator(struct sf__pair_t_int_double_te_ *this, struct sf____conditional_t __p) {
     (this->first = __p.first);
     (this->second = __p.second);
     return (*this);
 }
 /* C++: operator=(__conditional_t<__and_<is_move_assignable<_T1>, */
-#line 3322 "/tmp/use_pair.i"
+#line 737 "/usr/include/c++/13/bits/stl_pair.h"
 __SF_INLINE struct sf__std__pair* sf__pair_t_int_double_te___operator(struct sf__pair_t_int_double_te_ *this, struct sf____conditional_t __p) {
     (this->first = /* expr */(__p.first));
     (this->second = /* expr */(__p.second));
@@ -77,15 +77,15 @@ __SF_INLINE struct sf__std__pair* sf__pair_t_int_double_te___operator(struct sf_
 }
 
 /* C++: struct integral_constant */
-#line 345 "/tmp/use_pair.i"
+#line 62 "/usr/include/c++/13/type_traits"
 struct sf__integral_constant_t_bool_te_ {
     _Bool value = __v;
 };
 /* C++: constexpr operator value_type() const noexcept */
-#line 350 "/tmp/use_pair.i"
+#line 67 "/usr/include/c++/13/type_traits"
 __SF_INLINE void sf__integral_constant_t_bool_te___operator(struct sf__integral_constant_t_bool_te_ *this);
 /* C++: constexpr operator value_type() const noexcept */
-#line 350 "/tmp/use_pair.i"
+#line 67 "/usr/include/c++/13/type_traits"
 __SF_INLINE void sf__integral_constant_t_bool_te___operator(struct sf__integral_constant_t_bool_te_ *this) {
     return this->value;
 }
@@ -95,7 +95,7 @@ __SF_INLINE void sf__integral_constant_t_bool_te___operator(struct sf__integral_
 /* unsupported top-level */
 
 /* C++: struct _PCC<false, _T1, _T2> */
-#line 3043 "/tmp/use_pair.i"
+#line 134 "/usr/include/c++/13/bits/stl_pair.h"
 struct sf___PCC_t_int_te_ {
 };
 
@@ -104,7 +104,7 @@ struct sf___PCC_t_int_te_ {
 /* unsupported top-level */
 
 /* C++: struct __conditional<false> */
-#line 391 "/tmp/use_pair.i"
+#line 126 "/usr/include/c++/13/type_traits"
 struct sf____conditional {
 };
 
@@ -410,7 +410,7 @@ struct sf____conditional {
 /* unsupported top-level */
 /* unsupported top-level */
 /* C++: inline void __terminate()  noexcept */
-#line 243 "/tmp/use_pair.i"
+#line 319 "/usr/include/x86_64-linux-gnu/c++/13/bits/c++config.h"
 void __terminate(void) {
     /*?*/ int terminate;
     terminate();
@@ -419,7 +419,7 @@ void __terminate(void) {
 
 
 /* C++: __is_constant_evaluated()  noexcept */
-#line 270 "/tmp/use_pair.i"
+#line 540 "/usr/include/x86_64-linux-gnu/c++/13/bits/c++config.h"
 _Bool __is_constant_evaluated(void) {
     return false;
 }
@@ -428,105 +428,105 @@ _Bool __is_constant_evaluated(void) {
 /* unsupported top-level */
 /* unsupported top-level */
 /* C++: struct __do_is_destructible_impl */
-#line 994 "/tmp/use_pair.i"
+#line 936 "/usr/include/c++/13/type_traits"
 struct sf__std____do_is_destructible_impl {
 };
 /* C++: struct __do_is_nt_destructible_impl */
-#line 1047 "/tmp/use_pair.i"
+#line 989 "/usr/include/c++/13/type_traits"
 struct sf__std____do_is_nt_destructible_impl {
 };
 /* C++: struct __do_is_implicitly_default_constructible_impl */
-#line 1297 "/tmp/use_pair.i"
+#line 1239 "/usr/include/c++/13/type_traits"
 struct sf__std____do_is_implicitly_default_constructible_impl {
 };
 /* C++: static false_type __test(...); */
-#line 1306 "/tmp/use_pair.i"
+#line 1248 "/usr/include/c++/13/type_traits"
 __SF_INLINE struct sf__integral_constant_t_bool_te_ sf__std____do_is_implicitly_default_constructible_impl____test(struct sf__std____do_is_implicitly_default_constructible_impl *this);
 /* C++: class __make_unsigned_selector_base */
-#line 1675 "/tmp/use_pair.i"
+#line 1757 "/usr/include/c++/13/type_traits"
 struct sf__std____make_unsigned_selector_base {
 };
 /* C++: struct __failure_type */
-#line 2076 "/tmp/use_pair.i"
+#line 2260 "/usr/include/c++/13/type_traits"
 struct sf__std____failure_type {
 };
 /* C++: struct __do_common_type_impl */
-#line 2079 "/tmp/use_pair.i"
+#line 2263 "/usr/include/c++/13/type_traits"
 struct sf__std____do_common_type_impl {
 };
 /* C++: struct __invoke_memfun_ref */
-#line 2205 "/tmp/use_pair.i"
+#line 2402 "/usr/include/c++/13/type_traits"
 struct sf__std____invoke_memfun_ref {
 };
 /* C++: struct __invoke_memfun_deref */
-#line 2206 "/tmp/use_pair.i"
+#line 2403 "/usr/include/c++/13/type_traits"
 struct sf__std____invoke_memfun_deref {
 };
 /* C++: struct __invoke_memobj_ref */
-#line 2207 "/tmp/use_pair.i"
+#line 2404 "/usr/include/c++/13/type_traits"
 struct sf__std____invoke_memobj_ref {
 };
 /* C++: struct __invoke_memobj_deref */
-#line 2208 "/tmp/use_pair.i"
+#line 2405 "/usr/include/c++/13/type_traits"
 struct sf__std____invoke_memobj_deref {
 };
 /* C++: struct __invoke_other */
-#line 2209 "/tmp/use_pair.i"
+#line 2406 "/usr/include/c++/13/type_traits"
 struct sf__std____invoke_other {
 };
 /* C++: struct __result_of_memfun_ref_impl */
-#line 2217 "/tmp/use_pair.i"
+#line 2414 "/usr/include/c++/13/type_traits"
 struct sf__std____result_of_memfun_ref_impl {
 };
 /* C++: struct __result_of_memfun_deref_impl */
-#line 2236 "/tmp/use_pair.i"
+#line 2433 "/usr/include/c++/13/type_traits"
 struct sf__std____result_of_memfun_deref_impl {
 };
 /* C++: struct __result_of_memobj_ref_impl */
-#line 2255 "/tmp/use_pair.i"
+#line 2452 "/usr/include/c++/13/type_traits"
 struct sf__std____result_of_memobj_ref_impl {
 };
 /* C++: struct __result_of_memobj_deref_impl */
-#line 2274 "/tmp/use_pair.i"
+#line 2471 "/usr/include/c++/13/type_traits"
 struct sf__std____result_of_memobj_deref_impl {
 };
 /* C++: struct __result_of_other_impl */
-#line 2357 "/tmp/use_pair.i"
+#line 2554 "/usr/include/c++/13/type_traits"
 struct sf__std____result_of_other_impl {
 };
 /* C++: struct __do_is_swappable_impl */
-#line 2463 "/tmp/use_pair.i"
+#line 2739 "/usr/include/c++/13/type_traits"
 struct sf__std____swappable_details____do_is_swappable_impl {
 };
 /* C++: struct __do_is_nothrow_swappable_impl */
-#line 2473 "/tmp/use_pair.i"
+#line 2749 "/usr/include/c++/13/type_traits"
 struct sf__std____swappable_details____do_is_nothrow_swappable_impl {
 };
 /* C++: struct __do_is_swappable_with_impl */
-#line 2536 "/tmp/use_pair.i"
+#line 2825 "/usr/include/c++/13/type_traits"
 struct sf__std____swappable_with_details____do_is_swappable_with_impl {
 };
 /* C++: struct __do_is_nothrow_swappable_with_impl */
-#line 2548 "/tmp/use_pair.i"
+#line 2837 "/usr/include/c++/13/type_traits"
 struct sf__std____swappable_with_details____do_is_nothrow_swappable_with_impl {
 };
 /* C++: struct __nonesuchbase */
-#line 2742 "/tmp/use_pair.i"
+#line 3047 "/usr/include/c++/13/type_traits"
 struct sf__std____nonesuchbase {
 };
 /* C++: struct __nonesuch : private __nonesuchbase */
-#line 2743 "/tmp/use_pair.i"
+#line 3048 "/usr/include/c++/13/type_traits"
 struct sf__std____nonesuch {
     struct sf__std____nonesuchbase __sf_base;
 };
 /* C++: ~__nonesuch() = delete; */
-#line 2744 "/tmp/use_pair.i"
+#line 3049 "/usr/include/c++/13/type_traits"
 __SF_INLINE void sf__std____nonesuch__dtor_body(struct sf__std____nonesuch *this);
 /* C++: __nonesuch(__nonesuch const&) = delete; */
-#line 2745 "/tmp/use_pair.i"
+#line 3050 "/usr/include/c++/13/type_traits"
 __SF_INLINE void sf__std____nonesuch__ctor(struct sf__std____nonesuch *this, const struct sf__std____nonesuch*);
 /* C++: void operator=(__nonesuch const&) = delete; */
-#line 2746 "/tmp/use_pair.i"
+#line 3051 "/usr/include/c++/13/type_traits"
 __SF_INLINE void sf__std____nonesuch__operator(struct sf__std____nonesuch *this, const struct sf__std____nonesuch*);
 __SF_INLINE void sf__std____nonesuch__dtor(struct sf__std____nonesuch *this);
 __SF_INLINE void sf__std____nonesuch__dtor(struct sf__std____nonesuch *this) {
@@ -536,18 +536,18 @@ __SF_INLINE void sf__std____nonesuch__dtor(struct sf__std____nonesuch *this) {
 
 
 /* C++: struct piecewise_construct_t */
-#line 2989 "/tmp/use_pair.i"
+#line 80 "/usr/include/c++/13/bits/stl_pair.h"
 struct sf__std__piecewise_construct_t {
 };
 /* C++: struct piecewise_construct_t */
-#line 2989 "/tmp/use_pair.i"
+#line 80 "/usr/include/c++/13/bits/stl_pair.h"
 __SF_INLINE void sf__std__piecewise_construct_t__ctor(struct sf__std__piecewise_construct_t *this);
 struct sf__std__piecewise_construct_t piecewise_construct = piecewise_construct_t();
 
 
 
 /* C++: std::pair<int, double> make_pair_id(int a, double b) */
-#line 3586 "/tmp/use_pair.i"
+#line 4 "/home/rolandpj/src/sea-front/gen/use_pair.cpp"
 struct sf__pair_t_int_double_te_ make_pair_id(int a, double b) {
     struct sf__pair_t_int_double_te_ p;
     (p.first = a);
@@ -556,7 +556,7 @@ struct sf__pair_t_int_double_te_ make_pair_id(int a, double b) {
 }
 
 /* C++: int main() */
-#line 3593 "/tmp/use_pair.i"
+#line 11 "/home/rolandpj/src/sea-front/gen/use_pair.cpp"
 int main(void) {
     struct sf__pair_t_int_double_te_ p = make_pair_id(42, 3.14);
     return p.first;
