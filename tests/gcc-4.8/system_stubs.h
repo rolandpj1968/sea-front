@@ -162,3 +162,9 @@ typedef __builtin_va_list va_list;
 #define gcov_type long
 #define pp_integer_with_precision(PP, ARG, PREC, TYPE, FMT) ((void)0)
 #define FINAL_MEM_STAT_DECL
+#define ARG_UNUSED(NAME) NAME __attribute__((unused))
+#define XRESIZEVAR(T, P, S) ((T*)realloc((P), (S)))
+#define HOST_LONG_LONG_FORMAT "ll"
+#define gcov_type_unsigned unsigned long
+#define HOST_WIDE_INT_PRINT "l"
+#define HOST_LONG_LONG_FORMAT_SIZE 2

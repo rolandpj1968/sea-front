@@ -459,7 +459,7 @@ static Node *primary_expr(Parser *p) {
              * a bare type keyword. */
             if (parser_at(p, TK_LT)) {
                 Token *after = parser_peek_ahead(p, 1);
-                bool looks_template_arg = false;
+                bool looks_like_template_id_arg = false;
                 switch (after->kind) {
                 case TK_KW_VOID: case TK_KW_BOOL: case TK_KW_CHAR:
                 case TK_KW_SHORT: case TK_KW_INT: case TK_KW_LONG:
@@ -470,7 +470,7 @@ static Node *primary_expr(Parser *p) {
                 case TK_KW_STRUCT: case TK_KW_CLASS: case TK_KW_UNION:
                 case TK_KW_ENUM: case TK_KW_TYPENAME: case TK_KW_DECLTYPE:
                 case TK_KW_AUTO:
-                    looks_template_arg = true;
+                    looks_like_template_id_arg = true;
                     break;
                 default:
                     break;
@@ -499,7 +499,7 @@ static Node *primary_expr(Parser *p) {
                         is_nontype_var = true;
                 }
                 if (!is_nontype_var &&
-                    (lookup_is_template_name(p, name) || looks_template_arg ||
+                    (lookup_is_template_name(p, name) || looks_like_template_id_arg ||
                      (p->template_depth > 0))) {
                     Node *tid = parse_template_id(p, name);
                     /* If no :: follows, this was a standalone
@@ -927,8 +927,8 @@ static Node *postfix_expr(Parser *p) {
                  * the name, trust it and parse '<...>' unconditionally.
                  * Otherwise speculate based on the leading token. */
                 if (parser_at(p, TK_LT)) {
-                    bool looks_template = member_template_kw;
-                    if (!looks_template) {
+                    bool looks_like_template_id = member_template_kw;
+                    if (!looks_like_template_id) {
                         Token *after = parser_peek_ahead(p, 1);
                         switch (after->kind) {
                         case TK_KW_VOID: case TK_KW_BOOL: case TK_KW_CHAR:
@@ -937,18 +937,20 @@ static Node *postfix_expr(Parser *p) {
                         case TK_KW_SIGNED: case TK_KW_UNSIGNED:
                         case TK_KW_WCHAR_T: case TK_KW_CHAR16_T: case TK_KW_CHAR32_T:
                         case TK_KW_CONST: case TK_KW_VOLATILE:
+                        case TK_KW_STRUCT: case TK_KW_CLASS:
+                        case TK_KW_UNION: case TK_KW_ENUM:
                         case TK_KW_TYPENAME: case TK_KW_DECLTYPE:
                         case TK_KW_AUTO:
-                            looks_template = true; break;
+                            looks_like_template_id = true; break;
                         case TK_IDENT:
                             if (lookup_is_type_name(p, after) ||
                                 lookup_is_template_name(p, after))
-                                looks_template = true;
+                                looks_like_template_id = true;
                             break;
                         default: break;
                         }
                     }
-                    if (looks_template)
+                    if (looks_like_template_id)
                         parse_template_id(p, member);
                 }
                 /* Qualified continuation through a class-template-id
