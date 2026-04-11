@@ -2399,7 +2399,8 @@ static void emit_class_def(Node *n) {
         fputs(";\n", stdout);
     }
 
-    fputs("struct ", stdout);
+    fputs((class_type && class_type->kind == TY_UNION) ? "union " : "struct ",
+          stdout);
     if (class_type)
         emit_mangled_class_tag(class_type);
     else if (n->class_def.tag)
@@ -2981,7 +2982,7 @@ static void emit_fwd_decl_walk(Node *n) {
     case ND_CLASS_DEF: {
         Type *ty = n->class_def.ty;
         if (ty && ty->tag) {
-            fputs("struct ", stdout);
+            fputs(ty->kind == TY_UNION ? "union " : "struct ", stdout);
             emit_mangled_class_tag(ty);
             fputs(";\n", stdout);
         }
