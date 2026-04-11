@@ -1253,6 +1253,18 @@ DeclSpec parse_type_specifiers(Parser *p) {
     result.type = ty; return result;
 }
 
+/* Absorb trailing cv-qualifiers after a type specifier.
+ * Valid C/C++: 'enum E const x' ≡ 'const enum E x'.
+ * N4659 §10.1.7 [dcl.type]: "const or volatile can be combined with
+ * any other type-specifier." */
+void parse_absorb_trailing_cv(Parser *p, DeclSpec *spec) {
+    if (!spec->type) return;
+    while (parser_at(p, TK_KW_CONST) || parser_at(p, TK_KW_VOLATILE)) {
+        if (parser_consume(p, TK_KW_CONST))    spec->type->is_const = true;
+        if (parser_consume(p, TK_KW_VOLATILE)) spec->type->is_volatile = true;
+    }
+}
+
 /*
  * Check if the current token could start a type-specifier.
  *

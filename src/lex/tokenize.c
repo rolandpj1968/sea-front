@@ -171,11 +171,20 @@ static const Keyword kw_table[] = {
     {"__asm",            TK_KW_ASM},     /* GCC alias for asm */
     {"__asm__",          TK_KW_ASM},     /* GCC alias for asm */
     {"__complex__",      TK_KW_VOID},    /* GCC complex — same as _Complex, treat as void */
+    {"__const",          TK_KW_CONST},   /* GCC alias for const */
+    {"__const__",        TK_KW_CONST},   /* GCC alias for const */
     {"__imag__",         TK_PLUS},       /* GCC complex imag-part — alias to unary plus (no-op) */
+    {"__inline",         TK_KW_INLINE},  /* GCC alias for inline */
+    {"__inline__",       TK_KW_INLINE},  /* GCC alias for inline */
+    {"__int128",         TK_KW_LONG},    /* GCC 128-bit int — map to long (close enough for struct layout) */
     {"__real__",         TK_PLUS},       /* GCC complex real-part — alias to unary plus (no-op) */
     {"__restrict",       TK_KW_VOLATILE}, /* GCC restrict — treat as volatile (noise spec we discard) */
     {"__restrict__",     TK_KW_VOLATILE}, /* GCC restrict alias */
+    {"__signed",         TK_KW_SIGNED},  /* GCC alias for signed */
+    {"__signed__",       TK_KW_SIGNED},  /* GCC alias for signed */
     {"__thread",         TK_KW_THREAD_LOCAL},  /* GCC TLS storage class */
+    {"__volatile",       TK_KW_VOLATILE}, /* GCC alias for volatile */
+    {"__volatile__",     TK_KW_VOLATILE}, /* GCC alias for volatile */
     {"alignas",          TK_KW_ALIGNAS},
     {"alignof",          TK_KW_ALIGNOF},
     {"and",              TK_LAND},

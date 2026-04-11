@@ -567,7 +567,9 @@ parse_suffixes:
 
                         parser_skip_cxx_attributes(p);
                         parser_skip_gnu_attributes(p);
-                        Type *param_base = parse_type_specifiers(p).type;
+                        DeclSpec pspec = parse_type_specifiers(p);
+                        parse_absorb_trailing_cv(p, &pspec);
+                        Type *param_base = pspec.type;
                         Node *param_decl = parse_declarator(p, param_base);
                         if (param_decl)
                             param_decl->kind = ND_PARAM;
@@ -680,7 +682,9 @@ parse_suffixes:
                     if (parser_consume(p, TK_ELLIPSIS)) { variadic = true; break; }
                     parser_skip_cxx_attributes(p);
                     parser_skip_gnu_attributes(p);
-                    Type *param_base = parse_type_specifiers(p).type;
+                    DeclSpec pspec2 = parse_type_specifiers(p);
+                    parse_absorb_trailing_cv(p, &pspec2);
+                    Type *param_base = pspec2.type;
                     Node *param_decl = parse_declarator(p, param_base);
                     if (param_decl) param_decl->kind = ND_PARAM;
                     /* Trailing attribute-specifier-seq after the
@@ -1036,8 +1040,13 @@ Node *parse_declaration(Parser *p) {
      * handled separately via the TK_KW_USING branch above. */
     if (parser_consume(p, TK_KW_TYPEDEF)) {
         DeclSpec spec = parse_type_specifiers(p);
+        parse_absorb_trailing_cv(p, &spec);
         Type *base_ty = spec.type;
         Node *decl = parse_declarator(p, base_ty);
+        /* GCC __attribute__ after typedef declarator — e.g.
+         * 'typedef int register_t __attribute__((__mode__(__word__)));'
+         * Common in system headers (sys/types.h). */
+        parser_skip_gnu_attributes(p);
         parser_expect(p, TK_SEMI);
 
         /* Register the typedef-name into the current declarative region */
@@ -1110,6 +1119,7 @@ Node *parse_declaration(Parser *p) {
 
     /* decl-specifier-seq — §10.1 [dcl.spec] */
     DeclSpec spec = parse_type_specifiers(p);
+    parse_absorb_trailing_cv(p, &spec);
     Type *base_ty = spec.type;
     Node *class_def = spec.class_def;
     if (!base_ty) {
@@ -1393,6 +1403,11 @@ Node *parse_declaration(Parser *p) {
         return blk;
     }
 
+    /* GCC __attribute__ after declarator — e.g. 'typedef int foo __attribute__((...));'
+     * or 'extern void bar(int) __attribute__((noreturn));'. Common in system
+     * headers. Already handled inside the function-declarator trailing path
+     * (decl.c:829), but may also appear on simple declarations. */
+    parser_skip_gnu_attributes(p);
     parser_expect(p, TK_SEMI);
     /* Drop any qualified_decl_scope set by parse_declarator — only the
      * function-def branch consumes it; for plain declarations (incl.

@@ -1137,6 +1137,7 @@ typedef struct {
 } DeclSpec;
 
 DeclSpec parse_type_specifiers(Parser *p);
+void parse_absorb_trailing_cv(Parser *p, DeclSpec *spec);
 Type *parse_type_name(Parser *p);
 
 /*

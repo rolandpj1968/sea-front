@@ -942,6 +942,26 @@ static Node *postfix_expr(Parser *p) {
                  * the name, trust it and parse '<...>' unconditionally.
                  * Otherwise speculate based on the leading token. */
                 if (parser_at(p, TK_LT)) {
+                    /* SHORTCUT (ours, not the standard): member template-id
+                     * disambiguation for 'obj.member<...>'.
+                     * Standard rule — N4659 §17.2/4 [temp.names]: after
+                     * '.'/'->' + optional 'template' + name, '<' is always
+                     * a template-argument-list opener if the name is a
+                     * template. Without full class-scope lookup we can't
+                     * always know, so we use a conservative heuristic:
+                     *   - If 'template' keyword preceded the name, trust it.
+                     *   - If the token after '<' is a type keyword, it's
+                     *     unambiguously a template arg (less-than never has
+                     *     a bare type keyword on the right).
+                     *   - If the token after '<' is a type-name ident,
+                     *     treat as template arg — 'member < TypeName' is
+                     *     unusual compared to 'member<TypeName>'.
+                     * We intentionally do NOT check if the after-token is a
+                     * template name: 'obj.field < template_func(args)' is
+                     * common (the comparison pattern in gcc source) and
+                     * would be a false positive.
+                     * TODO(seafront#member-tmpl-id): full class-scope lookup
+                     * would eliminate this heuristic entirely. */
                     bool looks_like_template_id = member_template_kw;
                     if (!looks_like_template_id) {
                         Token *after = parser_peek_ahead(p, 1);
@@ -958,8 +978,9 @@ static Node *postfix_expr(Parser *p) {
                         case TK_KW_AUTO:
                             looks_like_template_id = true; break;
                         case TK_IDENT:
-                            if (lookup_is_type_name(p, after) ||
-                                lookup_is_template_name(p, after))
+                            /* Only type names, not template names — avoids
+                             * false positive on 'field < template_func(x)'. */
+                            if (lookup_is_type_name(p, after))
                                 looks_like_template_id = true;
                             break;
                         default: break;
