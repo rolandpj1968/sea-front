@@ -420,6 +420,10 @@ struct Node {
             bool   is_constructor;
             bool   is_destructor;
             bool   is_virtual;
+            /* Bit-field width — N4659 §12.2.4 [class.bit]
+             *   member-declarator: identifier(opt) : constant-expression
+             * NULL for non-bitfield members. */
+            Node  *bitfield_width;
         } var_decl;
 
         /* ND_FUNC_DEF — N4659 §11.4 [dcl.fct.def]

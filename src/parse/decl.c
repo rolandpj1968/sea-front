@@ -1286,9 +1286,9 @@ Node *parse_declaration(Parser *p) {
     /* Bit-field — N4659 §12.2.4 [class.bit]
      *   member-declarator: identifier(opt) : constant-expression
      * The colon after a declarator name in a class indicates bit-field width.
-     * Consume the width expression and continue. */
+     * Store the width expression for C emission. */
     if (parser_consume(p, TK_COLON)) {
-        parse_assign_expr(p);  /* bit-field width — consumed and discarded */
+        decl->var_decl.bitfield_width = parse_assign_expr(p);
     }
 
     /* GCC __attribute__ between declarator and initializer:
@@ -1384,7 +1384,7 @@ Node *parse_declaration(Parser *p) {
             /* Bit-field width in comma-separated member declarations:
              * 'unsigned int a : 1, b : 1;' */
             if (parser_consume(p, TK_COLON))
-                parse_assign_expr(p);  /* consume width, discard */
+                next_decl->var_decl.bitfield_width = parse_assign_expr(p);
 
             /* GCC __attribute__ between declarator and init/comma:
              * 'int x __attribute__((unused)), y __attribute__((unused));' */

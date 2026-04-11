@@ -190,6 +190,7 @@ static const Keyword kw_table[] = {
     {"__inline",         TK_KW_INLINE},  /* GCC alias for inline */
     {"__inline__",       TK_KW_INLINE},  /* GCC alias for inline */
     {"__int128",         TK_KW_LONG},    /* GCC 128-bit int — map to long (close enough for struct layout) */
+    {"__null",           TK_KW_NULLPTR}, /* GCC builtin null — g++ expands NULL to __null */
     {"__real__",         TK_PLUS},       /* GCC complex real-part — alias to unary plus (no-op) */
     {"__restrict",       TK_KW_VOLATILE}, /* GCC restrict — treat as volatile (noise spec we discard) */
     {"__restrict__",     TK_KW_VOLATILE}, /* GCC restrict alias */
