@@ -56,8 +56,8 @@ extern FILE *stderr;
 #define STATIC_ASSERT(x)
 
 // Host config
-typedef long HOST_WIDE_INT;
-typedef unsigned long HOST_WIDEST_INT;
+#define HOST_WIDE_INT long
+#define HOST_WIDEST_INT unsigned long
 #define HOST_BITS_PER_WIDE_INT 64
 #define HOST_BITS_PER_WIDEST_INT 64
 #define HOST_BITS_PER_LONG 64
@@ -133,3 +133,22 @@ typedef __builtin_va_list va_list;
 #define SBITMAP_ELT_TYPE unsigned long
 #define HOST_WIDEST_FAST_INT long
 #define HOST_BITS_PER_WIDEST_FAST_INT 64
+
+// Additional macros from parse failure analysis
+#define ATTRIBUTE_COLD
+#define ATTRIBUTE_HOT
+#define GCOV_LINKAGE
+#define DEBUG_FUNCTION
+#define DATESTAMP ""
+#define DEVPHASE ""
+#define REVISION ""
+#define BASEVER "4.8.5"
+#define PKGVERSION "(sea-front) "
+#define BUGURL ""
+
+#define PERSONALITY "ar"
+#define SPARSESET_ELT_TYPE unsigned int
+#define XNEWVAR(T, SIZE) ((T*)malloc(SIZE))
+#define HOST_WIDE_INT_PRINT_UNSIGNED "%lu"
+#define HOST_WIDE_INT_PRINT_DEC "%ld"
+#define HOST_WIDE_INT_PRINT_HEX "0x%lx"
