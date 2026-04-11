@@ -974,6 +974,19 @@ static void emit_expr(Node *n) {
         fputc(')', stdout);
         emit_expr(n->cast.operand);
         return;
+    case ND_SIZEOF:
+        fputs("sizeof(", stdout);
+        if (n->sizeof_.is_type && n->sizeof_.ty)
+            emit_type(n->sizeof_.ty);
+        else if (n->sizeof_.expr)
+            emit_expr(n->sizeof_.expr);
+        fputc(')', stdout);
+        return;
+    case ND_ALIGNOF:
+        fputs("_Alignof(", stdout);
+        if (n->alignof_.ty) emit_type(n->alignof_.ty);
+        fputc(')', stdout);
+        return;
     case ND_MEMBER: {
         /* Check if the member lives in a base class and needs
          * __sf_base chain rewriting. */
