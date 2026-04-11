@@ -108,6 +108,15 @@ Type *subst_type(Type *ty, SubstMap *map, Arena *arena) {
         return copy;
     }
     case TY_STRUCT: case TY_UNION:
+        /* Injected-class-name: a bare class name (no template-id)
+         * inside a template body refers to the class itself. If the
+         * SubstMap has an entry for this tag (added by instantiate_one
+         * for the class name), substitute to the instantiated type.
+         * E.g. sizeof(Box) inside Box<T> → sizeof(Box<int>). */
+        if (ty->tag && !ty->template_id_node) {
+            Type *self = subst_map_lookup(map, ty->tag);
+            if (self) return self;
+        }
         /* If this struct type has a template_id_node (e.g. Box<T>
          * inside a template body), substitute the template args
          * so the instantiation pass can transitively instantiate

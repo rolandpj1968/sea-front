@@ -666,7 +666,8 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
      * positions bind the spec's param to the usage arg; concrete
      * positions must match exactly (already checked by the
      * specialization finder). */
-    SubstMap map = subst_map_new(arena, nparams > 0 ? nparams : 1);
+    /* +1 capacity for the injected-class-name entry */
+    SubstMap map = subst_map_new(arena, (nparams > 0 ? nparams : 1) + 1);
 
     /* Check if this is a partial specialization */
     Type *inner_ty = NULL;
@@ -707,24 +708,18 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
         }
     }
 
-    /* Clone the inner declaration with type substitution */
-    Node *cloned = clone_node(inner, &map, arena);
-    if (!cloned) return NULL;
-
-    /* For class templates: create a fresh Type for the instantiation
-     * so it has its own tag and template_args for mangling. */
-    if (cloned->kind == ND_CLASS_DEF) {
-        Type *inst_ty = arena_alloc(arena, sizeof(Type));
-        if (inner->kind == ND_CLASS_DEF && inner->class_def.ty)
+    /* For class templates: pre-create the instantiated Type so the
+     * injected-class-name (bare 'ClassName' inside the class body)
+     * can be substituted during cloning via the SubstMap. */
+    Type *inst_ty = NULL;
+    if (inner->kind == ND_CLASS_DEF) {
+        inst_ty = arena_alloc(arena, sizeof(Type));
+        if (inner->class_def.ty)
             *inst_ty = *inner->class_def.ty;
         else
             inst_ty->kind = TY_STRUCT;
         inst_ty->tag = template_id->template_id.name;
-
-        /* Store the concrete template args on the type for mangling.
-         * Use ALL usage args (not just the substitution map) so that
-         * partial specializations include the fixed args in their
-         * mangled name (e.g. vec<int,int,vl_embed> vs vec<int,int,vl_ptr>). */
+        /* Add template args early for mangling */
         int n = template_id->template_id.nargs;
         if (n > 0) {
             inst_ty->template_args = arena_alloc(arena, n * sizeof(Type *));
@@ -733,7 +728,6 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
                 inst_ty->template_args[i] =
                     type_arg_from_node(template_id->template_id.args[i]);
         }
-        /* If fewer explicit args than params (defaults), fill from map */
         if (n < map.nentries) {
             n = map.nentries;
             inst_ty->template_args = arena_alloc(arena, n * sizeof(Type *));
@@ -741,6 +735,21 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
             for (int i = 0; i < n; i++)
                 inst_ty->template_args[i] = map.entries[i].concrete_type;
         }
+        /* Add the class name to the SubstMap so the injected-class-name
+         * (bare 'Box' inside 'Box<T>' body) gets substituted to the
+         * instantiated type during cloning. */
+        Token *class_tag = inner->class_def.tag;
+        if (class_tag)
+            subst_map_add(&map, class_tag, inst_ty);
+    }
+
+    /* Clone the inner declaration with type substitution */
+    Node *cloned = clone_node(inner, &map, arena);
+    if (!cloned) return NULL;
+
+    /* For class templates: finish setting up the instantiated type.
+     * (template_args already set pre-clone for injected-class-name.) */
+    if (cloned->kind == ND_CLASS_DEF && inst_ty) {
 
         /* Build a class_region for the instantiated class so sema
          * can resolve member references inside method bodies. */
