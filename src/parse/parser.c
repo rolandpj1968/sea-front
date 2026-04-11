@@ -155,7 +155,7 @@ bool parser_at_eof(Parser *p) {
 /* ------------------------------------------------------------------ */
 
 ParseState parser_save(Parser *p) {
-    ParseState s;
+    ParseState s = {0};
     s.pos = p->pos;
     s.region = p->region;
     s.template_depth = p->template_depth;

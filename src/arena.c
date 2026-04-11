@@ -37,7 +37,7 @@ static ArenaPage *new_page(size_t min_size, size_t default_size) {
 }
 
 Arena arena_new(void) {
-    Arena a;
+    Arena a = {0};
     a.cur = new_page(0, ARENA_DEFAULT_PAGE_SIZE);
     a.page_size = ARENA_DEFAULT_PAGE_SIZE;
     return a;
@@ -90,7 +90,7 @@ void arena_free_all(Arena *a) {
 #define VEC_INITIAL_CAP 4
 
 Vec vec_new(Arena *arena) {
-    Vec v;
+    Vec v = {0};
     v.data = NULL;
     v.len = 0;
     v.cap = 0;

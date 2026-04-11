@@ -19,7 +19,7 @@
 /* ------------------------------------------------------------------ */
 
 SubstMap subst_map_new(Arena *arena, int capacity) {
-    SubstMap m;
+    SubstMap m = {0};
     m.entries = arena_alloc(arena, capacity * sizeof(SubstEntry));
     m.nentries = 0;
     m.capacity = capacity;

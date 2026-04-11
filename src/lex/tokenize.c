@@ -1217,7 +1217,7 @@ static void toklist_push(TokList *tl, Token *tok) {
 }
 
 TokenArray tokenize(File *file) {
-    LexCtx ctx;
+    LexCtx ctx = {0};
     ctx.file = file;
     ctx.p = file->contents;
     ctx.line = 1;
@@ -1332,7 +1332,7 @@ TokenArray tokenize(File *file) {
     }
 
     /* Flatten into a contiguous Token array */
-    TokenArray result;
+    TokenArray result = {0};
     result.len = tl.len;
     result.tokens = xmalloc(tl.len * sizeof(Token));
     for (int i = 0; i < tl.len; i++)
