@@ -520,6 +520,29 @@ static bool subtree_has_cleanups(Node *n) {
  * (anonymous structs, currently). */
 static int g_anon_counter = 0;
 
+/* Dedup for free function declarations/definitions.
+ * C doesn't support overloading, so we keep the first declaration
+ * of each function name and skip subsequent ones. Handles C++ system
+ * headers that provide const/non-const overloads (strchr, abs, div, etc.)
+ * and inline functions included from multiple header paths. */
+static struct { const char *loc; int len; } g_func_seen[8192];
+static int g_func_nseen = 0;
+
+static bool func_dedup_check(Token *name) {
+    if (!name) return false;
+    for (int i = 0; i < g_func_nseen; i++) {
+        if (g_func_seen[i].len == name->len &&
+            memcmp(g_func_seen[i].loc, name->loc, name->len) == 0)
+            return true;  /* already seen */
+    }
+    if (g_func_nseen < 8192) {
+        g_func_seen[g_func_nseen].loc = name->loc;
+        g_func_seen[g_func_nseen].len = name->len;
+        g_func_nseen++;
+    }
+    return false;  /* first time */
+}
+
 static void emit_mangled_class_tag(Type *class_type) {
     if (!class_type || !class_type->tag) {
         /* Anonymous struct/union — generate a unique name.
@@ -2934,6 +2957,9 @@ static void emit_top_level(Node *n) {
             emit_method_as_free_fn(n, n->func.class_type);
             g_current_class_def = saved;
         } else {
+            /* Dedup: inline functions from headers may be included multiple
+             * times in the preprocessed output. Skip redefinitions. */
+            if (func_dedup_check(n->func.name)) return;
             emit_func_def(n);
         }
         return;
@@ -2967,6 +2993,7 @@ static void emit_top_level(Node *n) {
          * so we synthesize the C declaration shape directly here. */
         if (n->var_decl.ty && n->var_decl.ty->kind == TY_FUNC &&
             n->var_decl.name) {
+            if (func_dedup_check(n->var_decl.name)) return;
             emit_source_comment(n->tok);
             Type *fty = n->var_decl.ty;
             emit_type(fty->ret);
