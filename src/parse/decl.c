@@ -1922,12 +1922,18 @@ static Node *parse_template_parameter(Parser *p) {
 Node *parse_template_declaration(Parser *p) {
     Token *tok = parser_expect(p, TK_KW_TEMPLATE);
 
-    /* explicit-specialization: template <> declaration */
+    /* explicit-specialization: template <> declaration
+     * N4659 §17.7.3 [temp.expl.spec]. May be nested:
+     * 'template<> template<>' for member templates of specialized classes. */
     if (parser_at(p, TK_LT) && parser_peek_ahead(p, 1)->kind == TK_GT) {
         parser_advance(p);  /* < */
         parser_advance(p);  /* > */
-        /* Parse the specialized declaration */
-        Node *decl = parse_declaration(p);
+        /* Nested template<>: 'template<> template<> ...' */
+        Node *decl;
+        if (parser_at(p, TK_KW_TEMPLATE))
+            decl = parse_template_declaration(p);
+        else
+            decl = parse_declaration(p);
         return new_template_decl_node(p, /*params=*/NULL, /*nparams=*/0,
                                       decl, tok);
     }
