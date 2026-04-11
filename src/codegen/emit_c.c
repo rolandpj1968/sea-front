@@ -742,9 +742,12 @@ static void emit_expr(Node *n) {
         if (n->chr.tok) fprintf(stdout, "%.*s", n->chr.tok->len, n->chr.tok->loc);
         return;
     case ND_BOOL_LIT:
-        /* C99: stdbool true/false. We'd need #include <stdbool.h>. Use 1/0
-         * for portability — bool maps to _Bool. */
-        emit_token_text(n->tok);
+        /* C doesn't have true/false without stdbool.h. Emit 1/0. */
+        if (n->tok && n->tok->len == 4 &&
+            memcmp(n->tok->loc, "true", 4) == 0)
+            fputc('1', stdout);
+        else
+            fputc('0', stdout);
         return;
     case ND_NULLPTR:
         fputs("((void*)0)", stdout);
