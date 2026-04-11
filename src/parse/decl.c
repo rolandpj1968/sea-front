@@ -1044,15 +1044,26 @@ Node *parse_declaration(Parser *p) {
             region_declare(p, decl->var_decl.name->loc,
                           decl->var_decl.name->len, ENTITY_TYPE,
                           decl->var_decl.ty);
-            /* For anonymous enums: set the tag to the typedef name
-             * so codegen can emit 'enum name' instead of bare 'enum'.
-             * E.g. 'typedef enum { A, B } my_enum_t;' gives the
-             * anonymous enum the tag 'my_enum_t'.
-             * Only for enums — structs/unions already get tags from
-             * their elaborated-type-specifier during parsing. */
-            if (decl->var_decl.ty && !decl->var_decl.ty->tag &&
-                decl->var_decl.ty->kind == TY_ENUM)
-                decl->var_decl.ty->tag = decl->var_decl.name;
+            /* For anonymous types: set the tag to the typedef name
+             * so codegen can emit a named type instead of bare
+             * 'struct' / 'union' / 'enum'. Handles:
+             *   typedef enum { A, B } my_enum_t;
+             *   typedef struct { int x; } my_struct_t;
+             * Only for types that don't already have a tag (i.e.,
+             * truly anonymous — 'typedef struct Foo {...} Foo;'
+             * already has tag "Foo" from the elaborated-type-specifier). */
+            /* Only tag types that have a body (class_def) — these are
+             * genuinely anonymous. Don't tag opaque/forward types
+             * (no class_def) as that would create undefined struct
+             * names in the output. */
+            if (decl->var_decl.ty && !decl->var_decl.ty->tag) {
+                if (decl->var_decl.ty->kind == TY_ENUM)
+                    decl->var_decl.ty->tag = decl->var_decl.name;
+                else if ((decl->var_decl.ty->kind == TY_STRUCT ||
+                          decl->var_decl.ty->kind == TY_UNION) &&
+                         decl->var_decl.ty->class_def)
+                    decl->var_decl.ty->tag = decl->var_decl.name;
+            }
         }
 
         return new_typedef_node(p, decl->var_decl.ty, decl->var_decl.name,

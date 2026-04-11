@@ -2875,11 +2875,16 @@ static void emit_top_level(Node *n) {
         /* Templates aren't lowered yet — silently skip. */
         return;
     case ND_TYPEDEF:
-        /* Typedef for an enum/struct/union: emit the underlying type
-         * definition as a C typedef. For enums: 'typedef enum name { ... } name;'
-         * For now, just skip — the type is already registered for
-         * use in declarations. The enum values are available as macros
-         * or via the tag name. */
+        /* If the typedef's underlying type is a struct/union with a
+         * body (anonymous typedef: 'typedef struct { ... } name;'),
+         * emit the struct definition. The typedef name was set as
+         * the tag by the parser, so emit_class_def emits it as
+         * 'struct sf__name { ... };'. */
+        if (n->var_decl.ty &&
+            (n->var_decl.ty->kind == TY_STRUCT || n->var_decl.ty->kind == TY_UNION) &&
+            n->var_decl.ty->class_def) {
+            emit_class_def(n->var_decl.ty->class_def);
+        }
         return;
     default:
         fputs("/* unsupported top-level */\n", stdout);
@@ -3034,7 +3039,7 @@ void emit_c(Node *tu) {
     for (int i = 0; i < tu->tu.ndecls; i++) {
         Node *n = tu->tu.decls[i];
         if (!n) continue;
-        if (n->kind == ND_CLASS_DEF) {
+        if (n->kind == ND_CLASS_DEF || n->kind == ND_TYPEDEF) {
             fputc('\n', stdout);
             emit_top_level(n);
         } else if (n->kind == ND_BLOCK) {
