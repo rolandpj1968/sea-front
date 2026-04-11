@@ -54,6 +54,10 @@
 
 bool g_emit_line_directives = true;
 
+/* Two-phase emit: structs first, then method bodies. */
+static int g_emit_phase = 0;
+enum { PHASE_STRUCTS = 1, PHASE_METHODS = 2 };
+
 static int g_indent = 0;
 /* Currently-emitting class definition (for ctor member-init walking
  * and inherited-member access rewriting). Set by emit_class_def
@@ -2338,12 +2342,20 @@ static void emit_method_as_free_fn(Node *func, Type *class_type) {
 
 static void emit_class_def(Node *n) {
     /* Emit a C struct from the parsed class definition.
-     * Members handled: data members (ND_VAR_DECL with no init).
-     * Skipped INSIDE the struct: methods (lowered to free functions
-     * after the struct definition).
-     * Other members (nested types, access specifiers) ignored. */
-    emit_source_comment(n->tok);
+     * When g_emit_phase == PHASE_STRUCTS: emit only the struct body
+     *   and method forward declarations.
+     * When g_emit_phase == PHASE_METHODS: emit method bodies, vtable,
+     *   synthesized ctors/dtors.
+     * When g_emit_phase == 0: emit everything (single-pass mode). */
     Type *class_type = n->class_def.ty;
+
+    /* Two-phase emission support: in PHASE_STRUCTS, emit only
+     * the struct definition + method forward declarations. In
+     * PHASE_METHODS, skip the struct (already emitted) and emit
+     * only method bodies, vtable, synthesized ctors/dtors. */
+    if (g_emit_phase == PHASE_METHODS) goto methods_phase;
+
+    emit_source_comment(n->tok);
 
     /* For polymorphic classes (any virtual method), forward-declare
      * the vtable struct so we can place a vptr field at offset 0 of
@@ -2533,6 +2545,32 @@ static void emit_class_def(Node *n) {
         fputs(" *this);\n", stdout);
     }
 
+    if (g_emit_phase == PHASE_STRUCTS) return;
+methods_phase:;
+
+    /* Re-scan for user dtor (needed for methods phase regardless
+     * of which phase we entered from). */
+    Node *user_dtor_m = NULL;
+    bool user_dtor_m_out_of_class = false;
+    if (class_type && class_type->has_dtor) {
+        for (int i = 0; i < n->class_def.nmembers; i++) {
+            Node *m = n->class_def.members[i];
+            if (!m) continue;
+            if (m->kind == ND_FUNC_DEF && m->func.is_destructor) {
+                Node *body = m->func.body;
+                bool empty = body && body->kind == ND_BLOCK &&
+                             body->block.nstmts == 0;
+                if (!empty) user_dtor_m = m;
+                break;
+            }
+            if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
+                m->var_decl.ty->kind == TY_FUNC && m->var_decl.is_destructor) {
+                user_dtor_m_out_of_class = true;
+                break;
+            }
+        }
+    }
+
     /* Vtable struct + static instance — N4659 §13.3 [class.virtual].
      *
      * The struct has one function-pointer slot per virtual method,
@@ -2648,7 +2686,7 @@ static void emit_class_def(Node *n) {
         mangle_class_tag(class_type);
         fputs(" *this) {\n", stdout);
         g_indent++;
-        if (user_dtor || user_dtor_out_of_class) {
+        if (user_dtor_m || user_dtor_m_out_of_class) {
             emit_indent();
             mangle_class_dtor_body(class_type);
             fputs("(this);\n", stdout);
@@ -2941,15 +2979,38 @@ void emit_c(Node *tu) {
     if (!tu || tu->kind != ND_TRANSLATION_UNIT) return;
     emit_prelude();
 
-    /* Forward-declare ALL struct types so ordering between classes
-     * and template instantiations doesn't matter. Without this,
-     * a derived class instantiation that appears before its base
-     * class definition would fail to compile because its base
-     * member has an incomplete type. */
+    /* Forward-declare ALL struct types so pointer references
+     * resolve regardless of definition order. */
     emit_forward_decl_structs(tu);
 
+    /* Two-pass emit: first all struct definitions (with forward
+     * declarations for their methods), then all method bodies,
+     * vtables, synthesized ctors/dtors, and non-class top-level
+     * declarations. This ensures that ALL struct types are fully
+     * defined before any method body dereferences a pointer to
+     * another struct (e.g. vl_ptr methods accessing vl_embed
+     * members through a pointer). */
+
+    /* Pass 1: struct bodies only */
+    g_emit_phase = PHASE_STRUCTS;
     for (int i = 0; i < tu->tu.ndecls; i++) {
-        if (i > 0) fputc('\n', stdout);  /* blank line between top-level decls */
+        Node *n = tu->tu.decls[i];
+        if (!n) continue;
+        if (n->kind == ND_CLASS_DEF) {
+            fputc('\n', stdout);
+            emit_top_level(n);
+        } else if (n->kind == ND_BLOCK) {
+            /* Namespace blocks may contain class definitions */
+            fputc('\n', stdout);
+            emit_top_level(n);
+        }
+    }
+
+    /* Pass 2: method bodies + everything else */
+    g_emit_phase = PHASE_METHODS;
+    for (int i = 0; i < tu->tu.ndecls; i++) {
+        fputc('\n', stdout);
         emit_top_level(tu->tu.decls[i]);
     }
+    g_emit_phase = 0;
 }
