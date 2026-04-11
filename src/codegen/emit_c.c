@@ -2358,6 +2358,33 @@ static void emit_class_def(Node *n) {
      * only method bodies, vtable, synthesized ctors/dtors. */
     if (g_emit_phase == PHASE_METHODS) goto methods_phase;
 
+    /* Skip if already emitted (dedup for dependency-driven emit). */
+    if (class_type && class_type->codegen_emitted) return;
+    if (class_type) class_type->codegen_emitted = true;
+
+    /* Emit struct dependencies first: any by-value struct/union
+     * member whose type has a class_def must be emitted before
+     * this struct. This handles the line-map.h pattern where
+     * a union contains by-value struct members. */
+    for (int i = 0; i < n->class_def.nmembers; i++) {
+        Node *m = n->class_def.members[i];
+        if (!m || m->kind != ND_VAR_DECL) continue;
+        Type *mty = m->var_decl.ty;
+        if (!mty) continue;
+        if ((mty->kind == TY_STRUCT || mty->kind == TY_UNION) &&
+            mty->class_def && !mty->codegen_emitted)
+            emit_class_def(mty->class_def);
+    }
+    /* Also emit base class definitions first. */
+    if (class_type && class_type->class_region) {
+        for (int i = 0; i < class_type->class_region->nbases; i++) {
+            DeclarativeRegion *br = class_type->class_region->bases[i];
+            if (br && br->owner_type && br->owner_type->class_def &&
+                !br->owner_type->codegen_emitted)
+                emit_class_def(br->owner_type->class_def);
+        }
+    }
+
     emit_source_comment(n->tok);
 
     /* For polymorphic classes (any virtual method), forward-declare

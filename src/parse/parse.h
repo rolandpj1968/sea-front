@@ -724,6 +724,10 @@ struct Type {
     Node *template_id_node;
     Type **template_args;
     int    n_template_args;
+
+    /* Codegen flag: set when this struct's definition has been
+     * emitted to prevent duplicate/out-of-order definitions. */
+    bool codegen_emitted;
 };
 
 /* ================================================================== */
