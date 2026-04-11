@@ -999,10 +999,19 @@ void parse_deferred_func_body(Parser *p, Node *func) {
     func->func.body_start_pos = -1;
 }
 
+/* Skip GCC __extension__ keyword if present. */
+static void skip_extension(Parser *p) {
+    while (parser_peek(p)->kind == TK_IDENT &&
+           parser_peek(p)->len == 13 &&
+           memcmp(parser_peek(p)->loc, "__extension__", 13) == 0)
+        parser_advance(p);
+}
+
 Node *parse_declaration(Parser *p) {
-    /* Leading C++11 attributes: '[[nodiscard]] T f(...)' etc. */
+    /* Leading C++11 attributes and GCC __extension__. */
     parser_skip_cxx_attributes(p);
     parser_skip_gnu_attributes(p);
+    skip_extension(p);
 
     Token *start_tok = parser_peek(p);
 
@@ -1397,6 +1406,7 @@ Node *parse_declaration(Parser *p) {
  *   - empty declarations ( ; )
  */
 Node *parse_top_level_decl(Parser *p) {
+    skip_extension(p);
     /* Empty declaration — N4659 §10/6 */
     if (parser_consume(p, TK_SEMI))
         return NULL;

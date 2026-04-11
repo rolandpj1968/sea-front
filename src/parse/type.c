@@ -141,6 +141,16 @@ DeclSpec parse_type_specifiers(Parser *p) {
          * decl-specifier-seq in glibc/libstdc++ headers. */
         parser_skip_gnu_attributes(p);
 
+        /* GCC __extension__ — suppresses warnings for the following
+         * construct. Semantically empty; skip it. Common in glibc
+         * headers: '__extension__ typedef struct { ... }'. */
+        if (parser_peek(p)->kind == TK_IDENT &&
+            parser_peek(p)->len == 13 &&
+            memcmp(parser_peek(p)->loc, "__extension__", 13) == 0) {
+            parser_advance(p);
+            continue;
+        }
+
         Token *tok = parser_peek(p);
 
         /* Storage-class specifiers and cv-qualifiers are part of the
