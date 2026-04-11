@@ -2214,6 +2214,8 @@ static void emit_func_def(Node *n) {
             if (p->param.name)
                 fprintf(stdout, " %.*s",
                         p->param.name->len, p->param.name->loc);
+            else
+                fprintf(stdout, " __sf_unused_%d", i);
         }
     }
     fputs(") ", stdout);
@@ -2329,6 +2331,10 @@ static void emit_method_signature(Node *func, Type *class_type) {
         if (p->param.name)
             fprintf(stdout, " %.*s",
                     p->param.name->len, p->param.name->loc);
+        else
+            /* C requires named parameters in function definitions.
+             * C++ allows unnamed params; synthesise a name. */
+            fprintf(stdout, " __sf_unused_%d", i);
     }
     fputc(')', stdout);
 }
