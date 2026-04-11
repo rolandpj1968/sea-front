@@ -113,7 +113,7 @@ Type *subst_type(Type *ty, SubstMap *map, Arena *arena) {
          * SubstMap has an entry for this tag (added by instantiate_one
          * for the class name), substitute to the instantiated type.
          * E.g. sizeof(Box) inside Box<T> → sizeof(Box<int>). */
-        if (ty->tag && !ty->template_id_node) {
+        if (ty->tag) {
             Type *self = subst_map_lookup(map, ty->tag);
             if (self) return self;
         }
