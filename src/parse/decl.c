@@ -428,6 +428,8 @@ parse_operator_id:
     }
 
 parse_suffixes:
+    ;  /* empty statement — C11 requires a statement after a label,
+        * a declaration alone doesn't satisfy (gcc 4.7 -pedantic). */
     /* Function declarator suffix — N4659 §11.3.5 [dcl.fct]
      *   parameters-and-qualifiers:
      *       ( parameter-declaration-clause ) cv-qualifier-seq(opt)

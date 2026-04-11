@@ -48,10 +48,10 @@ $(BUILDDIR)/test_lex.o: tests/test_lex.c $(HDR) | $(BUILDDIR)
 	$(CC) $(CFLAGS) -I src -c -o $@ $<
 
 # Pattern rules for source compilation
-$(BUILDDIR)/%.o: src/%.c $(HDR) $(PARSE_HDR) | $(BUILDDIR)/lex $(BUILDDIR)/parse $(BUILDDIR)/sema $(BUILDDIR)/codegen
+$(BUILDDIR)/%.o: src/%.c $(HDR) $(PARSE_HDR) | $(BUILDDIR)/lex $(BUILDDIR)/parse $(BUILDDIR)/sema $(BUILDDIR)/codegen $(BUILDDIR)/template
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILDDIR) $(BUILDDIR)/lex $(BUILDDIR)/parse $(BUILDDIR)/sema $(BUILDDIR)/codegen $(BUILDDIR)/mcpp:
+$(BUILDDIR) $(BUILDDIR)/lex $(BUILDDIR)/parse $(BUILDDIR)/sema $(BUILDDIR)/codegen $(BUILDDIR)/template $(BUILDDIR)/mcpp:
 	mkdir -p $@
 
 # Core tests — must all pass (gated).
