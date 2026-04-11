@@ -167,11 +167,19 @@ static const Keyword kw_table[] = {
      * Within them, '_B' (95+66) sorts before '__' (95+95). */
     {"_Bool",            TK_KW_BOOL},
     {"_Complex",         TK_KW_VOID},    /* C complex type — silently skip as void; sema doesn't model */
-    {"_Float128",        TK_KW_DOUBLE},  /* GCC extended float — map to double */
-    {"_Float32",         TK_KW_FLOAT},   /* GCC extended float — map to float */
-    {"_Float32x",        TK_KW_DOUBLE},  /* GCC extended float — map to double */
-    {"_Float64",         TK_KW_DOUBLE},  /* GCC extended float — map to double */
-    {"_Float64x",        TK_KW_DOUBLE},  /* GCC extended float — map to double */
+    /* ISO/IEC TS 18661-3 interchange types (GCC 7+, glibc 2.26+).
+     * NOT present in gcc 4.8 or our bootstrap target headers (gcc 4.7).
+     * These only appear when preprocessing gcc 4.8 source against a
+     * modern host glibc — the host g++ defines __HAVE_FLOAT32 etc.,
+     * causing glibc math headers to expose _Float32 overloads.
+     * In the real bootstrap chain (mcpp or gcc 4.7 as preprocessor)
+     * these types never appear. Mapped to float/double to unblock
+     * testing against modern system headers. */
+    {"_Float128",        TK_KW_DOUBLE},
+    {"_Float32",         TK_KW_FLOAT},
+    {"_Float32x",        TK_KW_DOUBLE},
+    {"_Float64",         TK_KW_DOUBLE},
+    {"_Float64x",        TK_KW_DOUBLE},
     {"_Static_assert",   TK_KW_STATIC_ASSERT},
     {"__asm",            TK_KW_ASM},     /* GCC alias for asm */
     {"__asm__",          TK_KW_ASM},     /* GCC alias for asm */
