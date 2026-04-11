@@ -1047,25 +1047,13 @@ Node *parse_declaration(Parser *p) {
          * 'typedef int register_t __attribute__((__mode__(__word__)));'
          * Common in system headers (sys/types.h). */
         parser_skip_gnu_attributes(p);
-        parser_expect(p, TK_SEMI);
 
-        /* Register the typedef-name into the current declarative region */
+        /* Register the first typedef-name into the current declarative region */
         if (decl->var_decl.name) {
             region_declare(p, decl->var_decl.name->loc,
                           decl->var_decl.name->len, ENTITY_TYPE,
                           decl->var_decl.ty);
-            /* For anonymous types: set the tag to the typedef name
-             * so codegen can emit a named type instead of bare
-             * 'struct' / 'union' / 'enum'. Handles:
-             *   typedef enum { A, B } my_enum_t;
-             *   typedef struct { int x; } my_struct_t;
-             * Only for types that don't already have a tag (i.e.,
-             * truly anonymous — 'typedef struct Foo {...} Foo;'
-             * already has tag "Foo" from the elaborated-type-specifier). */
-            /* Only tag types that have a body (class_def) — these are
-             * genuinely anonymous. Don't tag opaque/forward types
-             * (no class_def) as that would create undefined struct
-             * names in the output. */
+            /* For anonymous types: set the tag to the typedef name */
             if (decl->var_decl.ty && !decl->var_decl.ty->tag) {
                 if (decl->var_decl.ty->kind == TY_ENUM)
                     decl->var_decl.ty->tag = decl->var_decl.name;
@@ -1075,6 +1063,20 @@ Node *parse_declaration(Parser *p) {
                     decl->var_decl.ty->tag = decl->var_decl.name;
             }
         }
+
+        /* Comma-separated typedef declarators:
+         * 'typedef struct S s_t, *s_ptr;'
+         * Each additional declarator shares the base type. */
+        while (parser_consume(p, TK_COMMA)) {
+            Node *next_decl = parse_declarator(p, base_ty);
+            parser_skip_gnu_attributes(p);
+            if (next_decl->var_decl.name)
+                region_declare(p, next_decl->var_decl.name->loc,
+                              next_decl->var_decl.name->len, ENTITY_TYPE,
+                              next_decl->var_decl.ty);
+        }
+
+        parser_expect(p, TK_SEMI);
 
         return new_typedef_node(p, decl->var_decl.ty, decl->var_decl.name,
                                 start_tok);
@@ -1281,6 +1283,10 @@ Node *parse_declaration(Parser *p) {
         parse_assign_expr(p);  /* bit-field width — consumed and discarded */
     }
 
+    /* GCC __attribute__ between declarator and initializer:
+     * 'int x __attribute__((unused)) = 5;'. Common in gcc source. */
+    parser_skip_gnu_attributes(p);
+
     if (parser_consume(p, TK_ASSIGN)) {
         /* = initializer-clause — could be expression or braced-init-list.
          * Copy-list-init 'T x = {args}' on a class type uses ctor
@@ -1366,6 +1372,15 @@ Node *parse_declaration(Parser *p) {
 
         while (parser_consume(p, TK_COMMA)) {
             Node *next_decl = parse_declarator(p, base_ty);
+
+            /* Bit-field width in comma-separated member declarations:
+             * 'unsigned int a : 1, b : 1;' */
+            if (parser_consume(p, TK_COLON))
+                parse_assign_expr(p);  /* consume width, discard */
+
+            /* GCC __attribute__ between declarator and init/comma:
+             * 'int x __attribute__((unused)), y __attribute__((unused));' */
+            parser_skip_gnu_attributes(p);
 
             if (parser_consume(p, TK_ASSIGN))
                 next_decl->var_decl.init = parse_assign_expr(p);
