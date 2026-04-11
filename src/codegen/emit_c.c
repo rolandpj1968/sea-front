@@ -3247,6 +3247,64 @@ void emit_c(Node *tu) {
      * resolve regardless of definition order. */
     emit_forward_decl_structs(tu);
 
+    /* Emit all enum definitions before any struct bodies, so enum
+     * members used as struct fields have complete types. Enums
+     * appear as ND_VAR_DECL with TY_ENUM (bare enum definition)
+     * or as members of typedef/class nodes. */
+    for (int i = 0; i < tu->tu.ndecls; i++) {
+        Node *n = tu->tu.decls[i];
+        if (!n) continue;
+        /* Walk into blocks (namespace/extern "C" contents) */
+        if (n->kind == ND_BLOCK) {
+            for (int j = 0; j < n->block.nstmts; j++) {
+                Node *s = n->block.stmts[j];
+                if (!s) continue;
+                Type *ety = NULL;
+                if (s->kind == ND_VAR_DECL && s->var_decl.ty &&
+                    s->var_decl.ty->kind == TY_ENUM)
+                    ety = s->var_decl.ty;
+                if (s->kind == ND_TYPEDEF && s->var_decl.ty &&
+                    s->var_decl.ty->kind == TY_ENUM)
+                    ety = s->var_decl.ty;
+                if (ety && ety->enum_tokens && !ety->codegen_emitted) {
+                    ety->codegen_emitted = true;
+                    fputs("enum ", stdout);
+                    if (ety->tag)
+                        fprintf(stdout, "%.*s ", ety->tag->len, ety->tag->loc);
+                    fputs("{ ", stdout);
+                    for (int k = 0; k < ety->enum_ntokens; k++) {
+                        Token *t = &ety->enum_tokens[k];
+                        if (t->has_space && k > 0) fputc(' ', stdout);
+                        fprintf(stdout, "%.*s", t->len, t->loc);
+                    }
+                    fputs(" };\n", stdout);
+                }
+            }
+            continue;
+        }
+        /* Top-level enum */
+        Type *ety = NULL;
+        if (n->kind == ND_VAR_DECL && n->var_decl.ty &&
+            n->var_decl.ty->kind == TY_ENUM)
+            ety = n->var_decl.ty;
+        if (n->kind == ND_TYPEDEF && n->var_decl.ty &&
+            n->var_decl.ty->kind == TY_ENUM)
+            ety = n->var_decl.ty;
+        if (ety && ety->enum_tokens && !ety->codegen_emitted) {
+            ety->codegen_emitted = true;
+            fputs("enum ", stdout);
+            if (ety->tag)
+                fprintf(stdout, "%.*s ", ety->tag->len, ety->tag->loc);
+            fputs("{ ", stdout);
+            for (int k = 0; k < ety->enum_ntokens; k++) {
+                Token *t = &ety->enum_tokens[k];
+                if (t->has_space && k > 0) fputc(' ', stdout);
+                fprintf(stdout, "%.*s", t->len, t->loc);
+            }
+            fputs(" };\n", stdout);
+        }
+    }
+
     /* Two-pass emit: first all struct definitions (with forward
      * declarations for their methods), then all method bodies,
      * vtables, synthesized ctors/dtors, and non-class top-level
