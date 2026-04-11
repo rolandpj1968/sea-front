@@ -684,14 +684,22 @@ DeclSpec parse_type_specifiers(Parser *p) {
             /* Optional underlying type: enum E : int { ... } */
             if (parser_consume(p, TK_COLON))
                 parse_type_specifiers(p);  /* consume the underlying type */
-            /* Enumerator list { ... } */
+            /* Enumerator list { ... } — capture token pointers for
+             * verbatim C emission of enum values. */
             if (parser_consume(p, TK_LBRACE)) {
+                int start = p->pos;
                 int depth = 1;
                 while (depth > 0 && !parser_at_eof(p)) {
                     if (parser_consume(p, TK_LBRACE)) depth++;
                     else if (parser_consume(p, TK_RBRACE)) depth--;
                     else parser_advance(p);
                 }
+                int end = p->pos - 1;  /* '}' token position */
+                ty->enum_tokens = &p->tokens[start];
+                ty->enum_ntokens = end - start;
+            } else {
+                ty->enum_tokens = NULL;
+                ty->enum_ntokens = 0;
             }
             /* Register enum tag — same as struct (§6.3.2/3) */
             if (ty->tag) {

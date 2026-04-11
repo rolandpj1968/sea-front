@@ -2840,6 +2840,28 @@ static void emit_top_level(Node *n) {
         return;
     case ND_CLASS_DEF: emit_class_def(n); return;
     case ND_VAR_DECL:
+        /* Bare enum definition: 'enum Color { RED, GREEN };' becomes
+         * ND_VAR_DECL with type TY_ENUM and no name. Emit the enum
+         * body as a C enum definition. */
+        if (n->var_decl.ty && n->var_decl.ty->kind == TY_ENUM &&
+            n->var_decl.ty->enum_tokens && n->var_decl.ty->enum_ntokens > 0 &&
+            !n->var_decl.name) {
+            if (n->var_decl.ty->codegen_emitted) return;
+            n->var_decl.ty->codegen_emitted = true;
+            emit_source_comment(n->tok);
+            fputs("enum ", stdout);
+            if (n->var_decl.ty->tag)
+                fprintf(stdout, "%.*s ", n->var_decl.ty->tag->len,
+                        n->var_decl.ty->tag->loc);
+            fputs("{ ", stdout);
+            for (int i = 0; i < n->var_decl.ty->enum_ntokens; i++) {
+                Token *t = &n->var_decl.ty->enum_tokens[i];
+                if (t->has_space && i > 0) fputc(' ', stdout);
+                fprintf(stdout, "%.*s", t->len, t->loc);
+            }
+            fputs(" };\n", stdout);
+            return;
+        }
         /* Top-level free function declaration: 'int foo();' parses
          * as ND_VAR_DECL with TY_FUNC. emit_var_decl_inner doesn't
          * know how to print TY_FUNC (emit_type falls back to int),
@@ -2876,19 +2898,31 @@ static void emit_top_level(Node *n) {
         /* Templates aren't lowered yet — silently skip. */
         return;
     case ND_TYPEDEF: {
-        /* If the typedef's underlying type (or pointed-to type) is
-         * a struct/union with a body, emit the struct definition.
-         * Handles both:
-         *   typedef struct { ... } name;     (direct)
-         *   typedef struct foo { ... } *ptr; (pointer to named struct)
-         * Also emit from DeclSpec.class_def if available. */
+        /* Emit the underlying type definition if applicable. */
         Type *uty = n->var_decl.ty;
         while (uty && (uty->kind == TY_PTR || uty->kind == TY_REF ||
                         uty->kind == TY_RVALREF))
             uty = uty->base;
+        /* Struct/union with body */
         if (uty && (uty->kind == TY_STRUCT || uty->kind == TY_UNION) &&
             uty->class_def)
             emit_class_def(uty->class_def);
+        /* Enum with body */
+        if (uty && uty->kind == TY_ENUM &&
+            uty->enum_tokens && uty->enum_ntokens > 0 &&
+            !uty->codegen_emitted) {
+            uty->codegen_emitted = true;
+            fputs("enum ", stdout);
+            if (uty->tag)
+                fprintf(stdout, "%.*s ", uty->tag->len, uty->tag->loc);
+            fputs("{ ", stdout);
+            for (int i = 0; i < uty->enum_ntokens; i++) {
+                Token *t = &uty->enum_tokens[i];
+                if (t->has_space && i > 0) fputc(' ', stdout);
+                fprintf(stdout, "%.*s", t->len, t->loc);
+            }
+            fputs(" };\n", stdout);
+        }
         return;
     }
     default:

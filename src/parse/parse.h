@@ -725,6 +725,13 @@ struct Type {
     Type **template_args;
     int    n_template_args;
 
+    /* TY_ENUM: enumerator body tokens for C emission.
+     * enum_tokens points to the first token INSIDE the braces,
+     * enum_ntokens is the count (NOT including '}'). Set during
+     * parsing; -1/NULL for forward-declared enums. */
+    Token *enum_tokens;   /* first token of enum body */
+    int    enum_ntokens;  /* number of tokens in body */
+
     /* Codegen flag: set when this struct's definition has been
      * emitted to prevent duplicate/out-of-order definitions. */
     bool codegen_emitted;
