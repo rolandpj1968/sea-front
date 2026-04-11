@@ -167,6 +167,11 @@ static const Keyword kw_table[] = {
      * Within them, '_B' (95+66) sorts before '__' (95+95). */
     {"_Bool",            TK_KW_BOOL},
     {"_Complex",         TK_KW_VOID},    /* C complex type — silently skip as void; sema doesn't model */
+    {"_Float128",        TK_KW_DOUBLE},  /* GCC extended float — map to double */
+    {"_Float32",         TK_KW_FLOAT},   /* GCC extended float — map to float */
+    {"_Float32x",        TK_KW_DOUBLE},  /* GCC extended float — map to double */
+    {"_Float64",         TK_KW_DOUBLE},  /* GCC extended float — map to double */
+    {"_Float64x",        TK_KW_DOUBLE},  /* GCC extended float — map to double */
     {"_Static_assert",   TK_KW_STATIC_ASSERT},
     {"__asm",            TK_KW_ASM},     /* GCC alias for asm */
     {"__asm__",          TK_KW_ASM},     /* GCC alias for asm */
