@@ -2576,9 +2576,64 @@ static void emit_class_def(Node *n) {
     for (int i = 0; i < n->class_def.nmembers; i++) {
         Node *m = n->class_def.members[i];
         if (!m) continue;
+        /* Flat blocks from comma-separated declarations:
+         * 'size_t precision, char_precision;' → ND_BLOCK(is_flat)
+         * containing individual ND_VAR_DECLs. Flatten them. */
+        if (m->kind == ND_BLOCK && m->block.is_flat) {
+            for (int j = 0; j < m->block.nstmts; j++) {
+                Node *s = m->block.stmts[j];
+                if (!s || s->kind != ND_VAR_DECL) continue;
+                if (s->var_decl.ty && s->var_decl.ty->kind == TY_FUNC) continue;
+                emit_indent();
+                emit_var_decl_inner(s);
+                fputs(";\n", stdout);
+            }
+            continue;
+        }
         if (m->kind != ND_VAR_DECL) continue;
-        /* Skip member functions: ND_VAR_DECL with TY_FUNC type. */
-        if (m->var_decl.ty && m->var_decl.ty->kind == TY_FUNC) continue;
+        /* Member functions (ND_VAR_DECL with TY_FUNC) are forward-declared
+         * separately — skip them here. BUT: function POINTER members
+         * (typedefs like 'convert_f func;' where the typedef lost the
+         * pointer level) should be emitted as 'ret_type (*name)(params)'.
+         *
+         * Heuristic: if the class_region has this name registered as a
+         * function (TY_FUNC entity), it's a method declaration — skip.
+         * Otherwise it's a function pointer data member — emit. */
+        if (m->var_decl.ty && m->var_decl.ty->kind == TY_FUNC) {
+            bool is_method = false;
+            if (m->var_decl.is_constructor || m->var_decl.is_destructor ||
+                m->var_decl.is_virtual)
+                is_method = true;
+            /* If the class has any ND_FUNC_DEF members (actual method
+             * bodies), TY_FUNC members without ctor/dtor/virtual flags
+             * are method declarations. If the class has NO ND_FUNC_DEF
+             * members (plain C struct), TY_FUNC members are function
+             * pointer fields from typedefs. */
+            if (!is_method) {
+                for (int k = 0; k < n->class_def.nmembers; k++) {
+                    Node *mk = n->class_def.members[k];
+                    if (mk && mk->kind == ND_FUNC_DEF) {
+                        is_method = true;
+                        break;
+                    }
+                }
+            }
+            if (is_method) continue;
+            /* Function pointer member: emit as 'ret (*name)(params)' */
+            if (!m->var_decl.name) continue;
+            emit_indent();
+            Type *fty = m->var_decl.ty;
+            emit_type(fty->ret);
+            fprintf(stdout, " (*%.*s)(",
+                    m->var_decl.name->len, m->var_decl.name->loc);
+            for (int j = 0; j < fty->nparams; j++) {
+                if (j > 0) fputs(", ", stdout);
+                emit_type(fty->params[j]);
+            }
+            if (fty->nparams == 0) fputs("void", stdout);
+            fputs(");\n", stdout);
+            continue;
+        }
         emit_indent();
         emit_var_decl_inner(m);
         fputs(";\n", stdout);
