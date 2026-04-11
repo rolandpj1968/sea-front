@@ -972,6 +972,38 @@ void template_instantiate(Node *tu, Arena *arena) {
                 req->usage_type->has_dtor          = existing->has_dtor;
                 req->usage_type->has_default_ctor  = existing->has_default_ctor;
             }
+            /* For function template duplicates: rewrite the call-site
+             * ND_TEMPLATE_ID to ND_IDENT with the mangled name, so
+             * codegen emits the correct function name. */
+            if (req->template_id->kind == ND_TEMPLATE_ID &&
+                !req->usage_type) {
+                Token *fname = req->template_id->template_id.name;
+                int na = req->template_id->template_id.nargs;
+                int bufsize = 256;
+                char *buf = arena_alloc(arena, bufsize);
+                int pos = 0;
+                if (fname)
+                    pos += snprintf(buf + pos, bufsize - pos, "%.*s",
+                                    fname->len, fname->loc);
+                pos += snprintf(buf + pos, bufsize - pos, "_t_");
+                for (int i = 0; i < na; i++) {
+                    if (i > 0) buf[pos++] = '_';
+                    Type *at = type_arg_from_node(
+                        req->template_id->template_id.args[i]);
+                    pos = type_to_key(at, buf, pos, bufsize);
+                }
+                pos += snprintf(buf + pos, bufsize - pos, "_te_");
+                Token *mangled = arena_alloc(arena, sizeof(Token));
+                if (fname) *mangled = *fname;
+                else memset(mangled, 0, sizeof(Token));
+                mangled->loc = buf;
+                mangled->len = pos;
+                mangled->kind = TK_IDENT;
+                req->template_id->kind = ND_IDENT;
+                req->template_id->ident.name = mangled;
+                req->template_id->ident.implicit_this = false;
+                req->template_id->ident.resolved_decl = NULL;
+            }
             continue;
         }
 
@@ -1075,6 +1107,15 @@ void template_instantiate(Node *tu, Arena *arena) {
                     all_instantiated[total_inst++] = extra_methods[e];
                 ninst_this_round++;
             }
+        }
+        /* Register function template instantiations in the dedup set
+         * so the same function isn't instantiated multiple times from
+         * different call sites. Use a dummy Type as the value. */
+        if (inst && (inst->kind == ND_FUNC_DEF || inst->kind == ND_FUNC_DECL)) {
+            Type *dummy = arena_alloc(arena, sizeof(Type));
+            memset(dummy, 0, sizeof(Type));
+            dummy->kind = TY_FUNC;
+            dedup_add(&ds, key, key_len, dummy);
         }
     }
     if (ninst_this_round == 0) break;
@@ -1382,6 +1423,13 @@ static void patch_node_types(Node *n, DedupSet *ds, Arena *arena) {
     case ND_CAST:
         patch_type(n->cast.ty, ds, arena);
         patch_node_types(n->cast.operand, ds, arena);
+        break;
+    case ND_SIZEOF:
+        patch_type(n->sizeof_.ty, ds, arena);
+        patch_node_types(n->sizeof_.expr, ds, arena);
+        break;
+    case ND_ALIGNOF:
+        patch_type(n->alignof_.ty, ds, arena);
         break;
     case ND_BINARY: case ND_ASSIGN: case ND_COMMA:
         patch_node_types(n->binary.lhs, ds, arena);
