@@ -114,3 +114,22 @@ typedef __builtin_va_list va_list;
 #define ATTRIBUTE_PRINTF_2
 #define ATTRIBUTE_PRINTF_3
 #define ATTRIBUTE_PRINTF_4
+
+// Additional macros discovered during gcc 4.8 source testing
+#define ATTRIBUTE_PRINTF_1
+#define ATTRIBUTE_PRINTF_2
+#define ATTRIBUTE_PRINTF_3
+#define ATTRIBUTE_PRINTF_4
+#define ATTRIBUTE_NONNULL(n)
+#define ATTRIBUTE_MALLOC
+#define ENUM_BITFIELD(TYPE) unsigned int
+#define XCNEW(T) ((T*)calloc(1, sizeof(T)))
+#define XCNEWVEC(T,N) ((T*)calloc((N), sizeof(T)))
+#define XNEW(T) ((T*)malloc(sizeof(T)))
+#define XNEWVEC(T,N) ((T*)calloc((N), sizeof(T)))
+#define XRESIZEVEC(T,P,N) ((T*)realloc((P), (N)*sizeof(T)))
+#define XDELETEVEC(P) free(P)
+#define CHAR_BIT 8
+#define SBITMAP_ELT_TYPE unsigned long
+#define HOST_WIDEST_FAST_INT long
+#define HOST_BITS_PER_WIDEST_FAST_INT 64
