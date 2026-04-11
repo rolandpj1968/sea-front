@@ -158,3 +158,7 @@ typedef __builtin_va_list va_list;
 #define XOBFINISH(O, T) ((T)0)
 #define XOBNEW(O, T) ((T*)0)
 #define XOBNEWVEC(O, T, N) ((T*)0)
+#define gcov_unsigned_t unsigned int
+#define gcov_type long
+#define pp_integer_with_precision(PP, ARG, PREC, TYPE, FMT) ((void)0)
+#define FINAL_MEM_STAT_DECL
