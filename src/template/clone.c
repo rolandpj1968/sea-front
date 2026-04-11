@@ -1,17 +1,18 @@
 /*
- * clone.c — AST cloning with type substitution for template
- * instantiation.
+ * clone.c — AST cloning with type substitution for template instantiation.
  *
- * subst_type: deep-copy a Type, replacing TY_DEPENDENT nodes whose
- *   tag matches a SubstMap entry with the concrete type.
- * clone_node: deep-copy a Node tree, applying subst_type to every
- *   Type* field and recursively cloning child nodes.
+ * SubstMap maps template parameter names to concrete types.
+ * clone_node deep-copies an AST subtree, applying subst_type to every
+ * Type* field so that TY_DEPENDENT placeholders become concrete types.
  *
- * All allocations use the Arena passed in — no freeing needed.
+ * Clone strategy: arena_alloc zero-inits the target node, then we copy
+ * the active union variant struct (`c->func = n->func`, etc.) to get
+ * all scalar fields, then override pointer fields that need deep cloning
+ * or type substitution. This avoids copying bytes from inactive union
+ * variants — the rest of the node stays zero.
  */
 
 #include "clone.h"
-#include <string.h>
 
 /* ------------------------------------------------------------------ */
 /* SubstMap                                                            */
@@ -22,24 +23,21 @@ SubstMap subst_map_new(Arena *arena, int capacity) {
     m.entries = arena_alloc(arena, capacity * sizeof(SubstEntry));
     m.nentries = 0;
     m.capacity = capacity;
-    m.arena = arena;
     return m;
 }
 
 void subst_map_add(SubstMap *m, Token *param_name, Type *concrete_type) {
-    if (m->nentries >= m->capacity) return; /* shouldn't happen */
+    if (m->nentries >= m->capacity) return;  /* silently drop — shouldn't happen */
     m->entries[m->nentries].param_name = param_name;
     m->entries[m->nentries].concrete_type = concrete_type;
     m->nentries++;
 }
 
-static Type *subst_map_lookup(SubstMap *m, Token *tag) {
-    if (!tag) return NULL;
-    for (int i = 0; i < m->nentries; i++) {
-        Token *p = m->entries[i].param_name;
-        if (p && p->len == tag->len &&
-            memcmp(p->loc, tag->loc, tag->len) == 0)
-            return m->entries[i].concrete_type;
+static Type *subst_map_lookup(SubstMap *map, const char *name, int len) {
+    for (int i = 0; i < map->nentries; i++) {
+        Token *pn = map->entries[i].param_name;
+        if (pn && pn->len == len && memcmp(pn->loc, name, len) == 0)
+            return map->entries[i].concrete_type;
     }
     return NULL;
 }
@@ -51,137 +49,124 @@ static Type *subst_map_lookup(SubstMap *m, Token *tag) {
 Type *subst_type(Type *ty, SubstMap *map, Arena *arena) {
     if (!ty) return NULL;
 
-    /* TY_DEPENDENT — the core substitution case */
-    if (ty->kind == TY_DEPENDENT) {
-        Type *concrete = subst_map_lookup(map, ty->tag);
-        if (concrete) {
-            /* Apply cv-qualifiers from the dependent usage onto
-             * the concrete type (e.g. 'const T' → 'const int') */
-            if (ty->is_const || ty->is_volatile) {
-                Type *copy = arena_alloc(arena, sizeof(Type));
-                *copy = *concrete;
-                copy->is_const    = copy->is_const    || ty->is_const;
-                copy->is_volatile = copy->is_volatile || ty->is_volatile;
-                return copy;
-            }
-            return concrete;
-        }
-        /* Unresolved dependent type — return as-is (may be from an
-         * outer template scope we're not instantiating yet) */
+    /* TY_DEPENDENT → substitute if the name matches a map entry */
+    if (ty->kind == TY_DEPENDENT && ty->tag) {
+        Type *concrete = subst_map_lookup(map, ty->tag->loc, ty->tag->len);
+        if (concrete) return concrete;
+        /* No match — leave as-is (will remain dependent for outer template) */
         return ty;
     }
 
-    /* Compound types — recurse into children */
+    /* TY_STRUCT / TY_UNION with a template_id_node: substitute args
+     * in the template-id so transitive instantiation can pick them up.
+     * E.g. inside Box<T>, a member 'Pair<T,T> p' has template_id_node
+     * with T args — those need to become concrete. */
+    if ((ty->kind == TY_STRUCT || ty->kind == TY_UNION) &&
+        ty->template_id_node &&
+        ty->template_id_node->kind == ND_TEMPLATE_ID) {
+        Node *tid = ty->template_id_node;
+
+        /* Check if any arg would actually change */
+        bool needs_subst = false;
+        for (int i = 0; i < tid->template_id.nargs; i++) {
+            Node *a = tid->template_id.args[i];
+            Type *at = (a && a->kind == ND_VAR_DECL) ? a->var_decl.ty : NULL;
+            if (at && at->kind == TY_DEPENDENT) { needs_subst = true; break; }
+        }
+
+        if (needs_subst) {
+            Type *copy = arena_alloc(arena, sizeof(Type));
+            *copy = *ty;
+            Node *tid_copy = arena_alloc(arena, sizeof(Node));
+            *tid_copy = *tid;
+            tid_copy->template_id.args = arena_alloc(arena,
+                tid->template_id.nargs * sizeof(Node *));
+            for (int i = 0; i < tid->template_id.nargs; i++) {
+                Node *a = tid->template_id.args[i];
+                if (a && a->kind == ND_VAR_DECL && a->var_decl.ty &&
+                    a->var_decl.ty->kind == TY_DEPENDENT) {
+                    Type *sub = subst_type(a->var_decl.ty, map, arena);
+                    Node *ac = arena_alloc(arena, sizeof(Node));
+                    *ac = *a;
+                    ac->var_decl.ty = sub;
+                    tid_copy->template_id.args[i] = ac;
+                } else {
+                    tid_copy->template_id.args[i] = a;
+                }
+            }
+            copy->template_id_node = tid_copy;
+            return copy;
+        }
+    }
+
+    /* Injected-class-name substitution: a TY_STRUCT whose tag matches
+     * a SubstMap entry is the template class itself (e.g. sizeof(Box)
+     * inside Box<T>'s body). Replace with the concrete type. */
+    if ((ty->kind == TY_STRUCT || ty->kind == TY_UNION) &&
+        ty->tag && !ty->template_id_node) {
+        Type *concrete = subst_map_lookup(map, ty->tag->loc, ty->tag->len);
+        if (concrete) return concrete;
+    }
+
+    /* Recurse into compound types */
     switch (ty->kind) {
     case TY_PTR: case TY_REF: case TY_RVALREF: {
-        Type *new_base = subst_type(ty->base, map, arena);
-        if (new_base == ty->base) return ty; /* no change */
+        Type *sub = subst_type(ty->base, map, arena);
+        if (sub == ty->base) return ty;  /* no change */
         Type *copy = arena_alloc(arena, sizeof(Type));
         *copy = *ty;
-        copy->base = new_base;
+        copy->base = sub;
         return copy;
     }
     case TY_ARRAY: {
-        Type *new_base = subst_type(ty->base, map, arena);
-        if (new_base == ty->base) return ty;
+        Type *sub = subst_type(ty->base, map, arena);
+        if (sub == ty->base) return ty;
         Type *copy = arena_alloc(arena, sizeof(Type));
         *copy = *ty;
-        copy->base = new_base;
+        copy->base = sub;
         return copy;
     }
     case TY_FUNC: {
-        Type *new_ret = subst_type(ty->ret, map, arena);
-        bool changed = (new_ret != ty->ret);
-        Type **new_params = NULL;
+        Type *ret = subst_type(ty->ret, map, arena);
+        bool changed = (ret != ty->ret);
+        Type **params = ty->params;
         if (ty->nparams > 0) {
-            new_params = arena_alloc(arena, ty->nparams * sizeof(Type *));
+            params = arena_alloc(arena, ty->nparams * sizeof(Type *));
             for (int i = 0; i < ty->nparams; i++) {
-                new_params[i] = subst_type(ty->params[i], map, arena);
-                if (new_params[i] != ty->params[i]) changed = true;
+                params[i] = subst_type(ty->params[i], map, arena);
+                if (params[i] != ty->params[i]) changed = true;
             }
         }
         if (!changed) return ty;
         Type *copy = arena_alloc(arena, sizeof(Type));
         *copy = *ty;
-        copy->ret = new_ret;
-        if (new_params) copy->params = new_params;
+        copy->ret = ret;
+        copy->params = params;
         return copy;
     }
-    case TY_STRUCT: case TY_UNION:
-        /* Injected-class-name: a bare class name (no template-id)
-         * inside a template body refers to the class itself. If the
-         * SubstMap has an entry for this tag (added by instantiate_one
-         * for the class name), substitute to the instantiated type.
-         * E.g. sizeof(Box) inside Box<T> → sizeof(Box<int>). */
-        if (ty->tag) {
-            Type *self = subst_map_lookup(map, ty->tag);
-            if (self) return self;
-        }
-        /* If this struct type has a template_id_node (e.g. Box<T>
-         * inside a template body), substitute the template args
-         * so the instantiation pass can transitively instantiate
-         * the inner template with concrete types. */
-        if (ty->template_id_node &&
-            ty->template_id_node->kind == ND_TEMPLATE_ID) {
-            Node *tid = ty->template_id_node;
-            bool changed = false;
-            Node **new_args = arena_alloc(arena,
-                tid->template_id.nargs * sizeof(Node *));
-            for (int i = 0; i < tid->template_id.nargs; i++) {
-                Node *arg = tid->template_id.args[i];
-                if (arg && arg->kind == ND_VAR_DECL && arg->var_decl.ty) {
-                    Type *new_ty = subst_type(arg->var_decl.ty, map, arena);
-                    if (new_ty != arg->var_decl.ty) {
-                        Node *new_arg = arena_alloc(arena, sizeof(Node));
-                        *new_arg = *arg;
-                        new_arg->var_decl.ty = new_ty;
-                        new_args[i] = new_arg;
-                        changed = true;
-                        continue;
-                    }
-                }
-                new_args[i] = arg;
-            }
-            if (changed) {
-                Node *new_tid = arena_alloc(arena, sizeof(Node));
-                *new_tid = *tid;
-                new_tid->template_id.args = new_args;
-                Type *copy = arena_alloc(arena, sizeof(Type));
-                *copy = *ty;
-                copy->template_id_node = new_tid;
-                return copy;
-            }
-        }
-        return ty;
     default:
-        /* Fundamental types, TY_ENUM — no dependent children. */
         return ty;
     }
 }
 
 /* ------------------------------------------------------------------ */
-/* Node cloning                                                        */
+/* Node array cloning                                                  */
 /* ------------------------------------------------------------------ */
 
-/* Forward declaration — clone_node is recursive */
-Node *clone_node(Node *n, SubstMap *map, Arena *arena);
-
-/* Clone an array of Node pointers */
-static Node **clone_node_array(Node **arr, int count,
-                                SubstMap *map, Arena *arena) {
-    if (!arr || count <= 0) return NULL;
-    Node **copy = arena_alloc(arena, count * sizeof(Node *));
-    for (int i = 0; i < count; i++)
-        copy[i] = clone_node(arr[i], map, arena);
-    return copy;
+static Node **clone_node_array(Node **arr, int n, SubstMap *map, Arena *arena) {
+    if (!arr || n <= 0) return NULL;
+    Node **out = arena_alloc(arena, n * sizeof(Node *));
+    for (int i = 0; i < n; i++)
+        out[i] = clone_node(arr[i], map, arena);
+    return out;
 }
 
-/* Clone a MemInit array (ctor mem-initializer-list) */
-static MemInit *clone_mem_inits(MemInit *inits, int count,
+static MemInit *clone_mem_inits(MemInit *inits, int n,
                                  SubstMap *map, Arena *arena) {
-    if (!inits || count <= 0) return NULL;
-    MemInit *copy = arena_alloc(arena, count * sizeof(MemInit));
-    for (int i = 0; i < count; i++) {
+    (void)map;
+    if (!inits || n <= 0) return NULL;
+    MemInit *copy = arena_alloc(arena, n * sizeof(MemInit));
+    for (int i = 0; i < n; i++) {
         copy[i].name = inits[i].name;
         copy[i].args = clone_node_array(inits[i].args, inits[i].nargs,
                                          map, arena);
@@ -190,34 +175,59 @@ static MemInit *clone_mem_inits(MemInit *inits, int count,
     return copy;
 }
 
+/* ------------------------------------------------------------------ */
+/* Node cloning                                                        */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Deep-copy an AST node, applying type substitution via SubstMap.
+ *
+ * The target node is arena-allocated (zero-init). We copy only the
+ * common fields (kind, tok) and the active union variant's struct,
+ * then override pointer fields that need deep cloning or type
+ * substitution. Inactive union variants stay zero — no stale bytes.
+ */
 Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
     if (!n) return NULL;
 
     Node *c = arena_alloc(arena, sizeof(Node));
-    *c = *n;  /* shallow copy — then fix up child pointers below */
+    c->kind = n->kind;
+    c->tok = n->tok;
 
     switch (n->kind) {
-    /* -- Leaf expression nodes -- */
+    /* -- Leaf expression nodes (no child pointers or types) -- */
     case ND_NUM:
+        c->num = n->num;
+        break;
     case ND_FNUM:
+        c->fnum = n->fnum;
+        break;
     case ND_STR:
+        c->str = n->str;
+        break;
     case ND_CHAR:
+        c->chr = n->chr;
+        break;
     case ND_BOOL_LIT:
     case ND_NULLPTR:
     case ND_NULL_STMT:
     case ND_BREAK:
     case ND_CONTINUE:
+        /* No variant data — just kind + tok */
+        break;
     case ND_GOTO:
+        c->goto_ = n->goto_;
+        break;
     case ND_ACCESS_SPEC:
-        /* No child nodes or types to substitute */
+        c->access_spec = n->access_spec;
         break;
 
     case ND_IDENT:
-        /* Leaf — name token is shared, not cloned */
+        c->ident = n->ident;
         break;
 
     case ND_QUALIFIED:
-        /* Clone the parts array (tokens are shared) */
+        c->qualified = n->qualified;
         if (n->qualified.parts && n->qualified.nparts > 0) {
             c->qualified.parts = arena_alloc(arena,
                 n->qualified.nparts * sizeof(Token *));
@@ -230,6 +240,7 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
     case ND_BINARY:
     case ND_ASSIGN:
     case ND_COMMA:
+        c->binary = n->binary;
         c->binary.lhs = clone_node(n->binary.lhs, map, arena);
         c->binary.rhs = clone_node(n->binary.rhs, map, arena);
         break;
@@ -237,61 +248,72 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
     /* -- Unary expressions -- */
     case ND_UNARY:
     case ND_POSTFIX:
+        c->unary = n->unary;
         c->unary.operand = clone_node(n->unary.operand, map, arena);
         break;
 
     case ND_TERNARY:
+        c->ternary = n->ternary;
         c->ternary.cond  = clone_node(n->ternary.cond, map, arena);
         c->ternary.then_ = clone_node(n->ternary.then_, map, arena);
         c->ternary.else_ = clone_node(n->ternary.else_, map, arena);
         break;
 
     case ND_CALL:
+        c->call = n->call;
         c->call.callee = clone_node(n->call.callee, map, arena);
         c->call.args   = clone_node_array(n->call.args, n->call.nargs,
                                            map, arena);
         break;
 
     case ND_MEMBER:
+        c->member = n->member;
         c->member.obj = clone_node(n->member.obj, map, arena);
         break;
 
     case ND_SUBSCRIPT:
+        c->subscript = n->subscript;
         c->subscript.base  = clone_node(n->subscript.base, map, arena);
         c->subscript.index = clone_node(n->subscript.index, map, arena);
         break;
 
     case ND_CAST:
+        c->cast = n->cast;
         c->cast.ty      = subst_type(n->cast.ty, map, arena);
         c->cast.operand = clone_node(n->cast.operand, map, arena);
         break;
 
     case ND_SIZEOF:
+        c->sizeof_ = n->sizeof_;
         c->sizeof_.expr = clone_node(n->sizeof_.expr, map, arena);
         c->sizeof_.ty   = subst_type(n->sizeof_.ty, map, arena);
         break;
 
     case ND_ALIGNOF:
+        c->alignof_ = n->alignof_;
         c->alignof_.ty = subst_type(n->alignof_.ty, map, arena);
         break;
 
     /* -- Statements -- */
     case ND_BLOCK:
+        c->block = n->block;
         c->block.stmts = clone_node_array(n->block.stmts, n->block.nstmts,
                                            map, arena);
         c->block.scope = NULL;  /* sema re-creates */
-        c->block.is_flat = n->block.is_flat;
         break;
 
     case ND_RETURN:
+        c->ret = n->ret;
         c->ret.expr = clone_node(n->ret.expr, map, arena);
         break;
 
     case ND_EXPR_STMT:
+        c->expr_stmt = n->expr_stmt;
         c->expr_stmt.expr = clone_node(n->expr_stmt.expr, map, arena);
         break;
 
     case ND_IF:
+        c->if_ = n->if_;
         c->if_.init  = clone_node(n->if_.init, map, arena);
         c->if_.cond  = clone_node(n->if_.cond, map, arena);
         c->if_.then_ = clone_node(n->if_.then_, map, arena);
@@ -299,16 +321,19 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
         break;
 
     case ND_WHILE:
+        c->while_ = n->while_;
         c->while_.cond = clone_node(n->while_.cond, map, arena);
         c->while_.body = clone_node(n->while_.body, map, arena);
         break;
 
     case ND_DO:
+        c->do_ = n->do_;
         c->do_.cond = clone_node(n->do_.cond, map, arena);
         c->do_.body = clone_node(n->do_.body, map, arena);
         break;
 
     case ND_FOR:
+        c->for_ = n->for_;
         c->for_.init = clone_node(n->for_.init, map, arena);
         c->for_.cond = clone_node(n->for_.cond, map, arena);
         c->for_.inc  = clone_node(n->for_.inc, map, arena);
@@ -316,27 +341,32 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
         break;
 
     case ND_SWITCH:
+        c->switch_ = n->switch_;
         c->switch_.init = clone_node(n->switch_.init, map, arena);
         c->switch_.expr = clone_node(n->switch_.expr, map, arena);
         c->switch_.body = clone_node(n->switch_.body, map, arena);
         break;
 
     case ND_CASE:
+        c->case_ = n->case_;
         c->case_.expr = clone_node(n->case_.expr, map, arena);
         c->case_.stmt = clone_node(n->case_.stmt, map, arena);
         break;
 
     case ND_DEFAULT:
+        c->default_ = n->default_;
         c->default_.stmt = clone_node(n->default_.stmt, map, arena);
         break;
 
     case ND_LABEL:
+        c->label = n->label;
         c->label.stmt = clone_node(n->label.stmt, map, arena);
         break;
 
     /* -- Declarations -- */
     case ND_VAR_DECL:
     case ND_TYPEDEF:
+        c->var_decl = n->var_decl;
         c->var_decl.ty   = subst_type(n->var_decl.ty, map, arena);
         c->var_decl.init = clone_node(n->var_decl.init, map, arena);
         c->var_decl.ctor_args = clone_node_array(
@@ -345,6 +375,7 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
 
     case ND_FUNC_DEF:
     case ND_FUNC_DECL:
+        c->func = n->func;
         c->func.ret_ty = subst_type(n->func.ret_ty, map, arena);
         c->func.params = clone_node_array(n->func.params, n->func.nparams,
                                            map, arena);
@@ -359,10 +390,12 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
         break;
 
     case ND_PARAM:
+        c->param = n->param;
         c->param.ty = subst_type(n->param.ty, map, arena);
         break;
 
     case ND_CLASS_DEF:
+        c->class_def = n->class_def;
         c->class_def.members = clone_node_array(
             n->class_def.members, n->class_def.nmembers, map, arena);
         /* Substitute base types (for template inheritance) */
@@ -378,21 +411,24 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
         break;
 
     case ND_TEMPLATE_DECL:
+        c->template_decl = n->template_decl;
         /* Don't recurse into nested templates — they'll be
          * instantiated separately if needed */
         break;
 
     case ND_TEMPLATE_ID:
-        /* Clone args but keep name token shared */
+        c->template_id = n->template_id;
         c->template_id.args = clone_node_array(
             n->template_id.args, n->template_id.nargs, map, arena);
         break;
 
     case ND_FRIEND:
+        c->friend_decl = n->friend_decl;
         c->friend_decl.decl = clone_node(n->friend_decl.decl, map, arena);
         break;
 
     case ND_TRANSLATION_UNIT:
+        c->tu = n->tu;
         /* Should not be cloned — top-level container */
         break;
     }

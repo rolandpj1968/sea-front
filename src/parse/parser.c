@@ -434,7 +434,7 @@ Node *new_template_id_node(Parser *p, Token *name, Node **args, int nargs,
  * unit start (N4861 §10.1 [module.unit]) — not yet handled.
  */
 Node *parse(TokenArray tokens, Arena *arena, CppStandard std) {
-    Parser p;
+    Parser p = {0};
     /* Filter preprocessor leftovers (#line directives) once, up front.
      * mcpp emits '#line N "file"' tokens that can appear anywhere — we
      * drop entire #-prefixed lines so the parser never has to think
