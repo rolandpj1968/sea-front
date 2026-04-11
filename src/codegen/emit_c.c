@@ -707,6 +707,38 @@ static const char *binop_str(TokenKind k) {
     }
 }
 
+/* Map binary operator TokenKind to mangled method suffix.
+ * Returns NULL if the operator is not overloadable or we don't
+ * support rewriting it yet. Must match the suffixes in
+ * emit_operator_method_name. */
+static const char *binop_to_operator_suffix(TokenKind op) {
+    switch (op) {
+    case TK_PLUS:           return "__plus";
+    case TK_MINUS:          return "__minus";
+    case TK_STAR:           return "__deref";  /* operator* (binary = multiply) */
+    case TK_SLASH:          return "__div";
+    case TK_PERCENT:        return "__mod";
+    case TK_AMP:            return "__bitand";
+    case TK_PIPE:           return "__bitor";
+    case TK_CARET:          return "__xor";
+    case TK_SHL:            return "__lshift";
+    case TK_SHR:            return "__rshift";
+    case TK_EQ:             return "__eq";
+    case TK_NE:             return "__ne";
+    case TK_LT:             return "__lt";
+    case TK_GT:             return "__gt";
+    case TK_LE:             return "__le";
+    case TK_GE:             return "__ge";
+    case TK_LAND:           return "__land";
+    case TK_LOR:            return "__lor";
+    case TK_PLUS_ASSIGN:    return "__plus_assign";
+    case TK_MINUS_ASSIGN:   return "__minus_assign";
+    case TK_STAR_ASSIGN:    return "__mul_assign";
+    case TK_SLASH_ASSIGN:   return "__div_assign";
+    default:                return NULL;
+    }
+}
+
 static const char *unop_str(TokenKind k) {
     switch (k) {
     case TK_PLUS:  return "+";
@@ -772,20 +804,60 @@ static void emit_expr(Node *n) {
         }
         emit_token_text(n->ident.name);
         return;
-    case ND_BINARY:
+    case ND_BINARY: {
+        /* Check if the LHS is a struct type with an overloaded operator.
+         * If so, rewrite 'a + b' → 'Class__plus(&a, b)'. */
+        Type *lhs_ty = n->binary.lhs ? n->binary.lhs->resolved_type : NULL;
+        /* Dereference pointer-to-struct (e.g. from reference lowering) */
+        if (lhs_ty && (lhs_ty->kind == TY_PTR || lhs_ty->kind == TY_REF))
+            lhs_ty = lhs_ty->base;
+        if (lhs_ty && (lhs_ty->kind == TY_STRUCT || lhs_ty->kind == TY_UNION) &&
+            lhs_ty->tag) {
+            const char *suffix = binop_to_operator_suffix(n->binary.op);
+            if (suffix) {
+                mangle_class_tag(lhs_ty);
+                fputs(suffix, stdout);
+                fputs("(&", stdout);
+                emit_expr(n->binary.lhs);
+                fputs(", ", stdout);
+                emit_expr(n->binary.rhs);
+                fputc(')', stdout);
+                return;
+            }
+        }
         fputc('(', stdout);
         emit_expr(n->binary.lhs);
         fprintf(stdout, " %s ", binop_str(n->binary.op));
         emit_expr(n->binary.rhs);
         fputc(')', stdout);
         return;
-    case ND_ASSIGN:
+    }
+    case ND_ASSIGN: {
+        /* Compound assignment on struct: a += b → Class__plus_assign(&a, b) */
+        Type *lhs_ty = n->binary.lhs ? n->binary.lhs->resolved_type : NULL;
+        if (lhs_ty && (lhs_ty->kind == TY_PTR || lhs_ty->kind == TY_REF))
+            lhs_ty = lhs_ty->base;
+        if (lhs_ty && (lhs_ty->kind == TY_STRUCT || lhs_ty->kind == TY_UNION) &&
+            lhs_ty->tag && n->binary.op != TK_ASSIGN) {
+            const char *suffix = binop_to_operator_suffix(n->binary.op);
+            if (suffix) {
+                mangle_class_tag(lhs_ty);
+                fputs(suffix, stdout);
+                fputs("(&", stdout);
+                emit_expr(n->binary.lhs);
+                fputs(", ", stdout);
+                emit_expr(n->binary.rhs);
+                fputc(')', stdout);
+                return;
+            }
+        }
         fputc('(', stdout);
         emit_expr(n->binary.lhs);
         fprintf(stdout, " %s ", binop_str(n->binary.op));
         emit_expr(n->binary.rhs);
         fputc(')', stdout);
         return;
+    }
     case ND_UNARY:
         fputc('(', stdout);
         fputs(unop_str(n->unary.op), stdout);
