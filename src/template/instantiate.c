@@ -70,25 +70,57 @@ static Node *registry_find(TmplRegistry *reg, const char *name, int name_len) {
 }
 
 /*
- * Find a full specialization matching the given template-id args.
- * Specializations are ND_TEMPLATE_DECL with nparams == 0 whose
- * inner class has a template_id_node with matching arg types.
+ * Match a specialization pattern type against a concrete usage type.
+ * Returns true if they match. TY_DEPENDENT in the pattern matches
+ * any concrete type (wildcard for partial specializations).
+ */
+static bool types_match(Type *pattern, Type *concrete) {
+    if (!pattern || !concrete) return (!pattern && !concrete);
+    /* TY_DEPENDENT in pattern = wildcard (partial spec variable) */
+    if (pattern->kind == TY_DEPENDENT) return true;
+    /* Kind must match */
+    if (pattern->kind != concrete->kind) return false;
+    if (pattern->is_unsigned != concrete->is_unsigned) return false;
+    /* For struct/union, compare tags */
+    if ((pattern->kind == TY_STRUCT || pattern->kind == TY_UNION) &&
+        pattern->tag && concrete->tag) {
+        if (pattern->tag->len != concrete->tag->len ||
+            memcmp(pattern->tag->loc, concrete->tag->loc,
+                   pattern->tag->len) != 0)
+            return false;
+    }
+    /* For pointers/refs, compare base types recursively */
+    if (pattern->kind == TY_PTR || pattern->kind == TY_REF ||
+        pattern->kind == TY_RVALREF)
+        return types_match(pattern->base, concrete->base);
+    return true;
+}
+
+/*
+ * Find the best specialization (full or partial) matching the given
+ * template-id args. Checks all ND_TEMPLATE_DECL entries with the
+ * same name whose inner class has a template_id_node.
+ *
+ * Full specializations (nparams == 0) are preferred over partial
+ * specializations (nparams > 0). Among partial specs, the most
+ * specialized (fewer remaining params) wins.
  *
  * Returns the specialization's ND_TEMPLATE_DECL, or NULL.
  */
 static Node *registry_find_specialization(TmplRegistry *reg,
                                            const char *name, int name_len,
                                            Node *template_id) {
+    Node *best = NULL;
+    int best_nparams = -1;  /* -1 = no match yet */
+
     uint32_t idx = hash_name(name, name_len) % TMPL_REGISTRY_SIZE;
     for (TmplEntry *e = reg->buckets[idx]; e; e = e->next) {
         if (e->name_len != name_len ||
             memcmp(e->name, name, name_len) != 0)
             continue;
-        /* Must be a specialization (nparams == 0) */
-        if (e->tmpl->template_decl.nparams != 0) continue;
-        /* Get the specialization's template-id args from its inner
-         * class type */
-        Node *spec_decl = e->tmpl->template_decl.decl;
+        Node *tmpl = e->tmpl;
+        /* Skip the primary template (no template_id_node on inner class) */
+        Node *spec_decl = tmpl->template_decl.decl;
         if (!spec_decl) continue;
         Type *spec_ty = NULL;
         if (spec_decl->kind == ND_CLASS_DEF)
@@ -98,31 +130,29 @@ static Node *registry_find_specialization(TmplRegistry *reg,
         if (!spec_ty || !spec_ty->template_id_node) continue;
         Node *spec_tid = spec_ty->template_id_node;
         if (spec_tid->kind != ND_TEMPLATE_ID) continue;
-        /* Compare arg count */
+        /* Arg count must match */
         if (spec_tid->template_id.nargs != template_id->template_id.nargs)
             continue;
-        /* Compare each arg type */
+        /* Match each arg: concrete positions must match exactly,
+         * TY_DEPENDENT positions are wildcards. */
         bool match = true;
         for (int i = 0; i < spec_tid->template_id.nargs && match; i++) {
             Node *sa = spec_tid->template_id.args[i];
             Node *ua = template_id->template_id.args[i];
             Type *st = (sa && sa->kind == ND_VAR_DECL) ? sa->var_decl.ty : NULL;
             Type *ut = (ua && ua->kind == ND_VAR_DECL) ? ua->var_decl.ty : NULL;
-            if (!st || !ut) { match = false; break; }
-            /* Compare type kinds — simple structural comparison */
-            if (st->kind != ut->kind) { match = false; break; }
-            if (st->is_unsigned != ut->is_unsigned) { match = false; break; }
-            /* For struct/union, compare tags */
-            if ((st->kind == TY_STRUCT || st->kind == TY_UNION) &&
-                st->tag && ut->tag) {
-                if (st->tag->len != ut->tag->len ||
-                    memcmp(st->tag->loc, ut->tag->loc, st->tag->len) != 0)
-                    match = false;
-            }
+            if (!types_match(st, ut)) match = false;
         }
-        if (match) return e->tmpl;
+        if (!match) continue;
+        /* Prefer full specializations (nparams == 0) over partial.
+         * Among partials, prefer more specialized (fewer params). */
+        int np = tmpl->template_decl.nparams;
+        if (best == NULL || np < best_nparams) {
+            best = tmpl;
+            best_nparams = np;
+        }
     }
-    return NULL;
+    return best;
 }
 
 /*
@@ -608,25 +638,55 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
     int nargs   = template_id->template_id.nargs;
 
     /* Build the substitution map.
-     * For each template parameter, use the corresponding argument if
-     * provided; otherwise fall back to the parameter's default type
-     * (§17.1/8 [temp.param]). */
+     *
+     * For primary templates: match params by position against the
+     * usage args, with fallback to default types.
+     *
+     * For partial specializations: the spec's inner class has a
+     * template_id_node with a PATTERN (e.g. vec<T, A, vl_embed>).
+     * Unify each pattern position against the usage arg. TY_DEPENDENT
+     * positions bind the spec's param to the usage arg; concrete
+     * positions must match exactly (already checked by the
+     * specialization finder). */
     SubstMap map = subst_map_new(arena, nparams > 0 ? nparams : 1);
-    for (int i = 0; i < nparams; i++) {
-        Node *param = tmpl->template_decl.params[i];
-        if (!param) continue;
-        Token *pname = param->param.name;
-        if (!pname) continue;
 
-        Type *arg_ty = NULL;
-        if (i < nargs)
-            arg_ty = type_arg_from_node(template_id->template_id.args[i]);
-        /* Fall back to default if no explicit argument */
-        if (!arg_ty && param->param.default_type)
-            arg_ty = subst_type(param->param.default_type, &map, arena);
-        if (arg_ty)
-            subst_map_add(&map, pname, arg_ty);
-        /* else: non-type param or missing default — not yet handled */
+    /* Check if this is a partial specialization */
+    Type *inner_ty = NULL;
+    if (inner->kind == ND_CLASS_DEF) inner_ty = inner->class_def.ty;
+    else if (inner->kind == ND_VAR_DECL) inner_ty = inner->var_decl.ty;
+    Node *spec_pattern = (inner_ty && inner_ty->template_id_node &&
+                          inner_ty->template_id_node->kind == ND_TEMPLATE_ID)
+                         ? inner_ty->template_id_node : NULL;
+
+    if (spec_pattern && spec_pattern->template_id.nargs == nargs) {
+        /* Partial specialization: unify pattern against usage args */
+        for (int i = 0; i < nargs; i++) {
+            Node *pa = spec_pattern->template_id.args[i];
+            Type *pt = (pa && pa->kind == ND_VAR_DECL) ? pa->var_decl.ty : NULL;
+            if (!pt || pt->kind != TY_DEPENDENT) continue;
+            /* This pattern position is a param variable — bind it */
+            Type *arg_ty = type_arg_from_node(template_id->template_id.args[i]);
+            if (arg_ty && pt->tag)
+                subst_map_add(&map, pt->tag, arg_ty);
+        }
+    } else {
+        /* Primary template: match by position */
+        for (int i = 0; i < nparams; i++) {
+            Node *param = tmpl->template_decl.params[i];
+            if (!param) continue;
+            Token *pname = param->param.name;
+            if (!pname) continue;
+
+            Type *arg_ty = NULL;
+            if (i < nargs)
+                arg_ty = type_arg_from_node(template_id->template_id.args[i]);
+            /* Fall back to default if no explicit argument */
+            if (!arg_ty && param->param.default_type)
+                arg_ty = subst_type(param->param.default_type, &map, arena);
+            if (arg_ty)
+                subst_map_add(&map, pname, arg_ty);
+            /* else: non-type param or missing default — not yet handled */
+        }
     }
 
     /* Clone the inner declaration with type substitution */
@@ -644,10 +704,20 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
         inst_ty->tag = template_id->template_id.name;
 
         /* Store the concrete template args on the type for mangling.
-         * Use the substitution map (which includes defaults) rather
-         * than just the explicit args from the template-id. */
-        int n = map.nentries;
+         * Use ALL usage args (not just the substitution map) so that
+         * partial specializations include the fixed args in their
+         * mangled name (e.g. vec<int,int,vl_embed> vs vec<int,int,vl_ptr>). */
+        int n = template_id->template_id.nargs;
         if (n > 0) {
+            inst_ty->template_args = arena_alloc(arena, n * sizeof(Type *));
+            inst_ty->n_template_args = n;
+            for (int i = 0; i < n; i++)
+                inst_ty->template_args[i] =
+                    type_arg_from_node(template_id->template_id.args[i]);
+        }
+        /* If fewer explicit args than params (defaults), fill from map */
+        if (n < map.nentries) {
+            n = map.nentries;
             inst_ty->template_args = arena_alloc(arena, n * sizeof(Type *));
             inst_ty->n_template_args = n;
             for (int i = 0; i < n; i++)
@@ -845,9 +915,24 @@ void template_instantiate(Node *tu, Arena *arena) {
                 subst_map_add(&tmp_map, param->param.name, arg_ty);
         }
 
-        /* Dedup check — uses resolved map (includes defaults) */
+        /* Dedup check — use ALL usage args (not just the map, which
+         * may exclude fixed args from partial specializations). */
         char key[MAX_DEDUP_KEY];
-        int key_len = build_dedup_key_from_map(req->name, &tmp_map, key);
+        int key_len = 0;
+        if (req->name && key_len + req->name->len < MAX_DEDUP_KEY) {
+            memcpy(key, req->name->loc, req->name->len);
+            key_len = req->name->len;
+        }
+        key[key_len++] = '\0';
+        /* Include all usage args (explicit + defaults from map) */
+        int total_args = na > tmp_map.nentries ? na : tmp_map.nentries;
+        for (int i = 0; i < total_args; i++) {
+            Type *arg_ty = (i < na) ?
+                type_arg_from_node(req->template_id->template_id.args[i]) :
+                (i < tmp_map.nentries ? tmp_map.entries[i].concrete_type : NULL);
+            key_len = type_to_key(arg_ty, key, key_len, MAX_DEDUP_KEY);
+            key[key_len++] = '\0';
+        }
         Type *existing = dedup_find(&ds, key, key_len);
 
         if (existing) {
@@ -872,7 +957,14 @@ void template_instantiate(Node *tu, Arena *arena) {
         Node **extra_methods = NULL;
         int nextra = 0;
         Node *inst;
-        if (spec) {
+        if (spec && spec->template_decl.nparams > 0) {
+            /* Partial specialization — clone with substitution.
+             * Build a SubstMap by matching the specialization's
+             * pattern args against the usage args. TY_DEPENDENT
+             * positions in the pattern become bindings. */
+            inst = instantiate_one(spec, req->template_id,
+                                    arena, tu, &extra_methods, &nextra);
+        } else if (spec) {
             /* Full specialization — use the concrete class directly.
              * No cloning or substitution needed. */
             inst = spec->template_decl.decl;
