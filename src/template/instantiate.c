@@ -261,6 +261,16 @@ static void collect_from_type(InstCollector *col, Type *ty) {
     if (tid->kind != ND_TEMPLATE_ID || !tid->template_id.name)
         return;
 
+    /* Skip template-ids that still have dependent (unresolved) args.
+     * These appear inside cloned template bodies where an outer
+     * template parameter hasn't been substituted yet. They'll be
+     * collected once the outer template is instantiated. */
+    for (int i = 0; i < tid->template_id.nargs; i++) {
+        Node *arg = tid->template_id.args[i];
+        Type *aty = (arg && arg->kind == ND_VAR_DECL) ? arg->var_decl.ty : NULL;
+        if (aty && aty->kind == TY_DEPENDENT) return;
+    }
+
     Token *name = tid->template_id.name;
     Node *tmpl = registry_find(col->reg, name->loc, name->len);
     if (!tmpl) return;  /* template definition not found — skip */
@@ -424,6 +434,14 @@ static void collect_from_node(InstCollector *col, Node *n) {
          * a call callee). Record as a function template instantiation
          * request if the name resolves to a template definition. */
         Token *tname = n->template_id.name;
+        /* Skip if any arg is still dependent (unsubstituted). */
+        bool has_dep = false;
+        for (int i = 0; i < n->template_id.nargs && !has_dep; i++) {
+            Node *arg = n->template_id.args[i];
+            Type *aty = (arg && arg->kind == ND_VAR_DECL) ? arg->var_decl.ty : NULL;
+            if (aty && aty->kind == TY_DEPENDENT) has_dep = true;
+        }
+        if (has_dep) break;
         if (tname) {
             Node *tmpl = registry_find(col->reg, tname->loc, tname->len);
             if (tmpl) {
