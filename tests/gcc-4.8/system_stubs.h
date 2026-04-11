@@ -152,3 +152,9 @@ typedef __builtin_va_list va_list;
 #define HOST_WIDE_INT_PRINT_UNSIGNED "%lu"
 #define HOST_WIDE_INT_PRINT_DEC "%ld"
 #define HOST_WIDE_INT_PRINT_HEX "0x%lx"
+
+#define XALLOCAVEC(T, N) ((T*)__builtin_alloca(sizeof(T) * (N)))
+#define XALLOCAVAR(T, S) ((T*)__builtin_alloca(S))
+#define XOBFINISH(O, T) ((T)0)
+#define XOBNEW(O, T) ((T*)0)
+#define XOBNEWVEC(O, T, N) ((T*)0)
