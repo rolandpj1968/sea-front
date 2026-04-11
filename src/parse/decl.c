@@ -1040,10 +1040,20 @@ Node *parse_declaration(Parser *p) {
         parser_expect(p, TK_SEMI);
 
         /* Register the typedef-name into the current declarative region */
-        if (decl->var_decl.name)
+        if (decl->var_decl.name) {
             region_declare(p, decl->var_decl.name->loc,
                           decl->var_decl.name->len, ENTITY_TYPE,
                           decl->var_decl.ty);
+            /* For anonymous enums: set the tag to the typedef name
+             * so codegen can emit 'enum name' instead of bare 'enum'.
+             * E.g. 'typedef enum { A, B } my_enum_t;' gives the
+             * anonymous enum the tag 'my_enum_t'.
+             * Only for enums — structs/unions already get tags from
+             * their elaborated-type-specifier during parsing. */
+            if (decl->var_decl.ty && !decl->var_decl.ty->tag &&
+                decl->var_decl.ty->kind == TY_ENUM)
+                decl->var_decl.ty->tag = decl->var_decl.name;
+        }
 
         return new_typedef_node(p, decl->var_decl.ty, decl->var_decl.name,
                                 start_tok);

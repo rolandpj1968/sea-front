@@ -168,3 +168,7 @@ typedef __builtin_va_list va_list;
 #define gcov_type_unsigned unsigned long
 #define HOST_WIDE_INT_PRINT "l"
 #define HOST_LONG_LONG_FORMAT_SIZE 2
+#define SIZEOF_LONG 8
+#define SIZEOF_INT 4
+#define SIZEOF_SHORT 2
+#define SIZEOF_LONG_LONG 8

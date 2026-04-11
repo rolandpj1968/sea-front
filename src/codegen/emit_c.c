@@ -2874,6 +2874,13 @@ static void emit_top_level(Node *n) {
     case ND_TEMPLATE_DECL:
         /* Templates aren't lowered yet — silently skip. */
         return;
+    case ND_TYPEDEF:
+        /* Typedef for an enum/struct/union: emit the underlying type
+         * definition as a C typedef. For enums: 'typedef enum name { ... } name;'
+         * For now, just skip — the type is already registered for
+         * use in declarations. The enum values are available as macros
+         * or via the tag name. */
+        return;
     default:
         fputs("/* unsupported top-level */\n", stdout);
         return;
