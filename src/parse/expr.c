@@ -486,14 +486,21 @@ static Node *primary_expr(Parser *p) {
                  *   - we're in a template-arg context AND the name is
                  *     NOT in lookup as a non-type entity (variable /
                  *     non-type template parameter). */
+                /* Check if a non-template entity (variable, function)
+                 * shadows a template name in the current scope. Per
+                 * §6.3.10/2, a variable hides a class/template name.
+                 * If the FIRST match in lookup is a variable, '<' is
+                 * less-than, not template-args. */
                 bool is_nontype_var = false;
-                if (p->template_depth > 0) {
+                {
                     Declaration *d = lookup_unqualified(p, name->loc, name->len);
-                    if (d && d->entity == ENTITY_VARIABLE)
+                    if (d && d->entity == ENTITY_VARIABLE &&
+                        !(d->type && d->type->kind == TY_FUNC))
                         is_nontype_var = true;
                 }
-                if (lookup_is_template_name(p, name) || looks_template_arg ||
-                    (p->template_depth > 0 && !is_nontype_var)) {
+                if (!is_nontype_var &&
+                    (lookup_is_template_name(p, name) || looks_template_arg ||
+                     (p->template_depth > 0))) {
                     Node *tid = parse_template_id(p, name);
                     /* If no :: follows, this was a standalone
                      * template-id (e.g. max_of<int>(...)) — return
@@ -574,7 +581,15 @@ static Node *primary_expr(Parser *p) {
         if (parts.len == 1 && !global_scope) {
             Token *name = (Token *)parts.data[0];
 
-            /* Rule 4: template-name followed by < → template-id */
+            /* Rule 4: template-name followed by < → template-id.
+             * But if a variable/function shadows the template name
+             * in the current scope (§6.3.10/2), '<' is less-than. */
+            {
+                Declaration *shadow = lookup_unqualified(p, name->loc, name->len);
+                if (shadow && shadow->entity == ENTITY_VARIABLE &&
+                    !(shadow->type && shadow->type->kind == TY_FUNC))
+                    goto simple_ident;
+            }
             if (parser_at(p, TK_LT) && lookup_is_template_name(p, name)) {
                 Node *tid = parse_template_id(p, name);
                 /* template-id may be followed by :: nested-name segments
@@ -592,6 +607,7 @@ static Node *primary_expr(Parser *p) {
                 return tid;
             }
 
+        simple_ident:;
             Node *node = new_node(p, ND_IDENT, name);
             node->ident.name = name; node->ident.implicit_this = false; node->ident.resolved_decl = NULL;
             return node;
