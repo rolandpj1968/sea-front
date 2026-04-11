@@ -2875,18 +2875,22 @@ static void emit_top_level(Node *n) {
     case ND_TEMPLATE_DECL:
         /* Templates aren't lowered yet — silently skip. */
         return;
-    case ND_TYPEDEF:
-        /* If the typedef's underlying type is a struct/union with a
-         * body (anonymous typedef: 'typedef struct { ... } name;'),
-         * emit the struct definition. The typedef name was set as
-         * the tag by the parser, so emit_class_def emits it as
-         * 'struct sf__name { ... };'. */
-        if (n->var_decl.ty &&
-            (n->var_decl.ty->kind == TY_STRUCT || n->var_decl.ty->kind == TY_UNION) &&
-            n->var_decl.ty->class_def) {
-            emit_class_def(n->var_decl.ty->class_def);
-        }
+    case ND_TYPEDEF: {
+        /* If the typedef's underlying type (or pointed-to type) is
+         * a struct/union with a body, emit the struct definition.
+         * Handles both:
+         *   typedef struct { ... } name;     (direct)
+         *   typedef struct foo { ... } *ptr; (pointer to named struct)
+         * Also emit from DeclSpec.class_def if available. */
+        Type *uty = n->var_decl.ty;
+        while (uty && (uty->kind == TY_PTR || uty->kind == TY_REF ||
+                        uty->kind == TY_RVALREF))
+            uty = uty->base;
+        if (uty && (uty->kind == TY_STRUCT || uty->kind == TY_UNION) &&
+            uty->class_def)
+            emit_class_def(uty->class_def);
         return;
+    }
     default:
         fputs("/* unsupported top-level */\n", stdout);
         return;

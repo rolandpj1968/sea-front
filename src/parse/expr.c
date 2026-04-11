@@ -486,11 +486,10 @@ static Node *primary_expr(Parser *p) {
                  *   - we're in a template-arg context AND the name is
                  *     NOT in lookup as a non-type entity (variable /
                  *     non-type template parameter). */
-                /* Check if a non-template entity (variable, function)
-                 * shadows a template name in the current scope. Per
-                 * §6.3.10/2, a variable hides a class/template name.
-                 * If the FIRST match in lookup is a variable, '<' is
-                 * less-than, not template-args. */
+                /* N4659 §6.3.10/2 [basic.scope.hiding]: a variable
+                 * hides a class/template name. Same rule and same
+                 * SHORTCUT as the simple-ident path above — see the
+                 * full comment there. */
                 bool is_nontype_var = false;
                 {
                     Declaration *d = lookup_unqualified(p, name->loc, name->len);
@@ -581,9 +580,25 @@ static Node *primary_expr(Parser *p) {
         if (parts.len == 1 && !global_scope) {
             Token *name = (Token *)parts.data[0];
 
-            /* Rule 4: template-name followed by < → template-id.
-             * But if a variable/function shadows the template name
-             * in the current scope (§6.3.10/2), '<' is less-than. */
+            /* Rule 4 — N4659 §17.2/2 [temp.names]: after name lookup
+             * finds a template-name, '<' is always the start of a
+             * template-argument-list.
+             *
+             * Standard rule — N4659 §6.3.10/2 [basic.scope.hiding]:
+             * "A class name or enumeration name can be hidden by the
+             * name of a variable, data member, function, or enumerator
+             * declared in the same scope." When a non-function
+             * variable shadows a template name, the variable wins
+             * and '<' is less-than.
+             *
+             * SHORTCUT (ours, not the standard): we exempt function-
+             * typed variables (constructors, methods) because they
+             * share the class name via the injected-class-name but
+             * should NOT block template-id parsing. The standard
+             * uses a more nuanced "elaborated-type-specifier" lookup
+             * distinction; our function-type check is simpler.
+             * TODO(seafront#tmpl-shadow): use the standard's
+             * elaborated-type-specifier lookup rules. */
             {
                 Declaration *shadow = lookup_unqualified(p, name->loc, name->len);
                 if (shadow && shadow->entity == ENTITY_VARIABLE &&

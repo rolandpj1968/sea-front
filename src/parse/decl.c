@@ -1035,7 +1035,8 @@ Node *parse_declaration(Parser *p) {
      * C++11 alias-declaration ('using identifier = type-id') is
      * handled separately via the TK_KW_USING branch above. */
     if (parser_consume(p, TK_KW_TYPEDEF)) {
-        Type *base_ty = parse_type_specifiers(p).type;
+        DeclSpec spec = parse_type_specifiers(p);
+        Type *base_ty = spec.type;
         Node *decl = parse_declarator(p, base_ty);
         parser_expect(p, TK_SEMI);
 
