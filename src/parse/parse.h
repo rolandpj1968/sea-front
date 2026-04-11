@@ -319,6 +319,8 @@ struct Node {
             Node **stmts;
             int nstmts;
             DeclarativeRegion *scope;  /* sema-side; the block's region */
+            bool is_flat;  /* true for comma-separated decls, namespace/extern "C" bodies —
+                            * emit statements without wrapping { } braces */
         } block;
 
         /* ND_RETURN — N4659 §9.6.3 [stmt.return]

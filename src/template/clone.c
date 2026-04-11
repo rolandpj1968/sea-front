@@ -280,6 +280,7 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
         c->block.stmts = clone_node_array(n->block.stmts, n->block.nstmts,
                                            map, arena);
         c->block.scope = NULL;  /* sema re-creates */
+        c->block.is_flat = n->block.is_flat;
         break;
 
     case ND_RETURN:

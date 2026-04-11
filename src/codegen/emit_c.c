@@ -1364,6 +1364,17 @@ static void emit_stmt_with_miniblock(Node *s) {
 }
 
 static void emit_block(Node *n) {
+    /* Flat blocks (comma-separated declarators, namespace/extern "C" bodies)
+     * emit their statements directly without wrapping { } braces, so
+     * variables remain visible in the enclosing scope. */
+    if (n->block.is_flat) {
+        for (int i = 0; i < n->block.nstmts; i++) {
+            emit_indent();
+            emit_stmt(n->block.stmts[i]);
+        }
+        return;
+    }
+
     fputs("{\n", stdout);
     g_indent++;
 

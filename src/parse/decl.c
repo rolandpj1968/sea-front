@@ -1386,8 +1386,11 @@ Node *parse_declaration(Parser *p) {
 
         parser_expect(p, TK_SEMI);
 
-        /* Wrap multiple declarators in a block node */
-        return new_block_node(p, (Node **)decls.data, decls.len, start_tok);
+        /* Wrap multiple declarators in a flat block — no braces in C output,
+         * so variables remain visible in the enclosing scope. */
+        Node *blk = new_block_node(p, (Node **)decls.data, decls.len, start_tok);
+        blk->block.is_flat = true;
+        return blk;
     }
 
     parser_expect(p, TK_SEMI);
@@ -1611,8 +1614,10 @@ Node *parse_top_level_decl(Parser *p) {
 
         region_pop(p);
 
-        /* Return as a block of declarations */
-        return new_block_node(p, (Node **)decls.data, decls.len, tok);
+        /* Return as a flat block — namespace body, no braces needed. */
+        Node *blk = new_block_node(p, (Node **)decls.data, decls.len, tok);
+        blk->block.is_flat = true;
+        return blk;
     }
 
     /* static_assert — N4659 §10.1.4 [dcl.dcl]
@@ -1677,7 +1682,9 @@ Node *parse_top_level_decl(Parser *p) {
                     vec_push(&decls, decl);
             }
             parser_expect(p, TK_RBRACE);
-            return new_block_node(p, (Node **)decls.data, decls.len, brace);
+            Node *blk = new_block_node(p, (Node **)decls.data, decls.len, brace);
+            blk->block.is_flat = true;
+            return blk;
         }
 
         /* extern "C" single-declaration */
