@@ -279,6 +279,10 @@ static void collect_from_node(InstCollector *col, Node *n) {
     case ND_CLASS_DEF:
         for (int i = 0; i < n->class_def.nmembers; i++)
             collect_from_node(col, n->class_def.members[i]);
+        /* Collect from base types — a template base like Base<T>
+         * (substituted to Base<int>) needs to be instantiated too. */
+        for (int i = 0; i < n->class_def.nbase_types; i++)
+            collect_from_type(col, n->class_def.base_types[i]);
         break;
 
     case ND_TEMPLATE_DECL:
@@ -985,6 +989,64 @@ void template_instantiate(Node *tu, Arena *arena) {
     tu->tu.ndecls = new_n;
     } /* end iteration loop */
 
+    /* Post-loop: resolve template base classes. During instantiation,
+     * a derived template's base type (e.g. base_t<int>) may not have
+     * been instantiated yet when the derived class was cloned. Now
+     * that all instantiations are done, walk each instantiated class's
+     * base_types and link any that now have class_region set. Also
+     * check the dedup set for bases that were instantiated. */
+    for (int i = 0; i < total_inst; i++) {
+        Node *inst = all_instantiated[i];
+        if (!inst || inst->kind != ND_CLASS_DEF) continue;
+        Type *ity = inst->class_def.ty;
+        if (!ity || !ity->class_region) continue;
+        for (int bi = 0; bi < inst->class_def.nbase_types; bi++) {
+            Type *base_ty = inst->class_def.base_types[bi];
+            if (!base_ty) continue;
+            /* Already linked? */
+            if (base_ty->class_region) {
+                /* Check if already in bases list */
+                bool found = false;
+                for (int k = 0; k < ity->class_region->nbases; k++) {
+                    if (ity->class_region->bases[k] == base_ty->class_region) {
+                        found = true; break;
+                    }
+                }
+                if (!found)
+                    region_add_base_raw(ity->class_region,
+                                         base_ty->class_region, arena);
+                continue;
+            }
+            /* Try the dedup set — base may have been instantiated */
+            if (base_ty->template_id_node &&
+                base_ty->template_id_node->kind == ND_TEMPLATE_ID) {
+                Node *tid = base_ty->template_id_node;
+                char key[512];
+                int pos = 0;
+                if (tid->template_id.name) {
+                    Token *tn = tid->template_id.name;
+                    memcpy(key, tn->loc, tn->len);
+                    pos = tn->len;
+                }
+                key[pos++] = '\0';
+                for (int k = 0; k < tid->template_id.nargs; k++) {
+                    Node *arg = tid->template_id.args[k];
+                    Type *aty = (arg && arg->kind == ND_VAR_DECL) ?
+                                arg->var_decl.ty : NULL;
+                    pos = type_to_key(aty, key, pos, 512);
+                    key[pos++] = '\0';
+                }
+                Type *resolved = dedup_find(&ds, key, pos);
+                if (resolved && resolved->class_region) {
+                    base_ty->class_region = resolved->class_region;
+                    base_ty->class_def = resolved->class_def;
+                    region_add_base_raw(ity->class_region,
+                                         resolved->class_region, arena);
+                }
+            }
+        }
+    }
+
     /* Reverse the instantiated array so that transitive dependencies
      * (discovered in later rounds) appear before the types that
      * reference them. This is a simple heuristic that works because
@@ -1015,6 +1077,7 @@ void template_instantiate(Node *tu, Arena *arena) {
              * template_id_node or template_args (i.e., it's a
              * template instantiation of the same template). */
             bool a_needs_b = false;
+            /* Check by-value members */
             for (int m = 0; m < a->class_def.nmembers && !a_needs_b; m++) {
                 Node *mem = a->class_def.members[m];
                 if (!mem || mem->kind != ND_VAR_DECL) continue;
@@ -1022,14 +1085,21 @@ void template_instantiate(Node *tu, Arena *arena) {
                 if (!mty) continue;
                 if (mty->kind != TY_STRUCT && mty->kind != TY_UNION)
                     continue;
-                /* Match by tag name — if the member is an
-                 * instantiation of the same template as B, A depends
-                 * on B (or another instantiation with the same tag,
-                 * which is close enough for ordering). */
                 if (mty->tag && bty->tag &&
                     mty->tag->len == bty->tag->len &&
                     memcmp(mty->tag->loc, bty->tag->loc,
                            mty->tag->len) == 0)
+                    a_needs_b = true;
+            }
+            /* Also check base types — base classes are embedded
+             * as __sf_base members, so they must be defined first. */
+            for (int bt = 0; bt < a->class_def.nbase_types && !a_needs_b; bt++) {
+                Type *base = a->class_def.base_types[bt];
+                if (!base || !base->tag) continue;
+                if (bty->tag &&
+                    base->tag->len == bty->tag->len &&
+                    memcmp(base->tag->loc, bty->tag->loc,
+                           base->tag->len) == 0)
                     a_needs_b = true;
             }
             if (a_needs_b) {
