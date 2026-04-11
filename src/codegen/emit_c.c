@@ -2858,6 +2858,7 @@ static void emit_top_level(Node *n) {
                     if (i > 0) fputs(", ", stdout);
                     emit_type(fty->params[i]);
                 }
+                if (fty->is_variadic) fputs(", ...", stdout);
             }
             fputs(");\n", stdout);
             return;
