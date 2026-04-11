@@ -117,6 +117,9 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
                 if (parser_consume(p, TK_KW_CONST))    base_ty->is_const = true;
                 if (parser_consume(p, TK_KW_VOLATILE)) base_ty->is_volatile = true;
             }
+            /* GCC __attribute__ after pointer cv-qualifiers:
+             * 'const char * const __attribute__((unused)) name'. */
+            parser_skip_gnu_attributes(p);
         } else if (parser_consume(p, TK_LAND)) {
             /* && — rvalue reference (C++11) */
             base_ty = new_rvalref_type(p, base_ty);
@@ -1122,6 +1125,9 @@ Node *parse_declaration(Parser *p) {
     /* decl-specifier-seq — §10.1 [dcl.spec] */
     DeclSpec spec = parse_type_specifiers(p);
     parse_absorb_trailing_cv(p, &spec);
+    /* GCC __attribute__ between type specifier and declarator:
+     * 'struct stat __attribute__((unused)) buf;'. */
+    parser_skip_gnu_attributes(p);
     Type *base_ty = spec.type;
     Node *class_def = spec.class_def;
     if (!base_ty) {
