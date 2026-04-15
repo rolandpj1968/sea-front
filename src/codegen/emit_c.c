@@ -892,6 +892,85 @@ static void emit_storage_flags_for_def(int flags) {
     emit_storage_flags_impl(flags, true);
 }
 
+/* Emit a C function declarator — the 'ret name(params)' shape —
+ * handling the case where ret itself is a function pointer, which
+ * requires declarator-interleaving (N4659 §11.3 [dcl.meaning]):
+ *   void (*getsig(void))(int);      // getsig returns a fn pointer
+ * cannot be written as
+ *   void (*)(int) getsig(void);     // abstract ret in decl pos — invalid
+ * The inner-return + '(*' + name + '(...this-fn-params...)' + ')' +
+ * '(' + fn-ptr-params + ')' shape is the only legal C form.
+ *
+ * For simple (non-fptr) return types, falls back to
+ *   emit_type(ret); ' '; name; '('
+ * with the caller emitting the function-params-and-close afterward.
+ *
+ * Returns true if the caller still needs to emit params and ')'
+ * (the common case); false if this helper already emitted everything
+ * including the closing ')' (fptr-return case).
+ *
+ * Actually, to keep call sites simple, this helper emits the params
+ * inline. Callers just pass the full param set. */
+static void emit_param_declarator(Type *ty, Token *name, int idx);
+static void emit_func_header(Type *ret_ty, Token *name,
+                              Node **params, int nparams, bool variadic) {
+    bool ret_is_fptr = ret_ty && ret_ty->kind == TY_PTR &&
+                       ret_ty->base && ret_ty->base->kind == TY_FUNC;
+    if (ret_is_fptr) {
+        Type *fty = ret_ty->base;
+        emit_type(fty->ret);
+        fputs(" (*", stdout);
+        if (name)
+            fprintf(stdout, "%.*s", name->len, name->loc);
+        fputc('(', stdout);
+        if (nparams == 0 && !variadic) {
+            fputs("void", stdout);
+        } else {
+            for (int i = 0; i < nparams; i++) {
+                if (i > 0) fputs(", ", stdout);
+                Node *p = params[i];
+                emit_param_declarator(p->param.ty, p->param.name, i);
+            }
+            if (variadic) {
+                if (nparams > 0) fputs(", ", stdout);
+                fputs("...", stdout);
+            }
+        }
+        fputs("))(", stdout);
+        for (int i = 0; i < fty->nparams; i++) {
+            if (i > 0) fputs(", ", stdout);
+            emit_type(fty->params[i]);
+        }
+        if (fty->is_variadic) {
+            if (fty->nparams > 0) fputs(", ", stdout);
+            fputs("...", stdout);
+        } else if (fty->nparams == 0) {
+            fputs("void", stdout);
+        }
+        fputc(')', stdout);
+        return;
+    }
+    emit_type(ret_ty);
+    fputc(' ', stdout);
+    if (name)
+        fprintf(stdout, "%.*s", name->len, name->loc);
+    fputc('(', stdout);
+    if (nparams == 0 && !variadic) {
+        fputs("void", stdout);
+    } else {
+        for (int i = 0; i < nparams; i++) {
+            if (i > 0) fputs(", ", stdout);
+            Node *p = params[i];
+            emit_param_declarator(p->param.ty, p->param.name, i);
+        }
+        if (variadic) {
+            if (nparams > 0) fputs(", ", stdout);
+            fputs("...", stdout);
+        }
+    }
+    fputc(')', stdout);
+}
+
 /* Emit a parameter's 'type name' pair. C interleaves the name with
  * the declarator for function-pointer parameters ('int (*p)(int)'),
  * so we can't just emit_type then name. Arrays also decay to pointer
@@ -2739,25 +2818,9 @@ static void emit_func_def(Node *n) {
     emit_source_comment(n->tok);
     cf_begin_function(n);
     emit_storage_flags_for_def(n->func.storage_flags);
-    emit_type(n->func.ret_ty);
+    emit_func_header(n->func.ret_ty, n->func.name,
+                     n->func.params, n->func.nparams, n->func.is_variadic);
     fputc(' ', stdout);
-    if (n->func.name)
-        fprintf(stdout, "%.*s", n->func.name->len, n->func.name->loc);
-    fputc('(', stdout);
-    if (n->func.nparams == 0 && !n->func.is_variadic) {
-        fputs("void", stdout);
-    } else {
-        for (int i = 0; i < n->func.nparams; i++) {
-            if (i > 0) fputs(", ", stdout);
-            Node *p = n->func.params[i];
-            emit_param_declarator(p->param.ty, p->param.name, i);
-        }
-        if (n->func.is_variadic) {
-            if (n->func.nparams > 0) fputs(", ", stdout);
-            fputs("...", stdout);
-        }
-    }
-    fputs(") ", stdout);
     emit_func_body(n);
 }
 
@@ -3475,6 +3538,40 @@ static void emit_top_level(Node *n) {
             emit_source_comment(n->tok);
             emit_storage_flags(n->var_decl.storage_flags);
             Type *fty = n->var_decl.ty;
+            /* Function returning a function pointer requires
+             * declarator-interleaving (N4659 §11.3):
+             *   void (*signal(int, void(*)(int)))(int);
+             * rather than the invalid 'void (*)(int) signal(...)'. */
+            bool ret_is_fptr = fty->ret && fty->ret->kind == TY_PTR &&
+                               fty->ret->base && fty->ret->base->kind == TY_FUNC;
+            if (ret_is_fptr) {
+                Type *inner = fty->ret->base;
+                emit_type(inner->ret);
+                fprintf(stdout, " (*%.*s(",
+                        n->var_decl.name->len, n->var_decl.name->loc);
+                if (fty->nparams == 0) {
+                    fputs("void", stdout);
+                } else {
+                    for (int i = 0; i < fty->nparams; i++) {
+                        if (i > 0) fputs(", ", stdout);
+                        emit_type(fty->params[i]);
+                    }
+                    if (fty->is_variadic) fputs(", ...", stdout);
+                }
+                fputs("))(", stdout);
+                for (int i = 0; i < inner->nparams; i++) {
+                    if (i > 0) fputs(", ", stdout);
+                    emit_type(inner->params[i]);
+                }
+                if (inner->is_variadic) {
+                    if (inner->nparams > 0) fputs(", ", stdout);
+                    fputs("...", stdout);
+                } else if (inner->nparams == 0) {
+                    fputs("void", stdout);
+                }
+                fputs(");\n", stdout);
+                return;
+            }
             emit_type(fty->ret);
             fprintf(stdout, " %.*s(",
                     n->var_decl.name->len, n->var_decl.name->loc);
