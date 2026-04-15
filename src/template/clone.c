@@ -52,9 +52,22 @@ Type *subst_type(Type *ty, SubstMap *map, Arena *arena) {
     /* TY_DEPENDENT → substitute if the name matches a map entry */
     if (ty->kind == TY_DEPENDENT && ty->tag) {
         Type *concrete = subst_map_lookup(map, ty->tag->loc, ty->tag->len);
-        if (concrete) return concrete;
-        /* No match — leave as-is (will remain dependent for outer template) */
-        return ty;
+        if (!concrete) {
+            /* No match — leave as-is (still dependent for outer template) */
+            return ty;
+        }
+        /* Qualified dependent name 'typename T::member': once T
+         * resolves to a concrete class type, look up 'member' in its
+         * class region. Handles dependent defaults like
+         *   template<typename T, typename L = typename T::default_layout>
+         * where the substitution must resolve T::default_layout. */
+        if (ty->dep_member && concrete->class_region) {
+            Declaration *md = lookup_in_scope(concrete->class_region,
+                ty->dep_member->loc, ty->dep_member->len);
+            if (md && md->type) return md->type;
+            /* Fall through — leave dependent if we can't resolve. */
+        }
+        return concrete;
     }
 
     /* TY_STRUCT / TY_UNION with a template_id_node: substitute args

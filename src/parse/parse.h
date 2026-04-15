@@ -459,6 +459,14 @@ struct Node {
              * the tag for name mangling and the type for the 'this'
              * parameter. */
             Type *class_type;
+            /* For OOL methods whose qualifier is a template-id —
+             * 'vec<T, A, vl_embed>::last()' — this is the parsed
+             * ND_TEMPLATE_ID node carrying the qualifier args. Used by
+             * the template instantiation pass to bind the method to
+             * the matching specialization (primary vs partial) instead
+             * of attaching it to every instantiation with the same
+             * class tag. NULL for non-templated qualifiers. */
+            Node *qual_tid;
             /* True for destructors (parsed from '~ClassName'). The
              * declared name token still points at 'ClassName' (no tilde),
              * so codegen needs this flag to distinguish a dtor from a
@@ -681,8 +689,20 @@ struct Type {
     int nparams;
     bool is_variadic;   /* true if param list ends with ... */
 
-    /* TY_STRUCT, TY_UNION, TY_ENUM: tag name (for 'struct Foo' usage) */
+    /* TY_STRUCT, TY_UNION, TY_ENUM: tag name (for 'struct Foo' usage)
+     * TY_DEPENDENT: the template parameter name (e.g. 'T') or, for a
+     *   qualified dependent name 'typename T::member', the leading
+     *   template parameter ('T'); the nested member lives in
+     *   dep_member below. */
     Token *tag;
+
+    /* TY_DEPENDENT: nested-name suffix of a dependent qualified type.
+     * For 'typename T::default_layout', tag is 'T' and dep_member is
+     * 'default_layout'. During substitution, once T resolves to a
+     * concrete type with a class_region, we look up dep_member in
+     * that region to get the final concrete type. NULL for plain
+     * dependent names ('T' alone). */
+    Token *dep_member;
 
     /* TY_STRUCT, TY_UNION: the declarative region holding the members
      * of the class body (NULL for forward-declared / opaque types).
@@ -925,6 +945,13 @@ struct Parser {
      * the method body can resolve Foo's members via lookup. Cleared
      * after each top-level declaration. */
     DeclarativeRegion *qualified_decl_scope;
+    /* Side channel from parse_declarator → parse_declaration: when the
+     * declarator-id is qualified via a template-id ('C<T,A,L>::f'),
+     * this is the parsed ND_TEMPLATE_ID node. The function-def branch
+     * copies it onto func.qual_tid so the template instantiation pass
+     * can bind OOL methods to the matching specialization. Cleared
+     * after each top-level declaration. */
+    Node *qualified_decl_tid;
     /* Side channel from parse_declarator → parse_declaration: set true
      * when the declarator-id is '~Name' (destructor). Read by the
      * function-def branch and cleared after each declaration. */

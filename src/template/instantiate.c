@@ -52,11 +52,28 @@ static void registry_add(TmplRegistry *reg, const char *name, int name_len,
     reg->buckets[idx] = e;
 }
 
-/* Find the primary template (nparams > 0) for a given name. */
+/* Find the primary template for a given name. The primary is the
+ * ND_TEMPLATE_DECL whose inner class/func has NO template_id_node —
+ * i.e., the declarator-id wasn't a template-id (partial specs and
+ * full specs ARE template-ids). Falls back to any match when only
+ * specializations exist. */
 static Node *registry_find(TmplRegistry *reg, const char *name, int name_len) {
     uint32_t idx = hash_name(name, name_len) % TMPL_REGISTRY_SIZE;
     for (TmplEntry *e = reg->buckets[idx]; e; e = e->next) {
-        if (e->name_len == name_len && memcmp(e->name, name, name_len) == 0 &&
+        if (e->name_len != name_len ||
+            memcmp(e->name, name, name_len) != 0) continue;
+        Node *decl = e->tmpl->template_decl.decl;
+        if (!decl) continue;
+        Type *dty = NULL;
+        if (decl->kind == ND_CLASS_DEF)       dty = decl->class_def.ty;
+        else if (decl->kind == ND_VAR_DECL)   dty = decl->var_decl.ty;
+        /* Primary: no template_id_node on the inner declaration's type */
+        if (dty && !dty->template_id_node &&
+            e->tmpl->template_decl.nparams > 0)
+            return e->tmpl;
+        /* Function templates have no class Type with a template_id_node,
+         * so accept any func-def/decl with nparams > 0 as primary. */
+        if ((decl->kind == ND_FUNC_DEF || decl->kind == ND_FUNC_DECL) &&
             e->tmpl->template_decl.nparams > 0)
             return e->tmpl;
     }
@@ -594,9 +611,82 @@ static Type *type_arg_from_node(Node *arg) {
 }
 
 /*
+ * Unify two template-id argument lists. Each arg is an ND_VAR_DECL
+ * whose var_decl.ty is the type. TY_DEPENDENT positions on either
+ * side are wildcards. Arg counts must match. Used to decide whether
+ * an OOL method's qualifier ('vec<T,A,vl_embed>::f') matches the
+ * template's own pattern ('vec<T,A,vl_embed>').
+ */
+static bool template_ids_unify(Node *a, Node *b) {
+    if (!a || !b) return a == b;
+    if (a->kind != ND_TEMPLATE_ID || b->kind != ND_TEMPLATE_ID) return false;
+    if (a->template_id.nargs != b->template_id.nargs) return false;
+    for (int i = 0; i < a->template_id.nargs; i++) {
+        Node *aa = a->template_id.args[i];
+        Node *bb = b->template_id.args[i];
+        Type *at = (aa && aa->kind == ND_VAR_DECL) ? aa->var_decl.ty : NULL;
+        Type *bt = (bb && bb->kind == ND_VAR_DECL) ? bb->var_decl.ty : NULL;
+        if (!types_match(at, bt)) return false;
+    }
+    return true;
+}
+
+/*
+ * Decide whether an OOL method template belongs to the class template
+ * being instantiated.
+ *
+ * Two-stage match:
+ *   (1) Tag names must agree (necessary for any match).
+ *   (2) If the OOL method's qualifier is a template-id (e.g.
+ *       'vec<T,A,vl_embed>::last'), and the target class template is
+ *       a specialization (has a template_id_node pattern), the args
+ *       must unify. A non-specialization target (primary) only
+ *       accepts methods whose qualifier has NO template-id or whose
+ *       template-id trivially matches the primary's params.
+ *
+ * Falls back to tag-only matching when either side lacks template-id
+ * information — preserves legacy behavior for non-specialized classes.
+ */
+static bool ool_method_matches(Node *method, Type *target_class) {
+    Node *inner = method->template_decl.decl;
+    if (!inner) return false;
+    if (!(inner->kind == ND_FUNC_DEF || inner->kind == ND_FUNC_DECL))
+        return false;
+    Type *mct = inner->func.class_type;
+    if (!mct || !mct->tag || !target_class || !target_class->tag) return false;
+    if (mct->tag->len != target_class->tag->len ||
+        memcmp(mct->tag->loc, target_class->tag->loc, mct->tag->len) != 0)
+        return false;
+    /* Refinement: when both sides carry template-id patterns, require
+     * them to unify. This keeps 'vec<T,A,vl_embed>::f' from binding
+     * to 'vec<T,A,vl_ptr>' or to the primary. */
+    Node *m_tid = inner->func.qual_tid;
+    Node *t_tid = target_class->template_id_node;
+    if (m_tid && t_tid)
+        return template_ids_unify(m_tid, t_tid);
+    /* OOL qualifier has template-id args but target has no pattern
+     * (primary instantiation). This is legitimate when the OOL's
+     * args are all dependent (template params of the method itself,
+     * like 'Box<T>::get'). It's a mismatch when any arg is concrete
+     * ('vec<T,A,vl_embed>::last' shouldn't bind to the primary). */
+    if (m_tid && !t_tid) {
+        for (int i = 0; i < m_tid->template_id.nargs; i++) {
+            Node *a = m_tid->template_id.args[i];
+            Type *t = (a && a->kind == ND_VAR_DECL) ? a->var_decl.ty : NULL;
+            if (t && t->kind != TY_DEPENDENT) return false;
+        }
+        return true;  /* all args dependent — primary-compatible */
+    }
+    /* OOL qualifier had no template-id args: legacy tag-only match.
+     * (This is the common case for non-templated classes.) */
+    return true;
+}
+
+/*
  * Find out-of-class method templates for a given class template.
  * These are top-level ND_TEMPLATE_DECL nodes wrapping ND_FUNC_DEF
- * where func.class_type matches the class template's type.
+ * where func.class_type matches the class template's type AND (when
+ * applicable) the qualifier template-id unifies with the target.
  * Collects into 'out' array, returns count.
  */
 static int find_ool_methods(Node *tu, Type *class_type,
@@ -611,30 +701,14 @@ static int find_ool_methods(Node *tu, Type *class_type,
             for (int j = 0; j < n->block.nstmts; j++) {
                 Node *m = n->block.stmts[j];
                 if (!m || m->kind != ND_TEMPLATE_DECL) continue;
-                Node *inner = m->template_decl.decl;
-                if (!inner) continue;
-                if ((inner->kind == ND_FUNC_DEF || inner->kind == ND_FUNC_DECL) &&
-                    inner->func.class_type &&
-                    inner->func.class_type->tag &&
-                    inner->func.class_type->tag->len == class_type->tag->len &&
-                    memcmp(inner->func.class_type->tag->loc,
-                           class_type->tag->loc, class_type->tag->len) == 0) {
-                    if (count < max) out[count++] = m;
-                }
+                if (ool_method_matches(m, class_type) && count < max)
+                    out[count++] = m;
             }
             continue;
         }
         if (n->kind != ND_TEMPLATE_DECL) continue;
-        Node *inner = n->template_decl.decl;
-        if (!inner) continue;
-        if ((inner->kind == ND_FUNC_DEF || inner->kind == ND_FUNC_DECL) &&
-            inner->func.class_type &&
-            inner->func.class_type->tag &&
-            inner->func.class_type->tag->len == class_type->tag->len &&
-            memcmp(inner->func.class_type->tag->loc,
-                   class_type->tag->loc, class_type->tag->len) == 0) {
-            if (count < max) out[count++] = n;
-        }
+        if (ool_method_matches(n, class_type) && count < max)
+            out[count++] = n;
     }
     return count;
 }
@@ -1009,9 +1083,33 @@ void template_instantiate(Node *tu, Arena *arena) {
 
         /* Check for a full specialization that matches the requested
          * args. If found, use the specialization's concrete definition
-         * directly instead of cloning the primary template. */
+         * directly instead of cloning the primary template.
+         *
+         * If the usage args are shorter than the primary's param list
+         * (defaults expansion applies), try matching against a SYNTHETIC
+         * template-id whose args are the expanded usage. This lets
+         *   template<typename T, typename A = X, typename L = Y>
+         *   struct vec<T, A, vl_ptr> { ... };  // partial spec
+         * match a usage 'vec<int>' that expands to 'vec<int, X, vl_ptr>'. */
         Node *spec = registry_find_specialization(
             &reg, req->name->loc, req->name->len, req->template_id);
+        if (!spec && np > na && tmp_map.nentries == np) {
+            /* Build synthetic template-id from the expanded tmp_map. */
+            Node *syn = arena_alloc(arena, sizeof(Node));
+            *syn = *req->template_id;
+            syn->template_id.nargs = np;
+            syn->template_id.args = arena_alloc(arena, np * sizeof(Node *));
+            for (int i = 0; i < np; i++) {
+                Node *arg = arena_alloc(arena, sizeof(Node));
+                memset(arg, 0, sizeof(Node));
+                arg->kind = ND_VAR_DECL;
+                arg->var_decl.ty = tmp_map.entries[i].concrete_type;
+                syn->template_id.args[i] = arg;
+            }
+            spec = registry_find_specialization(
+                &reg, req->name->loc, req->name->len, syn);
+            if (spec) req->template_id = syn;  /* use expanded for instantiation */
+        }
 
         Node **extra_methods = NULL;
         int nextra = 0;

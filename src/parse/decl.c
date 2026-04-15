@@ -318,12 +318,16 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
          * TODO(seafront#decl-tmpl-id): when our lookup covers the
          * inline-namespace and friend-injection cases, restore the
          * standard check and emit a diagnostic on lookup failure. */
+        Node *leading_tid = NULL;
         if (parser_at(p, TK_LT)) {
-            parse_template_id(p, name);
+            leading_tid = parse_template_id(p, name);
             /* Keep qscope: 'C<T>::f' should still resolve into C's
              * class_region for member visibility — an instantiation
              * may differ in dependent details, but member names
-             * declared in the primary template are visible. */
+             * declared in the primary template are visible. The
+             * template-id's args are preserved below on the FUNC_DEF
+             * so the instantiation pass can bind the OOL method to
+             * the matching partial specialization (not just the tag). */
         }
         /* Consume qualified-id: ident(opt <args>) :: ident :: ... :: ident
          * N4659 §6.4.3 [basic.lookup.qual] / §11.3 grammar.
@@ -342,7 +346,7 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
                  * leading-segment template-id parse for the full
                  * discussion. */
                 if (parser_at(p, TK_LT)) {
-                    parse_template_id(p, name);
+                    Node *seg_tid = parse_template_id(p, name);
                     /* Resolve template-id segment via lookup in current
                      * qscope and refine. */
                     if (qscope) {
@@ -350,6 +354,9 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
                         if (next && next->type && next->type->class_region)
                             qscope = next->type->class_region;
                     }
+                    /* Track the deepest template-id so OOL methods whose
+                     * qualifier ends in a template-id carry its args. */
+                    if (seg_tid) leading_tid = seg_tid;
                 }
                 /* Resolve this segment in the previous scope. The LAST
                  * segment is the declarator-id name itself; we don't
@@ -384,6 +391,10 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
          * function-def branch to push. */
         if (qscope)
             p->qualified_decl_scope = qscope;
+        /* Preserve the qualifier template-id, if any, so the
+         * function-def branch can copy it onto func.qual_tid. */
+        if (leading_tid)
+            p->qualified_decl_tid = leading_tid;
         /* Out-of-class constructor definition: 'Foo::Foo(...)'.
          * If the qualified-id ends in a name that matches the
          * qualifier scope's class name, this is a ctor. The
@@ -1249,6 +1260,8 @@ Node *parse_declaration(Parser *p) {
          * original region after the body. */
         DeclarativeRegion *qscope = p->qualified_decl_scope;
         p->qualified_decl_scope = NULL;
+        Node *qtid = p->qualified_decl_tid;
+        p->qualified_decl_tid = NULL;
         DeclarativeRegion *saved_region = p->region;
         if (qscope && !p->tentative) {
             p->region = qscope;
@@ -1257,6 +1270,10 @@ Node *parse_declaration(Parser *p) {
              * name and inject a 'this' parameter. */
             if (qscope->kind == REGION_CLASS && qscope->owner_type)
                 func->func.class_type = qscope->owner_type;
+            /* Preserve the qualifier template-id on the func so the
+             * template instantiation pass can bind OOL methods to the
+             * matching specialization. */
+            func->func.qual_tid = qtid;
         }
 
         /* In-class member function: defer body parsing until the

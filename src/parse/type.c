@@ -852,6 +852,26 @@ DeclSpec parse_type_specifiers(Parser *p) {
             copy->is_volatile = is_volatile;
             result.type = copy; return result;
         }
+        /* Dependent qualified name ('typename T::member' with T a
+         * template type parameter): preserve the base and member as
+         * TY_DEPENDENT so subst_type can resolve at instantiation.
+         * Without this, the member name ('default_layout') leaks into
+         * the mangle and no specialization matches. */
+        {
+            Declaration *first_d = lookup_unqualified_kind(
+                p, first->loc, first->len, ENTITY_TYPE);
+            if (first_d && first_d->type &&
+                first_d->type->kind == TY_DEPENDENT &&
+                last_seg != first) {
+                Type *dep = new_type(p, TY_DEPENDENT);
+                dep->tag = first;
+                dep->dep_member = last_seg;
+                dep->is_const = is_const;
+                dep->is_volatile = is_volatile;
+                result.type = dep;
+                return result;
+            }
+        }
         Type *ty = new_type(p, TY_STRUCT);  /* opaque — sema resolves */
         ty->is_const = is_const;
         ty->is_volatile = is_volatile;
@@ -1088,6 +1108,12 @@ DeclSpec parse_type_specifiers(Parser *p) {
             DeclarativeRegion *qscope2 =
                 (d->type && d->type->class_region) ? d->type->class_region : NULL;
             Declaration *qres2 = d;
+            /* For 'typename T::member' where T is a dependent template
+             * param, record the member suffix so substitution can
+             * resolve it once T becomes concrete. */
+            Token *dep_member_tok = NULL;
+            bool chain_is_dependent =
+                d->type && d->type->kind == TY_DEPENDENT;
             while (parser_consume(p, TK_SCOPE)) {
                 parser_consume(p, TK_KW_TEMPLATE);
                 if (parser_at(p, TK_IDENT)) {
@@ -1106,10 +1132,23 @@ DeclSpec parse_type_specifiers(Parser *p) {
                             qscope2 = next->ns_region;
                         else
                             qscope2 = NULL;
+                    } else if (chain_is_dependent) {
+                        /* Dependent qualified: remember the last segment
+                         * as the member to resolve at substitution time. */
+                        dep_member_tok = seg;
                     } else {
                         qres2 = NULL;
                     }
                 }
+            }
+            if (chain_is_dependent && dep_member_tok) {
+                /* Build a fresh TY_DEPENDENT carrying both the base
+                 * param tag and the qualified member name. */
+                Type *dep = new_type(p, TY_DEPENDENT);
+                dep->tag = d->type->tag;
+                dep->dep_member = dep_member_tok;
+                result.type = dep;
+                return result;
             }
             /* If the chain resolved through to a real type, use it
              * instead of d->type (the leading segment). */
