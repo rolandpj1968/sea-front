@@ -1027,11 +1027,23 @@ static void emit_expr(Node *n) {
             /* Method dispatch lowering applies when the member resolves
              * to a method declaration (type TY_FUNC). A function pointer
              * data field has type TY_PTR(TY_FUNC) and falls through to
-             * the generic call path which emits 'obj.field(args)'. */
-            Type *callee_ty = callee->resolved_type;
+             * the generic call path which emits 'obj.field(args)'. Look
+             * up the member in the class region to tell them apart;
+             * fall back to resolved_type when the region lookup misses. */
+            bool is_method_call = false;
             if (ot && (ot->kind == TY_STRUCT || ot->kind == TY_UNION) &&
-                ot->tag && callee->member.member &&
-                (!callee_ty || callee_ty->kind == TY_FUNC)) {
+                ot->tag && callee->member.member) {
+                Token *mn = callee->member.member;
+                Type *mty = NULL;
+                if (ot->class_region) {
+                    Declaration *md = lookup_in_scope(ot->class_region,
+                                                      mn->loc, mn->len);
+                    if (md && md->type) mty = md->type;
+                }
+                if (!mty && callee->resolved_type) mty = callee->resolved_type;
+                is_method_call = mty && mty->kind == TY_FUNC;
+            }
+            if (is_method_call) {
                 bool virt = method_is_virtual(ot, callee->member.member);
                 if (virt) {
                     /* Virtual dispatch: load __sf_vptr then call slot.

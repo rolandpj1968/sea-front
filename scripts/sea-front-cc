@@ -1,0 +1,164 @@
+#!/bin/sh
+# sea-front-cc — wrapper that acts as a C++ compiler for build systems.
+#
+# Pipeline: preprocess (g++) → transpile (sea-front) → compile C (gcc)
+#
+# Usage: sea-front-cc [compiler-flags] -c -o output.o input.cpp
+#        sea-front-cc [compiler-flags] -o output input.o ...   (link mode)
+#
+# Environment:
+#   SEA_FRONT    — path to sea-front binary (default: build/sea-front)
+#   SEA_CC       — C compiler for compiling emitted C (default: cc)
+#   SEA_CPP      — C++ preprocessor (default: g++)
+#   SEA_VERBOSE  — set to 1 for debug output
+
+set -e
+
+SEA_FRONT="${SEA_FRONT:-$(dirname "$0")/../build/sea-front}"
+SEA_CC="${SEA_CC:-cc}"
+SEA_CPP="${SEA_CPP:-g++}"
+SEA_VERBOSE="${SEA_VERBOSE:-0}"
+
+log() {
+    [ "$SEA_VERBOSE" = "1" ] && echo "[sea-front-cc] $*" >&2 || true
+}
+
+# Parse arguments to understand what mode we're in.
+# We need to identify:
+#   - input files (.cpp, .cc, .cxx, .C, .c)
+#   - output file (-o foo)
+#   - compile-only (-c)
+#   - preprocessor flags (-I, -D, -U, -include, -isystem, -std=)
+#   - other flags passed through to the C compiler
+MODE="link"
+OUTPUT=""
+INPUTS=""
+CPP_FLAGS=""
+CC_FLAGS=""
+STD_FLAG=""
+SKIP_NEXT=0
+
+for arg in "$@"; do
+    if [ "$SKIP_NEXT" = "1" ]; then
+        SKIP_NEXT=0
+        continue
+    fi
+    case "$arg" in
+        -c)
+            MODE="compile"
+            ;;
+        -o)
+            # Next arg is output file — handled in paired loop below
+            ;;
+        -E|-S|-M|-MM)
+            # Preprocessing/assembly/dependency modes — pass through to preprocessor
+            exec $SEA_CPP "$@"
+            ;;
+        -shared|-static)
+            CC_FLAGS="$CC_FLAGS $arg"
+            ;;
+        *)
+            ;;
+    esac
+done
+
+# Re-parse to extract structured info (output, inputs, flags)
+OUTPUT=""
+INPUTS=""
+CPP_FLAGS=""
+CC_FLAGS=""
+PREV=""
+for arg in "$@"; do
+    if [ "$PREV" = "-o" ]; then
+        OUTPUT="$arg"
+        PREV=""
+        continue
+    fi
+    PREV=""
+    case "$arg" in
+        -c) MODE="compile" ;;
+        -o) PREV="-o" ;;
+        -I*|-D*|-U*)
+            CPP_FLAGS="$CPP_FLAGS $arg"
+            ;;
+        -include|-isystem|-iquote)
+            CPP_FLAGS="$CPP_FLAGS $arg"
+            PREV="$arg"
+            ;;
+        -std=*)
+            STD_FLAG="$arg"
+            CPP_FLAGS="$CPP_FLAGS $arg"
+            ;;
+        -W*|-f*|-g*|-O*|-m*|-pipe|-pthread)
+            CC_FLAGS="$CC_FLAGS $arg"
+            ;;
+        -l*|-L*)
+            CC_FLAGS="$CC_FLAGS $arg"
+            ;;
+        *.cpp|*.cc|*.cxx|*.C|*.c|*.ii|*.i)
+            INPUTS="$INPUTS $arg"
+            ;;
+        *.o|*.a|*.so)
+            # Object/library files — pass through for linking
+            CC_FLAGS="$CC_FLAGS $arg"
+            ;;
+        *)
+            # Unknown — pass to both
+            CPP_FLAGS="$CPP_FLAGS $arg"
+            CC_FLAGS="$CC_FLAGS $arg"
+            ;;
+    esac
+    # Handle -include / -isystem with separate value arg
+    case "$PREV" in
+        -include|-isystem|-iquote)
+            # Will be captured on next iteration as the value
+            ;;
+    esac
+done
+
+# If no C++ source files, this is a pure link or C compile — pass through
+if [ -z "$INPUTS" ]; then
+    log "No source files — passthrough to $SEA_CC"
+    exec $SEA_CC "$@"
+fi
+
+if [ "$MODE" = "link" ]; then
+    log "Link mode — passthrough to $SEA_CC"
+    exec $SEA_CC "$@"
+fi
+
+# Default output: derive from input (foo.cpp → foo.o)
+if [ -z "$OUTPUT" ] && [ "$MODE" = "compile" ]; then
+    for src in $INPUTS; do
+        OUTPUT=$(echo "$src" | sed 's/\.[^.]*$/.o/')
+        break
+    done
+fi
+
+# Compile mode: preprocess → sea-front → cc -c
+for src in $INPUTS; do
+    log "Processing: $src"
+
+    TMPDIR="${TMPDIR:-/tmp}"
+    base=$(basename "$src" | sed 's/\.[^.]*$//')
+    pp_file="$TMPDIR/sf_pp_${base}_$$.i"
+    c_file="$TMPDIR/sf_out_${base}_$$.c"
+
+    # Step 1: Preprocess
+    log "  Preprocess: $SEA_CPP -E $STD_FLAG $CPP_FLAGS $src"
+    $SEA_CPP -E $STD_FLAG $CPP_FLAGS "$src" -o "$pp_file" 2>/dev/null
+
+    # Step 2: Transpile C++ → C
+    log "  Transpile: $SEA_FRONT --emit-c $pp_file"
+    $SEA_FRONT --emit-c "$pp_file" > "$c_file" 2>/dev/null
+
+    # Step 3: Compile C → .o
+    # Use -std=c99 for gcc 4.7 compatibility (for-init declarations)
+    log "  Compile: $SEA_CC -std=c99 -w -c $CC_FLAGS -o $OUTPUT $c_file"
+    $SEA_CC -std=c99 -w -c $CC_FLAGS -o "$OUTPUT" "$c_file"
+
+    # Cleanup
+    rm -f "$pp_file" "$c_file"
+done
+
+log "Done"
