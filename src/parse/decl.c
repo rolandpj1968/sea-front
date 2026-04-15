@@ -1250,6 +1250,7 @@ Node *parse_declaration(Parser *p) {
         func->func.is_constructor = p->pending_is_constructor;
         p->pending_is_constructor = false;
         func->func.is_virtual = (spec.flags & DECL_VIRTUAL) != 0;
+        func->func.storage_flags = spec.flags;
         func->func.body_start_pos = -1;
         func->func.body_end_pos = -1;
         func->func.deferred_class_region = NULL;
@@ -1510,6 +1511,7 @@ Node *parse_declaration(Parser *p) {
         if ((spec.flags & DECL_VIRTUAL) &&
             decl->var_decl.ty && decl->var_decl.ty->kind == TY_FUNC)
             decl->var_decl.is_virtual = true;
+        decl->var_decl.storage_flags = spec.flags;
     }
     return decl;
 }

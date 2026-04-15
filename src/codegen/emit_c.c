@@ -166,6 +166,7 @@ static int cont_target(void)   { return find_cont_target_from(g_cf.nlive); }
 static void emit_expr(Node *n);
 static void emit_type(Type *ty);
 static void emit_mangled_class_tag(Type *class_type);
+static void emit_stmt(Node *n);
 
 /*
  * Emit a "C++: ..." comment showing the original C++ declaration.
@@ -851,6 +852,46 @@ static void emit_type(Type *ty) {
     }
 }
 
+/* Re-emit storage-class / function-specifier keywords from the
+ * DeclSpec flags captured at parse time. N4659 §10.1.1 [dcl.stc] /
+ * §10.1.6 [dcl.inline].
+ *
+ * C-vs-C++ inline divergence is handled here (function DEFINITIONS
+ * only, signalled by for_definition=true): C++ inline functions
+ * have external linkage with "merge across TUs" semantics handled
+ * by the linker (COMDAT / weak). A plain C 'inline' definition
+ * also has external linkage but requires exactly ONE non-inline
+ * provider across the program. Preprocessed C++ headers emit the
+ * inline in every TU that includes them — plain C link produces
+ * duplicate-definition errors.
+ *
+ * Lowering: an 'inline' DEFINITION without static/extern becomes
+ * '__attribute__((weak))' WITHOUT the 'inline' keyword. gcc warns
+ * and drops the weak attribute when combined with 'inline'
+ * (-Wattributes), so we emit weak-without-inline to actually get
+ * weak linkage. The compiler can still inline based on contents.
+ * Static inlines need no shim (internal linkage per TU). */
+static void emit_storage_flags_impl(int flags, bool for_definition) {
+    bool is_inline = (flags & DECL_INLINE) != 0;
+    bool is_static = (flags & DECL_STATIC) != 0;
+    bool is_extern = (flags & DECL_EXTERN) != 0;
+    if (for_definition && is_inline && !is_static && !is_extern) {
+        fputs("__attribute__((weak)) ", stdout);
+        return;  /* skip the 'inline' keyword — conflicts with weak */
+    }
+    if (is_extern)  fputs("extern ", stdout);
+    if (is_static)  fputs("static ", stdout);
+    if (is_inline)  fputs("inline ", stdout);
+}
+
+static void emit_storage_flags(int flags) {
+    emit_storage_flags_impl(flags, false);
+}
+
+static void emit_storage_flags_for_def(int flags) {
+    emit_storage_flags_impl(flags, true);
+}
+
 /* Emit a parameter's 'type name' pair. C interleaves the name with
  * the declarator for function-pointer parameters ('int (*p)(int)'),
  * so we can't just emit_type then name. Arrays also decay to pointer
@@ -1312,6 +1353,30 @@ static void emit_expr(Node *n) {
     case ND_ALIGNOF:
         fputs("_Alignof(", stdout);
         if (n->alignof_.ty) emit_type(n->alignof_.ty);
+        fputc(')', stdout);
+        return;
+    case ND_STMT_EXPR:
+        /* GCC statement-expression — emit the inner block inside
+         * '({ ... })'. Target compilers (gcc 4.7 / gcc 4.8) accept
+         * the extension. Non-standard; needed for glibc / libiberty
+         * macros (obstack_alloc, XOBNEW, etc.). */
+        fputc('(', stdout);
+        if (n->stmt_expr.block)
+            emit_stmt(n->stmt_expr.block);
+        fputc(')', stdout);
+        return;
+
+    case ND_OFFSETOF:
+        /* __builtin_offsetof(type, member) — emit with the sea-front
+         * type and the member-designator tokens verbatim. */
+        fputs("__builtin_offsetof(", stdout);
+        emit_type(n->offsetof_.ty);
+        fputs(", ", stdout);
+        for (int i = 0; i < n->offsetof_.n_mem_toks; i++) {
+            Token *t = &n->offsetof_.mem_toks[i];
+            if (t->has_space && i > 0) fputc(' ', stdout);
+            fprintf(stdout, "%.*s", t->len, t->loc);
+        }
         fputc(')', stdout);
         return;
     case ND_INIT_LIST:
@@ -2639,6 +2704,7 @@ static void emit_func_body(Node *func) {
 static void emit_func_def(Node *n) {
     emit_source_comment(n->tok);
     cf_begin_function(n);
+    emit_storage_flags_for_def(n->func.storage_flags);
     emit_type(n->func.ret_ty);
     fputc(' ', stdout);
     if (n->func.name)
@@ -3373,6 +3439,7 @@ static void emit_top_level(Node *n) {
                     return;
             }
             emit_source_comment(n->tok);
+            emit_storage_flags(n->var_decl.storage_flags);
             Type *fty = n->var_decl.ty;
             emit_type(fty->ret);
             fprintf(stdout, " %.*s(",
@@ -3413,6 +3480,7 @@ static void emit_top_level(Node *n) {
                 g_emit_phase = saved_phase;
             }
         }
+        emit_storage_flags(n->var_decl.storage_flags);
         emit_var_decl_inner(n);
         fputs(";\n", stdout);
         return;

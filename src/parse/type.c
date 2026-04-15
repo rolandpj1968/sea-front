@@ -1494,20 +1494,83 @@ Type *parse_type_name(Parser *p) {
                parser_consume(p, TK_KW_CONST) || parser_consume(p, TK_KW_VOLATILE))
             ;
         parser_expect(p, TK_RPAREN);
-        base = new_ptr_type(p, base);
-        /* Optional function-parameter list of the pointed-to function. */
+        /* Optional function-parameter list of the pointed-to function.
+         * If present we build a real TY_FUNC so the POINTER wraps
+         * FUNCTION (not the original base type): '(*)(args)' means
+         * 'pointer to function with these args'. Without the suffix
+         * this is just a parenthesised pointer declarator ('(T*)').
+         * N4659 §11.3.1 / §11.3.5 [dcl.fct].
+         *
+         * SHORTCUT: tentative param parse. If the args list contains
+         * pack expansion / dependent template tricks ('_ArgTypes...'),
+         * our partial abstract-declarator parser will fail. On
+         * failure, restore and swallow the args opaquely — the cast
+         * ends up with the wrong param count but the pointer level
+         * is preserved. Used only in type-name position (casts,
+         * sizeof, template args), so a mismatched param list is
+         * rarely observable at runtime. TODO(seafront#abs-decl-pack):
+         * extend to parse pack expansions once we lower them. */
         if (parser_consume(p, TK_LPAREN)) {
-            int depth = 1;
-            while (depth > 0 && !parser_at_eof(p)) {
-                if (parser_at(p, TK_LPAREN)) depth++;
-                else if (parser_at(p, TK_RPAREN)) {
-                    depth--;
-                    if (depth == 0) break;
+            ParseState saved = parser_save(p);
+            bool prev_tentative = p->tentative;
+            bool saved_failed = p->tentative_failed;
+            p->tentative = true;
+            p->tentative_failed = false;
+            Vec param_types = vec_new(p->arena);
+            bool variadic = false;
+            bool parse_ok = true;
+            if (!parser_at(p, TK_RPAREN)) {
+                if (parser_at(p, TK_KW_VOID) &&
+                    parser_peek_ahead(p, 1)->kind == TK_RPAREN) {
+                    parser_advance(p);
+                } else {
+                    for (;;) {
+                        if (parser_consume(p, TK_ELLIPSIS)) {
+                            variadic = true; break;
+                        }
+                        Type *pbase = parse_type_specifiers(p).type;
+                        if (!pbase || p->tentative_failed) {
+                            parse_ok = false; break;
+                        }
+                        while (parser_consume(p, TK_STAR)) {
+                            pbase = new_ptr_type(p, pbase);
+                            while (parser_at(p, TK_KW_CONST) ||
+                                   parser_at(p, TK_KW_VOLATILE)) {
+                                if (parser_consume(p, TK_KW_CONST))
+                                    pbase->is_const = true;
+                                if (parser_consume(p, TK_KW_VOLATILE))
+                                    pbase->is_volatile = true;
+                            }
+                        }
+                        vec_push(&param_types, pbase);
+                        if (!parser_consume(p, TK_COMMA)) break;
+                    }
                 }
-                parser_advance(p);
+                if (parse_ok && !parser_at(p, TK_RPAREN))
+                    parse_ok = false;
             }
-            parser_expect(p, TK_RPAREN);
+            p->tentative = prev_tentative;
+            p->tentative_failed = saved_failed;
+            if (parse_ok) {
+                parser_expect(p, TK_RPAREN);
+                base = new_func_type(p, base, (Type **)param_types.data,
+                                      param_types.len, variadic);
+            } else {
+                /* Opaque fallback: skip to matching ')'. */
+                parser_restore(p, saved);
+                int depth = 1;
+                while (depth > 0 && !parser_at_eof(p)) {
+                    if (parser_at(p, TK_LPAREN)) depth++;
+                    else if (parser_at(p, TK_RPAREN)) {
+                        depth--;
+                        if (depth == 0) break;
+                    }
+                    parser_advance(p);
+                }
+                parser_expect(p, TK_RPAREN);
+            }
         }
+        base = new_ptr_type(p, base);
     }
     /* Grouped abstract pointer-to-member-function:
      *   '(C::*)(args)' or '(C::B::*)(args)'

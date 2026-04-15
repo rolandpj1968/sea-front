@@ -76,6 +76,21 @@ typedef enum {
     ND_SIZEOF,          /* sizeof — N4659 §8.3.3 [expr.sizeof]
                          * C++11 adds sizeof...(pack) */
     ND_ALIGNOF,         /* alignof — N4659 §8.3.6 [expr.alignof] */
+    ND_OFFSETOF,        /* GCC __builtin_offsetof(type, member)
+                         * Parsed into a type + raw member-token range.
+                         * Codegen re-emits as '__builtin_offsetof(T, m)'
+                         * so gcc computes the real offset. Used by
+                         * stddef.h's offsetof macro and libcpp's
+                         * DEFAULT_ALIGNMENT. Not in the C++ standard
+                         * (§20.2.5 exposes 'offsetof' via <cstddef>
+                         * without specifying the implementation). */
+    ND_STMT_EXPR,       /* GCC statement-expression ({ stmts; expr; })
+                         * Not in the standard — gcc extension used
+                         * heavily in glibc/libiberty macros (obstack,
+                         * __extension__). The value is the last
+                         * expression-statement in the block. Captured
+                         * as a raw token range so codegen can re-emit
+                         * the extension verbatim for a gcc compiler. */
     ND_INIT_LIST,       /* braced-init-list — N4659 §11.6.4 [dcl.init.list]
                          *   { initializer-list(opt) ,(opt) }
                          * Used as an initializer for arrays and aggregates,
@@ -317,6 +332,22 @@ struct Node {
             Type *ty;
         } alignof_;
 
+        /* ND_OFFSETOF — __builtin_offsetof. Emit '__builtin_offsetof(T, mem)'. */
+        struct {
+            Type  *ty;
+            Token *mem_toks;  /* member designator tokens (starting after ',') */
+            int    n_mem_toks;
+        } offsetof_;
+
+        /* ND_STMT_EXPR — GCC statement-expression.
+         * Parsed as a normal compound statement so type-names get
+         * mangled and member accesses resolve against our renamed
+         * structs. Codegen re-wraps the emitted block in '({ ... })'
+         * for gcc. N4659 does NOT include this — it's a gcc extension. */
+        struct {
+            Node *block;   /* ND_BLOCK holding the inner statements */
+        } stmt_expr;
+
         /* ND_INIT_LIST — N4659 §11.6.4 [dcl.init.list]
          * Braced initializer: { e1, e2, ... }. Each element is itself
          * an expression — possibly another ND_INIT_LIST for nested
@@ -437,6 +468,14 @@ struct Node {
              *   member-declarator: identifier(opt) : constant-expression
              * NULL for non-bitfield members. */
             Node  *bitfield_width;
+            /* Storage-class / function-specifier flags — N4659
+             * §10.1.1 [dcl.stc] / §10.1.6 [dcl.inline]. Copied from
+             * the DeclSpec at parse time so codegen can re-emit
+             * 'extern', 'static', 'inline' qualifiers. Without this,
+             * system-header patterns like 'extern FILE *stdin;' lose
+             * the extern and become TU-local definitions, causing
+             * multiple-definition link errors. */
+            int    storage_flags;  /* DECL_STATIC | DECL_EXTERN | DECL_INLINE | ... */
         } var_decl;
 
         /* ND_FUNC_DEF — N4659 §11.4 [dcl.fct.def]
@@ -447,6 +486,13 @@ struct Node {
             Node **params;  /* array of ND_PARAM nodes */
             int nparams;
             bool is_variadic;  /* param list ends with '...' — N4659 §11.3.5/4 [dcl.fct] */
+            /* Storage-class / function-specifier flags — N4659
+             * §10.1.1 [dcl.stc] / §10.1.6 [dcl.inline]. 'static' on
+             * a definition gives internal linkage; 'inline' gates
+             * multi-TU header-inline behavior. Without this, every
+             * inline in a preprocessed header becomes an external
+             * definition and links collide. */
+            int    storage_flags;
             Node *body;     /* ND_BLOCK (compound-statement) */
             DeclarativeRegion *param_scope;  /* sema; prototype-scope region */
             /* Constructor mem-initializer-list — N4659 §15.6.2 [class.base.init]

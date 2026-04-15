@@ -127,6 +127,35 @@ static int get_binop_prec(Parser *p, TokenKind k) {
 static Node *primary_expr(Parser *p) {
     Token *tok = parser_peek(p);
 
+    /* GCC statement-expression — '__extension__ ({ stmts; expr; })'
+     * or bare '({ ... })'. Non-standard. Captured as a raw token
+     * range; codegen re-emits the extension verbatim for gcc.
+     * Common in glibc / libiberty macros (obstack_alloc, XOBNEW). */
+    {
+        Token *first = tok;
+        int start = p->pos;
+        bool is_stmt_expr = false;
+        if (first->kind == TK_IDENT && first->len == 13 &&
+            memcmp(first->loc, "__extension__", 13) == 0 &&
+            parser_peek_ahead(p, 1)->kind == TK_LPAREN &&
+            parser_peek_ahead(p, 2)->kind == TK_LBRACE) {
+            parser_advance(p);  /* __extension__ */
+            is_stmt_expr = true;
+        } else if (first->kind == TK_LPAREN &&
+                   parser_peek_ahead(p, 1)->kind == TK_LBRACE) {
+            is_stmt_expr = true;
+        }
+        if (is_stmt_expr) {
+            parser_advance(p);  /* ( */
+            Node *block = parse_compound_stmt(p);
+            parser_expect(p, TK_RPAREN);
+            Node *node = new_node(p, ND_STMT_EXPR, first);
+            node->stmt_expr.block = block;
+            return node;
+        }
+        (void)start;
+    }
+
     switch (tok->kind) {
     case TK_NUM:        /* §5.13.2 [lex.icon] */
         parser_advance(p);
@@ -349,6 +378,35 @@ static Node *primary_expr(Parser *p) {
         }
         parser_expect(p, close);
         return new_cast_node(p, ty, /*operand=*/NULL, tok);
+    }
+
+    /* GCC __builtin_offsetof(type, member). Parse type + member-token
+     * range; codegen re-emits for gcc. Used by <stddef.h> offsetof
+     * and libcpp's DEFAULT_ALIGNMENT computation. */
+    if (tok->kind == TK_IDENT && tok->len == 18 &&
+        memcmp(tok->loc, "__builtin_offsetof", 18) == 0 &&
+        parser_peek_ahead(p, 1)->kind == TK_LPAREN) {
+        parser_advance(p);  /* __builtin_offsetof */
+        parser_advance(p);  /* ( */
+        Type *ty = parse_type_name(p);
+        parser_expect(p, TK_COMMA);
+        int mem_start_pos = p->pos;
+        int depth = 1;
+        while (depth > 0 && !parser_at_eof(p)) {
+            if (parser_at(p, TK_LPAREN)) depth++;
+            else if (parser_at(p, TK_RPAREN)) {
+                depth--;
+                if (depth == 0) break;
+            }
+            parser_advance(p);
+        }
+        int mem_end_pos = p->pos;
+        parser_expect(p, TK_RPAREN);
+        Node *node = new_node(p, ND_OFFSETOF, tok);
+        node->offsetof_.ty = ty;
+        node->offsetof_.mem_toks = &p->tokens[mem_start_pos];
+        node->offsetof_.n_mem_toks = mem_end_pos - mem_start_pos;
+        return node;
     }
 
     /* GCC/Clang type-trait intrinsics in expression context:
