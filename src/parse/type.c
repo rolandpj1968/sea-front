@@ -856,7 +856,13 @@ DeclSpec parse_type_specifiers(Parser *p) {
          * template type parameter): preserve the base and member as
          * TY_DEPENDENT so subst_type can resolve at instantiation.
          * Without this, the member name ('default_layout') leaks into
-         * the mangle and no specialization matches. */
+         * the mangle and no specialization matches.
+         *
+         * N4659 §13.8.3 [temp.dep.type] — a nested-name-specifier
+         * that references a template parameter produces a dependent
+         * type; the member is resolved at instantiation in the
+         * enclosing type's class-region. §17.6/2 [temp.res] — the
+         * 'typename' keyword disambiguates this as a type. */
         {
             Declaration *first_d = lookup_unqualified_kind(
                 p, first->loc, first->len, ENTITY_TYPE);
@@ -1110,7 +1116,8 @@ DeclSpec parse_type_specifiers(Parser *p) {
             Declaration *qres2 = d;
             /* For 'typename T::member' where T is a dependent template
              * param, record the member suffix so substitution can
-             * resolve it once T becomes concrete. */
+             * resolve it once T becomes concrete. See N4659 §13.8.3
+             * [temp.dep.type]; same shape as the IDENT :: branch above. */
             Token *dep_member_tok = NULL;
             bool chain_is_dependent =
                 d->type && d->type->kind == TY_DEPENDENT;

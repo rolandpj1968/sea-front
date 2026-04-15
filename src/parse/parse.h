@@ -465,7 +465,13 @@ struct Node {
              * the template instantiation pass to bind the method to
              * the matching specialization (primary vs partial) instead
              * of attaching it to every instantiation with the same
-             * class tag. NULL for non-templated qualifiers. */
+             * class tag. NULL for non-templated qualifiers.
+             *
+             * N4659 §17.8.2 [temp.mem]/5 — a member of a class
+             * template may be defined outside of the template
+             * definition; the definition of a member of a partial
+             * specialization is written using the form of the partial
+             * specialization's template-id. */
             Node *qual_tid;
             /* True for destructors (parsed from '~ClassName'). The
              * declared name token still points at 'ClassName' (no tilde),
@@ -701,7 +707,11 @@ struct Type {
      * 'default_layout'. During substitution, once T resolves to a
      * concrete type with a class_region, we look up dep_member in
      * that region to get the final concrete type. NULL for plain
-     * dependent names ('T' alone). */
+     * dependent names ('T' alone).
+     *
+     * N4659 §13.8.3 [temp.dep.type] — dependent types produced by a
+     * nested-name-specifier. N4659 §17.6/2 [temp.res]: 'typename'
+     * disambiguates a dependent qualified name as naming a type. */
     Token *dep_member;
 
     /* TY_STRUCT, TY_UNION: the declarative region holding the members

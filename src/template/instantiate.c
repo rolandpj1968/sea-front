@@ -56,7 +56,14 @@ static void registry_add(TmplRegistry *reg, const char *name, int name_len,
  * ND_TEMPLATE_DECL whose inner class/func has NO template_id_node —
  * i.e., the declarator-id wasn't a template-id (partial specs and
  * full specs ARE template-ids). Falls back to any match when only
- * specializations exist. */
+ * specializations exist.
+ *
+ * N4659 §17.8.3 [temp.class.spec] — a class template partial
+ * specialization names a different template from the primary; the
+ * primary template is the one without a template argument list.
+ * N4659 §17.8.3/1: "... a partial specialization of the template."
+ * We use 'has template_id_node' as the syntactic proxy for 'is a
+ * specialization'. */
 static Node *registry_find(TmplRegistry *reg, const char *name, int name_len) {
     uint32_t idx = hash_name(name, name_len) % TMPL_REGISTRY_SIZE;
     for (TmplEntry *e = reg->buckets[idx]; e; e = e->next) {
@@ -616,6 +623,15 @@ static Type *type_arg_from_node(Node *arg) {
  * side are wildcards. Arg counts must match. Used to decide whether
  * an OOL method's qualifier ('vec<T,A,vl_embed>::f') matches the
  * template's own pattern ('vec<T,A,vl_embed>').
+ *
+ * N4659 §17.8.3.2 [temp.class.spec.match] — matching a class template
+ * specialization against a template-id. SHORTCUT (ours, not the
+ * standard): we do position-wise type equality with TY_DEPENDENT as a
+ * wildcard rather than running full unification (no occurs check, no
+ * binding capture across positions). Sufficient for the OOL-method
+ * binding we need; not equivalent to the standard's algorithm for
+ * pathological patterns. TODO(seafront#tmpl-unify-full): replace with
+ * real unification when we need it.
  */
 static bool template_ids_unify(Node *a, Node *b) {
     if (!a || !b) return a == b;
@@ -635,18 +651,28 @@ static bool template_ids_unify(Node *a, Node *b) {
  * Decide whether an OOL method template belongs to the class template
  * being instantiated.
  *
+ * N4659 §17.8.2 [temp.mem]/5 — a member of a class template (or of a
+ * member template of a class template) defined outside its template
+ * definition must be specified using the template-id of the class or
+ * specialization it belongs to. That template-id determines the
+ * method's owning template.
+ *
  * Two-stage match:
  *   (1) Tag names must agree (necessary for any match).
  *   (2) If the OOL method's qualifier is a template-id (e.g.
  *       'vec<T,A,vl_embed>::last'), and the target class template is
  *       a specialization (has a template_id_node pattern), the args
- *       must unify. A non-specialization target (primary) only
- *       accepts methods whose qualifier has NO template-id or whose
- *       template-id trivially matches the primary's params.
+ *       must unify via template_ids_unify. A non-specialization
+ *       target (primary) only accepts methods whose qualifier has
+ *       NO template-id or whose template-id args are all dependent.
  *
- * Falls back to tag-only matching when either side lacks template-id
- * information — preserves legacy behavior for non-specialized classes.
- */
+ * SHORTCUT: "all dependent args → primary-compatible" is a sea-front
+ * proxy, not a standard rule. The standard selects the template
+ * whose template-id syntactically matches the qualifier; our proxy
+ * covers the common case (primary's 'Box<T>::get()' has args {T_dep})
+ * without running full template-id-to-template resolution.
+ * TODO(seafront#ool-primary-match): replace with real matching
+ * against the primary's own template_id pattern when one exists. */
 static bool ool_method_matches(Node *method, Type *target_class) {
     Node *inner = method->template_decl.decl;
     if (!inner) return false;
@@ -1090,7 +1116,13 @@ void template_instantiate(Node *tu, Arena *arena) {
          * template-id whose args are the expanded usage. This lets
          *   template<typename T, typename A = X, typename L = Y>
          *   struct vec<T, A, vl_ptr> { ... };  // partial spec
-         * match a usage 'vec<int>' that expands to 'vec<int, X, vl_ptr>'. */
+         * match a usage 'vec<int>' that expands to 'vec<int, X, vl_ptr>'.
+         *
+         * N4659 §17.6.2.3 [temp.arg.type]/2 — default template
+         * arguments are considered when matching a template-id
+         * against a specialization; the specialization is selected
+         * using the fully-substituted arguments. Our retry with the
+         * expanded arg list implements this for the common case. */
         Node *spec = registry_find_specialization(
             &reg, req->name->loc, req->name->len, req->template_id);
         if (!spec && np > na && tmp_map.nentries == np) {

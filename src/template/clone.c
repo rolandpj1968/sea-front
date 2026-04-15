@@ -60,7 +60,12 @@ Type *subst_type(Type *ty, SubstMap *map, Arena *arena) {
          * resolves to a concrete class type, look up 'member' in its
          * class region. Handles dependent defaults like
          *   template<typename T, typename L = typename T::default_layout>
-         * where the substitution must resolve T::default_layout. */
+         * where the substitution must resolve T::default_layout.
+         *
+         * N4659 §13.8.3 [temp.dep.type] — 'typename' nested-name is a
+         * dependent type until instantiation resolves the base. At
+         * instantiation (§17.7 [temp.inst]), the member is looked up
+         * in the (now concrete) enclosing type. */
         if (ty->dep_member && concrete->class_region) {
             Declaration *md = lookup_in_scope(concrete->class_region,
                 ty->dep_member->loc, ty->dep_member->len);
