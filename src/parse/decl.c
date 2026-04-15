@@ -162,6 +162,11 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
     bool name_was_qualified = false;
     Token *name = NULL;
     Type *ty = base_ty;
+    /* Deferred wrappers from a grouped declarator like '(*fp)' — the
+     * inner '*' must bind AFTER the outer suffix runs. See the grouped-
+     * declarator branch below. */
+    Type *pending_wrap[16];
+    int   pending_nwrap = 0;
 
     /* Parenthesized declarator: ( ptr-declarator )
      *
@@ -222,7 +227,24 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
             parser_expect(p, TK_RPAREN);
 
             name = inner->var_decl.name;
+            /* N4659 §11.3 [dcl.meaning]: in a grouped declarator the
+             * inner modifiers (*, &, &&) apply AFTER the outer
+             * suffix (function params, arrays). Example:
+             *   int (*fp)(int)
+             * The inner '*' binds later than the outer '(int)' —
+             * fp has type 'pointer to function taking int returning int',
+             * not 'function returning pointer to int'.
+             *
+             * Implementation: the inner recursion wrapped base_ty with
+             * its *, &, && operators. Unwrap them into pending_wrap[]
+             * and re-apply after the outer suffix has mutated ty. */
             ty = inner->var_decl.ty;
+            while (pending_nwrap < 16 && ty != base_ty &&
+                   (ty->kind == TY_PTR || ty->kind == TY_REF ||
+                    ty->kind == TY_RVALREF)) {
+                pending_wrap[pending_nwrap++] = ty;
+                ty = ty->base;
+            }
             goto parse_suffixes;
         }
     }
@@ -630,6 +652,16 @@ parse_suffixes:
             ty = new_func_type(p, ty, (Type **)param_types.data,
                                param_types.len, variadic);
 
+            /* Apply deferred wrappers from a grouped declarator
+             * (see the grouped branch — inner '*' binds AFTER outer
+             * suffix). Example: int (*fp)(int). */
+            for (int i = pending_nwrap - 1; i >= 0; i--) {
+                Type *w = pending_wrap[i];
+                if (w->kind == TY_PTR)          ty = new_ptr_type(p, ty);
+                else if (w->kind == TY_REF)     ty = new_ref_type(p, ty);
+                else if (w->kind == TY_RVALREF) ty = new_rvalref_type(p, ty);
+            }
+
             Node *node = new_var_decl_node(p, ty, name,
                                            name ? name : parser_peek(p));
             node->func.params = (Node **)params.data;
@@ -716,6 +748,15 @@ parse_suffixes:
         if (inner_failed) {
             parser_restore(p, saved);
             p->tentative_failed = saved_failed;
+            /* Apply pending wrappers before returning, so a grouped
+             * declarator '(*name)' that's followed by a non-parens
+             * suffix (direct-init lookalike) still gets the ptr. */
+            for (int i = pending_nwrap - 1; i >= 0; i--) {
+                Type *w = pending_wrap[i];
+                if (w->kind == TY_PTR)          ty = new_ptr_type(p, ty);
+                else if (w->kind == TY_REF)     ty = new_ref_type(p, ty);
+                else if (w->kind == TY_RVALREF) ty = new_rvalref_type(p, ty);
+            }
             return new_var_decl_node(p, ty, name, parser_peek(p));
         }
 
@@ -723,6 +764,15 @@ parse_suffixes:
 
         ty = new_func_type(p, ty, (Type **)param_types.data,
                            param_types.len, variadic);
+
+        /* Apply deferred wrappers from a grouped declarator (reverse
+         * order — innermost modifier wraps first). */
+        for (int i = pending_nwrap - 1; i >= 0; i--) {
+            Type *w = pending_wrap[i];
+            if (w->kind == TY_PTR)          ty = new_ptr_type(p, ty);
+            else if (w->kind == TY_REF)     ty = new_ref_type(p, ty);
+            else if (w->kind == TY_RVALREF) ty = new_rvalref_type(p, ty);
+        }
 
         Node *node = new_var_decl_node(p, ty, name,
                                        name ? name : parser_peek(p));
@@ -755,6 +805,15 @@ parse_suffixes:
         }
         parser_expect(p, TK_RBRACKET);
         ty = new_array_type(p, ty, len);
+    }
+
+    /* Apply deferred wrappers from a grouped declarator — see the
+     * grouped-declarator branch for the rationale. */
+    for (int i = pending_nwrap - 1; i >= 0; i--) {
+        Type *w = pending_wrap[i];
+        if (w->kind == TY_PTR)          ty = new_ptr_type(p, ty);
+        else if (w->kind == TY_REF)     ty = new_ref_type(p, ty);
+        else if (w->kind == TY_RVALREF) ty = new_rvalref_type(p, ty);
     }
 
     return new_var_decl_node(p, ty, name, name ? name : parser_peek(p));
@@ -1297,29 +1356,12 @@ Node *parse_declaration(Parser *p) {
 
     if (parser_consume(p, TK_ASSIGN)) {
         /* = initializer-clause — could be expression or braced-init-list.
-         * Copy-list-init 'T x = {args}' on a class type uses ctor
-         * overload resolution (N4659 §11.6.4 [dcl.init.list]/3.6) so
-         * we route to the same ctor_args path as 'T x(args)'. For
-         * non-class types we just store the first arg as init and
-         * ignore the rest (TODO: aggregate init). */
-        if (parser_consume(p, TK_LBRACE)) {
-            decl->var_decl.has_ctor_init = true;
-            Vec args = vec_new(p->arena);
-            if (!parser_at(p, TK_RBRACE)) {
-                vec_push(&args, parse_assign_expr(p));
-                parser_consume(p, TK_ELLIPSIS);
-                while (parser_consume(p, TK_COMMA)) {
-                    if (parser_at(p, TK_RBRACE)) break;  /* trailing comma */
-                    vec_push(&args, parse_assign_expr(p));
-                    parser_consume(p, TK_ELLIPSIS);
-                }
-            }
-            decl->var_decl.ctor_args  = (Node **)args.data;
-            decl->var_decl.ctor_nargs = args.len;
-            parser_expect(p, TK_RBRACE);
-        } else {
-            decl->var_decl.init = parse_assign_expr(p);
-        }
+         * Both route through parse_assign_expr: a leading '{' is parsed
+         * into ND_INIT_LIST (see expr.c TK_LBRACE branch). Aggregate
+         * initializers for arrays and plain structs are preserved this
+         * way; class types with user-defined ctors should prefer
+         * paren-init 'T x(args)' which sets has_ctor_init below. */
+        decl->var_decl.init = parse_assign_expr(p);
     } else if (parser_consume(p, TK_LPAREN)) {
         /* Direct-initialization: T x(arg-list) — N4659 §11.6/16
          * Collect ALL the args. Codegen lowers this as
@@ -1396,17 +1438,9 @@ Node *parse_declaration(Parser *p) {
                 next_decl->var_decl.init = parse_expr(p);
                 parser_expect(p, TK_RPAREN);
             } else if (parser_at(p, TK_LBRACE)) {
-                /* Braced-init-list 'T x{...}' — depth-counted skip,
-                 * matches the single-decl path. */
-                int depth = 0;
-                while (!parser_at_eof(p)) {
-                    if (parser_at(p, TK_LBRACE)) depth++;
-                    if (parser_at(p, TK_RBRACE)) {
-                        depth--;
-                        if (depth <= 0) { parser_advance(p); break; }
-                    }
-                    parser_advance(p);
-                }
+                /* Braced-init-list 'T x{...}' — parse into ND_INIT_LIST
+                 * so aggregate init is preserved. */
+                next_decl->var_decl.init = parse_assign_expr(p);
             }
 
             if (next_decl->var_decl.name)

@@ -294,6 +294,13 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
         c->alignof_.ty = subst_type(n->alignof_.ty, map, arena);
         break;
 
+    case ND_INIT_LIST:
+        c->init_list = n->init_list;
+        c->init_list.elems = clone_node_array(n->init_list.elems,
+                                              n->init_list.nelems,
+                                              map, arena);
+        break;
+
     /* -- Statements -- */
     case ND_BLOCK:
         c->block = n->block;

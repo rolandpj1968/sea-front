@@ -76,6 +76,10 @@ typedef enum {
     ND_SIZEOF,          /* sizeof — N4659 §8.3.3 [expr.sizeof]
                          * C++11 adds sizeof...(pack) */
     ND_ALIGNOF,         /* alignof — N4659 §8.3.6 [expr.alignof] */
+    ND_INIT_LIST,       /* braced-init-list — N4659 §11.6.4 [dcl.init.list]
+                         *   { initializer-list(opt) ,(opt) }
+                         * Used as an initializer for arrays and aggregates,
+                         * and (via list-initialization) for class types. */
 
     /* -- Statements --
      * N4659 §9 [stmt.stmt]
@@ -312,6 +316,15 @@ struct Node {
         struct {
             Type *ty;
         } alignof_;
+
+        /* ND_INIT_LIST — N4659 §11.6.4 [dcl.init.list]
+         * Braced initializer: { e1, e2, ... }. Each element is itself
+         * an expression — possibly another ND_INIT_LIST for nested
+         * aggregate init like 'int m[2][3] = { { 1,2,3 }, { 4,5,6 } }'. */
+        struct {
+            Node **elems;
+            int    nelems;
+        } init_list;
 
         /* ND_BLOCK — N4659 §9.3 [stmt.block]
          * compound-statement: { statement-seq(opt) } */
@@ -741,6 +754,11 @@ struct Type {
     /* Codegen flag: set when this struct's definition has been
      * emitted to prevent duplicate/out-of-order definitions. */
     bool codegen_emitted;
+
+    /* Stable id for anonymous struct/union types (no tag). Lazily
+     * assigned on first reference so the definition and every use
+     * agree on the name. Zero means 'unassigned'. */
+    int  anon_id;
 };
 
 /* ================================================================== */

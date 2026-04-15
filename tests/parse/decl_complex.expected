@@ -1,7 +1,7 @@
 (translation-unit
   (var-decl (array int 10) "arr")
   (var-decl (func-type int (int)) "f" )
-  (var-decl (func-type (ptr int) (int int)) "fp" )
+  (var-decl (ptr (func-type int (int int))) "fp" )
   (typedef)
   (var-decl (ptr int) "p")
   (typedef)

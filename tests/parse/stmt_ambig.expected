@@ -4,7 +4,7 @@
   (func-def void "f" (params)
     (block
       (post-++ (call (ident "T") (ident "a")))
-      (var-decl (func-type (ptr int) (int)) "d" )
+      (var-decl (ptr (func-type int (int))) "d" )
       (var-decl (array int 5) "e")
       (var-decl int "x")
       (var-decl int "c" (num 7))

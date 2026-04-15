@@ -35,7 +35,7 @@
         (= (ident "a") (ident "b"))
         (= (ident "b") (ident "t")))))
   (template (params (param ? "T") (param unsigned-long "N"))
-    (func-def void "mswap" (params (param (array (ref dependent T)) "a") (param (array (ref dependent T)) "b"))
+    (func-def void "mswap" (params (param (ref (array dependent T)) "a") (param (ref (array dependent T)) "b"))
       (block
         (for (var-decl unsigned-long "i" (num 0)) (< (ident "i") (ident "N")) (++ (ident "i"))
           (call (ident "mswap") ([] (ident "a") (ident "i")) ([] (ident "b") (ident "i")))))))

@@ -197,21 +197,29 @@ static Node *primary_expr(Parser *p) {
     case TK_LBRACE: {
         /* braced-init-list — N4659 §11.6.4 [dcl.init.list]
          *   { initializer-list(opt) ,(opt) }
-         * As a primary expression in C++11 list-initialization (e.g.
-         * 'return {};', 'f({1,2})'). Currently parsed and discarded into
-         * an opaque NULLPTR-shaped node. */
+         * Parses into ND_INIT_LIST so aggregate init of arrays and
+         * plain structs is preserved for codegen emission. Each
+         * element is an assignment-expression; nested '{...}'
+         * elements recurse back into this same branch. */
         parser_advance(p);
-        int depth = 1;
-        while (depth > 0 && !parser_at_eof(p)) {
-            if (parser_at(p, TK_LBRACE)) depth++;
-            else if (parser_at(p, TK_RBRACE)) {
-                depth--;
-                if (depth == 0) break;
+        Node *node = new_node(p, ND_INIT_LIST, tok);
+        Vec elems = vec_new(p->arena);
+        if (!parser_at(p, TK_RBRACE)) {
+            vec_push(&elems, parse_assign_expr(p));
+            /* Pack expansion: 'expr...' — consume the ellipsis if
+             * present (rare in aggregate init, legal after unpacking
+             * an argument pack inside a braced-init-list). */
+            parser_consume(p, TK_ELLIPSIS);
+            while (parser_consume(p, TK_COMMA)) {
+                if (parser_at(p, TK_RBRACE)) break;  /* trailing comma */
+                vec_push(&elems, parse_assign_expr(p));
+                parser_consume(p, TK_ELLIPSIS);
             }
-            parser_advance(p);
         }
         parser_expect(p, TK_RBRACE);
-        return new_node(p, ND_NULLPTR, tok);  /* opaque placeholder */
+        node->init_list.elems  = (Node **)elems.data;
+        node->init_list.nelems = elems.len;
+        return node;
     }
 
     case TK_LBRACKET: {

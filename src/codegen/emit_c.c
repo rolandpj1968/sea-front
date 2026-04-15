@@ -543,12 +543,53 @@ static bool func_dedup_check(Token *name) {
     return false;  /* first time */
 }
 
+/* Does this struct/union (or any of its bases) have member function
+ * definitions? A class with at least one ND_FUNC_DEF in its body —
+ * or in an ancestor's body — is a C++ class: unqualified TY_FUNC
+ * members/inherited names are method declarations. A class with none
+ * is a plain C struct from a typedef'd header; TY_FUNC members are
+ * function-pointer data fields (the typedef flattened away the
+ * pointer level). Both struct emission and call-site method-vs-fptr
+ * disambiguation depend on this. */
+static bool class_has_method_bodies(Type *class_type) {
+    if (!class_type) return false;
+    if (class_type->class_def) {
+        Node *cd = class_type->class_def;
+        for (int i = 0; i < cd->class_def.nmembers; i++) {
+            Node *m = cd->class_def.members[i];
+            if (m && m->kind == ND_FUNC_DEF) return true;
+            /* Pure virtual / pure-decl methods also count. */
+            if (m && m->kind == ND_VAR_DECL && m->var_decl.ty &&
+                m->var_decl.ty->kind == TY_FUNC &&
+                (m->var_decl.is_constructor || m->var_decl.is_destructor ||
+                 m->var_decl.is_virtual))
+                return true;
+        }
+    }
+    if (class_type->class_region) {
+        for (int i = 0; i < class_type->class_region->nbases; i++) {
+            DeclarativeRegion *br = class_type->class_region->bases[i];
+            if (br && br->owner_type && class_has_method_bodies(br->owner_type))
+                return true;
+        }
+    }
+    return false;
+}
+
 static void emit_mangled_class_tag(Type *class_type) {
     if (!class_type || !class_type->tag) {
         /* Anonymous struct/union — generate a unique name.
          * C11 allows anonymous struct/union members inside structs,
-         * but we need a name for type references and forward decls. */
-        fprintf(stdout, "__sf_anon_%d", g_anon_counter++);
+         * but we need a name for type references and forward decls.
+         * Cache the id on the Type so every reference (definition
+         * and uses) resolves to the same name. */
+        if (class_type) {
+            if (class_type->anon_id == 0)
+                class_type->anon_id = ++g_anon_counter;
+            fprintf(stdout, "__sf_anon_%d", class_type->anon_id);
+        } else {
+            fprintf(stdout, "__sf_anon_%d", ++g_anon_counter);
+        }
         return;
     }
     mangle_class_tag(class_type);
@@ -983,8 +1024,14 @@ static void emit_expr(Node *n) {
             Type *ot = obj ? obj->resolved_type : NULL;
             bool obj_is_ptr = ot && ot->kind == TY_PTR;
             if (obj_is_ptr) ot = ot->base;
+            /* Method dispatch lowering applies when the member resolves
+             * to a method declaration (type TY_FUNC). A function pointer
+             * data field has type TY_PTR(TY_FUNC) and falls through to
+             * the generic call path which emits 'obj.field(args)'. */
+            Type *callee_ty = callee->resolved_type;
             if (ot && (ot->kind == TY_STRUCT || ot->kind == TY_UNION) &&
-                ot->tag && callee->member.member) {
+                ot->tag && callee->member.member &&
+                (!callee_ty || callee_ty->kind == TY_FUNC)) {
                 bool virt = method_is_virtual(ot, callee->member.member);
                 if (virt) {
                     /* Virtual dispatch: load __sf_vptr then call slot.
@@ -1093,6 +1140,15 @@ static void emit_expr(Node *n) {
         fputs("_Alignof(", stdout);
         if (n->alignof_.ty) emit_type(n->alignof_.ty);
         fputc(')', stdout);
+        return;
+    case ND_INIT_LIST:
+        fputc('{', stdout);
+        for (int i = 0; i < n->init_list.nelems; i++) {
+            if (i > 0) fputs(", ", stdout);
+            emit_expr(n->init_list.elems[i]);
+        }
+        if (n->init_list.nelems == 0) fputc('0', stdout);  /* C99: {0} legal */
+        fputc('}', stdout);
         return;
     case ND_MEMBER: {
         /* Check if the member lives in a base class and needs
@@ -2592,37 +2648,18 @@ static void emit_class_def(Node *n) {
         }
         if (m->kind != ND_VAR_DECL) continue;
         /* Member functions (ND_VAR_DECL with TY_FUNC) are forward-declared
-         * separately — skip them here. BUT: function POINTER members
-         * (typedefs like 'convert_f func;' where the typedef lost the
-         * pointer level) should be emitted as 'ret_type (*name)(params)'.
-         *
-         * Heuristic: if the class_region has this name registered as a
-         * function (TY_FUNC entity), it's a method declaration — skip.
-         * Otherwise it's a function pointer data member — emit. */
-        if (m->var_decl.ty && m->var_decl.ty->kind == TY_FUNC) {
-            bool is_method = false;
-            if (m->var_decl.is_constructor || m->var_decl.is_destructor ||
-                m->var_decl.is_virtual)
-                is_method = true;
-            /* If the class has any ND_FUNC_DEF members (actual method
-             * bodies), TY_FUNC members without ctor/dtor/virtual flags
-             * are method declarations. If the class has NO ND_FUNC_DEF
-             * members (plain C struct), TY_FUNC members are function
-             * pointer fields from typedefs. */
-            if (!is_method) {
-                for (int k = 0; k < n->class_def.nmembers; k++) {
-                    Node *mk = n->class_def.members[k];
-                    if (mk && mk->kind == ND_FUNC_DEF) {
-                        is_method = true;
-                        break;
-                    }
-                }
-            }
-            if (is_method) continue;
+         * separately — skip them here. Function POINTER data members
+         * have type TY_PTR(TY_FUNC) after the parser's grouped-declarator
+         * wrapping, so they fall through to the generic var-decl path —
+         * but C syntax needs the special 'ret (*name)(params)' shape. */
+        if (m->var_decl.ty && m->var_decl.ty->kind == TY_FUNC)
+            continue;  /* method declaration — handled below as forward decl */
+        if (m->var_decl.ty && m->var_decl.ty->kind == TY_PTR &&
+            m->var_decl.ty->base && m->var_decl.ty->base->kind == TY_FUNC &&
+            m->var_decl.name) {
             /* Function pointer member: emit as 'ret (*name)(params)' */
-            if (!m->var_decl.name) continue;
             emit_indent();
-            Type *fty = m->var_decl.ty;
+            Type *fty = m->var_decl.ty->base;
             emit_type(fty->ret);
             fprintf(stdout, " (*%.*s)(",
                     m->var_decl.name->len, m->var_decl.name->loc);
