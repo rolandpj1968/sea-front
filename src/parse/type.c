@@ -1414,8 +1414,20 @@ bool parser_at_type_specifier(Parser *p) {
          * Otherwise — function templates like swap, alias templates —
          * it must NOT be parsed as a type, or 'swap(args)' in expression
          * context would be mis-parsed as a declaration. */
-        if (lookup_is_type_name(p, parser_peek(p)))
+        if (lookup_is_type_name(p, parser_peek(p))) {
+            /* Name lookup disambiguation — N4659 §6.3.10 [basic.scope.hiding]:
+             * a struct tag ('struct deps') and a variable of the same
+             * name coexist; the variable name hides the tag in
+             * ordinary lookup. If the next token is '->' or '.', the
+             * name is clearly being used as an object expression
+             * (member access), so it's NOT a type-specifier here even
+             * though the tag exists. Narrow heuristic, not a full
+             * scope-precedence resolver. */
+            Token *next = parser_peek_ahead(p, 1);
+            if (next->kind == TK_ARROW || next->kind == TK_DOT)
+                return false;
             return true;
+        }
         if (lookup_is_template_name(p, parser_peek(p)))
             return parser_peek_ahead(p, 1)->kind == TK_LT;
         return false;

@@ -735,6 +735,42 @@ static void emit_type(Type *ty) {
     }
 }
 
+/* Emit a parameter's 'type name' pair. C interleaves the name with
+ * the declarator for function-pointer parameters ('int (*p)(int)'),
+ * so we can't just emit_type then name. Arrays also decay to pointer
+ * in parameter position (N4659 §11.3.4/5 [dcl.array]); emit_type
+ * already does that decay. Unnamed parameters get __sf_unused_N
+ * because C requires named params in definitions. */
+static void emit_param_declarator(Type *ty, Token *name, int idx) {
+    if (ty && ty->kind == TY_PTR && ty->base && ty->base->kind == TY_FUNC) {
+        Type *fty = ty->base;
+        emit_type(fty->ret);
+        fputs(" (*", stdout);
+        if (name)
+            fprintf(stdout, "%.*s", name->len, name->loc);
+        else
+            fprintf(stdout, "__sf_unused_%d", idx);
+        fputs(")(", stdout);
+        for (int i = 0; i < fty->nparams; i++) {
+            if (i > 0) fputs(", ", stdout);
+            emit_type(fty->params[i]);
+        }
+        if (fty->is_variadic) {
+            if (fty->nparams > 0) fputs(", ", stdout);
+            fputs("...", stdout);
+        } else if (fty->nparams == 0) {
+            fputs("void", stdout);
+        }
+        fputc(')', stdout);
+        return;
+    }
+    emit_type(ty);
+    if (name)
+        fprintf(stdout, " %.*s", name->len, name->loc);
+    else
+        fprintf(stdout, " __sf_unused_%d", idx);
+}
+
 /* ------------------------------------------------------------------ */
 /* Expression emission                                                */
 /* ------------------------------------------------------------------ */
@@ -1268,6 +1304,52 @@ static void emit_var_decl_inner(Node *n) {
      * arrays (int arr[]) emit just []. For function parameters,
      * emit_type already decays to pointer — this path handles
      * local/global variable declarations only. */
+    /* Function-pointer var-decl: 'int (*name)(args)' — N4659 §11.3.1
+     * [dcl.ptr]. After the grouped-declarator fix, these are
+     * TY_PTR(TY_FUNC). C syntax interleaves name and params in the
+     * declarator, so emit_type alone can't produce it. */
+    if (ty && ty->kind == TY_PTR && ty->base && ty->base->kind == TY_FUNC &&
+        n->var_decl.name) {
+        Type *fty = ty->base;
+        emit_type(fty->ret);
+        fprintf(stdout, " (*%.*s)(", n->var_decl.name->len, n->var_decl.name->loc);
+        for (int i = 0; i < fty->nparams; i++) {
+            if (i > 0) fputs(", ", stdout);
+            emit_type(fty->params[i]);
+        }
+        if (fty->is_variadic) {
+            if (fty->nparams > 0) fputs(", ", stdout);
+            fputs("...", stdout);
+        } else if (fty->nparams == 0) {
+            fputs("void", stdout);
+        }
+        fputc(')', stdout);
+        if (n->var_decl.init) {
+            fputs(" = ", stdout);
+            emit_expr(n->var_decl.init);
+        }
+        return;
+    }
+    /* Function type as var-decl: a local or top-level function
+     * declaration. N4659 §11.3.5 [dcl.fct]. C syntax is
+     *   ret name(params);
+     * not 'functype name;'. Emit the full prototype. */
+    if (ty && ty->kind == TY_FUNC && n->var_decl.name) {
+        emit_type(ty->ret);
+        fprintf(stdout, " %.*s(", n->var_decl.name->len, n->var_decl.name->loc);
+        for (int i = 0; i < ty->nparams; i++) {
+            if (i > 0) fputs(", ", stdout);
+            emit_type(ty->params[i]);
+        }
+        if (ty->is_variadic) {
+            if (ty->nparams > 0) fputs(", ", stdout);
+            fputs("...", stdout);
+        } else if (ty->nparams == 0) {
+            fputs("void", stdout);
+        }
+        fputc(')', stdout);
+        return;
+    }
     if (ty && ty->kind == TY_ARRAY) {
         emit_type(ty->base);
         fputc(' ', stdout);
@@ -2398,12 +2480,7 @@ static void emit_func_def(Node *n) {
         for (int i = 0; i < n->func.nparams; i++) {
             if (i > 0) fputs(", ", stdout);
             Node *p = n->func.params[i];
-            emit_type(p->param.ty);
-            if (p->param.name)
-                fprintf(stdout, " %.*s",
-                        p->param.name->len, p->param.name->loc);
-            else
-                fprintf(stdout, " __sf_unused_%d", i);
+            emit_param_declarator(p->param.ty, p->param.name, i);
         }
     }
     fputs(") ", stdout);
@@ -2515,14 +2592,7 @@ static void emit_method_signature(Node *func, Type *class_type) {
     for (int i = 0; i < func->func.nparams; i++) {
         fputs(", ", stdout);
         Node *p = func->func.params[i];
-        emit_type(p->param.ty);
-        if (p->param.name)
-            fprintf(stdout, " %.*s",
-                    p->param.name->len, p->param.name->loc);
-        else
-            /* C requires named parameters in function definitions.
-             * C++ allows unnamed params; synthesise a name. */
-            fprintf(stdout, " __sf_unused_%d", i);
+        emit_param_declarator(p->param.ty, p->param.name, i);
     }
     fputc(')', stdout);
 }
@@ -3129,6 +3199,30 @@ static void emit_top_level(Node *n) {
             }
             fputs(");\n", stdout);
             return;
+        }
+        /* Emit dependency struct/union definitions before the var-decl
+         * references them. Covers patterns like
+         *   static const struct { ... } table[] = {...};
+         * where the anonymous/named struct is defined inline with the
+         * array and has no separate ND_CLASS_DEF at top level. Without
+         * this the C output references 'struct __sf_anon_N' that was
+         * never defined. */
+        {
+            Type *dep = n->var_decl.ty;
+            while (dep && dep->kind == TY_ARRAY) dep = dep->base;
+            if (dep && (dep->kind == TY_STRUCT || dep->kind == TY_UNION) &&
+                dep->class_def && !dep->codegen_emitted) {
+                /* Pass 2 (PHASE_METHODS) skips the struct body, so we
+                 * have to flip the phase to emit the definition. This
+                 * preserves the two-phase guarantee for user-declared
+                 * classes (whose bodies are emitted in pass 1) while
+                 * catching anonymous/inline structs that only appear
+                 * as the element type of a var-decl's array. */
+                int saved_phase = g_emit_phase;
+                g_emit_phase = 0;  /* single-pass: emit everything */
+                emit_class_def(dep->class_def);
+                g_emit_phase = saved_phase;
+            }
         }
         emit_var_decl_inner(n);
         fputs(";\n", stdout);
