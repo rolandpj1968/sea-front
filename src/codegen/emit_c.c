@@ -1202,13 +1202,23 @@ static void emit_expr(Node *n) {
         return;
     }
     case ND_SUBSCRIPT: {
-        /* If the base is a struct/union type, this is an overloaded
-         * operator[] — emit as a method call. Otherwise, plain C
-         * array subscript. */
+        /* Subscript dispatch — N4659 §8.2.1 [expr.sub] / §16.5.5 [over.sub].
+         * A subscript on a class/union VALUE is an overloaded operator[]
+         * call. A subscript on a POINTER (even a pointer-to-struct) is
+         * plain C pointer arithmetic and must NOT be rewritten —
+         * 'ptr_to_struct[i]' is idiomatic array notation, not an
+         * operator call. Key distinction: the static type of the base.
+         *
+         * Class template instantiations sometimes elide the class_region
+         * on the instantiated type, so we don't require it to be present —
+         * trust that a struct/union value with a subscript was written
+         * expecting operator[] and emit the method call. */
         Type *base_ty = n->subscript.base ? n->subscript.base->resolved_type : NULL;
-        if (base_ty && base_ty->kind == TY_PTR) base_ty = base_ty->base;
-        if (base_ty && (base_ty->kind == TY_STRUCT || base_ty->kind == TY_UNION) &&
-            base_ty->tag) {
+        bool base_is_class_value =
+            base_ty &&
+            (base_ty->kind == TY_STRUCT || base_ty->kind == TY_UNION) &&
+            base_ty->tag;
+        if (base_is_class_value) {
             /* operator[] → mangled method call.
              * If the operator returns a reference (TY_REF / TY_RVALREF
              * → pointer in C), dereference the result. If it returns
@@ -1264,10 +1274,15 @@ static void emit_var_decl_inner(Node *n) {
         if (n->var_decl.name)
             fprintf(stdout, "%.*s", n->var_decl.name->len,
                     n->var_decl.name->loc);
-        if (ty->array_len >= 0)
+        if (ty->array_len >= 0) {
             fprintf(stdout, "[%d]", ty->array_len);
-        else
+        } else if (ty->array_size_expr) {
+            fputc('[', stdout);
+            emit_expr(ty->array_size_expr);
+            fputc(']', stdout);
+        } else {
             fputs("[]", stdout);
+        }
         /* Array init (if any) */
         if (n->var_decl.init) {
             fputs(" = ", stdout);

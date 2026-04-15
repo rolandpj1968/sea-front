@@ -482,6 +482,35 @@ Node *parse_stmt(Parser *p) {
         parser_advance(p);
         return new_node(p, ND_NULL_STMT, tok);
 
+    /* asm-definition — N4659 §10.4 [dcl.asm]
+     *   asm ( string-literal ) ;
+     * GCC extended-asm additionally allows
+     *   asm ( string-literal : outputs : inputs : clobbers : labels ) ;
+     * We don't lower inline assembly; swallow the balanced parens
+     * and emit a null statement. Lowering correctly would require
+     * codegen support for asm which is out of scope. */
+    case TK_KW_ASM: {
+        parser_advance(p);
+        /* Optional asm-qualifiers: volatile / goto / inline. */
+        while (parser_at(p, TK_KW_VOLATILE) ||
+               parser_at(p, TK_KW_INLINE) ||
+               parser_at(p, TK_KW_GOTO))
+            parser_advance(p);
+        parser_expect(p, TK_LPAREN);
+        int depth = 1;
+        while (depth > 0 && !parser_at_eof(p)) {
+            if (parser_at(p, TK_LPAREN)) depth++;
+            else if (parser_at(p, TK_RPAREN)) {
+                depth--;
+                if (depth == 0) break;
+            }
+            parser_advance(p);
+        }
+        parser_expect(p, TK_RPAREN);
+        parser_consume(p, TK_SEMI);
+        return new_node(p, ND_NULL_STMT, tok);
+    }
+
     /* using declaration/directive/alias inside blocks
      * (§10.3.3 [namespace.udecl], §10.3.4 [namespace.udir])
      * static_assert can also appear inside blocks. */

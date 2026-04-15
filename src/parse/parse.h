@@ -683,8 +683,18 @@ struct Type {
      *   TY_ARRAY   — N4659 §11.3.4 [dcl.array] (T[N]) */
     Type *base;
 
-    /* TY_ARRAY: element count, -1 for unsized [] */
+    /* TY_ARRAY: element count, -1 for unsized [] or expression-sized */
     int array_len;
+
+    /* TY_ARRAY: original size expression when it isn't an integer
+     * literal — e.g. '[N]', '[sizeof(x)]', '[f()]'. Codegen falls
+     * back to emitting this when array_len < 0 so constant folding
+     * and sizeof expressions survive into the C output. NULL when
+     * the size was a literal (already captured in array_len) or
+     * omitted ('[]'). N4659 §11.3.4/1 [dcl.array]: size is a
+     * constant-expression, but we keep the full expr so the C
+     * compiler re-evaluates it. */
+    Node *array_size_expr;
 
     /* TY_FUNC — N4659 §11.3.5 [dcl.fct]
      * C++11: trailing return types (-> Type)

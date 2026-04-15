@@ -802,20 +802,24 @@ parse_suffixes:
     while (parser_at(p, TK_LBRACKET) &&
            parser_peek_ahead(p, 1)->kind != TK_LBRACKET) {
         parser_advance(p);  /* consume [ */
-        int len = -1;  /* unsized */
+        int len = -1;  /* unsized / expression-sized */
+        Node *size_expr = NULL;
         if (!parser_at(p, TK_RBRACKET)) {
-            /* For the first pass, only handle integer constant array sizes */
-            /* N4659 §11.3.4 [dcl.array]: the expression must be a
-             * converted constant expression of type std::size_t.
-             * For the first pass, we accept any expression but only
-             * extract the value from integer literals. Non-literal
-             * sizes are stored as -1 (unsized) — sema evaluates later. */
-            Node *size_expr = parse_assign_expr(p);
+            /* N4659 §11.3.4 [dcl.array]: the size is a constant-
+             * expression. For integer literals we extract the value
+             * into array_len. For non-literal expressions (macros
+             * that expand to sizeof(...)/N, template params, etc.)
+             * we keep the Node so codegen can re-emit it verbatim —
+             * essential for sys-header structs like sigset_t whose
+             * size is 1024/(8*sizeof(long)). */
+            size_expr = parse_assign_expr(p);
             if (size_expr && size_expr->kind == ND_NUM)
                 len = (int)size_expr->num.lo;
         }
         parser_expect(p, TK_RBRACKET);
         ty = new_array_type(p, ty, len);
+        if (len < 0 && size_expr && size_expr->kind != ND_NUM)
+            ty->array_size_expr = size_expr;
     }
 
     /* Apply deferred wrappers from a grouped declarator — see the
