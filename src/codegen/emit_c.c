@@ -2489,6 +2489,40 @@ static void emit_stmt(Node *n) {
         else
             fputs(";\n", stdout);
         return;
+    case ND_SWITCH:
+        /* switch — N4659 §9.4.2 [stmt.switch]. Emit
+         *   switch (expr) body
+         * The C++17 init-statement is not lowered yet (would emit as
+         * a preceding statement in a braced block). break/continue
+         * inside are handled by the ND_BREAK/ND_CONTINUE cases —
+         * 'break' in a switch exits the switch, not a loop. */
+        fputs("switch (", stdout);
+        if (n->switch_.expr)
+            emit_expr(n->switch_.expr);
+        fputs(") ", stdout);
+        if (n->switch_.body)
+            emit_stmt(n->switch_.body);
+        else
+            fputs(";\n", stdout);
+        return;
+    case ND_CASE:
+        /* case — N4659 §9.1 [stmt.label]/4 */
+        fputs("case ", stdout);
+        if (n->case_.expr)
+            emit_expr(n->case_.expr);
+        fputs(": ", stdout);
+        if (n->case_.stmt)
+            emit_stmt(n->case_.stmt);
+        else
+            fputs(";\n", stdout);
+        return;
+    case ND_DEFAULT:
+        fputs("default: ", stdout);
+        if (n->default_.stmt)
+            emit_stmt(n->default_.stmt);
+        else
+            fputs(";\n", stdout);
+        return;
     case ND_BREAK:
         if (break_needs_cleanup()) {
             /* Slice C: walk the cleanup chain before exiting the
