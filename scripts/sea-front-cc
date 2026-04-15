@@ -145,8 +145,19 @@ for src in $INPUTS; do
     c_file="$TMPDIR/sf_out_${base}_$$.c"
 
     # Step 1: Preprocess
-    log "  Preprocess: $SEA_CPP -E $STD_FLAG $CPP_FLAGS $src"
-    $SEA_CPP -E $STD_FLAG $CPP_FLAGS "$src" -o "$pp_file" 2>/dev/null
+    #
+    # Defines we inject to steer gcc / libc / libcpp away from
+    # inline-asm and vectorized code paths that sea-front can't lower:
+    #   -DGCC_VERSION=4004
+    #       Disables libcpp's SSE2/SSE4 vectorized line scanner
+    #       (gated on GCC_VERSION >= 4005) while keeping all other
+    #       libcpp feature checks (2007, 3000) enabled. Forces the
+    #       scalar search_line_acc_char fallback. sea-front discards
+    #       inline asm bodies, so the vectorized fast-path would
+    #       compile to an empty function and crash at runtime.
+    SF_DEFINES="-DGCC_VERSION=4004"
+    log "  Preprocess: $SEA_CPP -E $SF_DEFINES $STD_FLAG $CPP_FLAGS $src"
+    $SEA_CPP -E $SF_DEFINES $STD_FLAG $CPP_FLAGS "$src" -o "$pp_file" 2>/dev/null
 
     # Step 2: Transpile C++ → C
     log "  Transpile: $SEA_FRONT --emit-c $pp_file"
