@@ -520,27 +520,101 @@ static bool subtree_has_cleanups(Node *n) {
  * (anonymous structs, currently). */
 static int g_anon_counter = 0;
 
-/* Dedup for free function declarations/definitions.
- * C doesn't support overloading, so we keep the first declaration
- * of each function name and skip subsequent ones. Handles C++ system
- * headers that provide const/non-const overloads (strchr, abs, div, etc.)
- * and inline functions included from multiple header paths. */
-static struct { const char *loc; int len; } g_func_seen[8192];
+/* Dedup for free-function declarations and definitions.
+ * C doesn't support overloading (§6.2.1 identifier spaces): multiple
+ * same-named declarations with different signatures (const/non-const
+ * strchr, abs(int)/abs(long), div variants, etc.) redeclare the same
+ * linker symbol. Likewise header-inline definitions may be included
+ * multiple times after preprocessing.
+ *
+ * Policy:
+ *   - FUNC_DECL: skip if the name has already been seen (as decl or
+ *     def). Otherwise emit and record as decl.
+ *   - FUNC_DEF: skip if the name has already been seen as DEF.
+ *     Otherwise emit and mark as def — a decl upgrading to a def is
+ *     the common pattern
+ *         static void do_define(cpp_reader *);      // decl
+ *         ... more code ...
+ *         static void do_define(cpp_reader *pfile) { ... }  // def
+ *     C accepts both when their signatures match, so the def must
+ *     be allowed through even though the decl "already seen" the
+ *     name. Mismatched signatures (abs(int) decl vs abs(long) def)
+ *     are a C conflicting-types error — we can't detect that without
+ *     signature tracking, so rely on the header-include order. */
+typedef struct {
+    const char *loc;
+    int len;
+    bool is_def;
+    /* Coarse signature fingerprint: (nparams, first_param_kind).
+     * Used to detect same-name-different-type overloads at the
+     * decl↔def boundary, e.g. 'int abs(int)' decl vs 'long abs(long)'
+     * def. Full type encoding is overkill — parameter count plus the
+     * first parameter's TypeKind is enough to separate the cases
+     * that actually arise in preprocessed headers. */
+    int nparams;
+    int first_param_kind;
+} FuncSeen;
+static FuncSeen g_func_seen[8192];
 static int g_func_nseen = 0;
 
-static bool func_dedup_check(Token *name) {
-    if (!name) return false;
+static int func_first_param_kind(Type *fty) {
+    if (!fty || fty->kind != TY_FUNC || fty->nparams < 1) return -1;
+    Type *p = fty->params[0];
+    return p ? (int)p->kind : -1;
+}
+
+static FuncSeen *func_seen_find(Token *name) {
+    if (!name) return NULL;
     for (int i = 0; i < g_func_nseen; i++) {
         if (g_func_seen[i].len == name->len &&
             memcmp(g_func_seen[i].loc, name->loc, name->len) == 0)
-            return true;  /* already seen */
+            return &g_func_seen[i];
+    }
+    return NULL;
+}
+
+/* Both kinds' dedup take (nparams, first_param_kind) so we can
+ * compare signatures. Callers pass -1 when the info is unavailable;
+ * that matches any recorded signature (conservative — matches the
+ * pre-signature behavior). */
+static bool func_decl_dedup_check_sig(Token *name, int nparams,
+                                       int first_param_kind) {
+    if (!name) return false;
+    if (func_seen_find(name)) return true;
+    if (g_func_nseen < 8192) {
+        g_func_seen[g_func_nseen].loc = name->loc;
+        g_func_seen[g_func_nseen].len = name->len;
+        g_func_seen[g_func_nseen].is_def = false;
+        g_func_seen[g_func_nseen].nparams = nparams;
+        g_func_seen[g_func_nseen].first_param_kind = first_param_kind;
+        g_func_nseen++;
+    }
+    return false;
+}
+
+static bool func_def_dedup_check_sig(Token *name, int nparams,
+                                      int first_param_kind) {
+    if (!name) return false;
+    FuncSeen *fs = func_seen_find(name);
+    if (fs) {
+        if (fs->is_def) return true;
+        /* Decl→def upgrade only when signatures match. Different
+         * signature (abs(int) decl vs abs(long) def) means C treats
+         * them as conflicting; skip the def and keep the first. */
+        if (fs->nparams != nparams || fs->first_param_kind != first_param_kind)
+            return true;
+        fs->is_def = true;
+        return false;
     }
     if (g_func_nseen < 8192) {
         g_func_seen[g_func_nseen].loc = name->loc;
         g_func_seen[g_func_nseen].len = name->len;
+        g_func_seen[g_func_nseen].is_def = true;
+        g_func_seen[g_func_nseen].nparams = nparams;
+        g_func_seen[g_func_nseen].first_param_kind = first_param_kind;
         g_func_nseen++;
     }
-    return false;  /* first time */
+    return false;
 }
 
 /* Does this struct/union (or any of its bases) have member function
@@ -702,7 +776,30 @@ static void emit_type(Type *ty) {
     case TY_FLOAT:   fputs("float", stdout); return;
     case TY_DOUBLE:  fputs("double", stdout); return;
     case TY_LDOUBLE: fputs("long double", stdout); return;
-    case TY_PTR:     emit_type(ty->base); fputs("*", stdout); return;
+    case TY_PTR:
+        /* Function-pointer type in type-expression position
+         * ('int (*)(int)' in a cast, sizeof, return type, etc.).
+         * The C declarator syntax interleaves '*' with the surrounding
+         * parentheses; emit_type alone can produce the abstract form
+         * 'ret (*)(params)'. N4659 §11.3.1 [dcl.ptr]. */
+        if (ty->base && ty->base->kind == TY_FUNC) {
+            Type *fty = ty->base;
+            emit_type(fty->ret);
+            fputs(" (*)(", stdout);
+            for (int i = 0; i < fty->nparams; i++) {
+                if (i > 0) fputs(", ", stdout);
+                emit_type(fty->params[i]);
+            }
+            if (fty->is_variadic) {
+                if (fty->nparams > 0) fputs(", ", stdout);
+                fputs("...", stdout);
+            } else if (fty->nparams == 0) {
+                fputs("void", stdout);
+            }
+            fputc(')', stdout);
+            return;
+        }
+        emit_type(ty->base); fputs("*", stdout); return;
     /* References — emit as pointer in C (caller passes &x). */
     case TY_REF:     emit_type(ty->base); fputs("*", stdout); return;
     case TY_RVALREF: emit_type(ty->base); fputs("*", stdout); return;
@@ -3148,7 +3245,16 @@ static void emit_top_level(Node *n) {
         } else {
             /* Dedup: inline functions from headers may be included multiple
              * times in the preprocessed output. Skip redefinitions. */
-            if (func_dedup_check(n->func.name)) return;
+            {
+                Type *p0 = (n->func.nparams > 0 &&
+                            n->func.params[0] &&
+                            n->func.params[0]->param.ty)
+                    ? n->func.params[0]->param.ty : NULL;
+                if (func_def_dedup_check_sig(n->func.name,
+                                              n->func.nparams,
+                                              p0 ? (int)p0->kind : -1))
+                    return;
+            }
             emit_func_def(n);
         }
         return;
@@ -3182,7 +3288,13 @@ static void emit_top_level(Node *n) {
          * so we synthesize the C declaration shape directly here. */
         if (n->var_decl.ty && n->var_decl.ty->kind == TY_FUNC &&
             n->var_decl.name) {
-            if (func_dedup_check(n->var_decl.name)) return;
+            {
+                Type *fty = n->var_decl.ty;
+                int np = fty ? fty->nparams : -1;
+                int k  = func_first_param_kind(fty);
+                if (func_decl_dedup_check_sig(n->var_decl.name, np, k))
+                    return;
+            }
             emit_source_comment(n->tok);
             Type *fty = n->var_decl.ty;
             emit_type(fty->ret);
