@@ -759,8 +759,20 @@ static bool method_is_virtual(Type *class_type, Token *method_name) {
 static void emit_type(Type *ty) {
     if (!ty) { fputs("/*?*/ int", stdout); return; }
 
-    if (ty->is_const)    fputs("const ", stdout);
-    if (ty->is_volatile) fputs("volatile ", stdout);
+    /* cv-qualifier placement:
+     *   TY_PTR with is_const: 'T * const' (const pointer to T) —
+     *     the qualifier follows the '*' in the declarator
+     *     (N4659 §11.3.1 [dcl.ptr]).
+     *   Other kinds with is_const: 'const T' (const-qualified T) —
+     *     west-const placement.
+     * Emitting 'const' first for TY_PTR yields 'const T *' (const
+     * pointee), which mis-types 'struct S *const ss' as a pointer
+     * to const S and breaks 'ss->field = x' with an lvalue error. */
+    bool is_ptr = ty->kind == TY_PTR;
+    if (!is_ptr) {
+        if (ty->is_const)    fputs("const ", stdout);
+        if (ty->is_volatile) fputs("volatile ", stdout);
+    }
 
     switch (ty->kind) {
     case TY_VOID:    fputs("void", stdout); return;
@@ -785,7 +797,10 @@ static void emit_type(Type *ty) {
         if (ty->base && ty->base->kind == TY_FUNC) {
             Type *fty = ty->base;
             emit_type(fty->ret);
-            fputs(" (*)(", stdout);
+            fputs(" (*", stdout);
+            if (ty->is_const)    fputs("const ", stdout);
+            if (ty->is_volatile) fputs("volatile ", stdout);
+            fputs(")(", stdout);
             for (int i = 0; i < fty->nparams; i++) {
                 if (i > 0) fputs(", ", stdout);
                 emit_type(fty->params[i]);
@@ -799,7 +814,11 @@ static void emit_type(Type *ty) {
             fputc(')', stdout);
             return;
         }
-        emit_type(ty->base); fputs("*", stdout); return;
+        emit_type(ty->base);
+        fputs("*", stdout);
+        if (ty->is_const)    fputs(" const", stdout);
+        if (ty->is_volatile) fputs(" volatile", stdout);
+        return;
     /* References — emit as pointer in C (caller passes &x). */
     case TY_REF:     emit_type(ty->base); fputs("*", stdout); return;
     case TY_RVALREF: emit_type(ty->base); fputs("*", stdout); return;
@@ -1336,7 +1355,15 @@ static void emit_expr(Node *n) {
             }
         }
         if (!did_base_rewrite) {
+            /* Precedence: member-access '.' / '->' binds tighter than
+             * cast. Source '((cast)expr)->m' must keep the grouping,
+             * else '(cast)expr->m' reparses as '(cast)(expr->m)'.
+             * N4659 §8.2.5 [expr.ref] / C §6.5.2.3. */
+            bool needs_paren = n->member.obj &&
+                               n->member.obj->kind == ND_CAST;
+            if (needs_paren) fputc('(', stdout);
             emit_expr(n->member.obj);
+            if (needs_paren) fputc(')', stdout);
             fputs(n->member.op == TK_ARROW ? "->" : ".", stdout);
             if (mem)
                 fprintf(stdout, "%.*s", mem->len, mem->loc);
@@ -1384,7 +1411,17 @@ static void emit_expr(Node *n) {
             fputc(')', stdout);
             if (ref_return) fputc(')', stdout);
         } else {
+            /* Precedence: subscript [] binds tighter than cast.
+             * Source '((cast)expr)[idx]' must keep the grouping, else
+             * emitted '(cast)expr[idx]' reparses as '(cast)(expr[idx])'.
+             * N4659 §8.2.1 [expr.sub] / C §6.5.2.1. Parenthesize when
+             * the base is a cast (or any other low-prec form we'd
+             * otherwise miscompose). */
+            bool needs_paren = n->subscript.base &&
+                               n->subscript.base->kind == ND_CAST;
+            if (needs_paren) fputc('(', stdout);
             emit_expr(n->subscript.base);
+            if (needs_paren) fputc(')', stdout);
             fputc('[', stdout);
             emit_expr(n->subscript.index);
             fputc(']', stdout);
@@ -1405,6 +1442,33 @@ static void emit_stmt(Node *n);
 
 static void emit_var_decl_inner(Node *n) {
     Type *ty = n->var_decl.ty;
+    /* Inline enum-type var-decl: 'enum { A=0, B } x;' carries the
+     * enumerator list on Type.enum_tokens. Emit the enum definition
+     * in the declarator so NOT_FLOAT / AFTER_POINT etc. are visible
+     * in the enclosing scope. N4659 §10.2 [dcl.enum]. Only applies
+     * when we haven't already emitted this enum elsewhere (top-level
+     * bare 'enum X {};' marks codegen_emitted). */
+    if (ty && ty->kind == TY_ENUM && ty->enum_tokens &&
+        ty->enum_ntokens > 0 && !ty->codegen_emitted &&
+        n->var_decl.name) {
+        ty->codegen_emitted = true;
+        fputs("enum ", stdout);
+        if (ty->tag)
+            fprintf(stdout, "%.*s ", ty->tag->len, ty->tag->loc);
+        fputs("{ ", stdout);
+        for (int i = 0; i < ty->enum_ntokens; i++) {
+            Token *t = &ty->enum_tokens[i];
+            if (t->has_space && i > 0) fputc(' ', stdout);
+            fprintf(stdout, "%.*s", t->len, t->loc);
+        }
+        fprintf(stdout, " } %.*s",
+                n->var_decl.name->len, n->var_decl.name->loc);
+        if (n->var_decl.init) {
+            fputs(" = ", stdout);
+            emit_expr(n->var_decl.init);
+        }
+        return;
+    }
     /* Array declarations: C requires 'int arr[10]' not 'int* arr'.
      * Emit the element type, then the name, then [N]. For unsized
      * arrays (int arr[]) emit just []. For function parameters,
@@ -2580,13 +2644,17 @@ static void emit_func_def(Node *n) {
     if (n->func.name)
         fprintf(stdout, "%.*s", n->func.name->len, n->func.name->loc);
     fputc('(', stdout);
-    if (n->func.nparams == 0) {
+    if (n->func.nparams == 0 && !n->func.is_variadic) {
         fputs("void", stdout);
     } else {
         for (int i = 0; i < n->func.nparams; i++) {
             if (i > 0) fputs(", ", stdout);
             Node *p = n->func.params[i];
             emit_param_declarator(p->param.ty, p->param.name, i);
+        }
+        if (n->func.is_variadic) {
+            if (n->func.nparams > 0) fputs(", ", stdout);
+            fputs("...", stdout);
         }
     }
     fputs(") ", stdout);

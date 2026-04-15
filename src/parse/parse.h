@@ -446,6 +446,7 @@ struct Node {
             Token *name;
             Node **params;  /* array of ND_PARAM nodes */
             int nparams;
+            bool is_variadic;  /* param list ends with '...' — N4659 §11.3.5/4 [dcl.fct] */
             Node *body;     /* ND_BLOCK (compound-statement) */
             DeclarativeRegion *param_scope;  /* sema; prototype-scope region */
             /* Constructor mem-initializer-list — N4659 §15.6.2 [class.base.init]

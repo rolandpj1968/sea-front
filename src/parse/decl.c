@@ -677,6 +677,7 @@ parse_suffixes:
                                            name ? name : parser_peek(p));
             node->func.params = (Node **)params.data;
             node->func.nparams = params.len;
+            node->func.is_variadic = variadic;
             if (saved_region_for_params)
                 p->region = saved_region_for_params;
             return node;
@@ -789,6 +790,7 @@ parse_suffixes:
                                        name ? name : parser_peek(p));
         node->func.params = (Node **)params.data;
         node->func.nparams = params.len;
+        node->func.is_variadic = variadic;
         return node;
     }
 
@@ -1239,6 +1241,7 @@ Node *parse_declaration(Parser *p) {
         func->func.name = decl->var_decl.name;
         func->func.params = decl->func.params;
         func->func.nparams = decl->func.nparams;
+        func->func.is_variadic = decl->func.is_variadic;
         func->func.body = NULL;
         func->func.param_scope = NULL;
         func->func.class_type = NULL;

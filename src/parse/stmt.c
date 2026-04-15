@@ -134,7 +134,15 @@ static Node *parse_if_stmt(Parser *p) {
                 parser_advance(p);
             }
         }
-        bool ok = decl && parser_at(p, TK_RPAREN) && !p->tentative_failed;
+        /* Valid if-condition declaration needs a name — N4659 §9.4.1
+         * [stmt.select]/2 the condition form is 'decl-specifier-seq
+         * declarator brace-or-equal-initializer'. An abstract
+         * declarator with no name is not a condition. This matters
+         * for 'if (answer)' when 'answer' is BOTH a struct tag and
+         * a variable in scope — without the name check the tentative
+         * parse accepts 'struct answer' and emits an empty decl. */
+        bool ok = decl && decl->var_decl.name &&
+                  parser_at(p, TK_RPAREN) && !p->tentative_failed;
         p->tentative = prev_tentative;
         p->tentative_failed = saved_failed;
         parser_restore(p, saved);
