@@ -1070,6 +1070,7 @@ void       parser_restore(Parser *p, ParseState saved);
 /* GCC extension: __attribute__((...)) — skip any sequence of these.
  * Lexer treats __attribute__ as a plain identifier. */
 void parser_skip_gnu_attributes(Parser *p);
+void parser_skip_gnu_attributes_with_mode(Parser *p, Token **out_mode);
 void parser_skip_cxx_attributes(Parser *p);
 
 /* Node constructors (arena-allocated) */

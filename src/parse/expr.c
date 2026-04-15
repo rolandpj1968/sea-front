@@ -409,6 +409,25 @@ static Node *primary_expr(Parser *p) {
         return node;
     }
 
+    /* GCC __builtin_expect(expr, hint) — branch prediction hint.
+     * Value is the first argument; the second is a literal hint we
+     * can drop. Without this, the generic 'unknown __builtin' path
+     * below returns a BOOL_LIT(0), collapsing hot-path conditionals
+     * like search_line_acc_char's match check to 'if (0) ...' and
+     * producing infinite loops at runtime. N4659 does NOT include
+     * this (gcc extension). */
+    if (tok->kind == TK_IDENT && tok->len == 16 &&
+        memcmp(tok->loc, "__builtin_expect", 16) == 0 &&
+        parser_peek_ahead(p, 1)->kind == TK_LPAREN) {
+        parser_advance(p);  /* name */
+        parser_advance(p);  /* ( */
+        Node *expr = parse_assign_expr(p);
+        parser_expect(p, TK_COMMA);
+        parse_assign_expr(p);  /* hint — discard */
+        parser_expect(p, TK_RPAREN);
+        return expr;
+    }
+
     /* GCC/Clang type-trait intrinsics in expression context:
      *   __is_trivial(T), __is_assignable(T, U), __is_same(T, U), etc.
      * These are bool-valued built-ins whose arguments are TYPES, not

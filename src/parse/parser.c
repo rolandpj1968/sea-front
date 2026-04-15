@@ -221,16 +221,33 @@ void parser_skip_cxx_attributes(Parser *p) {
  * type system, so we drop them entirely.
  */
 void parser_skip_gnu_attributes(Parser *p) {
+    parser_skip_gnu_attributes_with_mode(p, NULL);
+}
+
+/* Like parser_skip_gnu_attributes, but also detects
+ *   __attribute__((__mode__(X)))
+ * on the way past and returns the mode name's length/loc via *out_mode
+ * when present. X is typically '__word__', '__DI__', '__SI__', etc.
+ * Used by typedef parsing to upgrade the base type, e.g.
+ *   typedef unsigned int word_type __attribute__((__mode__(__word__)));
+ * becomes a long-sized type on 64-bit. libcpp's lex.c relies on this.
+ * Caller passes NULL when they don't care. */
+void parser_skip_gnu_attributes_with_mode(Parser *p, Token **out_mode) {
     while (parser_at(p, TK_IDENT) &&
            (token_equal(parser_peek(p), "__attribute__") ||
             token_equal(parser_peek(p), "__attribute"))) {
         parser_advance(p);                  /* __attribute__ */
         parser_expect(p, TK_LPAREN);
         parser_expect(p, TK_LPAREN);
-        /* Now inside the inner paren — balance toward its matching ).
-         * Terminates: paren counting; advances each iteration. */
+        /* Scan forward looking for __mode__(X) before skipping. */
         int depth = 1;
         while (depth > 0 && !parser_at_eof(p)) {
+            if (out_mode && parser_at(p, TK_IDENT) &&
+                token_equal(parser_peek(p), "__mode__") &&
+                parser_peek_ahead(p, 1)->kind == TK_LPAREN &&
+                parser_peek_ahead(p, 2)->kind == TK_IDENT) {
+                *out_mode = parser_peek_ahead(p, 2);
+            }
             if (parser_at(p, TK_LPAREN)) depth++;
             else if (parser_at(p, TK_RPAREN)) { depth--; if (depth == 0) break; }
             parser_advance(p);

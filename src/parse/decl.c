@@ -1126,8 +1126,42 @@ Node *parse_declaration(Parser *p) {
         Node *decl = parse_declarator(p, base_ty);
         /* GCC __attribute__ after typedef declarator — e.g.
          * 'typedef int register_t __attribute__((__mode__(__word__)));'
-         * Common in system headers (sys/types.h). */
-        parser_skip_gnu_attributes(p);
+         * Common in system headers (sys/types.h).
+         *
+         * Recognise __mode__(X) to upgrade the declared type's size.
+         * Without this, 'typedef unsigned int word_type
+         *   __attribute__((__mode__(__word__)))' becomes a plain
+         * 32-bit unsigned int in sea-front, but the surrounding
+         * libcpp lex code assumes the native word size (64-bit on
+         * x86_64), producing out-of-bounds reads in search_line_acc_char.
+         * Not in ISO C++ — gcc extension. */
+        Token *mode_tok = NULL;
+        parser_skip_gnu_attributes_with_mode(p, &mode_tok);
+        if (mode_tok && decl && decl->var_decl.ty) {
+            const char *m = mode_tok->loc;
+            int ml = mode_tok->len;
+            Type *new_ty = NULL;
+            if ((ml == 8 && memcmp(m, "__word__", 8) == 0) ||
+                (ml == 6 && memcmp(m, "__DI__", 6) == 0) ||
+                (ml == 2 && memcmp(m, "DI", 2) == 0)) {
+                new_ty = new_type(p, TY_LONG);
+            } else if ((ml == 6 && memcmp(m, "__SI__", 6) == 0) ||
+                       (ml == 2 && memcmp(m, "SI", 2) == 0)) {
+                new_ty = new_type(p, TY_INT);
+            } else if ((ml == 6 && memcmp(m, "__HI__", 6) == 0) ||
+                       (ml == 2 && memcmp(m, "HI", 2) == 0)) {
+                new_ty = new_type(p, TY_SHORT);
+            } else if ((ml == 6 && memcmp(m, "__QI__", 6) == 0) ||
+                       (ml == 2 && memcmp(m, "QI", 2) == 0)) {
+                new_ty = new_type(p, TY_CHAR);
+            }
+            if (new_ty) {
+                new_ty->is_unsigned = decl->var_decl.ty->is_unsigned;
+                new_ty->is_const    = decl->var_decl.ty->is_const;
+                new_ty->is_volatile = decl->var_decl.ty->is_volatile;
+                decl->var_decl.ty = new_ty;
+            }
+        }
 
         /* Register the first typedef-name into the current declarative region */
         if (decl->var_decl.name) {
