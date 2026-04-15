@@ -161,6 +161,22 @@ static void visit_ident(Sema *s, Node *n) {
     Token *name = n->ident.name;
     if (!name || name->kind != TK_IDENT) return;
     Declaration *d = lookup_unqualified_from(s->cur_scope, name->loc, name->len);
+    /* N4659 §6.3.10 [basic.scope.hiding] / C §6.2.3 [Name spaces of
+     * identifiers] — a tag and an ordinary identifier (variable,
+     * function, typedef) with the same name coexist in separate name
+     * spaces; in expression context the ordinary identifier wins.
+     * Classic pattern:
+     *   struct stat { ... };                      // tag
+     *   int stat(const char *, struct stat *);    // function
+     * Unqualified lookup may land on the tag (first-seen in the
+     * bucket); re-query with ENTITY_VARIABLE preference so an
+     * expression 'stat(args)' resolves to the function, not a ctor
+     * call on the tag type. */
+    if (d && (d->entity == ENTITY_TAG || d->entity == ENTITY_TYPE)) {
+        Declaration *ord =
+            lookup_kind_from(s->cur_scope, name->loc, name->len, ENTITY_VARIABLE);
+        if (ord) d = ord;
+    }
     if (!d) return;
     n->ident.resolved_decl = d;
     if (d->type)
@@ -358,6 +374,10 @@ static void visit_call(Sema *s, Node *n) {
      * when the type has a non-trivial dtor. */
     if (n->call.callee && n->call.callee->kind == ND_IDENT) {
         Declaration *d = n->call.callee->ident.resolved_decl;
+        Token *nm = n->call.callee->ident.name;
+        if (nm && nm->len == 4 && memcmp(nm->loc, "stat", 4) == 0)
+            fprintf(stderr, "DBG visit_call for stat: d=%p entity=%d\n",
+                    (void*)d, d ? d->entity : -1);
         if (d && (d->entity == ENTITY_TYPE || d->entity == ENTITY_TAG) &&
             d->type && d->type->kind == TY_STRUCT) {
             n->resolved_type = d->type;

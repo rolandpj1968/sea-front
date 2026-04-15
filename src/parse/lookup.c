@@ -226,11 +226,17 @@ static Declaration *lookup_kind_in_region(DeclarativeRegion *r,
  */
 Declaration *lookup_unqualified_kind(Parser *p, const char *name,
                                      int name_len, EntityKind kind) {
-    for (DeclarativeRegion *r = p->region; r; r = r->enclosing) {
+    return lookup_kind_from(p->region, name, name_len, kind);
+}
+
+/* Scope-rooted variant for sema (no Parser needed). Same semantics
+ * as lookup_unqualified_kind but the starting region is explicit. */
+Declaration *lookup_kind_from(DeclarativeRegion *start, const char *name,
+                               int name_len, EntityKind kind) {
+    for (DeclarativeRegion *r = start; r; r = r->enclosing) {
         Declaration *d = lookup_kind_in_region(r, name, name_len, kind);
         if (d)
             return d;
-        /* Also search using-directive regions */
         for (int i = 0; i < r->nusing; i++) {
             d = lookup_kind_in_region(r->using_regions[i], name, name_len, kind);
             if (d)

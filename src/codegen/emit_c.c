@@ -1007,11 +1007,18 @@ static void emit_expr(Node *n) {
         emit_token_text(n->ident.name);
         return;
     case ND_BINARY: {
-        /* Check if the LHS is a struct type with an overloaded operator.
-         * If so, rewrite 'a + b' → 'Class__plus(&a, b)'. */
+        /* Overloaded-operator dispatch — N4659 §16.5 [over.oper]:
+         * 'a op b' where a has class type calls the class's operator.
+         *
+         * Value lhs (TY_STRUCT / TY_UNION) → dispatch.
+         * Reference lhs (TY_REF — becomes T* in emitted C but still
+         *   has value semantics) → dereference and dispatch.
+         * Pointer lhs (TY_PTR) → native C pointer arithmetic /
+         *   comparison. Do NOT dispatch — 'pchdir != NULL' on a
+         *   DIR* must emit as a plain pointer comparison, not
+         *   sf__DIR__ne(&pchdir, NULL). */
         Type *lhs_ty = n->binary.lhs ? n->binary.lhs->resolved_type : NULL;
-        /* Dereference pointer-to-struct (e.g. from reference lowering) */
-        if (lhs_ty && (lhs_ty->kind == TY_PTR || lhs_ty->kind == TY_REF))
+        if (lhs_ty && (lhs_ty->kind == TY_REF || lhs_ty->kind == TY_RVALREF))
             lhs_ty = lhs_ty->base;
         if (lhs_ty && (lhs_ty->kind == TY_STRUCT || lhs_ty->kind == TY_UNION) &&
             lhs_ty->tag) {
@@ -1035,9 +1042,11 @@ static void emit_expr(Node *n) {
         return;
     }
     case ND_ASSIGN: {
-        /* Compound assignment on struct: a += b → Class__plus_assign(&a, b) */
+        /* Compound assignment on struct: a += b → Class__plus_assign(&a, b)
+         * Same value-vs-pointer distinction as ND_BINARY — TY_PTR lhs
+         * is native C pointer arithmetic, not a class operator. */
         Type *lhs_ty = n->binary.lhs ? n->binary.lhs->resolved_type : NULL;
-        if (lhs_ty && (lhs_ty->kind == TY_PTR || lhs_ty->kind == TY_REF))
+        if (lhs_ty && (lhs_ty->kind == TY_REF || lhs_ty->kind == TY_RVALREF))
             lhs_ty = lhs_ty->base;
         if (lhs_ty && (lhs_ty->kind == TY_STRUCT || lhs_ty->kind == TY_UNION) &&
             lhs_ty->tag && n->binary.op != TK_ASSIGN) {

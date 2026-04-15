@@ -1287,6 +1287,8 @@ Declaration *lookup_unqualified_from(DeclarativeRegion *start,
  * 'Foo' hides the class name (§6.3.10/2 [basic.scope.hiding]). */
 Declaration *lookup_unqualified_kind(Parser *p, const char *name,
                                      int name_len, EntityKind kind);
+Declaration *lookup_kind_from(DeclarativeRegion *start, const char *name,
+                               int name_len, EntityKind kind);
 
 /*
  * Disambiguation oracles — convenience wrappers around lookup.
