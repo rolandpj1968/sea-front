@@ -64,6 +64,10 @@ static int g_indent = 0;
  * before each method body, restored after. NULL outside class
  * member emission. */
 static Node *g_current_class_def = NULL;
+/* Return type of the function currently being emitted. Set by
+ * emit_func_def / emit_method_as_free_fn so ND_RETURN can adapt to
+ * reference returns (T& lowered to T*: 'return *x;' → 'return x;'). */
+static Type *g_current_func_ret_ty = NULL;
 
 static void emit_indent(void) {
     for (int i = 0; i < g_indent; i++) fputs("    ", stdout);
@@ -202,6 +206,34 @@ static int resolve_operator_overload(Type *class_type,
                                       const char *op_suffix,
                                       Type **arg_types, int nargs,
                                       Type ***out_param_types);
+
+/* Emit a return-expression with reference-return adaptation.
+ *
+ * In sea-front, T& and T&& parameters/returns are lowered to T* in C.
+ * A 'return E;' from such a function must produce a T*, but C++ source
+ * commonly returns a T-lvalue (e.g. 'return *this;' or 'return foo;'
+ * where foo is a class object). The expression's resolved_type tells us
+ * whether it's already a reference (so already a pointer in our C):
+ *
+ *   - resolved_type is TY_REF / TY_RVALREF → already lowered to a
+ *     pointer; emit unchanged.
+ *   - expression is '*X' for some pointer X → cancel the deref, emit X.
+ *   - otherwise → take the address: '&(E)'. Works for any lvalue. */
+static void emit_return_expr(Node *e) {
+    Type *rt = g_current_func_ret_ty;
+    bool needs_ref = rt && (rt->kind == TY_REF || rt->kind == TY_RVALREF);
+    if (!needs_ref) { emit_expr(e); return; }
+    Type *et = e ? e->resolved_type : NULL;
+    if (et && (et->kind == TY_REF || et->kind == TY_RVALREF)) {
+        emit_expr(e); return;
+    }
+    if (e->kind == ND_UNARY && e->unary.op == TK_STAR) {
+        emit_expr(e->unary.operand); return;
+    }
+    fputs("&(", stdout);
+    emit_expr(e);
+    fputc(')', stdout);
+}
 
 /* Emit a mangled parameter-type suffix used for overload
  * disambiguation on operator methods and inline operator-call
@@ -2439,7 +2471,7 @@ static void emit_stmt(Node *n) {
             }
             if (n->ret.expr) {
                 fputs("__SF_RETURN(", stdout);
-                emit_expr(n->ret.expr);
+                emit_return_expr(n->ret.expr);
                 fprintf(stdout, ", %s);\n", lbl);
             } else {
                 fprintf(stdout, "__SF_RETURN_VOID(%s);\n", lbl);
@@ -2448,7 +2480,7 @@ static void emit_stmt(Node *n) {
             fputs("return", stdout);
             if (n->ret.expr) {
                 fputc(' ', stdout);
-                emit_expr(n->ret.expr);
+                emit_return_expr(n->ret.expr);
             }
             fputs(";\n", stdout);
         }
@@ -3247,11 +3279,14 @@ static void emit_func_body(Node *func) {
 static void emit_func_def(Node *n) {
     emit_source_comment(n->tok);
     cf_begin_function(n);
+    Type *saved_ret = g_current_func_ret_ty;
+    g_current_func_ret_ty = n->func.ret_ty;
     emit_storage_flags_for_def(n->func.storage_flags);
     emit_func_header(n->func.ret_ty, n->func.name,
                      n->func.params, n->func.nparams, n->func.is_variadic);
     fputc(' ', stdout);
     emit_func_body(n);
+    g_current_func_ret_ty = saved_ret;
 }
 
 /* Emit just the signature of a method as a mangled free function.
@@ -3390,9 +3425,12 @@ static void emit_method_as_free_fn(Node *func, Type *class_type) {
 
     emit_source_comment(func->tok);
     cf_begin_function(func);
+    Type *saved_ret = g_current_func_ret_ty;
+    g_current_func_ret_ty = func->func.ret_ty;
     emit_method_signature(func, class_type);
     fputc(' ', stdout);
     emit_func_body(func);
+    g_current_func_ret_ty = saved_ret;
 }
 
 static void emit_class_def(Node *n) {
@@ -3672,6 +3710,20 @@ static void emit_class_def(Node *n) {
 
     if (g_emit_phase == PHASE_STRUCTS) return;
 methods_phase:;
+    /* Dedup methods phase: template instantiation can leave multiple
+     * ND_CLASS_DEF nodes pointing at the same logical class (the
+     * struct-body dedup at line 3452 catches them via codegen_emitted,
+     * but PHASE_METHODS skips that check by goto). Use a separate
+     * pointer-set on ND_CLASS_DEF identity so a class's methods only
+     * emit once even if instantiation produced several copies. */
+    {
+        enum { METHODS_EMIT_CAP = 256 };
+        static Node *seen[METHODS_EMIT_CAP];
+        static int nseen = 0;
+        for (int i = 0; i < nseen; i++)
+            if (seen[i] == n) return;
+        if (nseen < METHODS_EMIT_CAP) seen[nseen++] = n;
+    }
 
     /* Re-scan for user dtor (needed for methods phase regardless
      * of which phase we entered from). */
