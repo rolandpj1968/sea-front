@@ -66,15 +66,30 @@ extern Mangler *g_mangler;
  * declaration: 'struct sf__std__vector { ... };' */
 void mangle_class_tag(Type *class_type);
 
-/* A regular method on a class:
- *   class vec, member 'push' → sf__vec__push */
-void mangle_class_method(Type *class_type, Token *method_name);
+/* A regular method on a class. The parameter type list is encoded
+ * as a suffix so overloads get distinct C names:
+ *   vec::push(int)   → sf__vec__push_p_int_pe_
+ *   vec::push(int,T) → sf__vec__push_p_int_T_pe_
+ * N4659 §16.2 [over.load] — distinct overloads must have distinct
+ * signatures. C has no overloading, so the signature is encoded
+ * into the symbol name.
+ *
+ * param_types / nparams describe the method's own parameters
+ * (excluding the implicit 'this'). Pass NULL/0 for signature-less
+ * contexts (e.g. forward references from templates where the
+ * signature isn't available); the caller accepts the ambiguity. */
+void mangle_class_method(Type *class_type, Token *method_name,
+                          Type **param_types, int nparams);
 
-/* Constructor:
- *   class vec → sf__vec__ctor */
-void mangle_class_ctor(Type *class_type);
+/* Constructor. Parameter-type suffix disambiguates overloads:
+ *   vec()        → sf__vec__ctor_p_void_pe_
+ *   vec(int)     → sf__vec__ctor_p_int_pe_
+ *   vec(vec&)    → sf__vec__ctor_p_vec_ref_pe_ */
+void mangle_class_ctor(Type *class_type,
+                        Type **param_types, int nparams);
 
-/* Destructor wrapper (chains user dtor body + member dtors):
+/* Destructor wrapper (chains user dtor body + member dtors). Dtors
+ * cannot be overloaded so no parameter suffix:
  *   class vec → sf__vec__dtor */
 void mangle_class_dtor(Type *class_type);
 

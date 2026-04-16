@@ -205,15 +205,36 @@ void mangle_class_tag(Type *class_type) {
     emit_class_close();
 }
 
-void mangle_class_method(Type *class_type, Token *method_name) {
+/* Append the parameter-type list as a mangled suffix —
+ *   _p_<t0>_<t1>_..._pe_
+ * with 'void' for the empty list. Mirrors the _t_..._te_ shape used
+ * for template arguments. N4659 §16.2 [over.load]. */
+static void emit_param_suffix(Type **param_types, int nparams) {
+    fputs("_p_", stdout);
+    if (nparams == 0) {
+        fputs("void", stdout);
+    } else {
+        for (int i = 0; i < nparams; i++) {
+            if (i > 0) fputc('_', stdout);
+            emit_type_for_mangle(param_types[i]);
+        }
+    }
+    fputs("_pe_", stdout);
+}
+
+void mangle_class_method(Type *class_type, Token *method_name,
+                          Type **param_types, int nparams) {
     emit_class_open(class_type);
     g_mangler->append_member(g_mangler, method_name);
+    emit_param_suffix(param_types, nparams);
     emit_class_close();
 }
 
-void mangle_class_ctor(Type *class_type) {
+void mangle_class_ctor(Type *class_type,
+                        Type **param_types, int nparams) {
     emit_class_open(class_type);
     g_mangler->append_ctor(g_mangler);
+    emit_param_suffix(param_types, nparams);
     emit_class_close();
 }
 

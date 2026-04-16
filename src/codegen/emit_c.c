@@ -167,6 +167,64 @@ static void emit_expr(Node *n);
 static void emit_type(Type *ty);
 static void emit_mangled_class_tag(Type *class_type);
 static void emit_stmt(Node *n);
+static int collect_call_arg_types(Node **args, int nargs, Type ***out_types);
+static int resolve_overload(Type *class_type, Token *name, bool is_ctor,
+                             Type **arg_types, int nargs,
+                             Type ***out_param_types);
+
+/* Emit a mangled parameter-type suffix used for overload
+ * disambiguation on operator methods and inline operator-call
+ * rewrites. Mirrors mangle.c's emit_type_for_mangle shape but
+ * lives in emit_c.c so call-site rewrites that don't go through
+ * the mangle_class_method helper can share it. The two encoders
+ * MUST stay in sync. */
+static void emit_local_param_suffix(Type **param_types, int nparams) {
+    fputs("_p_", stdout);
+    if (nparams == 0) {
+        fputs("void", stdout);
+    } else {
+        for (int i = 0; i < nparams; i++) {
+            if (i > 0) fputc('_', stdout);
+            Type *pt = param_types[i];
+            if (!pt) { fputs("unknown", stdout); continue; }
+            switch (pt->kind) {
+            case TY_VOID:    fputs("void", stdout); break;
+            case TY_BOOL:    fputs("bool", stdout); break;
+            case TY_CHAR:    fputs(pt->is_unsigned ? "uchar" : "char", stdout); break;
+            case TY_SHORT:   fputs(pt->is_unsigned ? "ushort" : "short", stdout); break;
+            case TY_INT:     fputs(pt->is_unsigned ? "uint" : "int", stdout); break;
+            case TY_LONG:    fputs(pt->is_unsigned ? "ulong" : "long", stdout); break;
+            case TY_LLONG:   fputs(pt->is_unsigned ? "ullong" : "llong", stdout); break;
+            case TY_FLOAT:   fputs("float", stdout); break;
+            case TY_DOUBLE:  fputs("double", stdout); break;
+            case TY_PTR:     fputs("ptr", stdout); break;
+            case TY_REF:     fputs("ref", stdout); break;
+            case TY_STRUCT: case TY_UNION:
+                if (pt->tag) fprintf(stdout, "%.*s", pt->tag->len, pt->tag->loc);
+                else fputs("anon", stdout);
+                break;
+            default: fputs("unknown", stdout); break;
+            }
+        }
+    }
+    fputs("_pe_", stdout);
+}
+
+/* Shared diagnostic for the "no matching overload" case. We fail
+ * loudly rather than fall through to arg-type mangling — the prior
+ * silent fallback would emit a symbol that doesn't resolve at link
+ * time, which we've repeatedly diagnosed as a poor tradeoff. */
+static void die_no_overload(Type *class_type, Token *name, int nargs,
+                             const char *where) {
+    fprintf(stderr,
+        "sea-front: no matching overload for %s on class %.*s "
+        "(%d arg%s); called from %s\n",
+        name ? "method" : "ctor",
+        class_type && class_type->tag ? class_type->tag->len : 7,
+        class_type && class_type->tag ? class_type->tag->loc : "unknown",
+        nargs, nargs == 1 ? "" : "s", where);
+    abort();
+}
 
 /*
  * Emit a "C++: ..." comment showing the original C++ declaration.
@@ -290,7 +348,17 @@ static void hoist_emit_decl(Node *call) {
         emit_type(call->resolved_type);
         fprintf(stdout, " %s;\n", name);
         emit_indent();
-        mangle_class_ctor(call->resolved_type);
+        {
+            Type **at = NULL;
+            int na = collect_call_arg_types(call->call.args,
+                                             call->call.nargs, &at);
+            Type **pty = NULL;
+            int np = resolve_overload(call->resolved_type, NULL, true,
+                                       at, na, &pty);
+            if (np < 0)
+                die_no_overload(call->resolved_type, NULL, na, "hoist_emit_decl");
+            mangle_class_ctor(call->resolved_type, pty, np);
+        }
         fprintf(stdout, "(&%s", name);
         for (int i = 0; i < call->call.nargs; i++) {
             fputs(", ", stdout);
@@ -892,6 +960,172 @@ static void emit_storage_flags_for_def(int flags) {
     emit_storage_flags_impl(flags, true);
 }
 
+/* Collect the parameter types of a function AST node (ND_FUNC_DEF
+ * or ND_VAR_DECL with TY_FUNC) into a fresh Type* array so the
+ * mangling helpers can encode them as a signature suffix.
+ *
+ * Returns the type array via *out_types (NULL when nparams == 0)
+ * and the count via the return value. The array lives in a small
+ * static pool since mangling emits immediately — no long-lived
+ * ownership. */
+static int collect_func_param_types(Node *func_node, Type ***out_types) {
+    static Type *pool[64];
+    *out_types = NULL;
+    if (!func_node) return 0;
+    int n = 0;
+    if (func_node->kind == ND_FUNC_DEF || func_node->kind == ND_FUNC_DECL) {
+        n = func_node->func.nparams;
+        if (n > 64) n = 64;
+        for (int i = 0; i < n; i++)
+            pool[i] = func_node->func.params[i]->param.ty;
+        *out_types = n > 0 ? pool : NULL;
+        return n;
+    }
+    if (func_node->kind == ND_VAR_DECL && func_node->var_decl.ty &&
+        func_node->var_decl.ty->kind == TY_FUNC) {
+        Type *fty = func_node->var_decl.ty;
+        n = fty->nparams;
+        if (n > 64) n = 64;
+        for (int i = 0; i < n; i++) pool[i] = fty->params[i];
+        *out_types = n > 0 ? pool : NULL;
+        return n;
+    }
+    return 0;
+}
+
+/* Collect the resolved types of call arguments. Used ONLY to pick
+ * the matching overload at a call site (see resolve_overload) —
+ * NOT for mangling directly. The mangled symbol is defined by the
+ * DECLARATION's signature, so call-site mangling must round-trip
+ * through resolve_overload to find the decl and emit ITS param
+ * types. Call-arg types may differ (implicit conversions); only
+ * the decl's types are part of the symbol name.
+ *
+ * Uses a static pool since mangling emits immediately — callers
+ * must emit-and-consume before reinvoking. */
+static int collect_call_arg_types(Node **args, int nargs, Type ***out_types) {
+    static Type *pool[64];
+    *out_types = NULL;
+    if (nargs <= 0) return 0;
+    if (nargs > 64) nargs = 64;
+    for (int i = 0; i < nargs; i++)
+        pool[i] = args[i] ? args[i]->resolved_type : NULL;
+    *out_types = pool;
+    return nargs;
+}
+
+/* Match a single candidate member against a call's arg types.
+ * Returns -1 if nparams ≠ nargs (hard reject); otherwise a score in
+ * [0 .. nparams] counting position-wise type-kind matches.
+ * For methods, name must already have been pre-filtered by the caller. */
+static int overload_match_score(Node *m, Type **arg_types, int nargs) {
+    bool is_def = m->kind == ND_FUNC_DEF;
+    int nparams = is_def ? m->func.nparams : m->var_decl.ty->nparams;
+    if (nparams != nargs) return -1;
+    int score = 0;
+    for (int k = 0; k < nparams && k < 64; k++) {
+        Type *pt = is_def ? m->func.params[k]->param.ty
+                          : m->var_decl.ty->params[k];
+        Type *at = arg_types && k < nargs ? arg_types[k] : NULL;
+        if (pt && at && pt->kind == at->kind) score++;
+    }
+    return score;
+}
+
+static int copy_member_param_types(Node *m, Type **pool) {
+    if (m->kind == ND_FUNC_DEF) {
+        int n = m->func.nparams;
+        if (n > 64) n = 64;
+        for (int i = 0; i < n; i++)
+            pool[i] = m->func.params[i]->param.ty;
+        return n;
+    }
+    int n = m->var_decl.ty->nparams;
+    if (n > 64) n = 64;
+    for (int i = 0; i < n; i++)
+        pool[i] = m->var_decl.ty->params[i];
+    return n;
+}
+
+/* Collect same-named candidate methods from a class AND all its
+ * base classes (recursive). Inherited methods need to be reachable
+ * through the same-name lookup. Caller's 'found' vector accumulates. */
+static void collect_overload_candidates(Type *class_type, Token *name,
+                                         bool is_ctor,
+                                         Node **found, int *nfound, int cap) {
+    if (!class_type || !class_type->class_def) return;
+    Node *cd = class_type->class_def;
+    for (int i = 0; i < cd->class_def.nmembers; i++) {
+        Node *m = cd->class_def.members[i];
+        if (!m) continue;
+        bool is_def   = m->kind == ND_FUNC_DEF;
+        bool is_decl  = m->kind == ND_VAR_DECL && m->var_decl.ty &&
+                        m->var_decl.ty->kind == TY_FUNC;
+        if (!is_def && !is_decl) continue;
+        bool m_is_ctor = is_def ? m->func.is_constructor
+                                : m->var_decl.is_constructor;
+        if (is_ctor != m_is_ctor) continue;
+        Token *mn = is_def ? m->func.name : m->var_decl.name;
+        if (!is_ctor) {
+            if (!name || !mn) continue;
+            if (mn->len != name->len) continue;
+            if (memcmp(mn->loc, name->loc, name->len) != 0) continue;
+        }
+        if (*nfound < cap) found[(*nfound)++] = m;
+    }
+    /* Inherited methods — N4659 §13.5.2 [class.member.lookup].
+     * Ctors are not inherited (§15.1 [class.ctor]). */
+    if (!is_ctor && class_type->class_region) {
+        for (int i = 0; i < class_type->class_region->nbases; i++) {
+            DeclarativeRegion *br = class_type->class_region->bases[i];
+            if (br && br->owner_type)
+                collect_overload_candidates(br->owner_type, name, is_ctor,
+                                             found, nfound, cap);
+        }
+    }
+}
+
+/* Find the ctor/method declaration in a class (or its bases) that
+ * best matches the given call-argument types, and return ITS param
+ * types for mangling. The decl's signature IS the mangled symbol —
+ * callers must not substitute the arg types directly.
+ *
+ * 'name' is NULL for ctors. Selection (N4659 §16.3 [over.match]):
+ *   - If exactly one candidate with the name exists, use it
+ *     regardless of arg kinds (implicit-conversion catchall).
+ *   - Otherwise require nparams == nargs and pick the highest
+ *     kind-match score; break ties by source order.
+ *   - If no candidate has the right nparams, aborts — an unresolved
+ *     method call is either a bug in the input or a sea-front
+ *     instantiation miss. Silent fallback was the wrong move last
+ *     time; surfacing it loudly is the fix. */
+static int resolve_overload(Type *class_type, Token *name, bool is_ctor,
+                             Type **arg_types, int nargs,
+                             Type ***out_param_types) {
+    static Type *pool[64];
+    *out_param_types = NULL;
+    enum { MAX_CAND = 32 };
+    Node *cands[MAX_CAND];
+    int ncands = 0;
+    collect_overload_candidates(class_type, name, is_ctor,
+                                 cands, &ncands, MAX_CAND);
+    if (ncands == 0) return -1;  /* caller may still error — see above */
+    if (ncands == 1) {
+        *out_param_types = pool;
+        return copy_member_param_types(cands[0], pool);
+    }
+    /* Pick by kind-match score. */
+    Node *best = NULL;
+    int best_score = -1;
+    for (int i = 0; i < ncands; i++) {
+        int s = overload_match_score(cands[i], arg_types, nargs);
+        if (s > best_score) { best = cands[i]; best_score = s; }
+    }
+    if (!best) return -1;
+    *out_param_types = pool;
+    return copy_member_param_types(best, pool);
+}
+
 /* Emit a C function declarator — the 'ret name(params)' shape —
  * handling the case where ret itself is a function pointer, which
  * requires declarator-interleaving (N4659 §11.3 [dcl.meaning]):
@@ -1163,6 +1397,8 @@ static void emit_expr(Node *n) {
             lhs_ty->tag) {
             const char *suffix = binop_to_operator_suffix(n->binary.op);
             if (suffix) {
+                /* Binop overload call — no param suffix emitted.
+                 * See TODO in emit_operator_method_name. */
                 mangle_class_tag(lhs_ty);
                 fputs(suffix, stdout);
                 fputs("(&", stdout);
@@ -1276,7 +1512,15 @@ static void emit_expr(Node *n) {
                 fprintf(stdout, "this->__sf_vptr->%.*s(this",
                         mname->len, mname->loc);
             } else {
-                mangle_class_method(class_type, mname);
+                Type **at = NULL;
+                int na = collect_call_arg_types(n->call.args,
+                                                 n->call.nargs, &at);
+                Type **pty = NULL;
+                int np = resolve_overload(class_type, mname, false,
+                                           at, na, &pty);
+                if (np < 0)
+                    die_no_overload(class_type, mname, na, "ND_CALL implicit-this");
+                mangle_class_method(class_type, mname, pty, np);
                 if (base_len > 0) {
                     /* Inherited method — receiver is the base subobject. */
                     fputs("(&this->", stdout);
@@ -1367,7 +1611,22 @@ static void emit_expr(Node *n) {
                             }
                         }
                     }
-                    mangle_class_method(method_class, callee->member.member);
+                    {
+                        Type **at = NULL;
+                        int na = collect_call_arg_types(n->call.args,
+                                                         n->call.nargs, &at);
+                        Type **pty = NULL;
+                        int np = resolve_overload(method_class,
+                                                   callee->member.member,
+                                                   false, at, na, &pty);
+                        if (np < 0)
+                            die_no_overload(method_class,
+                                             callee->member.member,
+                                             na, "ND_CALL member");
+                        mangle_class_method(method_class,
+                                             callee->member.member,
+                                             pty, np);
+                    }
                     fputc('(', stdout);
                 }
                 /* this argument: address-of for value, as-is for pointer.
@@ -2081,7 +2340,18 @@ static void emit_stmt(Node *n) {
         if (n->var_decl.has_ctor_init && n->var_decl.ty &&
             n->var_decl.ty->kind == TY_STRUCT && n->var_decl.name) {
             emit_indent();
-            mangle_class_ctor(n->var_decl.ty);
+            {
+                Type **at = NULL;
+                int na = collect_call_arg_types(n->var_decl.ctor_args,
+                                                 n->var_decl.ctor_nargs, &at);
+                Type **pty = NULL;
+                int np = resolve_overload(n->var_decl.ty, NULL, true,
+                                           at, na, &pty);
+                if (np < 0)
+                    die_no_overload(n->var_decl.ty, NULL, na,
+                                     "direct-init ctor call");
+                mangle_class_ctor(n->var_decl.ty, pty, np);
+            }
             fprintf(stdout, "(&%.*s",
                     n->var_decl.name->len, n->var_decl.name->loc);
             for (int i = 0; i < n->var_decl.ctor_nargs; i++) {
@@ -2099,7 +2369,8 @@ static void emit_stmt(Node *n) {
                  n->var_decl.ty && n->var_decl.ty->kind == TY_STRUCT &&
                  n->var_decl.ty->has_default_ctor && n->var_decl.name) {
             emit_indent();
-            mangle_class_ctor(n->var_decl.ty);
+            /* Default ctor — 0 params. */
+            mangle_class_ctor(n->var_decl.ty, NULL, 0);
             fprintf(stdout, "(&%.*s);\n",
                     n->var_decl.name->len, n->var_decl.name->loc);
         }
@@ -2683,7 +2954,8 @@ static void emit_ctor_member_inits(Node *func) {
             Type *base = class_base(cty, b);
             if (!base || !base->has_default_ctor) continue;
             emit_indent();
-            mangle_class_ctor(base);
+            /* Default-ctor chain into the base. 0-arg signature. */
+            mangle_class_ctor(base, NULL, 0);
             fputs("(&this->", stdout);
             if (b == 0) fputs("__sf_base", stdout);
             else        fprintf(stdout, "__sf_base%d", b);
@@ -2727,20 +2999,46 @@ static void emit_ctor_member_inits(Node *func) {
             /* Class member: ctor call with the user's args, or
              * default ctor if not listed. */
             if (found) {
-                emit_indent();
-                mangle_class_ctor(mty);
-                fprintf(stdout, "(&this->%.*s",
-                        m->var_decl.name->len, m->var_decl.name->loc);
-                for (int a = 0; a < found->nargs; a++) {
-                    fputs(", ", stdout);
-                    emit_expr(found->args[a]);
+                Type **at = NULL;
+                int na = collect_call_arg_types(found->args, found->nargs, &at);
+                Type **pty = NULL;
+                int np = resolve_overload(mty, NULL, true, at, na, &pty);
+                if (np < 0) {
+                    /* No matching ctor. For a 0-arg mem-init (`: m()`)
+                     * on a plain C struct whose has_default_ctor is
+                     * transitively true, this is trivial value-init —
+                     * the enclosing allocation's zero-fill covers it.
+                     * For a non-zero arg count, this is a real error. */
+                    if (na != 0)
+                        die_no_overload(mty, NULL, na,
+                                         "mem-init ctor call");
+                } else {
+                    emit_indent();
+                    mangle_class_ctor(mty, pty, np);
+                    fprintf(stdout, "(&this->%.*s",
+                            m->var_decl.name->len, m->var_decl.name->loc);
+                    for (int a = 0; a < found->nargs; a++) {
+                        fputs(", ", stdout);
+                        emit_expr(found->args[a]);
+                    }
+                    fputs(");\n", stdout);
                 }
-                fputs(");\n", stdout);
             } else if (mty->has_default_ctor) {
-                emit_indent();
-                mangle_class_ctor(mty);
-                fprintf(stdout, "(&this->%.*s);\n",
-                        m->var_decl.name->len, m->var_decl.name->loc);
+                /* Emit the default-ctor call only if the class
+                 * actually has a 0-arg ctor we can resolve. For a
+                 * plain C struct whose has_default_ctor was set
+                 * transitively (e.g. union inherits from nested
+                 * class), no ctor symbol exists — default init
+                 * is the C trivial kind (zero-fill by the enclosing
+                 * emit's {0} or nothing). N4659 §15.1/4 [class.ctor]. */
+                Type **pty = NULL;
+                int np = resolve_overload(mty, NULL, true, NULL, 0, &pty);
+                if (np >= 0) {
+                    emit_indent();
+                    mangle_class_ctor(mty, pty, np);
+                    fprintf(stdout, "(&this->%.*s);\n",
+                            m->var_decl.name->len, m->var_decl.name->loc);
+                }
             }
             /* else: trivially-default-constructible member, nothing to do. */
         } else {
@@ -2840,7 +3138,8 @@ static void emit_func_def(Node *n) {
  *
  * Falls back to '__operator' for unrecognised operators.
  */
-static void emit_operator_method_name(Type *class_type, Token *name) {
+static void emit_operator_method_name(Type *class_type, Token *name,
+                                       Type **param_types, int nparams) {
     /* The 'operator' keyword token — the operator symbol follows
      * in the source. We can peek at the bytes after the token. */
     const char *after = name->loc + name->len;
@@ -2881,6 +3180,15 @@ static void emit_operator_method_name(Type *class_type, Token *name) {
 
     mangle_class_tag(class_type);
     fputs(suffix, stdout);
+    /* TODO(seafront#op-overload): operator methods are currently
+     * mangled without a param-type suffix, meaning overloaded
+     * operators ('operator-(const T&)' vs 'operator-(long)') collide
+     * at link time — the same gap vec.h hit in gcc 4.8. Threading
+     * the suffix through binop / subscript / assign rewrite sites
+     * needs per-operator overload resolution that distinguishes
+     * '__subscript' vs '__plus' etc. — each class can have at most
+     * one of each, so single-operator disambiguation is enough. */
+    (void)param_types; (void)nparams;
 }
 
 /*
@@ -2911,16 +3219,20 @@ static void emit_method_signature(Node *func, Type *class_type) {
          * the body function directly. */
         mangle_class_dtor_body(class_type);
     } else if (func->func.is_constructor) {
-        /* Constructors mangle as Class__ctor. Single-overload only
-         * for now — multiple ctors of the same class would collide
-         * here and need a per-overload disambiguator (Itanium uses
-         * a parameter-type-encoded suffix; we'll add something
-         * similar when we tackle overloading). */
-        mangle_class_ctor(class_type);
+        /* Constructors mangle as Class__ctor with a param-type suffix
+         * so overloads land at distinct C symbols. N4659 §16.2
+         * [over.load]. */
+        Type **pty = NULL;
+        int np = collect_func_param_types(func, &pty);
+        mangle_class_ctor(class_type, pty, np);
     } else if (is_operator_name(func->func.name)) {
-        emit_operator_method_name(class_type, func->func.name);
+        Type **pty = NULL;
+        int np = collect_func_param_types(func, &pty);
+        emit_operator_method_name(class_type, func->func.name, pty, np);
     } else {
-        mangle_class_method(class_type, func->func.name);
+        Type **pty = NULL;
+        int np = collect_func_param_types(func, &pty);
+        mangle_class_method(class_type, func->func.name, pty, np);
     }
     fputc('(', stdout);
     fputs("struct ", stdout);
@@ -3173,11 +3485,17 @@ static void emit_class_def(Node *n) {
             emit_type(fty->ret);
             fputc(' ', stdout);
             if (m->var_decl.is_constructor) {
-                mangle_class_ctor(class_type);
+                Type **pty = NULL;
+                int np = collect_func_param_types(m, &pty);
+                mangle_class_ctor(class_type, pty, np);
             } else if (is_operator_name(m->var_decl.name)) {
-                emit_operator_method_name(class_type, m->var_decl.name);
+                Type **pty = NULL;
+                int np = collect_func_param_types(m, &pty);
+                emit_operator_method_name(class_type, m->var_decl.name, pty, np);
             } else {
-                mangle_class_method(class_type, m->var_decl.name);
+                Type **pty = NULL;
+                int np = collect_func_param_types(m, &pty);
+                mangle_class_method(class_type, m->var_decl.name, pty, np);
             }
             fputs("(struct ", stdout);
             mangle_class_tag(class_type);
@@ -3325,7 +3643,11 @@ methods_phase:;
             if (is_virt_decl && m->var_decl.is_destructor) continue;
             Token *mname = is_virt_funcdef ? m->func.name : m->var_decl.name;
             emit_indent();
-            mangle_class_method(class_type, mname);
+            {
+                Type **pty = NULL;
+                int np = collect_func_param_types(m, &pty);
+                mangle_class_method(class_type, mname, pty, np);
+            }
             fputs(",\n", stdout);
         }
         g_indent--;
@@ -3414,15 +3736,15 @@ methods_phase:;
         }
     }
     if (class_type && class_type->has_default_ctor && !any_user_ctor) {
-        /* Forward decl + body for the synthesized ctor. */
+        /* Forward decl + body for the synthesized ctor (0-param). */
         fputs("__SF_INLINE void ", stdout);
-        mangle_class_ctor(class_type);
+        mangle_class_ctor(class_type, NULL, 0);
         fputs("(struct ", stdout);
         mangle_class_tag(class_type);
         fputs(" *this);\n", stdout);
 
         fputs("__SF_INLINE void ", stdout);
-        mangle_class_ctor(class_type);
+        mangle_class_ctor(class_type, NULL, 0);
         fputs("(struct ", stdout);
         mangle_class_tag(class_type);
         fputs(" *this) {\n", stdout);
@@ -3433,7 +3755,7 @@ methods_phase:;
             Type *base = class_base(class_type, b);
             if (!base || !base->has_default_ctor) continue;
             emit_indent();
-            mangle_class_ctor(base);
+            mangle_class_ctor(base, NULL, 0);
             fputs("(&this->", stdout);
             if (b == 0) fputs("__sf_base", stdout);
             else        fprintf(stdout, "__sf_base%d", b);
@@ -3454,7 +3776,7 @@ methods_phase:;
             if (!m->var_decl.ty->has_default_ctor) continue;
             if (!m->var_decl.name) continue;
             emit_indent();
-            mangle_class_ctor(m->var_decl.ty);
+            mangle_class_ctor(m->var_decl.ty, NULL, 0);
             fprintf(stdout, "(&this->%.*s);\n",
                     m->var_decl.name->len, m->var_decl.name->loc);
         }
