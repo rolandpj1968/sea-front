@@ -171,6 +171,11 @@ static int collect_call_arg_types(Node **args, int nargs, Type ***out_types);
 static int resolve_overload(Type *class_type, Token *name, bool is_ctor,
                              Type **arg_types, int nargs,
                              Type ***out_param_types);
+static const char *operator_suffix_for_name(Token *name);
+static int resolve_operator_overload(Type *class_type,
+                                      const char *op_suffix,
+                                      Type **arg_types, int nargs,
+                                      Type ***out_param_types);
 
 /* Emit a mangled parameter-type suffix used for overload
  * disambiguation on operator methods and inline operator-call
@@ -1126,6 +1131,69 @@ static int resolve_overload(Type *class_type, Token *name, bool is_ctor,
     return copy_member_param_types(best, pool);
 }
 
+/* Walk class (+bases) collecting operator methods whose computed
+ * suffix matches op_suffix ("__plus", "__subscript", etc.). Separate
+ * from collect_overload_candidates because operator methods are all
+ * named 'operator' — the suffix is what distinguishes them. */
+static void collect_operator_candidates(Type *class_type,
+                                         const char *op_suffix,
+                                         Node **found, int *nfound, int cap) {
+    if (!class_type || !class_type->class_def) return;
+    Node *cd = class_type->class_def;
+    for (int i = 0; i < cd->class_def.nmembers; i++) {
+        Node *m = cd->class_def.members[i];
+        if (!m) continue;
+        bool is_def  = m->kind == ND_FUNC_DEF;
+        bool is_decl = m->kind == ND_VAR_DECL && m->var_decl.ty &&
+                        m->var_decl.ty->kind == TY_FUNC;
+        if (!is_def && !is_decl) continue;
+        Token *mn = is_def ? m->func.name : m->var_decl.name;
+        if (!mn || mn->kind != TK_KW_OPERATOR) continue;
+        const char *s = operator_suffix_for_name(mn);
+        if (strcmp(s, op_suffix) != 0) continue;
+        if (*nfound < cap) found[(*nfound)++] = m;
+    }
+    if (class_type->class_region) {
+        for (int i = 0; i < class_type->class_region->nbases; i++) {
+            DeclarativeRegion *br = class_type->class_region->bases[i];
+            if (br && br->owner_type)
+                collect_operator_candidates(br->owner_type, op_suffix,
+                                             found, nfound, cap);
+        }
+    }
+}
+
+/* Same selection rules as resolve_overload, keyed by operator suffix
+ * rather than by name token. Returns the winning decl's param count,
+ * and sets *out_param_types to the decl's param types (for mangling).
+ * Returns -1 if no candidate exists. */
+static int resolve_operator_overload(Type *class_type,
+                                      const char *op_suffix,
+                                      Type **arg_types, int nargs,
+                                      Type ***out_param_types) {
+    static Type *pool[64];
+    *out_param_types = NULL;
+    enum { MAX_CAND = 32 };
+    Node *cands[MAX_CAND];
+    int ncands = 0;
+    collect_operator_candidates(class_type, op_suffix,
+                                 cands, &ncands, MAX_CAND);
+    if (ncands == 0) return -1;
+    if (ncands == 1) {
+        *out_param_types = pool;
+        return copy_member_param_types(cands[0], pool);
+    }
+    Node *best = NULL;
+    int best_score = -1;
+    for (int i = 0; i < ncands; i++) {
+        int s = overload_match_score(cands[i], arg_types, nargs);
+        if (s > best_score) { best = cands[i]; best_score = s; }
+    }
+    if (!best) return -1;
+    *out_param_types = pool;
+    return copy_member_param_types(best, pool);
+}
+
 /* Emit a C function declarator — the 'ret name(params)' shape —
  * handling the case where ret itself is a function pointer, which
  * requires declarator-interleaving (N4659 §11.3 [dcl.meaning]):
@@ -1397,10 +1465,22 @@ static void emit_expr(Node *n) {
             lhs_ty->tag) {
             const char *suffix = binop_to_operator_suffix(n->binary.op);
             if (suffix) {
-                /* Binop overload call — no param suffix emitted.
-                 * See TODO in emit_operator_method_name. */
+                /* Resolve the specific operator overload by matching
+                 * the rhs type against each candidate's sole param
+                 * (ignoring the implicit 'this'). Fall back to
+                 * unsuffixed mangle if the class has no such operator
+                 * — this happens when the operator is inherited from
+                 * a base we don't fully model (e.g. std::ios_base
+                 * bitmask ops synthesised by the preprocessor) — the
+                 * resulting symbol will likely fail to link, which
+                 * is still a better diagnostic than a silent miscompile. */
+                Type *rhs_ty = n->binary.rhs ? n->binary.rhs->resolved_type : NULL;
+                Type *args[1] = { rhs_ty };
+                Type **pty = NULL;
+                int np = resolve_operator_overload(lhs_ty, suffix, args, 1, &pty);
                 mangle_class_tag(lhs_ty);
                 fputs(suffix, stdout);
+                if (np >= 0) emit_local_param_suffix(pty, np);
                 fputs("(&", stdout);
                 emit_expr(n->binary.lhs);
                 fputs(", ", stdout);
@@ -1427,8 +1507,13 @@ static void emit_expr(Node *n) {
             lhs_ty->tag && n->binary.op != TK_ASSIGN) {
             const char *suffix = binop_to_operator_suffix(n->binary.op);
             if (suffix) {
+                Type *rhs_ty = n->binary.rhs ? n->binary.rhs->resolved_type : NULL;
+                Type *args[1] = { rhs_ty };
+                Type **pty = NULL;
+                int np = resolve_operator_overload(lhs_ty, suffix, args, 1, &pty);
                 mangle_class_tag(lhs_ty);
                 fputs(suffix, stdout);
+                if (np >= 0) emit_local_param_suffix(pty, np);
                 fputs("(&", stdout);
                 emit_expr(n->binary.lhs);
                 fputs(", ", stdout);
@@ -1807,7 +1892,14 @@ static void emit_expr(Node *n) {
             }
             if (ref_return) fputs("(*", stdout);
             mangle_class_tag(base_ty);
-            fputs("__subscript(&", stdout);
+            fputs("__subscript", stdout);
+            Type *idx_ty = n->subscript.index ? n->subscript.index->resolved_type : NULL;
+            Type *args[1] = { idx_ty };
+            Type **pty = NULL;
+            int np = resolve_operator_overload(base_ty, "__subscript",
+                                                args, 1, &pty);
+            if (np >= 0) emit_local_param_suffix(pty, np);
+            fputs("(&", stdout);
             emit_expr(n->subscript.base);
             fputs(", ", stdout);
             emit_expr(n->subscript.index);
@@ -3138,57 +3230,53 @@ static void emit_func_def(Node *n) {
  *
  * Falls back to '__operator' for unrecognised operators.
  */
-static void emit_operator_method_name(Type *class_type, Token *name,
-                                       Type **param_types, int nparams) {
-    /* The 'operator' keyword token — the operator symbol follows
-     * in the source. We can peek at the bytes after the token. */
+/* Compute the mangled suffix for an operator method from its token.
+ * Returns a constant string like "__plus", "__subscript", "__assign".
+ * Shared between the decl-site emitter and the call-site candidate
+ * matcher so both agree on which operator is which. */
+static const char *operator_suffix_for_name(Token *name) {
+    if (!name) return "__operator";
     const char *after = name->loc + name->len;
-    /* Skip whitespace */
     while (*after == ' ' || *after == '\t') after++;
 
-    const char *suffix = "__operator";
-    if (after[0] == '[')       suffix = "__subscript";
-    else if (after[0] == '(' && after[1] == ')') suffix = "__call";
-    else if (after[0] == '=' && after[1] == '=') suffix = "__eq";
-    else if (after[0] == '!' && after[1] == '=') suffix = "__ne";
-    else if (after[0] == '<' && after[1] == '=') suffix = "__le";
-    else if (after[0] == '>' && after[1] == '=') suffix = "__ge";
-    else if (after[0] == '<' && after[1] != '<') suffix = "__lt";
-    else if (after[0] == '>' && after[1] != '>') suffix = "__gt";
-    else if (after[0] == '+' && after[1] == '=') suffix = "__plus_assign";
-    else if (after[0] == '-' && after[1] == '=') suffix = "__minus_assign";
-    else if (after[0] == '*' && after[1] == '=') suffix = "__mul_assign";
-    else if (after[0] == '/' && after[1] == '=') suffix = "__div_assign";
-    else if (after[0] == '+' && after[1] == '+') suffix = "__incr";
-    else if (after[0] == '-' && after[1] == '-') suffix = "__decr";
-    else if (after[0] == '+')  suffix = "__plus";
-    else if (after[0] == '-' && after[1] == '>') suffix = "__arrow";
-    else if (after[0] == '-')  suffix = "__minus";
-    else if (after[0] == '*')  suffix = "__deref";
-    else if (after[0] == '/')  suffix = "__div";
-    else if (after[0] == '%')  suffix = "__mod";
-    else if (after[0] == '&' && after[1] == '&') suffix = "__land";
-    else if (after[0] == '|' && after[1] == '|') suffix = "__lor";
-    else if (after[0] == '&')  suffix = "__bitand";
-    else if (after[0] == '|')  suffix = "__bitor";
-    else if (after[0] == '^')  suffix = "__xor";
-    else if (after[0] == '~')  suffix = "__compl";
-    else if (after[0] == '!')  suffix = "__not";
-    else if (after[0] == '<' && after[1] == '<') suffix = "__lshift";
-    else if (after[0] == '>' && after[1] == '>') suffix = "__rshift";
-    else if (after[0] == '=')  suffix = "__assign";
+    if (after[0] == '[')       return "__subscript";
+    if (after[0] == '(' && after[1] == ')') return "__call";
+    if (after[0] == '=' && after[1] == '=') return "__eq";
+    if (after[0] == '!' && after[1] == '=') return "__ne";
+    if (after[0] == '<' && after[1] == '=') return "__le";
+    if (after[0] == '>' && after[1] == '=') return "__ge";
+    if (after[0] == '<' && after[1] != '<') return "__lt";
+    if (after[0] == '>' && after[1] != '>') return "__gt";
+    if (after[0] == '+' && after[1] == '=') return "__plus_assign";
+    if (after[0] == '-' && after[1] == '=') return "__minus_assign";
+    if (after[0] == '*' && after[1] == '=') return "__mul_assign";
+    if (after[0] == '/' && after[1] == '=') return "__div_assign";
+    if (after[0] == '+' && after[1] == '+') return "__incr";
+    if (after[0] == '-' && after[1] == '-') return "__decr";
+    if (after[0] == '+')  return "__plus";
+    if (after[0] == '-' && after[1] == '>') return "__arrow";
+    if (after[0] == '-')  return "__minus";
+    if (after[0] == '*')  return "__deref";
+    if (after[0] == '/')  return "__div";
+    if (after[0] == '%')  return "__mod";
+    if (after[0] == '&' && after[1] == '&') return "__land";
+    if (after[0] == '|' && after[1] == '|') return "__lor";
+    if (after[0] == '&')  return "__bitand";
+    if (after[0] == '|')  return "__bitor";
+    if (after[0] == '^')  return "__xor";
+    if (after[0] == '~')  return "__compl";
+    if (after[0] == '!')  return "__not";
+    if (after[0] == '<' && after[1] == '<') return "__lshift";
+    if (after[0] == '>' && after[1] == '>') return "__rshift";
+    if (after[0] == '=')  return "__assign";
+    return "__operator";
+}
 
+static void emit_operator_method_name(Type *class_type, Token *name,
+                                       Type **param_types, int nparams) {
     mangle_class_tag(class_type);
-    fputs(suffix, stdout);
-    /* TODO(seafront#op-overload): operator methods are currently
-     * mangled without a param-type suffix, meaning overloaded
-     * operators ('operator-(const T&)' vs 'operator-(long)') collide
-     * at link time — the same gap vec.h hit in gcc 4.8. Threading
-     * the suffix through binop / subscript / assign rewrite sites
-     * needs per-operator overload resolution that distinguishes
-     * '__subscript' vs '__plus' etc. — each class can have at most
-     * one of each, so single-operator disambiguation is enough. */
-    (void)param_types; (void)nparams;
+    fputs(operator_suffix_for_name(name), stdout);
+    emit_local_param_suffix(param_types, nparams);
 }
 
 /*
