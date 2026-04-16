@@ -33,6 +33,10 @@ typedef struct {
      * Lookup of an unqualified identifier walks this chain via the
      * region's enclosing pointer. */
     DeclarativeRegion *cur_scope;
+    /* Current method's enclosing class type, or NULL if not in a
+     * method body. Used to give 'this' a resolved_type so overload
+     * resolution can match copy ctors against '*this'. */
+    Type *cur_class_type;
 } Sema;
 
 /* ------------------------------------------------------------------ */
@@ -157,8 +161,21 @@ static void visit_ident(Sema *s, Node *n) {
      * If the resolved declaration lives in a REGION_CLASS scope, it's
      * a class member referenced unqualifiedly inside a method body —
      * mark the ident so codegen rewrites it to 'this->name'. */
-    if (!s->cur_scope) return;
     Token *name = n->ident.name;
+    /* 'this' inside a non-static method has type 'C *' for class C
+     * (N4659 §16.2.2.1 [over.match.funcs]/4). It's not a normal
+     * declared name — handle it before the scope lookup so '*this'
+     * gets the right resolved_type for overload resolution. */
+    if (name && (name->kind == TK_KW_THIS ||
+                 (name->kind == TK_IDENT && name->len == 4 &&
+                  memcmp(name->loc, "this", 4) == 0)) &&
+        s->cur_class_type) {
+        Type *ptr = sema_new_type(s, TY_PTR);
+        ptr->base = s->cur_class_type;
+        n->resolved_type = ptr;
+        return;
+    }
+    if (!s->cur_scope) return;
     if (!name || name->kind != TK_IDENT) return;
     Declaration *d = lookup_unqualified_from(s->cur_scope, name->loc, name->len);
     /* N4659 §6.3.10 [basic.scope.hiding] / C §6.2.3 [Name spaces of
@@ -263,6 +280,12 @@ static void visit_ternary(Sema *s, Node *n) {
 static void visit_var_decl(Sema *s, Node *n) {
     if (n->var_decl.init)
         visit(s, n->var_decl.init);
+    /* Direct-init args ('T x(args)') are part of the construction
+     * expression — sema must walk them so identifiers in the arg list
+     * get resolved_type, which downstream overload resolution needs
+     * to pick the right ctor (e.g. copy vs converting). */
+    for (int i = 0; i < n->var_decl.ctor_nargs; i++)
+        if (n->var_decl.ctor_args[i]) visit(s, n->var_decl.ctor_args[i]);
     /* The declared type is already on var_decl.ty (set by the parser).
      * We just propagate it onto the node's resolved_type so consumers
      * can ask 'what's the type of this declaration?' uniformly. */
@@ -279,10 +302,22 @@ static void visit_block(Sema *s, Node *n) {
 
 static void visit_func_def(Sema *s, Node *n) {
     DeclarativeRegion *saved = s->cur_scope;
+    Type *saved_class = s->cur_class_type;
     /* Enter the function's prototype scope so parameter names resolve. */
     if (n->func.param_scope) s->cur_scope = n->func.param_scope;
+    if (n->func.class_type) s->cur_class_type = n->func.class_type;
+    /* Mem-initializers (N4659 §15.6.2 [class.base.init]) are part of
+     * the constructor — their initializer expressions need sema'ing
+     * too, otherwise references like 'o.v' on a TY_REF parameter 'o'
+     * stay un-typed and codegen falls back to '.' instead of '->'. */
+    for (int i = 0; i < n->func.n_mem_inits; i++) {
+        MemInit *mi = &n->func.mem_inits[i];
+        for (int k = 0; k < mi->nargs; k++)
+            if (mi->args[k]) visit(s, mi->args[k]);
+    }
     if (n->func.body) visit(s, n->func.body);
     s->cur_scope = saved;
+    s->cur_class_type = saved_class;
 }
 
 static void visit_class_def(Sema *s, Node *n) {
@@ -293,9 +328,16 @@ static void visit_class_def(Sema *s, Node *n) {
      * class scope (during in-class parsing), so we don't need to
      * push anything extra here — visit_func_def will pick up the
      * func.param_scope which itself has the class region as its
-     * enclosing. */
+     * enclosing.
+     *
+     * Push the enclosing class type so 'this' inside in-class method
+     * bodies (which don't have class_type stamped on each ND_FUNC_DEF
+     * — only out-of-class definitions get it) gets a resolved_type. */
+    Type *saved = s->cur_class_type;
+    if (n->class_def.ty) s->cur_class_type = n->class_def.ty;
     for (int i = 0; i < n->class_def.nmembers; i++)
         visit(s, n->class_def.members[i]);
+    s->cur_class_type = saved;
 }
 
 static void visit_return(Sema *s, Node *n) {

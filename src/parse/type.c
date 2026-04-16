@@ -520,6 +520,20 @@ DeclSpec parse_type_specifiers(Parser *p) {
                 parser_expect(p, TK_RBRACE);
                 region_pop(p);
 
+                /* Record class definition on the result. Build it
+                 * BEFORE replaying deferred bodies so the class's Type
+                 * has its class_def back-pointer wired — overload
+                 * resolution inside an inline method body that
+                 * mentions the enclosing class (e.g. 'fpos __pos(*this)'
+                 * inside fpos::operator+) needs class_def to find the
+                 * candidate ctors. N4659 §6.4.7/1 [class.mem]/6 says
+                 * complete-class context applies to deferred bodies. */
+                result.class_def = new_class_def_node(p, ty->tag,
+                    (Node **)members.data, members.len,
+                    ty->tag ? ty->tag : parser_peek(p));
+                result.class_def->class_def.ty = ty;
+                ty->class_def = result.class_def;
+
                 /* Replay deferred member function bodies — N4659
                  * §6.4.7/1 [class.mem]/6 (complete-class context).
                  * Inline member function bodies were captured as
@@ -535,12 +549,6 @@ DeclSpec parse_type_specifiers(Parser *p) {
                         fn->func.body_start_pos >= 0)
                         parse_deferred_func_body(p, fn);
                 }
-
-                /* Record class definition on the result */
-                result.class_def = new_class_def_node(p, ty->tag,
-                    (Node **)members.data, members.len,
-                    ty->tag ? ty->tag : parser_peek(p));
-                result.class_def->class_def.ty = ty;
                 /* Store base types for template instantiation. */
                 if (n_base_types > 0) {
                     result.class_def->class_def.base_types =
@@ -549,10 +557,6 @@ DeclSpec parse_type_specifiers(Parser *p) {
                         result.class_def->class_def.base_types[i] = base_types[i];
                     result.class_def->class_def.nbase_types = n_base_types;
                 }
-                /* Back-pointer so codegen can find the ND_CLASS_DEF
-                 * node from the Type alone (used when emitting
-                 * out-of-class ctor/dtor bodies). */
-                ty->class_def = result.class_def;
 
                 /* Trivially-destructible per N4659 §15.4 [class.dtor]/12:
                  *   trivial iff own user-declared dtor body is empty

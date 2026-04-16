@@ -1090,7 +1090,34 @@ static int overload_match_score(Node *m, Type **arg_types, int nargs) {
         Type *pt = is_def ? m->func.params[k]->param.ty
                           : m->var_decl.ty->params[k];
         Type *at = arg_types && k < nargs ? arg_types[k] : NULL;
-        if (pt && at && pt->kind == at->kind) score++;
+        if (!pt || !at) continue;
+        /* Identical kind: best score (e.g. int vs int, struct vs struct
+         * with the same tag — the prototypical copy-ctor pattern is
+         * scored separately below). */
+        if (pt->kind == at->kind) {
+            score += 2;
+            /* Same struct/union tag → bonus, so 'fpos vs fpos' beats
+             * 'anyclass vs fpos' when there's overload ambiguity. */
+            if ((pt->kind == TY_STRUCT || pt->kind == TY_UNION) &&
+                pt->tag && at->tag &&
+                pt->tag->len == at->tag->len &&
+                memcmp(pt->tag->loc, at->tag->loc, pt->tag->len) == 0)
+                score++;
+            continue;
+        }
+        /* Reference parameter (lowered to T* in C) accepting an arg of
+         * the underlying type: this is the copy/move-ctor pattern.
+         * 'Box(const Box&)' with arg 'Box' (e.g. '*this') should beat
+         * 'Box(int)' with the same arg. N4659 §16.3.3.2.1 [over.ics.rank]. */
+        if ((pt->kind == TY_REF || pt->kind == TY_RVALREF) && pt->base &&
+            pt->base->kind == at->kind) {
+            score += 2;
+            if ((at->kind == TY_STRUCT || at->kind == TY_UNION) &&
+                pt->base->tag && at->tag &&
+                pt->base->tag->len == at->tag->len &&
+                memcmp(pt->base->tag->loc, at->tag->loc, pt->base->tag->len) == 0)
+                score++;
+        }
     }
     return score;
 }
@@ -1872,9 +1899,24 @@ static void emit_expr(Node *n) {
     case ND_MEMBER: {
         /* Check if the member lives in a base class and needs
          * __sf_base chain rewriting. */
-        Type *obj_ty = n->member.obj ? n->member.obj->resolved_type : NULL;
+        Type *raw_obj_ty = n->member.obj ? n->member.obj->resolved_type : NULL;
+        Type *obj_ty = raw_obj_ty;
         if (obj_ty && obj_ty->kind == TY_PTR) obj_ty = obj_ty->base;
+        if (obj_ty && (obj_ty->kind == TY_REF || obj_ty->kind == TY_RVALREF))
+            obj_ty = obj_ty->base;
         Token *mem = n->member.member;
+        /* Pick the access operator. Source-level '.' must become '->'
+         * when the operand has been lowered to a pointer in our C —
+         * either an actual pointer (TY_PTR) or a reference parameter
+         * (TY_REF / TY_RVALREF, lowered to T*). N4659 §8.2.5
+         * [expr.ref] — references behave as the referenced object,
+         * so source uses '.' even though our C lowers to a pointer. */
+        bool obj_is_ptr_in_c = raw_obj_ty &&
+            (raw_obj_ty->kind == TY_PTR ||
+             raw_obj_ty->kind == TY_REF ||
+             raw_obj_ty->kind == TY_RVALREF);
+        const char *access_op =
+            (n->member.op == TK_ARROW || obj_is_ptr_in_c) ? "->" : ".";
         bool did_base_rewrite = false;
         if (obj_ty && (obj_ty->kind == TY_STRUCT || obj_ty->kind == TY_UNION) &&
             obj_ty->class_region && mem) {
@@ -1890,7 +1932,7 @@ static void emit_expr(Node *n) {
                     Declaration *bd = lookup_in_scope(base_r, mem->loc, mem->len);
                     if (bd) {
                         emit_expr(n->member.obj);
-                        fputs(n->member.op == TK_ARROW ? "->" : ".", stdout);
+                        fputs(access_op, stdout);
                         if (bi == 0) fputs("__sf_base.", stdout);
                         else fprintf(stdout, "__sf_base%d.", bi);
                         fprintf(stdout, "%.*s", mem->len, mem->loc);
@@ -1910,7 +1952,7 @@ static void emit_expr(Node *n) {
             if (needs_paren) fputc('(', stdout);
             emit_expr(n->member.obj);
             if (needs_paren) fputc(')', stdout);
-            fputs(n->member.op == TK_ARROW ? "->" : ".", stdout);
+            fputs(access_op, stdout);
             if (mem)
                 fprintf(stdout, "%.*s", mem->len, mem->loc);
         }
