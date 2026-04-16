@@ -161,6 +161,32 @@ static int return_target(void) { return find_return_target_from(g_cf.nlive); }
 static int break_target(void)  { return find_break_target_from(g_cf.nlive); }
 static int cont_target(void)   { return find_cont_target_from(g_cf.nlive); }
 
+/* Track emitted enum bodies by their enum_tokens pointer.
+ *
+ * Why pointer-not-flag: type.c shallow-copies Type structs when a
+ * typedef-name is used as a type-specifier (so cv-qualifiers don't
+ * leak), which means the boolean codegen_emitted on the original
+ * Type is invisible to copies. The enum_tokens ARRAY pointer survives
+ * the shallow copy unchanged, so it's a stable identity across all
+ * copies of the same logical enum. Marking by token-array address
+ * makes one emission cover all copies. */
+enum { ENUM_EMIT_CAP = 256 };
+static Token *g_emitted_enum_bodies[ENUM_EMIT_CAP];
+static int    g_emitted_enum_count = 0;
+
+static bool enum_body_already_emitted(Token *toks) {
+    if (!toks) return false;
+    for (int i = 0; i < g_emitted_enum_count; i++)
+        if (g_emitted_enum_bodies[i] == toks) return true;
+    return false;
+}
+
+static void mark_enum_body_emitted(Token *toks) {
+    if (!toks) return;
+    if (g_emitted_enum_count < ENUM_EMIT_CAP)
+        g_emitted_enum_bodies[g_emitted_enum_count++] = toks;
+}
+
 /* Forward decls for the hoist helpers below — both call into the
  * regular emitters, which appear later in the file. */
 static void emit_expr(Node *n);
@@ -1944,8 +1970,22 @@ static void emit_var_decl_inner(Node *n) {
      * when we haven't already emitted this enum elsewhere (top-level
      * bare 'enum X {};' marks codegen_emitted). */
     if (ty && ty->kind == TY_ENUM && ty->enum_tokens &&
-        ty->enum_ntokens > 0 && !ty->codegen_emitted &&
-        n->var_decl.name) {
+        ty->enum_ntokens > 0 && n->var_decl.name) {
+        if (enum_body_already_emitted(ty->enum_tokens)) {
+            /* Already emitted at top level — emit just the type
+             * reference, not the body. */
+            fputs("enum ", stdout);
+            if (ty->tag)
+                fprintf(stdout, "%.*s ", ty->tag->len, ty->tag->loc);
+            fprintf(stdout, "%.*s",
+                    n->var_decl.name->len, n->var_decl.name->loc);
+            if (n->var_decl.init) {
+                fputs(" = ", stdout);
+                emit_expr(n->var_decl.init);
+            }
+            return;
+        }
+        mark_enum_body_emitted(ty->enum_tokens);
         ty->codegen_emitted = true;
         fputs("enum ", stdout);
         if (ty->tag)
@@ -3916,7 +3956,8 @@ static void emit_top_level(Node *n) {
         if (n->var_decl.ty && n->var_decl.ty->kind == TY_ENUM &&
             n->var_decl.ty->enum_tokens && n->var_decl.ty->enum_ntokens > 0 &&
             !n->var_decl.name) {
-            if (n->var_decl.ty->codegen_emitted) return;
+            if (enum_body_already_emitted(n->var_decl.ty->enum_tokens)) return;
+            mark_enum_body_emitted(n->var_decl.ty->enum_tokens);
             n->var_decl.ty->codegen_emitted = true;
             emit_source_comment(n->tok);
             fputs("enum ", stdout);
@@ -4047,7 +4088,8 @@ static void emit_top_level(Node *n) {
         /* Enum with body */
         if (uty && uty->kind == TY_ENUM &&
             uty->enum_tokens && uty->enum_ntokens > 0 &&
-            !uty->codegen_emitted) {
+            !enum_body_already_emitted(uty->enum_tokens)) {
+            mark_enum_body_emitted(uty->enum_tokens);
             uty->codegen_emitted = true;
             fputs("enum ", stdout);
             if (uty->tag)
@@ -4222,7 +4264,9 @@ void emit_c(Node *tu) {
                 if (s->kind == ND_TYPEDEF && s->var_decl.ty &&
                     s->var_decl.ty->kind == TY_ENUM)
                     ety = s->var_decl.ty;
-                if (ety && ety->enum_tokens && !ety->codegen_emitted) {
+                if (ety && ety->enum_tokens &&
+                    !enum_body_already_emitted(ety->enum_tokens)) {
+                    mark_enum_body_emitted(ety->enum_tokens);
                     ety->codegen_emitted = true;
                     fputs("enum ", stdout);
                     if (ety->tag)
@@ -4246,7 +4290,9 @@ void emit_c(Node *tu) {
         if (n->kind == ND_TYPEDEF && n->var_decl.ty &&
             n->var_decl.ty->kind == TY_ENUM)
             ety = n->var_decl.ty;
-        if (ety && ety->enum_tokens && !ety->codegen_emitted) {
+        if (ety && ety->enum_tokens &&
+            !enum_body_already_emitted(ety->enum_tokens)) {
+            mark_enum_body_emitted(ety->enum_tokens);
             ety->codegen_emitted = true;
             fputs("enum ", stdout);
             if (ety->tag)
