@@ -207,6 +207,37 @@ static int resolve_operator_overload(Type *class_type,
                                       Type **arg_types, int nargs,
                                       Type ***out_param_types);
 
+/* Emit a call-site argument with reference-parameter adaptation.
+ *
+ * Mirrors emit_return_expr in the opposite direction: when the
+ * formal parameter is T& / T&& (lowered to T*), a value-typed
+ * argument like '*this' or 'foo' must become '&(arg)' so the C
+ * call passes the address. If the argument is already a pointer in
+ * our lowering (resolved_type is TY_PTR / TY_REF / TY_RVALREF) we
+ * pass it through. The '*X' → 'X' simplification keeps generated
+ * C readable in the common '*this' case.
+ *
+ * If we don't know the param type (param_ty == NULL), fall back to
+ * plain emit_expr — the caller is signalling 'no signature info,
+ * trust the source'. */
+static void emit_arg_for_param(Node *arg, Type *param_ty) {
+    if (!arg) return;
+    bool param_is_ref = param_ty &&
+        (param_ty->kind == TY_REF || param_ty->kind == TY_RVALREF);
+    if (!param_is_ref) { emit_expr(arg); return; }
+    Type *at = arg->resolved_type;
+    if (at && (at->kind == TY_REF || at->kind == TY_RVALREF ||
+               at->kind == TY_PTR)) {
+        emit_expr(arg); return;
+    }
+    if (arg->kind == ND_UNARY && arg->unary.op == TK_STAR) {
+        emit_expr(arg->unary.operand); return;
+    }
+    fputs("&(", stdout);
+    emit_expr(arg);
+    fputc(')', stdout);
+}
+
 /* Emit a return-expression with reference-return adaptation.
  *
  * In sea-front, T& and T&& parameters/returns are lowered to T* in C.
@@ -1677,6 +1708,8 @@ static void emit_expr(Node *n) {
                 Type *cur = g_current_class_def->class_def.ty;
                 base_len = find_base_path(cur, class_type, base_path, 8);
             }
+            Type **call_pty = NULL;
+            int call_np = -1;
             if (method_is_virtual(class_type, mname)) {
                 /* Virtual dispatch: this->__sf_vptr->m(this, args) */
                 fprintf(stdout, "this->__sf_vptr->%.*s(this",
@@ -1685,12 +1718,12 @@ static void emit_expr(Node *n) {
                 Type **at = NULL;
                 int na = collect_call_arg_types(n->call.args,
                                                  n->call.nargs, &at);
-                Type **pty = NULL;
                 int np = resolve_overload(class_type, mname, false,
-                                           at, na, &pty);
+                                           at, na, &call_pty);
                 if (np < 0)
                     die_no_overload(class_type, mname, na, "ND_CALL implicit-this");
-                mangle_class_method(class_type, mname, pty, np);
+                call_np = np;
+                mangle_class_method(class_type, mname, call_pty, np);
                 if (base_len > 0) {
                     /* Inherited method — receiver is the base subobject. */
                     fputs("(&this->", stdout);
@@ -1709,7 +1742,9 @@ static void emit_expr(Node *n) {
             }
             for (int i = 0; i < n->call.nargs; i++) {
                 fputs(", ", stdout);
-                emit_expr(n->call.args[i]);
+                emit_arg_for_param(n->call.args[i],
+                                    (call_pty && i < call_np)
+                                        ? call_pty[i] : NULL);
             }
             fputc(')', stdout);
             return;
@@ -1740,6 +1775,12 @@ static void emit_expr(Node *n) {
             }
             if (is_method_call) {
                 bool virt = method_is_virtual(ot, callee->member.member);
+                /* Param types of the resolved method; used for arg
+                 * lowering at line below. NULL on the virtual path
+                 * (no overload resolution there yet — virtual call
+                 * arg coercion is a TODO). */
+                Type **call_pty = NULL;
+                int call_np = -1;
                 if (virt) {
                     /* Virtual dispatch: load __sf_vptr then call slot.
                      * Emit the receiver expression once into the slot
@@ -1763,7 +1804,7 @@ static void emit_expr(Node *n) {
                      * If so, mangle with the base class and pass
                      * &obj.__sf_base as the this pointer. */
                     Type *method_class = ot;
-                    
+
                     if (ot->class_region) {
                         /* Not in own class? Check bases. */
                         Token *mn = callee->member.member;
@@ -1775,7 +1816,7 @@ static void emit_expr(Node *n) {
                                 Declaration *bd = lookup_in_scope(br, mn->loc, mn->len);
                                 if (bd && br->owner_type) {
                                     method_class = br->owner_type;
-                                    
+
                                     break;
                                 }
                             }
@@ -1785,17 +1826,17 @@ static void emit_expr(Node *n) {
                         Type **at = NULL;
                         int na = collect_call_arg_types(n->call.args,
                                                          n->call.nargs, &at);
-                        Type **pty = NULL;
                         int np = resolve_overload(method_class,
                                                    callee->member.member,
-                                                   false, at, na, &pty);
+                                                   false, at, na, &call_pty);
                         if (np < 0)
                             die_no_overload(method_class,
                                              callee->member.member,
                                              na, "ND_CALL member");
+                        call_np = np;
                         mangle_class_method(method_class,
                                              callee->member.member,
-                                             pty, np);
+                                             call_pty, np);
                     }
                     fputc('(', stdout);
                 }
@@ -1829,7 +1870,9 @@ static void emit_expr(Node *n) {
                 }
                 for (int i = 0; i < n->call.nargs; i++) {
                     fputs(", ", stdout);
-                    emit_expr(n->call.args[i]);
+                    emit_arg_for_param(n->call.args[i],
+                                        (call_pty && i < call_np)
+                                            ? call_pty[i] : NULL);
                 }
                 fputc(')', stdout);
                 return;
@@ -2557,14 +2600,15 @@ static void emit_stmt(Node *n) {
                     die_no_overload(n->var_decl.ty, NULL, na,
                                      "direct-init ctor call");
                 mangle_class_ctor(n->var_decl.ty, pty, np);
+                fprintf(stdout, "(&%.*s",
+                        n->var_decl.name->len, n->var_decl.name->loc);
+                for (int i = 0; i < n->var_decl.ctor_nargs; i++) {
+                    fputs(", ", stdout);
+                    emit_arg_for_param(n->var_decl.ctor_args[i],
+                                        i < np ? pty[i] : NULL);
+                }
+                fputs(");\n", stdout);
             }
-            fprintf(stdout, "(&%.*s",
-                    n->var_decl.name->len, n->var_decl.name->loc);
-            for (int i = 0; i < n->var_decl.ctor_nargs; i++) {
-                fputs(", ", stdout);
-                emit_expr(n->var_decl.ctor_args[i]);
-            }
-            fputs(");\n", stdout);
         }
         /* Default-init 'Foo a;' (no init, no parens) calls the
          * class's user-declared default ctor when one exists.
@@ -3225,7 +3269,8 @@ static void emit_ctor_member_inits(Node *func) {
                             m->var_decl.name->len, m->var_decl.name->loc);
                     for (int a = 0; a < found->nargs; a++) {
                         fputs(", ", stdout);
-                        emit_expr(found->args[a]);
+                        emit_arg_for_param(found->args[a],
+                                            a < np ? pty[a] : NULL);
                     }
                     fputs(");\n", stdout);
                 }

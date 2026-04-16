@@ -458,5 +458,15 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
         break;
     }
 
+    /* Carry resolved_type through with substitution. The first sema
+     * pass (before instantiation) populates resolved_type on the
+     * original template's expression nodes; without this line the
+     * cloned ident/expr would lose it. Substituting through map
+     * means a 'b' of declared type Box<T> in the template becomes
+     * Box<int> on the clone, so codegen can match the instantiated
+     * class's methods for operator-overload rewrites. */
+    if (n->resolved_type)
+        c->resolved_type = subst_type(n->resolved_type, map, arena);
+
     return c;
 }

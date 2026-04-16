@@ -175,7 +175,19 @@ static void visit_ident(Sema *s, Node *n) {
         n->resolved_type = ptr;
         return;
     }
-    if (!s->cur_scope) return;
+    /* Cloned identifiers (template instantiations) carry a
+     * pre-substituted resolved_type from the clone pass. Don't
+     * blow it away with a fresh lookup that may resolve to the
+     * un-instantiated decl (whose type is still the un-substituted
+     * template version). resolved_decl is preserved across runs
+     * either way; we just guard the type write. */
+    bool already_typed = n->resolved_type != NULL;
+    if (!s->cur_scope) {
+        if (!already_typed && n->ident.resolved_decl &&
+            n->ident.resolved_decl->type)
+            n->resolved_type = n->ident.resolved_decl->type;
+        return;
+    }
     if (!name || name->kind != TK_IDENT) return;
     Declaration *d = lookup_unqualified_from(s->cur_scope, name->loc, name->len);
     /* N4659 §6.3.10 [basic.scope.hiding] / C §6.2.3 [Name spaces of
@@ -194,9 +206,16 @@ static void visit_ident(Sema *s, Node *n) {
             lookup_kind_from(s->cur_scope, name->loc, name->len, ENTITY_VARIABLE);
         if (ord) d = ord;
     }
-    if (!d) return;
+    if (!d) {
+        /* Same fallback as the cur_scope-NULL case: prefer the cloned
+         * resolved_decl's type over leaving resolved_type NULL. */
+        if (!already_typed && n->ident.resolved_decl &&
+            n->ident.resolved_decl->type)
+            n->resolved_type = n->ident.resolved_decl->type;
+        return;
+    }
     n->ident.resolved_decl = d;
-    if (d->type)
+    if (!already_typed && d->type)
         n->resolved_type = d->type;
     if (d->home && d->home->kind == REGION_CLASS)
         n->ident.implicit_this = true;
@@ -478,6 +497,17 @@ static void visit(Sema *s, Node *n) {
     case ND_VAR_DECL:  visit_var_decl(s, n);  return;
     case ND_FUNC_DEF:  visit_func_def(s, n);  return;
     case ND_CLASS_DEF: visit_class_def(s, n); return;
+
+    case ND_TEMPLATE_DECL:
+        /* Descend into the template's inner declaration so identifiers
+         * inside template bodies get resolved_type. The clone pass
+         * relies on this — cloned ident nodes inherit resolved_decl
+         * from the original, so without first-sema'ing the template
+         * body, expressions like '(__pos += __off)' inside an
+         * instantiated method end up un-typed and don't get rewritten
+         * to the operator+= call. */
+        if (n->template_decl.decl) visit(s, n->template_decl.decl);
+        return;
 
     case ND_TRANSLATION_UNIT:
         for (int i = 0; i < n->tu.ndecls; i++)
