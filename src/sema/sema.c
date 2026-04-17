@@ -436,9 +436,6 @@ static void visit_call(Sema *s, Node *n) {
     if (n->call.callee && n->call.callee->kind == ND_IDENT) {
         Declaration *d = n->call.callee->ident.resolved_decl;
         Token *nm = n->call.callee->ident.name;
-        if (nm && nm->len == 4 && memcmp(nm->loc, "stat", 4) == 0)
-            fprintf(stderr, "DBG visit_call for stat: d=%p entity=%d\n",
-                    (void*)d, d ? d->entity : -1);
         if (d && (d->entity == ENTITY_TYPE || d->entity == ENTITY_TAG) &&
             d->type && d->type->kind == TY_STRUCT) {
             n->resolved_type = d->type;

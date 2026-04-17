@@ -1606,7 +1606,8 @@ static void emit_expr(Node *n) {
                 fputs("(&", stdout);
                 emit_expr(n->binary.lhs);
                 fputs(", ", stdout);
-                emit_expr(n->binary.rhs);
+                emit_arg_for_param(n->binary.rhs,
+                                    (pty && np > 0) ? pty[0] : NULL);
                 fputc(')', stdout);
                 return;
             }
@@ -1639,7 +1640,8 @@ static void emit_expr(Node *n) {
                 fputs("(&", stdout);
                 emit_expr(n->binary.lhs);
                 fputs(", ", stdout);
-                emit_expr(n->binary.rhs);
+                emit_arg_for_param(n->binary.rhs,
+                                    (pty && np > 0) ? pty[0] : NULL);
                 fputc(')', stdout);
                 return;
             }
