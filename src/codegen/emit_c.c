@@ -2386,7 +2386,33 @@ static void emit_var_decl_inner(Node *n) {
     }
     if (n->var_decl.init) {
         fputs(" = ", stdout);
-        emit_expr(n->var_decl.init);
+        /* If the variable is a struct value but the init expression
+         * returns a reference (TY_REF lowered to T*), dereference.
+         * Patterns:
+         *   T elem = vec[i];       — subscript on class returns T&
+         *   T elem = func_ref();   — function returning T&
+         * Detected by: resolved_type is TY_REF, or init is a class
+         * subscript (which the emit rewrites to a ref-returning call). */
+        Node *init_e = n->var_decl.init;
+        Type *init_rt = init_e ? init_e->resolved_type : NULL;
+        bool init_is_ref = init_rt &&
+            (init_rt->kind == TY_REF || init_rt->kind == TY_RVALREF);
+        if (!init_is_ref && init_e && init_e->kind == ND_SUBSCRIPT) {
+            Type *base_ty = init_e->subscript.base ?
+                init_e->subscript.base->resolved_type : NULL;
+            if (base_ty && (base_ty->kind == TY_STRUCT ||
+                            base_ty->kind == TY_UNION))
+                init_is_ref = true;
+        }
+        bool var_is_struct = ty &&
+            (ty->kind == TY_STRUCT || ty->kind == TY_UNION);
+        if (init_is_ref && var_is_struct) {
+            fputs("(*", stdout);
+            emit_expr(n->var_decl.init);
+            fputc(')', stdout);
+        } else {
+            emit_expr(n->var_decl.init);
+        }
     } else if (n->var_decl.has_ctor_init && n->var_decl.ty &&
                n->var_decl.ty->kind != TY_STRUCT &&
                n->var_decl.ctor_nargs >= 1) {
