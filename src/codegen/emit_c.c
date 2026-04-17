@@ -3761,6 +3761,65 @@ static void emit_class_def(Node *n) {
             if (empty) continue;
             if (!class_type || !class_type->has_dtor) continue;
         }
+        /* Dedup const/non-const overloads that produce identical
+         * mangled names. In C there's no const method dispatch, so
+         * the const and non-const versions collide. We check name +
+         * nparams + all param type kinds. N4659 §16.2/3 [over.load].
+         * For operators, also compare the operator suffix.
+         * Skip destructors — they share the class name with ctors
+         * but mangle differently (dtor_body vs ctor). */
+        {
+            bool m_is_dtor = (m->kind == ND_FUNC_DEF && m->func.is_destructor) ||
+                (m->kind == ND_VAR_DECL && m->var_decl.is_destructor);
+            Token *mn = NULL; int mnp = 0; Type **mpt = NULL;
+            if (m->kind == ND_FUNC_DEF) {
+                mn = m->func.name; mnp = m->func.nparams;
+            } else if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
+                       m->var_decl.ty->kind == TY_FUNC) {
+                mn = m->var_decl.name; mnp = m->var_decl.ty->nparams;
+                mpt = m->var_decl.ty->params;
+            }
+            if (mn && !m_is_dtor) {
+                collect_func_param_types(m, &mpt);
+                bool mn_is_op = mn->kind == TK_KW_OPERATOR;
+                const char *mn_suffix = mn_is_op ? operator_suffix_for_name(mn) : NULL;
+                /* Copy param types to avoid static-pool aliasing */
+                Type *mpt_copy[64];
+                for (int k = 0; k < mnp && k < 64; k++) mpt_copy[k] = mpt ? mpt[k] : NULL;
+                bool dup = false;
+                for (int j = 0; j < i; j++) {
+                    Node *prev = n->class_def.members[j];
+                    if (!prev) continue;
+                    Token *pn = NULL; int pnp = 0;
+                    if (prev->kind == ND_FUNC_DEF) {
+                        pn = prev->func.name; pnp = prev->func.nparams;
+                    } else if (prev->kind == ND_VAR_DECL && prev->var_decl.ty &&
+                               prev->var_decl.ty->kind == TY_FUNC) {
+                        pn = prev->var_decl.name; pnp = prev->var_decl.ty->nparams;
+                    }
+                    if (!pn || pn->len != mn->len) continue;
+                    if (memcmp(pn->loc, mn->loc, mn->len) != 0) continue;
+                    if (pnp != mnp) continue;
+                    if (mn_is_op) {
+                        const char *ps = operator_suffix_for_name(pn);
+                        if (!ps || !mn_suffix || strcmp(ps, mn_suffix) != 0) continue;
+                    }
+                    /* Compare param type kinds to avoid false dedup of
+                     * overloads like T(int) vs T(const T&). */
+                    Type **ppt = NULL;
+                    collect_func_param_types(prev, &ppt);
+                    bool kinds_match = true;
+                    for (int k = 0; k < mnp && k < 64; k++) {
+                        int mk = mpt_copy[k] ? (int)mpt_copy[k]->kind : -1;
+                        int pk = ppt && ppt[k] ? (int)ppt[k]->kind : -1;
+                        if (mk != pk) { kinds_match = false; break; }
+                    }
+                    if (!kinds_match) continue;
+                    dup = true; break;
+                }
+                if (dup) continue;
+            }
+        }
         if (m->kind == ND_FUNC_DEF && class_type) {
             emit_source_comment(m->tok);
             emit_method_signature(m, class_type);
@@ -3991,6 +4050,44 @@ methods_phase:;
                          body->block.nstmts == 0;
             if (empty || !class_type->has_dtor) continue;
         }
+        /* Skip const/non-const overloads — same dedup as forward decls.
+         * Exclude destructors (same name as ctors but different mangle). */
+        if (m->func.is_destructor) goto emit_method;
+        Token *mn = m->func.name;
+        if (mn) {
+            Type **mpt = NULL;
+            collect_func_param_types(m, &mpt);
+            Type *mpt_copy[64];
+            for (int k = 0; k < m->func.nparams && k < 64; k++)
+                mpt_copy[k] = mpt ? mpt[k] : NULL;
+            bool mn_is_op = mn->kind == TK_KW_OPERATOR;
+            const char *mn_suffix = mn_is_op ? operator_suffix_for_name(mn) : NULL;
+            bool dup = false;
+            for (int j = 0; j < i; j++) {
+                Node *prev = n->class_def.members[j];
+                if (!prev || prev->kind != ND_FUNC_DEF) continue;
+                Token *pn = prev->func.name;
+                if (!pn || pn->len != mn->len) continue;
+                if (memcmp(pn->loc, mn->loc, mn->len) != 0) continue;
+                if (prev->func.nparams != m->func.nparams) continue;
+                if (mn_is_op) {
+                    const char *ps = operator_suffix_for_name(pn);
+                    if (!ps || !mn_suffix || strcmp(ps, mn_suffix) != 0) continue;
+                }
+                Type **ppt = NULL;
+                collect_func_param_types(prev, &ppt);
+                bool kinds_match = true;
+                for (int k = 0; k < m->func.nparams && k < 64; k++) {
+                    int mk = mpt_copy[k] ? (int)mpt_copy[k]->kind : -1;
+                    int pk = ppt && ppt[k] ? (int)ppt[k]->kind : -1;
+                    if (mk != pk) { kinds_match = false; break; }
+                }
+                if (!kinds_match) continue;
+                dup = true; break;
+            }
+            if (dup) continue;
+        }
+    emit_method:
         emit_method_as_free_fn(m, class_type);
     }
     g_current_class_def = saved_cdef;
