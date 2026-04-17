@@ -1861,10 +1861,15 @@ static void emit_expr(Node *n) {
                         int np = resolve_overload(method_class,
                                                    callee->member.member,
                                                    false, at, na, &call_pty);
-                        if (np < 0)
-                            die_no_overload(method_class,
-                                             callee->member.member,
-                                             na, "ND_CALL member");
+                        if (np < 0) {
+                            /* Method not found in class_def — fall
+                             * through to plain call emission. This
+                             * handles out-of-class method definitions
+                             * in template classes whose class_region
+                             * has the method but class_def doesn't. */
+                            is_method_call = false;
+                            goto plain_call;
+                        }
                         call_np = np;
                         mangle_class_method(method_class,
                                              callee->member.member,
@@ -1910,6 +1915,7 @@ static void emit_expr(Node *n) {
                 return;
             }
         }
+    plain_call:
         emit_expr(n->call.callee);
         fputc('(', stdout);
         for (int i = 0; i < n->call.nargs; i++) {
