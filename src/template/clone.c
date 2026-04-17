@@ -251,6 +251,16 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
                 n->qualified.nparts * sizeof(Token *));
             memcpy(c->qualified.parts, n->qualified.parts,
                    n->qualified.nparts * sizeof(Token *));
+            /* Substitute the leading qualifier if it matches a
+             * template parameter (e.g. 'A::release(v)' where A is
+             * the allocator param → 'va_heap::release(v)' after
+             * substitution). Replace the token with the concrete
+             * type's tag so codegen mangles against the right class. */
+            Token *lead = c->qualified.parts[0];
+            if (lead) {
+                Type *sub = subst_map_lookup(map, lead->loc, lead->len);
+                if (sub && sub->tag) c->qualified.parts[0] = sub->tag;
+            }
         }
         break;
 
