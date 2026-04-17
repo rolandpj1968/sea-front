@@ -1494,6 +1494,12 @@ static const char *binop_to_operator_suffix(TokenKind op) {
     case TK_MINUS_ASSIGN:   return "__minus_assign";
     case TK_STAR_ASSIGN:    return "__mul_assign";
     case TK_SLASH_ASSIGN:   return "__div_assign";
+    case TK_AMP_ASSIGN:     return "__bitand_assign";
+    case TK_PIPE_ASSIGN:    return "__bitor_assign";
+    case TK_CARET_ASSIGN:   return "__xor_assign";
+    case TK_SHL_ASSIGN:     return "__lshift_assign";
+    case TK_SHR_ASSIGN:     return "__rshift_assign";
+    case TK_PERCENT_ASSIGN: return "__mod_assign";
     default:                return NULL;
     }
 }
@@ -3431,11 +3437,17 @@ static const char *operator_suffix_for_name(Token *name) {
     if (after[0] == '%')  return "__mod";
     if (after[0] == '&' && after[1] == '&') return "__land";
     if (after[0] == '|' && after[1] == '|') return "__lor";
+    if (after[0] == '&' && after[1] == '=') return "__bitand_assign";
+    if (after[0] == '|' && after[1] == '=') return "__bitor_assign";
+    if (after[0] == '^' && after[1] == '=') return "__xor_assign";
+    if (after[0] == '%' && after[1] == '=') return "__mod_assign";
     if (after[0] == '&')  return "__bitand";
     if (after[0] == '|')  return "__bitor";
     if (after[0] == '^')  return "__xor";
     if (after[0] == '~')  return "__compl";
     if (after[0] == '!')  return "__not";
+    if (after[0] == '<' && after[1] == '<' && after[2] == '=') return "__lshift_assign";
+    if (after[0] == '>' && after[1] == '>' && after[2] == '=') return "__rshift_assign";
     if (after[0] == '<' && after[1] == '<') return "__lshift";
     if (after[0] == '>' && after[1] == '>') return "__rshift";
     if (after[0] == '=')  return "__assign";

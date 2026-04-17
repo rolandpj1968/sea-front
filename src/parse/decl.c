@@ -382,6 +382,13 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
             } else if (after->kind == TK_KW_OPERATOR) {
                 /* Qualified operator: Foo::operator[] */
                 parser_advance(p);  /* :: */
+                /* Stash the class scope BEFORE the goto — the normal
+                 * post-loop stash at line ~393 is skipped by the jump.
+                 * Without this, OOL operator definitions like
+                 * 'DI::operator++()' lose their class_type and codegen
+                 * emits them as free functions (no 'this' param). */
+                if (qscope) p->qualified_decl_scope = qscope;
+                if (leading_tid) p->qualified_decl_tid = leading_tid;
                 goto parse_operator_id;
             } else {
                 break;
