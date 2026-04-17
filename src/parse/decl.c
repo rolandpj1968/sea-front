@@ -529,6 +529,12 @@ parse_suffixes:
             after_paren->kind == TK_RPAREN ||
             after_paren->kind == TK_ELLIPSIS ||
             after_paren->kind == TK_KW_VOID ||
+            /* __attribute__ before a param type: gengtype-generated
+             * code uses '__attribute__((unused)) void *this_obj'.
+             * Treat __attribute__ as a param-list signal. */
+            (after_paren->kind == TK_IDENT &&
+             after_paren->len >= 13 &&
+             memcmp(after_paren->loc, "__attribute__", 13) == 0) ||
             /* Check if it's a type-specifier keyword or known type/template name */
             (after_paren->kind >= TK_KW_ALIGNAS /* any keyword */ ||
              (after_paren->kind == TK_IDENT &&
@@ -558,20 +564,26 @@ parse_suffixes:
                 break;
             }
         } else if (!name_was_qualified && after_paren->kind == TK_IDENT) {
-            /* A qualified-name (ident::...) is treated as a potential type
-             * — qualified lookup isn't resolved here, but the leading
-             * segment is overwhelmingly a namespace or class scope.
-             * Also: 'IDENT IDENT' inside parens (after a function name)
-             * looks like a parameter declaration with an inherited
-             * member typedef we can't resolve. */
-            Token *t2 = parser_peek_ahead(p, 2);
-            looks_like_params = lookup_is_type_name(p, after_paren) ||
-                                lookup_is_template_name(p, after_paren) ||
-                                t2->kind == TK_SCOPE ||
-                                t2->kind == TK_STAR || t2->kind == TK_AMP ||
-                                t2->kind == TK_LAND || t2->kind == TK_LT ||
-                                (t2->kind == TK_IDENT &&
-                                 !lookup_unqualified(p, t2->loc, t2->len));
+            /* __attribute__ before a param type signals param list. */
+            if (after_paren->len >= 13 &&
+                memcmp(after_paren->loc, "__attribute__", 13) == 0) {
+                looks_like_params = true;
+            } else {
+                /* A qualified-name (ident::...) is treated as a potential type
+                 * — qualified lookup isn't resolved here, but the leading
+                 * segment is overwhelmingly a namespace or class scope.
+                 * Also: 'IDENT IDENT' inside parens (after a function name)
+                 * looks like a parameter declaration with an inherited
+                 * member typedef we can't resolve. */
+                Token *t2 = parser_peek_ahead(p, 2);
+                looks_like_params = lookup_is_type_name(p, after_paren) ||
+                                    lookup_is_template_name(p, after_paren) ||
+                                    t2->kind == TK_SCOPE ||
+                                    t2->kind == TK_STAR || t2->kind == TK_AMP ||
+                                    t2->kind == TK_LAND || t2->kind == TK_LT ||
+                                    (t2->kind == TK_IDENT &&
+                                     !lookup_unqualified(p, t2->loc, t2->len));
+            }
         } else if (after_paren->kind == TK_SCOPE) {
             /* '::Foo::Bar' — fully qualified type at start of param list. */
             looks_like_params = true;
