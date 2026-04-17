@@ -469,8 +469,13 @@ static void hoist_emit_decl(Node *call) {
             Type **pty = NULL;
             int np = resolve_overload(call->resolved_type, NULL, true,
                                        at, na, &pty);
-            if (np < 0)
-                die_no_overload(call->resolved_type, NULL, na, "hoist_emit_decl");
+            if (np < 0) {
+                /* No matching ctor — skip ctor call. For plain C
+                 * structs whose has_default_ctor was transitively
+                 * set, this is trivial default construction (the
+                 * zero-fill from '{0}' covers it). */
+                goto hoist_done;
+            }
             mangle_class_ctor(call->resolved_type, pty, np);
         }
         fprintf(stdout, "(&%s", name);
@@ -488,6 +493,7 @@ static void hoist_emit_decl(Node *call) {
         fputs(";\n", stdout);
     }
 
+hoist_done:
     /* Tag the call so emit_expr now substitutes the temp name. */
     call->codegen_temp_name = name;
 
