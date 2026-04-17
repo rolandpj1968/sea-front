@@ -4322,10 +4322,6 @@ static void emit_top_level(Node *n) {
         return;
     case ND_CLASS_DEF: emit_class_def(n); return;
     case ND_VAR_DECL:
-        /* Skip in PHASE_STRUCTS — top-level var-decls should only be
-         * emitted in PHASE_METHODS (or phase 0) to avoid double
-         * emission when the TU loop runs twice. */
-        if (g_emit_phase == PHASE_STRUCTS) return;
         /* Bare enum definition: 'enum Color { RED, GREEN };' becomes
          * ND_VAR_DECL with type TY_ENUM and no name. Emit the enum
          * body as a C enum definition. */
