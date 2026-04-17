@@ -1998,9 +1998,20 @@ static void emit_expr(Node *n) {
     plain_call:
         emit_expr(n->call.callee);
         fputc('(', stdout);
-        for (int i = 0; i < n->call.nargs; i++) {
-            if (i > 0) fputs(", ", stdout);
-            emit_expr(n->call.args[i]);
+        /* Extract callee's function type for ref-param adaptation.
+         * Handles function pointers (TY_PTR(TY_FUNC)) and direct
+         * function calls (TY_FUNC). */
+        {
+            Type *callee_ft = n->call.callee ? n->call.callee->resolved_type : NULL;
+            if (callee_ft && callee_ft->kind == TY_PTR && callee_ft->base)
+                callee_ft = callee_ft->base;
+            if (callee_ft && callee_ft->kind != TY_FUNC) callee_ft = NULL;
+            for (int i = 0; i < n->call.nargs; i++) {
+                if (i > 0) fputs(", ", stdout);
+                Type *pt = (callee_ft && i < callee_ft->nparams)
+                    ? callee_ft->params[i] : NULL;
+                emit_arg_for_param(n->call.args[i], pt);
+            }
         }
         fputc(')', stdout);
         return;
