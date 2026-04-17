@@ -334,10 +334,21 @@ static void collect_from_node(InstCollector *col, Node *n) {
     /* Check types on this node */
     switch (n->kind) {
     case ND_VAR_DECL:
-    case ND_TYPEDEF:
         collect_from_type(col, n->var_decl.ty);
         if (n->var_decl.init)
             collect_from_node(col, n->var_decl.init);
+        break;
+
+    case ND_TYPEDEF:
+        collect_from_type(col, n->var_decl.ty);
+        /* For typedef'd structs ('typedef struct S { vec<T> m; } S2;'),
+         * the struct body is only accessible through the Type's class_def
+         * — the TU has no separate ND_CLASS_DEF node. Walk the class_def
+         * members so template-id types inside get collected. */
+        if (n->var_decl.ty &&
+            (n->var_decl.ty->kind == TY_STRUCT || n->var_decl.ty->kind == TY_UNION) &&
+            n->var_decl.ty->class_def)
+            collect_from_node(col, n->var_decl.ty->class_def);
         break;
 
     case ND_PARAM:
