@@ -1712,6 +1712,46 @@ static void emit_expr(Node *n) {
             fputs(n->codegen_temp_name, stdout);
             return;
         }
+        /* Qualified static method call: 'Class::method(args)' where
+         * the callee is ND_QUALIFIED with 2 parts [ClassName, method].
+         * Emit as a mangled free-function call without a 'this' arg.
+         * Common pattern in gcc: va_heap::release(ptr), double_int::from_shwi(v). */
+        /* Qualified static method call: 'Class::method(args)'.
+         * Callee is ND_QUALIFIED with parts [ClassName, method].
+         * Look up the class type to get proper template-arg mangling.
+         * If lookup fails, emit a best-effort human-readable name.
+         * No 'this' argument (static method). */
+        {
+            Node *callee_q = n->call.callee;
+            if (callee_q && callee_q->kind == ND_QUALIFIED &&
+                callee_q->qualified.nparts >= 2) {
+                Token *class_tok = callee_q->qualified.parts[0];
+                Token *method_tok = callee_q->qualified.parts[callee_q->qualified.nparts - 1];
+                if (class_tok && method_tok) {
+                    /* Collect call-arg types for param suffix */
+                    Type **at = NULL;
+                    int na = collect_call_arg_types(n->call.args,
+                                                     n->call.nargs, &at);
+                    /* Emit the mangled class tag + method name + param suffix.
+                     * We don't have the formal param types (no resolve_overload)
+                     * so we use the call-arg types as the suffix — this is the
+                     * best we can do without sema resolution of ND_QUALIFIED. */
+                    fputs("sf__", stdout);
+                    fprintf(stdout, "%.*s__%.*s",
+                            class_tok->len, class_tok->loc,
+                            method_tok->len, method_tok->loc);
+                    emit_local_param_suffix(at, na);
+                    fputc('(', stdout);
+                    for (int i = 0; i < n->call.nargs; i++) {
+                        if (i > 0) fputs(", ", stdout);
+                        emit_expr(n->call.args[i]);
+                    }
+                    fputc(')', stdout);
+                    return;
+                }
+            }
+        }
+
         /* Method call lowering: 'obj.method(args)' / 'p->method(args)'
          * becomes 'Class_method(&obj, args)' / 'Class_method(p, args)'.
          *
@@ -3546,14 +3586,18 @@ static void emit_method_signature(Node *func, Type *class_type) {
         mangle_class_method(class_type, func->func.name, pty, np);
     }
     fputc('(', stdout);
-    fputs("struct ", stdout);
-    mangle_class_tag(class_type);
-    fputs(" *this", stdout);
+    bool is_static = (func->func.storage_flags & DECL_STATIC) != 0;
+    if (!is_static) {
+        fputs("struct ", stdout);
+        mangle_class_tag(class_type);
+        fputs(" *this", stdout);
+    }
     for (int i = 0; i < func->func.nparams; i++) {
-        fputs(", ", stdout);
+        if (i > 0 || !is_static) fputs(", ", stdout);
         Node *p = func->func.params[i];
         emit_param_declarator(p->param.ty, p->param.name, i);
     }
+    if (is_static && func->func.nparams == 0) fputs("void", stdout);
     fputc(')', stdout);
 }
 
