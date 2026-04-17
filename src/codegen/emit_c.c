@@ -1678,7 +1678,38 @@ static void emit_expr(Node *n) {
         fputc('(', stdout);
         emit_expr(n->binary.lhs);
         fprintf(stdout, " %s ", binop_str(n->binary.op));
-        emit_expr(n->binary.rhs);
+        /* For plain assignment (=): if the RHS is a reference type
+         * (TY_REF lowered to T*) and the LHS target is a struct value
+         * (not a pointer), dereference the RHS. Pattern: '*slot = obj'
+         * where obj is 'const T&' → '*slot = (*obj)'.
+         * N4659 §8.18/2 [expr.ass] — the value of the RHS is assigned
+         * to the LHS; references bind transparently. */
+        {
+            Type *rhs_rt = n->binary.rhs ? n->binary.rhs->resolved_type : NULL;
+            bool rhs_is_ref = rhs_rt &&
+                (rhs_rt->kind == TY_REF || rhs_rt->kind == TY_RVALREF);
+            Type *lhs_t = n->binary.lhs ? n->binary.lhs->resolved_type : NULL;
+            bool lhs_wants_value = lhs_t &&
+                (lhs_t->kind == TY_STRUCT || lhs_t->kind == TY_UNION);
+            /* Also deref when LHS is a deref (*ptr = ref) — the target
+             * is a value and the RHS is a pointer in our lowering. */
+            if (!lhs_wants_value && n->binary.lhs &&
+                n->binary.lhs->kind == ND_UNARY &&
+                n->binary.lhs->unary.op == TK_STAR) {
+                Type *inner = n->binary.lhs->unary.operand ?
+                    n->binary.lhs->unary.operand->resolved_type : NULL;
+                if (inner && inner->kind == TY_PTR && inner->base &&
+                    (inner->base->kind == TY_STRUCT || inner->base->kind == TY_UNION))
+                    lhs_wants_value = true;
+            }
+            if (rhs_is_ref && lhs_wants_value && n->binary.op == TK_ASSIGN) {
+                fputs("(*", stdout);
+                emit_expr(n->binary.rhs);
+                fputc(')', stdout);
+            } else {
+                emit_expr(n->binary.rhs);
+            }
+        }
         fputc(')', stdout);
         return;
     }
