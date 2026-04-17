@@ -288,19 +288,32 @@ static void collect_from_type(InstCollector *col, Type *ty) {
     /* Skip template-ids that still have dependent (unresolved) args.
      * These appear inside cloned template bodies where an outer
      * template parameter hasn't been substituted yet. They'll be
-     * collected once the outer template is instantiated. */
+     * collected once the outer template is instantiated.
+     *
+     * Also skip args that look like unresolved template params:
+     * short (1-2 char) uppercase tags that aren't TY_DEPENDENT but
+     * should be. This catches cases where the parser resolved 'A'
+     * as an opaque TY_STRUCT/TY_INT instead of TY_DEPENDENT (scope
+     * visibility issue in partial specialization bodies). */
     for (int i = 0; i < tid->template_id.nargs; i++) {
         Node *arg = tid->template_id.args[i];
         Type *aty = (arg && arg->kind == ND_VAR_DECL) ? arg->var_decl.ty : NULL;
         if (aty && aty->kind == TY_DEPENDENT) return;
+        /* HEURISTIC (ours, not the standard): a 1-char uppercase tag
+         * on a non-TY_DEPENDENT type is almost certainly an unresolved
+         * template parameter. Skip it rather than instantiating with
+         * a bogus concrete type. TODO(seafront#dep-scope): fix the
+         * root cause — ensure template param scope is visible when
+         * parsing member types in partial specializations. */
+        if (aty && aty->tag && aty->tag->len == 1 &&
+            aty->tag->loc[0] >= 'A' && aty->tag->loc[0] <= 'Z' &&
+            aty->kind != TY_DEPENDENT) return;
     }
 
     Token *name = tid->template_id.name;
     Node *tmpl = registry_find(col->reg, name->loc, name->len);
     if (!tmpl) return;  /* template definition not found — skip */
 
-    /* TODO: dedup — check if we already have a request for this
-     * (name, args) combination. For now, collect all and dedup later. */
     InstRequest *req = arena_alloc(col->arena, sizeof(InstRequest));
     req->name = name;
     req->template_id = tid;
@@ -1196,6 +1209,7 @@ void template_instantiate(Node *tu, Arena *arena) {
             if (total_inst < MAX_INST)
                 all_instantiated[total_inst++] = inst;
             ninst_this_round++;
+            /* (trace removed) */
             /* Patch the usage-site type so codegen mangles it
              * with template args (e.g. sf__Box_t_int_te_). */
             if (inst->kind == ND_CLASS_DEF && inst->class_def.ty &&
