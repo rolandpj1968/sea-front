@@ -1337,6 +1337,69 @@ void template_instantiate(Node *tu, Arena *arena) {
         }
     }
 
+    /* Post-instantiation member-type patching: walk all instantiated
+     * classes and patch any member/param/return type that references
+     * another template (has template_id_node) against the dedup set.
+     * This is the bridge between transitive instantiation rounds
+     * and codegen: without it, a cloned method body's expression
+     * types (e.g. 'vec<int, vl_embed>' inside vec<int, vl_ptr>)
+     * have no class_region, so method dispatch falls through to
+     * plain C emission.
+     *
+     * The base-type patching above handles inheritance. This pass
+     * handles composition (by-pointer and by-value members) and
+     * method bodies. */
+    for (int i = 0; i < total_inst; i++) {
+        Node *inst = all_instantiated[i];
+        if (!inst || inst->kind != ND_CLASS_DEF) continue;
+        for (int mi = 0; mi < inst->class_def.nmembers; mi++) {
+            Node *m = inst->class_def.members[mi];
+            if (!m) continue;
+            Type *mty = NULL;
+            if (m->kind == ND_VAR_DECL) mty = m->var_decl.ty;
+            else if (m->kind == ND_FUNC_DEF) mty = m->func.ret_ty;
+            if (!mty) continue;
+            /* Peel pointer/ref/array to find the struct underneath */
+            Type *inner = mty;
+            while (inner && (inner->kind == TY_PTR || inner->kind == TY_REF ||
+                             inner->kind == TY_RVALREF || inner->kind == TY_ARRAY))
+                inner = inner->base;
+            if (!inner || !(inner->kind == TY_STRUCT || inner->kind == TY_UNION))
+                continue;
+            if (inner->class_region) continue;  /* already resolved */
+            if (!inner->template_id_node ||
+                inner->template_id_node->kind != ND_TEMPLATE_ID)
+                continue;
+            Node *tid = inner->template_id_node;
+            char key[512];
+            int pos = 0;
+            if (tid->template_id.name) {
+                Token *tn = tid->template_id.name;
+                if (pos + tn->len < 512) {
+                    memcpy(key, tn->loc, tn->len);
+                    pos = tn->len;
+                }
+            }
+            key[pos++] = '\0';
+            for (int k = 0; k < tid->template_id.nargs; k++) {
+                Node *arg = tid->template_id.args[k];
+                Type *aty = (arg && arg->kind == ND_VAR_DECL) ?
+                            arg->var_decl.ty : NULL;
+                pos = type_to_key(aty, key, pos, 512);
+                key[pos++] = '\0';
+            }
+            Type *resolved = dedup_find(&ds, key, pos);
+            if (resolved && resolved->class_region) {
+                inner->template_args   = resolved->template_args;
+                inner->n_template_args = resolved->n_template_args;
+                inner->class_region    = resolved->class_region;
+                inner->class_def       = resolved->class_def;
+                inner->has_dtor        = resolved->has_dtor;
+                inner->has_default_ctor = resolved->has_default_ctor;
+            }
+        }
+    }
+
     /* Reverse the instantiated array so that transitive dependencies
      * (discovered in later rounds) appear before the types that
      * reference them. This is a simple heuristic that works because

@@ -261,6 +261,26 @@ static void emit_return_expr(Node *e) {
     if (e->kind == ND_UNARY && e->unary.op == TK_STAR) {
         emit_expr(e->unary.operand); return;
     }
+    /* ND_SUBSCRIPT on a class type gets rewritten to a method call
+     * that returns T* (ref-return lowered). The result is already a
+     * pointer — wrapping in '&' would be taking the address of a
+     * temporary pointer, which is invalid. */
+    if (e->kind == ND_SUBSCRIPT) {
+        Type *base_ty = e->subscript.base ? e->subscript.base->resolved_type : NULL;
+        if (base_ty && (base_ty->kind == TY_STRUCT || base_ty->kind == TY_UNION)) {
+            emit_expr(e); return;
+        }
+    }
+    /* ND_CALL whose callee is a method that returns a reference —
+     * the codegen has already lowered the return type to T* in the
+     * method's C signature. Pass through without '&'. */
+    if (e->kind == ND_CALL) {
+        Type *crt = e->resolved_type;
+        if (crt && (crt->kind == TY_REF || crt->kind == TY_RVALREF ||
+                    crt->kind == TY_PTR)) {
+            emit_expr(e); return;
+        }
+    }
     fputs("&(", stdout);
     emit_expr(e);
     fputc(')', stdout);
@@ -1762,6 +1782,10 @@ static void emit_expr(Node *n) {
             Type *ot = obj ? obj->resolved_type : NULL;
             bool obj_is_ptr = ot && ot->kind == TY_PTR;
             if (obj_is_ptr) ot = ot->base;
+            /* Also peel TY_REF/TY_RVALREF — reference members that
+             * resolved to their lowered form (pointer). */
+            if (ot && (ot->kind == TY_REF || ot->kind == TY_RVALREF))
+                ot = ot->base;
             /* Method dispatch lowering applies when the member resolves
              * to a method declaration (type TY_FUNC). A function pointer
              * data field has type TY_PTR(TY_FUNC) and falls through to
