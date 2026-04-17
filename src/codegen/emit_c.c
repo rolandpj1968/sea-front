@@ -1573,6 +1573,15 @@ static void emit_expr(Node *n) {
         if (n->str.tok) fprintf(stdout, "%.*s", n->str.tok->len, n->str.tok->loc);
         return;
     case ND_IDENT:
+        /* gcc vec.h: 'vec<T,A,vl_ptr> v = vNULL;' — vNULL is an extern
+         * vnull with a template conversion operator. In C there are no
+         * conversion operators, and a zero-initialized struct achieves
+         * the same result (null pointer member). */
+        if (n->ident.name && n->ident.name->len == 5 &&
+            memcmp(n->ident.name->loc, "vNULL", 5) == 0) {
+            fputs("{0}", stdout);
+            return;
+        }
         if (n->ident.implicit_this) {
             fputs("this->", stdout);
             /* If the resolved declaration lives in a BASE class of
