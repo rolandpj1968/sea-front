@@ -3562,12 +3562,14 @@ static void emit_class_def(Node *n) {
     /* Emit struct dependencies first: any by-value struct/union
      * member whose type has a class_def must be emitted before
      * this struct. This handles the line-map.h pattern where
-     * a union contains by-value struct members. */
+     * a union contains by-value struct members. Also handles
+     * arrays of structs (i386.h stringop_strategy pattern). */
     for (int i = 0; i < n->class_def.nmembers; i++) {
         Node *m = n->class_def.members[i];
         if (!m || m->kind != ND_VAR_DECL) continue;
         Type *mty = m->var_decl.ty;
         if (!mty) continue;
+        while (mty->kind == TY_ARRAY && mty->base) mty = mty->base;
         if ((mty->kind == TY_STRUCT || mty->kind == TY_UNION) &&
             mty->class_def && !mty->codegen_emitted)
             emit_class_def(mty->class_def);
