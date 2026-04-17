@@ -1930,6 +1930,13 @@ static void emit_expr(Node *n) {
         }
         fputc(')', stdout);
         return;
+    case ND_COMMA:
+        fputc('(', stdout);
+        emit_expr(n->binary.lhs);
+        fputs(", ", stdout);
+        emit_expr(n->binary.rhs);
+        fputc(')', stdout);
+        return;
     case ND_INIT_LIST:
         fputc('{', stdout);
         for (int i = 0; i < n->init_list.nelems; i++) {
@@ -2146,7 +2153,8 @@ static void emit_var_decl_inner(Node *n) {
             fputs("void", stdout);
         }
         fputc(')', stdout);
-        if (n->var_decl.init) {
+        if (n->var_decl.init && n->var_decl.init->kind > 0 &&
+            n->var_decl.init->kind < 200) {
             fputs(" = ", stdout);
             emit_expr(n->var_decl.init);
         }
