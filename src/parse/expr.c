@@ -428,6 +428,44 @@ static Node *primary_expr(Parser *p) {
         return expr;
     }
 
+    /* GCC __builtin_unreachable() — marks unreachable code.
+     * Returns void; in gcc_assert macros it's placed inside a comma
+     * expression '__builtin_unreachable(), 0'. Emit as a regular
+     * function call so the C compiler sees it natively. */
+    if (tok->kind == TK_IDENT && tok->len == 21 &&
+        memcmp(tok->loc, "__builtin_unreachable", 21) == 0 &&
+        parser_peek_ahead(p, 1)->kind == TK_LPAREN) {
+        Token *name_tok = parser_advance(p);
+        parser_advance(p);  /* ( */
+        parser_expect(p, TK_RPAREN);
+        Node *node = new_node(p, ND_CALL, name_tok);
+        Node *callee = new_node(p, ND_IDENT, name_tok);
+        callee->ident.name = name_tok;
+        node->call.callee = callee;
+        node->call.args = NULL;
+        node->call.nargs = 0;
+        return node;
+    }
+
+    /* GCC __builtin_alloca(size) — stack allocation.
+     * Emitted as a regular call; the C compiler handles it. */
+    if (tok->kind == TK_IDENT && tok->len == 16 &&
+        memcmp(tok->loc, "__builtin_alloca", 16) == 0 &&
+        parser_peek_ahead(p, 1)->kind == TK_LPAREN) {
+        Token *name_tok = parser_advance(p);
+        parser_advance(p);  /* ( */
+        Node *arg = parse_assign_expr(p);
+        parser_expect(p, TK_RPAREN);
+        Node *node = new_node(p, ND_CALL, name_tok);
+        Node *callee = new_node(p, ND_IDENT, name_tok);
+        callee->ident.name = name_tok;
+        node->call.callee = callee;
+        node->call.args = arena_alloc(p->arena, sizeof(Node *));
+        node->call.args[0] = arg;
+        node->call.nargs = 1;
+        return node;
+    }
+
     /* GCC/Clang type-trait intrinsics in expression context:
      *   __is_trivial(T), __is_assignable(T, U), __is_same(T, U), etc.
      * These are bool-valued built-ins whose arguments are TYPES, not

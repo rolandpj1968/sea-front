@@ -1932,9 +1932,9 @@ static void emit_expr(Node *n) {
         return;
     case ND_COMMA:
         fputc('(', stdout);
-        emit_expr(n->binary.lhs);
+        emit_expr(n->comma.lhs);
         fputs(", ", stdout);
-        emit_expr(n->binary.rhs);
+        emit_expr(n->comma.rhs);
         fputc(')', stdout);
         return;
     case ND_INIT_LIST:
