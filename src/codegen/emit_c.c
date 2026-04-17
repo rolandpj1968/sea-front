@@ -762,6 +762,23 @@ static FuncSeen *func_seen_find(Token *name) {
     return NULL;
 }
 
+/* Signature-aware variant: find by name + nparams + first_param_kind.
+ * Returns NULL if no exact match exists, so overloaded free functions
+ * (like union_or_struct_p(enum) vs union_or_struct_p(type_p)) aren't
+ * incorrectly deduped. */
+static FuncSeen *func_seen_find_sig(Token *name, int nparams,
+                                      int first_param_kind) {
+    if (!name) return NULL;
+    for (int i = 0; i < g_func_nseen; i++) {
+        if (g_func_seen[i].len != name->len) continue;
+        if (memcmp(g_func_seen[i].loc, name->loc, name->len) != 0) continue;
+        if (g_func_seen[i].nparams == nparams &&
+            g_func_seen[i].first_param_kind == first_param_kind)
+            return &g_func_seen[i];
+    }
+    return NULL;
+}
+
 /* Both kinds' dedup take (nparams, first_param_kind) so we can
  * compare signatures. Callers pass -1 when the info is unavailable;
  * that matches any recorded signature (conservative — matches the
@@ -787,9 +804,7 @@ static bool func_def_dedup_check_sig(Token *name, int nparams,
     FuncSeen *fs = func_seen_find(name);
     if (fs) {
         if (fs->is_def) return true;
-        /* Decl→def upgrade only when signatures match. Different
-         * signature (abs(int) decl vs abs(long) def) means C treats
-         * them as conflicting; skip the def and keep the first. */
+        /* Decl→def upgrade only when signatures match. */
         if (fs->nparams != nparams || fs->first_param_kind != first_param_kind)
             return true;
         fs->is_def = true;
