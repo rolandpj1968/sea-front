@@ -4405,6 +4405,19 @@ static void emit_top_level(Node *n) {
         return;
     case ND_CLASS_DEF: emit_class_def(n); return;
     case ND_VAR_DECL:
+        /* Dedup top-level var-decls: the two-phase emit walks ND_BLOCK
+         * nodes in both passes, so vars inside extern "C" blocks get
+         * emitted twice. Track by Node pointer to skip duplicates. */
+        {
+            enum { VAR_DEDUP_CAP = 1024 };
+            static Node *var_seen[VAR_DEDUP_CAP];
+            static int var_nseen = 0;
+            if (n->var_decl.name) {
+                for (int i = 0; i < var_nseen; i++)
+                    if (var_seen[i] == n) return;
+                if (var_nseen < VAR_DEDUP_CAP) var_seen[var_nseen++] = n;
+            }
+        }
         /* Bare enum definition: 'enum Color { RED, GREEN };' becomes
          * ND_VAR_DECL with type TY_ENUM and no name. Emit the enum
          * body as a C enum definition. */
