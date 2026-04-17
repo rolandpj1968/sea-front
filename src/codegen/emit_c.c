@@ -1706,6 +1706,15 @@ static void emit_expr(Node *n) {
                 fputs("(*", stdout);
                 emit_expr(n->binary.rhs);
                 fputc(')', stdout);
+            } else if (lhs_wants_value && n->binary.op == TK_ASSIGN &&
+                       n->binary.rhs && n->binary.rhs->kind == ND_NUM &&
+                       n->binary.rhs->num.lo == 0) {
+                /* C++ allows 'struct_val = 0' (zero-init) for POD
+                 * types in template bodies. C doesn't. Emit a compound
+                 * literal zero-init: '(Type){0}'. */
+                fputc('(', stdout);
+                emit_type(lhs_t);
+                fputs("){0}", stdout);
             } else {
                 emit_expr(n->binary.rhs);
             }
