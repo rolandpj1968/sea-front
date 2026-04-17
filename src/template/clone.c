@@ -111,7 +111,15 @@ Type *subst_type(Type *ty, SubstMap *map, Arena *arena) {
                 bool should_subst = at && (at->kind == TY_DEPENDENT ||
                     (at->tag && subst_map_lookup(map, at->tag->loc, at->tag->len)));
                 if (should_subst) {
-                    Type *sub = subst_type(at, map, arena);
+                    /* Direct SubstMap lookup for non-TY_DEPENDENT types
+                     * (e.g. TY_INT with tag "A"). subst_type only handles
+                     * TY_DEPENDENT and TY_STRUCT injected names; for
+                     * opaque types that the parser mis-resolved, we do
+                     * the lookup here directly. */
+                    Type *sub = NULL;
+                    if (at->kind != TY_DEPENDENT && at->tag)
+                        sub = subst_map_lookup(map, at->tag->loc, at->tag->len);
+                    if (!sub) sub = subst_type(at, map, arena);
                     Node *ac = arena_alloc(arena, sizeof(Node));
                     *ac = *a;
                     ac->var_decl.ty = sub;
