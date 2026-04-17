@@ -84,12 +84,18 @@ Type *subst_type(Type *ty, SubstMap *map, Arena *arena) {
         ty->template_id_node->kind == ND_TEMPLATE_ID) {
         Node *tid = ty->template_id_node;
 
-        /* Check if any arg would actually change */
+        /* Check if any arg would actually change. TY_DEPENDENT is the
+         * canonical marker, but also check non-TY_DEPENDENT args whose
+         * tag matches a SubstMap entry — these are template params that
+         * the parser resolved as opaque types instead of TY_DEPENDENT
+         * (scope visibility issue in partial spec bodies). */
         bool needs_subst = false;
         for (int i = 0; i < tid->template_id.nargs; i++) {
             Node *a = tid->template_id.args[i];
             Type *at = (a && a->kind == ND_VAR_DECL) ? a->var_decl.ty : NULL;
             if (at && at->kind == TY_DEPENDENT) { needs_subst = true; break; }
+            if (at && at->tag && subst_map_lookup(map, at->tag->loc, at->tag->len))
+                { needs_subst = true; break; }
         }
 
         if (needs_subst) {
@@ -101,9 +107,11 @@ Type *subst_type(Type *ty, SubstMap *map, Arena *arena) {
                 tid->template_id.nargs * sizeof(Node *));
             for (int i = 0; i < tid->template_id.nargs; i++) {
                 Node *a = tid->template_id.args[i];
-                if (a && a->kind == ND_VAR_DECL && a->var_decl.ty &&
-                    a->var_decl.ty->kind == TY_DEPENDENT) {
-                    Type *sub = subst_type(a->var_decl.ty, map, arena);
+                Type *at = (a && a->kind == ND_VAR_DECL) ? a->var_decl.ty : NULL;
+                bool should_subst = at && (at->kind == TY_DEPENDENT ||
+                    (at->tag && subst_map_lookup(map, at->tag->loc, at->tag->len)));
+                if (should_subst) {
+                    Type *sub = subst_type(at, map, arena);
                     Node *ac = arena_alloc(arena, sizeof(Node));
                     *ac = *a;
                     ac->var_decl.ty = sub;
@@ -113,6 +121,18 @@ Type *subst_type(Type *ty, SubstMap *map, Arena *arena) {
                 }
             }
             copy->template_id_node = tid_copy;
+            /* Populate template_args from the substituted template_id
+             * so mangling can access them directly. Without this, the
+             * mangled name omits template args (producing just 'sf__vec'
+             * instead of 'sf__vec_t_int_va_heap_vl_ptr_te_'). */
+            int na = tid_copy->template_id.nargs;
+            copy->template_args = arena_alloc(arena, na * sizeof(Type *));
+            copy->n_template_args = na;
+            for (int i = 0; i < na; i++) {
+                Node *a = tid_copy->template_id.args[i];
+                copy->template_args[i] = (a && a->kind == ND_VAR_DECL)
+                    ? a->var_decl.ty : NULL;
+            }
             return copy;
         }
     }
