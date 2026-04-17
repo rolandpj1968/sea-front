@@ -2289,6 +2289,35 @@ static void emit_var_decl_inner(Node *n) {
         }
         return;
     }
+    /* Anonymous local struct: emit the body inline since no top-level
+     * definition exists. Pattern: 'struct { char x; int y; } align;'
+     * inside a function body (sbitmap.c alignment computation).
+     * Detected by: no user-given tag (tag == NULL before anon_id
+     * assignment) and class_def present but not yet emitted. */
+    if (ty && (ty->kind == TY_STRUCT || ty->kind == TY_UNION) &&
+        ty->class_def && !ty->codegen_emitted && n->var_decl.name &&
+        !ty->tag) {
+        Node *cd = ty->class_def;
+        fputs(ty->kind == TY_UNION ? "union" : "struct", stdout);
+        fputs(" { ", stdout);
+        for (int i = 0; i < cd->class_def.nmembers; i++) {
+            Node *m = cd->class_def.members[i];
+            if (m && m->kind == ND_VAR_DECL) {
+                emit_type(m->var_decl.ty);
+                if (m->var_decl.name)
+                    fprintf(stdout, " %.*s", m->var_decl.name->len,
+                            m->var_decl.name->loc);
+                fputs("; ", stdout);
+            }
+        }
+        fprintf(stdout, "} %.*s",
+                n->var_decl.name->len, n->var_decl.name->loc);
+        if (n->var_decl.init) {
+            fputs(" = ", stdout);
+            emit_expr(n->var_decl.init);
+        }
+        return;
+    }
     emit_type(ty);
     fputc(' ', stdout);
     if (n->var_decl.name)
