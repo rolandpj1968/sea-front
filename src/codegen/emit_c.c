@@ -1597,10 +1597,11 @@ static void emit_expr(Node *n) {
         if (n->str.tok) fprintf(stdout, "%.*s", n->str.tok->len, n->str.tok->loc);
         return;
     case ND_IDENT:
-        /* gcc vec.h: 'vec<T,A,vl_ptr> v = vNULL;' — vNULL is an extern
-         * vnull with a template conversion operator. In C there are no
-         * conversion operators, and a zero-initialized struct achieves
-         * the same result (null pointer member). */
+        /* SHORTCUT (ours, not the standard): gcc vec.h defines
+         * 'extern vnull vNULL;' with a template conversion operator
+         * (N4659 §16.3.2 [class.conv.fct]). In C there are no
+         * conversion operators; emit '{0}' (C99 §6.7.8/21) which
+         * zero-initializes the struct (null pointer member). */
         if (n->ident.name && n->ident.name->len == 5 &&
             memcmp(n->ident.name->loc, "vNULL", 5) == 0) {
             fputs("{0}", stdout);
@@ -1792,14 +1793,16 @@ static void emit_expr(Node *n) {
                 Token *class_tok = callee_q->qualified.parts[0];
                 Token *method_tok = callee_q->qualified.parts[callee_q->qualified.nparts - 1];
                 if (class_tok && method_tok) {
-                    /* Collect call-arg types for param suffix */
+                    /* SHORTCUT (ours, not the standard): emit a mangled
+                     * class tag + method name + param suffix from CALL-SITE
+                     * arg types. N4659 §16.3 [over.match] says the DECL's
+                     * param types should be used; we approximate because
+                     * sema doesn't resolve ND_QUALIFIED to a declaration.
+                     * TODO(seafront#qual-sema): add ND_QUALIFIED resolution
+                     * in sema so the decl's param types are available. */
                     Type **at = NULL;
                     int na = collect_call_arg_types(n->call.args,
                                                      n->call.nargs, &at);
-                    /* Emit the mangled class tag + method name + param suffix.
-                     * We don't have the formal param types (no resolve_overload)
-                     * so we use the call-arg types as the suffix — this is the
-                     * best we can do without sema resolution of ND_QUALIFIED. */
                     fputs("sf__", stdout);
                     fprintf(stdout, "%.*s__%.*s",
                             class_tok->len, class_tok->loc,
@@ -1944,12 +1947,15 @@ static void emit_expr(Node *n) {
                 }
                 if (!mty && callee->resolved_type) mty = callee->resolved_type;
                 is_method_call = mty && mty->kind == TY_FUNC;
-                /* For template instantiations where the class_region
-                 * exists but the method isn't found (incomplete region
-                 * from a different Type copy), assume method call if
-                 * the class has template args. Template classes never
-                 * have function-pointer data members with names like
-                 * 'address' or 'length'. */
+                /* SHORTCUT (ours, not the standard): for template
+                 * instantiations where the class_region exists but the
+                 * method isn't found (incomplete region from a Type copy
+                 * that wasn't patched), assume method call if the class
+                 * has template args. N4659 §16.5 [over.oper] — subscript,
+                 * call, and named members on class types are always member
+                 * functions, never data members, in gcc's template code.
+                 * TODO(seafront#tmpl-region-patch): ensure ALL Type copies
+                 * get class_region patched so this heuristic isn't needed. */
                 if (!is_method_call && ot->n_template_args > 0)
                     is_method_call = true;
             }
@@ -2018,6 +2024,16 @@ static void emit_expr(Node *n) {
                              * which is invalid C.
                              * For non-template classes, fall through. */
                             if (method_class->n_template_args > 0) {
+                                /* SHORTCUT (ours, not the standard):
+                                 * use CALL-SITE arg types for the param
+                                 * suffix when the decl's types aren't
+                                 * available (class_def NULL on this Type
+                                 * copy). N4659 §16.3 [over.match] says
+                                 * the DECL's param types are the mangle
+                                 * source; this approximation may mismatch
+                                 * if implicit conversions differ.
+                                 * TODO(seafront#tmpl-resolve-full): resolve
+                                 * through the actual instantiated class_def. */
                                 mangle_class_method(method_class,
                                     callee->member.member, at, na);
                                 call_np = na;

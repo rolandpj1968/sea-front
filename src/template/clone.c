@@ -85,10 +85,13 @@ Type *subst_type(Type *ty, SubstMap *map, Arena *arena) {
         Node *tid = ty->template_id_node;
 
         /* Check if any arg would actually change. TY_DEPENDENT is the
-         * canonical marker, but also check non-TY_DEPENDENT args whose
-         * tag matches a SubstMap entry — these are template params that
-         * the parser resolved as opaque types instead of TY_DEPENDENT
-         * (scope visibility issue in partial spec bodies). */
+         * canonical marker (N4659 §13.8.3 [temp.dep.type]). Also check
+         * non-TY_DEPENDENT args whose tag matches a SubstMap entry —
+         * SHORTCUT (ours, not the standard): these are template params
+         * that the parser resolved as opaque types instead of
+         * TY_DEPENDENT due to scope visibility issues in partial spec
+         * bodies. TODO(seafront#dep-scope): fix the parser so template
+         * param scope is always visible. */
         bool needs_subst = false;
         for (int i = 0; i < tid->template_id.nargs; i++) {
             Node *a = tid->template_id.args[i];
@@ -111,11 +114,13 @@ Type *subst_type(Type *ty, SubstMap *map, Arena *arena) {
                 bool should_subst = at && (at->kind == TY_DEPENDENT ||
                     (at->tag && subst_map_lookup(map, at->tag->loc, at->tag->len)));
                 if (should_subst) {
-                    /* Direct SubstMap lookup for non-TY_DEPENDENT types
-                     * (e.g. TY_INT with tag "A"). subst_type only handles
-                     * TY_DEPENDENT and TY_STRUCT injected names; for
-                     * opaque types that the parser mis-resolved, we do
-                     * the lookup here directly. */
+                    /* SHORTCUT (ours, not the standard): direct
+                     * SubstMap lookup for non-TY_DEPENDENT types (e.g.
+                     * TY_INT with tag "A"). subst_type only handles
+                     * TY_DEPENDENT (N4659 §13.8.3 [temp.dep.type]) and
+                     * TY_STRUCT injected names; for opaque types that
+                     * the parser mis-resolved, we do the lookup directly.
+                     * TODO(seafront#dep-scope): same root cause as above. */
                     Type *sub = NULL;
                     if (at->kind != TY_DEPENDENT && at->tag)
                         sub = subst_map_lookup(map, at->tag->loc, at->tag->len);
@@ -279,11 +284,18 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
                 n->qualified.nparts * sizeof(Token *));
             memcpy(c->qualified.parts, n->qualified.parts,
                    n->qualified.nparts * sizeof(Token *));
-            /* Substitute the leading qualifier if it matches a
-             * template parameter (e.g. 'A::release(v)' where A is
-             * the allocator param → 'va_heap::release(v)' after
-             * substitution). Replace the token with the concrete
-             * type's tag so codegen mangles against the right class. */
+            /* SHORTCUT (ours, not the standard): substitute the
+             * leading qualifier token if it matches a SubstMap entry
+             * (e.g. 'A::release(v)' → 'va_heap::release(v)').
+             * N4659 §17.7.1 [temp.inst]/1 says substitution happens
+             * at instantiation, replacing each template parameter
+             * with the corresponding argument. We do this at the
+             * token level because the parser stored ND_QUALIFIED
+             * with the dependent name as a bare Token, not as a
+             * resolvable type reference.
+             * TODO(seafront#qual-dependent): resolve qualified names
+             * through the dependent base's class_region at
+             * instantiation time (two-phase lookup). */
             Token *lead = c->qualified.parts[0];
             if (lead) {
                 Type *sub = subst_map_lookup(map, lead->loc, lead->len);
