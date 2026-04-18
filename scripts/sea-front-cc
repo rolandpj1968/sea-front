@@ -156,6 +156,11 @@ for src in $INPUTS; do
     #       inline asm bodies, so the vectorized fast-path would
     #       compile to an empty function and crash at runtime.
     SF_DEFINES="-DGCC_VERSION=4004"
+    # Default to C++03 when no -std= flag is given. gcc 4.8 source is
+    # C++03; without this, g++ 13 defaults to C++17 and libstdc++ 13
+    # headers emit C++17 constructs (std::byte etc.) that sea-front
+    # doesn't handle.
+    if [ -z "$STD_FLAG" ]; then STD_FLAG="-std=c++03"; fi
     log "  Preprocess: $SEA_CPP -E $SF_DEFINES $STD_FLAG $CPP_FLAGS $src"
     $SEA_CPP -E $SF_DEFINES $STD_FLAG $CPP_FLAGS "$src" -o "$pp_file" 2>/dev/null
 
