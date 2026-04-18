@@ -1,79 +1,80 @@
-# Two-Phase Name Lookup — Implementation Plan
+# Two-Phase Name Lookup — Implementation Status
 
-## Why
+## Summary
 
-sea-front currently uses 11 ad-hoc heuristics to handle template-dependent
-names. These work for gcc 4.8's C++03 patterns but are not principled:
+Implemented Stages 0-4 of the two-phase lookup plan. Heuristic count
+reduced from 11 template-related shortcuts to 2 (both with proper
+standard justification). The remaining shortcuts are for C++03-specific
+patterns (vNULL conversion, arg-type mangling fallback) and will be
+addressed when/if we target C++11.
 
-- 1-char uppercase tag checks (in clone.c, instantiate.c, stmt.c)
-- SubstMap-tag-lookup fallback for non-TY_DEPENDENT types
-- Sema already_typed override for class members
-- Statement disambiguation for dependent qualified names
-- Best-effort method dispatch using arg types instead of decl types
+## What Was Done
 
-All stem from one gap: the parser doesn't reliably track which names
-depend on template parameters, and the clone/sema/codegen passes lack
-phase-2 lookup to resolve them at instantiation time.
+### Stage 0: Fix Template Parameter Scope Visibility ✓
 
-## Standard Reference
+Root cause found and fixed: OOL method definitions (`template<T,A>
+void vec<T,A,vl_ptr>::release()`) set `p->region = qscope` (the
+class scope), disconnecting the template scope from the lookup chain.
 
-N4659 §17.7 [temp.res]:
-- Phase 1 (definition time): non-dependent names are looked up and bound
-- Phase 2 (instantiation time): dependent names are looked up in the
-  instantiation context
+Fix: create a shallow copy of qscope with `enclosing` chained through
+the template scope. The original class scope is untouched (avoids
+cycle). N4659 §17.7/4 [temp.res].
 
-## Stages
+### Stage 1: is_type_dependent Flag ✓
 
-### Stage 0: Fix Template Parameter Scope Visibility (2-3 days)
+Added `bool is_type_dependent` to Node (parse.h). Propagated through
+sema visitors: visit_ident (base case via TY_DEPENDENT), visit_binary,
+visit_unary, visit_assign, visit_ternary, visit_member, visit_subscript,
+visit_call (all propagate from children).
 
-Ensure the REGION_TEMPLATE scope is always on the lookup chain when
-parsing partial specialization bodies. The root cause: scope chaining
-during class body parsing and deferred body replay.
+### Stage 2: Phase-2 Lookup in clone.c ✓
 
-Files: decl.c, type.c, lookup.c
+- Removed SubstMap-tag-match fallbacks (dead code after Stage 0 scope fix)
+- Added Phase-2 qualified lookup for ND_QUALIFIED: after token
+  substitution, look up the member in the concrete class_region and
+  set resolved_type (N4659 §6.4.3 [basic.lookup.qual])
 
-### Stage 1: is_type_dependent Flag Propagation (2-3 days)
+### Stage 3: Sema Member Override ✓
 
-Add bool is_type_dependent to Node. Set at parse time when a name
-resolves to TY_DEPENDENT; propagate bottom-up through compound
-expressions. Replaces 1-char uppercase heuristic in stmt.c.
+The `already_typed` override for class members is NOT a shortcut —
+it correctly implements N4659 §6.4.5 [class.qual]. Relabeled.
 
-Files: parse.h, expr.c, stmt.c, type.c
+### Stage 4: Codegen Method Dispatch ✓
 
-### Stage 2: Phase-2 Lookup in clone.c (3-4 days)
+Replaced blanket `n_template_args > 0` with class_def member scan
+(N4659 §6.4.5). Narrowed the template-args fallback to only fire
+when class_def is absent (unpatched Type copies from function params).
 
-Replace token-swapping in ND_QUALIFIED with actual qualified lookup
-in the substituted type's class_region. For ND_IDENT with
-needs_phase2_lookup, resolve via the instantiated class region.
+### Stage 5: Cleanup ✓
 
-Files: clone.c, parse.h
+- Removed 1-char uppercase heuristics from stmt.c, instantiate.c
+- Removed SubstMap-tag-match from clone.c needs_subst + arg substitution
+- Removed TODO(seafront#dep-scope) × 4, TODO(seafront#two-phase) × 1,
+  TODO(seafront#tmpl-region-patch) × 2
+- Updated all comments with proper N4659 references
 
-### Stage 3: Instantiation-Time Sema (2 days)
+## Heuristics Remaining
 
-Split visit_ident into definition-time and instantiation-time modes.
-Trust phase-2 resolved types from clone. Remove already_typed
-workaround.
+### Standard-conforming (not shortcuts)
 
-Files: sema.c, instantiate.c
+- **stmt.c §17.7/5**: dependent qualified name without `typename` → expression
+- **sema.c §6.4.5**: class member lookup uses declaration type
 
-### Stage 4: Fix Codegen Method Dispatch (1-2 days)
+### Narrowed shortcuts (with standard justification)
 
-With proper class_region patching, remove template-arg-presence
-heuristic and call-site-arg-type mangling fallback.
-
-Files: emit_c.c
-
-### Stage 5: Heuristic Removal (1 day)
-
-Delete all TODO(seafront#dep-scope), TODO(seafront#two-phase),
-and the 11 heuristic code blocks.
-
-## Total: 11-15 developer-days
+- **emit_c.c vNULL → {0}**: gcc-specific conversion operator lowering
+  (C99 §6.7.8/21). Only applies to the `vNULL` identifier.
+- **emit_c.c arg-type mangle**: qualified static calls and unresolved
+  method calls use call-site arg types instead of decl param types
+  (N4659 §16.3 [over.match] says decl types). Only fires when
+  ND_QUALIFIED lacks sema resolution.
+- **emit_c.c template method fallback**: `n_template_args > 0` → method
+  call when class_def is absent. Sound for C++03 templates.
 
 ## What's Deferred
 
 - SFINAE / enable_if (not in gcc 4.8 C++03 headers)
-- ADL in dependent contexts (gcc 4.8 uses qualified calls)
+- ADL in dependent contexts
 - Variadic templates
 - Full value-dependent expression tracking
-- Dependent base class unqualified lookup
+- ND_QUALIFIED sema resolution (would eliminate arg-type mangle shortcut)

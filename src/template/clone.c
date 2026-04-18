@@ -84,16 +84,9 @@ Type *subst_type(Type *ty, SubstMap *map, Arena *arena) {
         ty->template_id_node->kind == ND_TEMPLATE_ID) {
         Node *tid = ty->template_id_node;
 
-        /* N4659 §17.7.1 [temp.inst]/1: at instantiation, every use of
-         * a template parameter is replaced with the corresponding arg.
-         * Check if any template-id arg matches a SubstMap entry —
-         * either by TY_DEPENDENT kind (the canonical marker per
-         * §13.8.3 [temp.dep.type]) or by tag-name match (covers
-         * args that went through an opaque-type parse path but still
-         * represent template parameters).
-         * TODO(seafront#two-phase-stage2): once all template params
-         * reliably parse as TY_DEPENDENT, the tag-match fallback
-         * becomes unnecessary. */
+        /* N4659 §13.8.3 [temp.dep.type]: check if any template-id arg
+         * is dependent. Template params parse as TY_DEPENDENT thanks
+         * to the OOL scope fix (decl.c qscope wrapper). */
         /* N4659 §13.8.3 [temp.dep.type]: check if any template-id arg
          * is dependent. With the OOL scope fix (decl.c qscope→enclosing
          * chain), template params reliably parse as TY_DEPENDENT. */
