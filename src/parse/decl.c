@@ -43,11 +43,12 @@
 
 #include "parse.h"
 
-/* Forward declaration. consume_trailing_qualifiers is a helper of
+/* Forward declaration. consume_trailing_qualifiers returns true if
+ * the trailing qualifier list included 'const'. It is a helper of
  * parse_declarator and lives immediately below it (per the
  * "general above helpers" convention). The forward decl is needed
  * because parse_declarator calls it from within its body. */
-static void consume_trailing_qualifiers(Parser *p);
+static bool consume_trailing_qualifiers(Parser *p);
 
 /*
  * parse_declarator — N4659 §11.3 [dcl.meaning]
@@ -673,7 +674,7 @@ parse_suffixes:
                 return new_var_decl_node(p, ty, name, name);
             }
 
-            consume_trailing_qualifiers(p);
+            bool method_const = consume_trailing_qualifiers(p);
 
             /* C++11 trailing return type: '-> type-id' */
             if (parser_consume(p, TK_ARROW))
@@ -681,6 +682,11 @@ parse_suffixes:
 
             ty = new_func_type(p, ty, (Type **)param_types.data,
                                param_types.len, variadic);
+            /* N4659 §10.1.7.1 [dcl.type.cv]: const/volatile
+             * after the parameter list qualifies the implicit
+             * object parameter (§16.3.1/4). Store on the function
+             * type so mangling can distinguish overloads. */
+            if (method_const) ty->is_const = true;
 
             /* Apply deferred wrappers from a grouped declarator
              * (see the grouped branch — inner '*' binds AFTER outer
@@ -791,10 +797,13 @@ parse_suffixes:
             return new_var_decl_node(p, ty, name, parser_peek(p));
         }
 
-        consume_trailing_qualifiers(p);
+        {
+            bool mc = consume_trailing_qualifiers(p);
 
-        ty = new_func_type(p, ty, (Type **)param_types.data,
-                           param_types.len, variadic);
+            ty = new_func_type(p, ty, (Type **)param_types.data,
+                               param_types.len, variadic);
+            if (mc) ty->is_const = true;
+        }
 
         /* Apply deferred wrappers from a grouped declarator (reverse
          * order — innermost modifier wraps first). */
@@ -894,9 +903,10 @@ parse_suffixes:
  *
  * Terminates: each iteration consumes a qualifier token or breaks.
  */
-static void consume_trailing_qualifiers(Parser *p) {
+static bool consume_trailing_qualifiers(Parser *p) {
+    bool saw_const = false;
     for (;;) {
-        if (parser_consume(p, TK_KW_CONST))    continue;
+        if (parser_consume(p, TK_KW_CONST))    { saw_const = true; continue; }
         if (parser_consume(p, TK_KW_VOLATILE)) continue;
         if (parser_consume(p, TK_KW_NOEXCEPT)) {
             /* noexcept(expr) — N4659 §15.4 [except.spec]. Skip
@@ -958,6 +968,7 @@ static void consume_trailing_qualifiers(Parser *p) {
      * Parse and discard; the return type isn't propagated yet. */
     if (parser_consume(p, TK_ARROW))
         parse_type_name(p);
+    return saw_const;
 }
 
 /*
@@ -1303,6 +1314,7 @@ Node *parse_declaration(Parser *p) {
         func->func.is_constructor = p->pending_is_constructor;
         p->pending_is_constructor = false;
         func->func.is_virtual = (spec.flags & DECL_VIRTUAL) != 0;
+        func->func.is_const_method = decl->var_decl.ty->is_const;
         func->func.storage_flags = spec.flags;
         func->func.body_start_pos = -1;
         func->func.body_end_pos = -1;

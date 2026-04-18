@@ -81,6 +81,12 @@ void mangle_class_tag(Type *class_type);
 void mangle_class_method(Type *class_type, Token *method_name,
                           Type **param_types, int nparams);
 
+/* Like mangle_class_method but appends '_const' when is_const is true.
+ * Distinguishes const from non-const method overloads (N4659 §16.3.1/4). */
+void mangle_class_method_cv(Type *class_type, Token *method_name,
+                             Type **param_types, int nparams,
+                             bool is_const);
+
 /* Constructor. Parameter-type suffix disambiguates overloads:
  *   vec()        → sf__vec__ctor_p_void_pe_
  *   vec(int)     → sf__vec__ctor_p_int_pe_

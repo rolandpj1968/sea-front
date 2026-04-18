@@ -130,6 +130,12 @@ static void emit_namespace_chain(Type *class_type) {
  * the type's C-like name (int, double, struct tag, etc.). */
 static void emit_type_for_mangle(Type *ty) {
     if (!ty) { fputs("unknown", stdout); return; }
+    /* CV-qualifiers — N4659 §10.1.7.1 [dcl.type.cv].
+     * Itanium encodes const as 'K', volatile as 'V'; we use
+     * 'const_' / 'volatile_' prefixes for readability.
+     * E.g. 'const int&' → 'const_int_ref'. */
+    if (ty->is_const)    fputs("const_", stdout);
+    if (ty->is_volatile) fputs("volatile_", stdout);
     switch (ty->kind) {
     case TY_VOID:    fputs("void", stdout); return;
     case TY_BOOL:    fputs("bool", stdout); return;
@@ -227,6 +233,19 @@ void mangle_class_method(Type *class_type, Token *method_name,
     emit_class_open(class_type);
     g_mangler->append_member(g_mangler, method_name);
     mangle_param_suffix(param_types, nparams);
+    emit_class_close();
+}
+
+void mangle_class_method_cv(Type *class_type, Token *method_name,
+                             Type **param_types, int nparams,
+                             bool is_const) {
+    emit_class_open(class_type);
+    g_mangler->append_member(g_mangler, method_name);
+    mangle_param_suffix(param_types, nparams);
+    /* N4659 §10.1.7.1 [dcl.type.cv] / §16.3.1/4: const qualifier
+     * on the implicit object parameter distinguishes overloads
+     * like operator[](int) vs operator[](int) const. */
+    if (is_const) fputs("_const", stdout);
     emit_class_close();
 }
 

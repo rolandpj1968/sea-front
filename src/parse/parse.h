@@ -549,6 +549,11 @@ struct Node {
              * Codegen emits a vtable for the class, places a vptr
              * field at offset 0, and dispatches calls through it. */
             bool is_virtual;
+            /* N4659 §10.1.7.1 [dcl.type.cv] / §16.3.1/4: 'const'
+             * after the parameter list qualifies the implicit object
+             * parameter. Used by mangling to distinguish const from
+             * non-const overloads (e.g. operator[] const). */
+            bool is_const_method;
             /* Deferred body parsing — N4659 §6.4.7/1 [class.mem]/6.
              * For an inline member function defined inside a class
              * body, the function body (and ctor-initializer list) are

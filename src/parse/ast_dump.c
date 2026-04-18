@@ -83,6 +83,14 @@ static void dump_type(Type *ty) {
     case TY_STRUCT:
         printf("struct");
         if (ty->tag) printf(" %.*s", ty->tag->len, ty->tag->loc);
+        if (ty->n_template_args > 0) {
+            printf("<");
+            for (int i = 0; i < ty->n_template_args; i++) {
+                if (i > 0) printf(",");
+                dump_type(ty->template_args[i]);
+            }
+            printf(">");
+        }
         return;
     case TY_UNION:
         printf("union");
@@ -377,6 +385,19 @@ static void dump(Node *node, int depth) {
     case ND_FUNC_DEF:
     case ND_FUNC_DECL:
         printf("(%s ", node->kind == ND_FUNC_DEF ? "func-def" : "func-decl");
+        /* Storage/qualifier flags — show only when set.
+         * Use storage_flags uniformly (§10.1 [dcl.spec]). */
+        {
+            int sf = node->func.storage_flags;
+            if (sf & DECL_STATIC)    printf("static ");
+            if (sf & DECL_INLINE)    printf("inline ");
+            if (sf & DECL_EXTERN)    printf("extern ");
+            if (sf & DECL_VIRTUAL)   printf("virtual ");
+            if (sf & DECL_CONSTEXPR) printf("constexpr ");
+        }
+        if (node->func.is_constructor)  printf("ctor ");
+        if (node->func.is_destructor)   printf("dtor ");
+        if (node->func.is_const_method) printf("const ");
         dump_type(node->func.ret_ty);
         if (node->func.name)
             printf(" \"%.*s\"", node->func.name->len, node->func.name->loc);

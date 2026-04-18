@@ -22,7 +22,7 @@
       (return (* (call (. (ident "m") "operator"))))))
   (template (params (param ? "T"))
     (class-def "A"
-      (func-def void "A" (params (param (ref const struct A)))
+      (func-def ctor void "A" (params (param (ref const struct A)))
         (block))
       (template (params (param ? "U"))
         (friend (func-def bool "operator" (params (param (ref const struct A)) (param (ref const struct A)))
@@ -40,7 +40,7 @@
         (for (var-decl unsigned-long "i" (num 0)) (< (ident "i") (ident "N")) (++ (ident "i"))
           (call (ident "mswap") ([] (ident "a") (ident "i")) ([] (ident "b") (ident "i")))))))
   (class-def "Pair"
-    (func-def void "Pair" (params (param (ptr int)) (param int))
+    (func-def ctor void "Pair" (params (param (ptr int)) (param int))
       (block)))
   (func-def void "direct_init_two_args" (params (param (ptr int) "p"))
     (block

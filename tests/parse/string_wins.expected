@@ -1,9 +1,9 @@
 (translation-unit
   (template (params (param ? "_Ret") (param ? "_Tp"))
     (class-def "mem_fun"
-      (func-def void "mem_fun" (params (param (ptr (func-type dependent _Ret ())) "pf"))
+      (func-def ctor void "mem_fun" (params (param (ptr (func-type dependent _Ret ())) "pf"))
         (block))
-      (func-def dependent _Ret "operator" (params (param (ptr dependent _Tp) "p"))
+      (func-def const dependent _Ret "operator" (params (param (ptr dependent _Tp) "p"))
         (block
           (return (call (->* (ident "p") (ident "f"))))))
       (var-decl (ptr (func-type dependent _Ret ())) "f")))
@@ -26,7 +26,7 @@
       (block
         (class-def "Guard"
           (var-decl (ptr int) "y")
-          (func-def void "Guard" (params (param (ptr int) "o"))
+          (func-def ctor void "Guard" (params (param (ptr int) "o"))
             (block
               (cast void (ident "o")))))
         (var-decl struct Guard "g" (ctor-args (num 0)))
@@ -39,6 +39,6 @@
   (template (params (param ? "T"))
     (var-decl struct Vec))
   (template (params)
-    (var-decl struct Vec))
+    (var-decl struct Vec<int>))
   (template (params)
-    (var-decl struct Vec)))
+    (var-decl struct Vec<char>)))

@@ -1690,7 +1690,7 @@ static void emit_expr(Node *n) {
                 int np = resolve_operator_overload(lhs_ty, suffix, args, 1, &pty);
                 mangle_class_tag(lhs_ty);
                 fputs(suffix, stdout);
-                if (np >= 0) emit_local_param_suffix(pty, np);
+                if (np >= 0) mangle_param_suffix(pty, np);
                 fputs("(&", stdout);
                 emit_expr(n->binary.lhs);
                 fputs(", ", stdout);
@@ -1724,7 +1724,7 @@ static void emit_expr(Node *n) {
                 int np = resolve_operator_overload(lhs_ty, suffix, args, 1, &pty);
                 mangle_class_tag(lhs_ty);
                 fputs(suffix, stdout);
-                if (np >= 0) emit_local_param_suffix(pty, np);
+                if (np >= 0) mangle_param_suffix(pty, np);
                 fputs("(&", stdout);
                 emit_expr(n->binary.lhs);
                 fputs(", ", stdout);
@@ -2366,7 +2366,7 @@ static void emit_expr(Node *n) {
             Type **pty = NULL;
             int np = resolve_operator_overload(base_ty, "__subscript",
                                                 args, 1, &pty);
-            if (np >= 0) emit_local_param_suffix(pty, np);
+            if (np >= 0) mangle_param_suffix(pty, np);
             fputs("(&", stdout);
             emit_expr(n->subscript.base);
             fputs(", ", stdout);
@@ -3821,11 +3821,13 @@ static const char *operator_suffix_for_name(Token *name) {
     return "__operator";
 }
 
-static void emit_operator_method_name(Type *class_type, Token *name,
-                                       Type **param_types, int nparams) {
+static void emit_operator_method_name_cv(Type *class_type, Token *name,
+                                          Type **param_types, int nparams,
+                                          bool is_const) {
     mangle_class_tag(class_type);
     fputs(operator_suffix_for_name(name), stdout);
-    emit_local_param_suffix(param_types, nparams);
+    mangle_param_suffix(param_types, nparams);
+    if (is_const) fputs("_const", stdout);
 }
 
 /*
@@ -3865,15 +3867,19 @@ static void emit_method_signature(Node *func, Type *class_type) {
     } else if (is_operator_name(func->func.name)) {
         Type **pty = NULL;
         int np = collect_func_param_types(func, &pty);
-        emit_operator_method_name(class_type, func->func.name, pty, np);
+        emit_operator_method_name_cv(class_type, func->func.name, pty, np,
+                                      func->func.is_const_method);
     } else {
         Type **pty = NULL;
         int np = collect_func_param_types(func, &pty);
-        mangle_class_method(class_type, func->func.name, pty, np);
+        mangle_class_method_cv(class_type, func->func.name, pty, np,
+                                func->func.is_const_method);
     }
     fputc('(', stdout);
     bool is_static = (func->func.storage_flags & DECL_STATIC) != 0;
     if (!is_static) {
+        /* N4659 §10.1.7.1: const method → const this */
+        if (func->func.is_const_method) fputs("const ", stdout);
         fputs("struct ", stdout);
         mangle_class_tag(class_type);
         fputs(" *this", stdout);
@@ -4103,65 +4109,8 @@ static void emit_class_def(Node *n) {
             if (empty) continue;
             if (!class_type || !class_type->has_dtor) continue;
         }
-        /* Dedup const/non-const overloads that produce identical
-         * mangled names. In C there's no const method dispatch, so
-         * the const and non-const versions collide. We check name +
-         * nparams + all param type kinds. N4659 §16.2/3 [over.load].
-         * For operators, also compare the operator suffix.
-         * Skip destructors — they share the class name with ctors
-         * but mangle differently (dtor_body vs ctor). */
-        {
-            bool m_is_dtor = (m->kind == ND_FUNC_DEF && m->func.is_destructor) ||
-                (m->kind == ND_VAR_DECL && m->var_decl.is_destructor);
-            Token *mn = NULL; int mnp = 0; Type **mpt = NULL;
-            if (m->kind == ND_FUNC_DEF) {
-                mn = m->func.name; mnp = m->func.nparams;
-            } else if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
-                       m->var_decl.ty->kind == TY_FUNC) {
-                mn = m->var_decl.name; mnp = m->var_decl.ty->nparams;
-                mpt = m->var_decl.ty->params;
-            }
-            if (mn && !m_is_dtor) {
-                collect_func_param_types(m, &mpt);
-                bool mn_is_op = mn->kind == TK_KW_OPERATOR;
-                const char *mn_suffix = mn_is_op ? operator_suffix_for_name(mn) : NULL;
-                /* Copy param types to avoid static-pool aliasing */
-                Type *mpt_copy[64];
-                for (int k = 0; k < mnp && k < 64; k++) mpt_copy[k] = mpt ? mpt[k] : NULL;
-                bool dup = false;
-                for (int j = 0; j < i; j++) {
-                    Node *prev = n->class_def.members[j];
-                    if (!prev) continue;
-                    Token *pn = NULL; int pnp = 0;
-                    if (prev->kind == ND_FUNC_DEF) {
-                        pn = prev->func.name; pnp = prev->func.nparams;
-                    } else if (prev->kind == ND_VAR_DECL && prev->var_decl.ty &&
-                               prev->var_decl.ty->kind == TY_FUNC) {
-                        pn = prev->var_decl.name; pnp = prev->var_decl.ty->nparams;
-                    }
-                    if (!pn || pn->len != mn->len) continue;
-                    if (memcmp(pn->loc, mn->loc, mn->len) != 0) continue;
-                    if (pnp != mnp) continue;
-                    if (mn_is_op) {
-                        const char *ps = operator_suffix_for_name(pn);
-                        if (!ps || !mn_suffix || strcmp(ps, mn_suffix) != 0) continue;
-                    }
-                    /* Compare param type kinds to avoid false dedup of
-                     * overloads like T(int) vs T(const T&). */
-                    Type **ppt = NULL;
-                    collect_func_param_types(prev, &ppt);
-                    bool kinds_match = true;
-                    for (int k = 0; k < mnp && k < 64; k++) {
-                        int mk = mpt_copy[k] ? (int)mpt_copy[k]->kind : -1;
-                        int pk = ppt && ppt[k] ? (int)ppt[k]->kind : -1;
-                        if (mk != pk) { kinds_match = false; break; }
-                    }
-                    if (!kinds_match) continue;
-                    dup = true; break;
-                }
-                if (dup) continue;
-            }
-        }
+        /* Const/non-const overloads now get distinct mangled names
+         * (via _const suffix) — no dedup needed. N4659 §16.2/3. */
         if (m->kind == ND_FUNC_DEF && class_type) {
             emit_source_comment(m->tok);
             emit_method_signature(m, class_type);
@@ -4199,11 +4148,15 @@ static void emit_class_def(Node *n) {
             } else if (is_operator_name(m->var_decl.name)) {
                 Type **pty = NULL;
                 int np = collect_func_param_types(m, &pty);
-                emit_operator_method_name(class_type, m->var_decl.name, pty, np);
+                bool mc = m->var_decl.ty && m->var_decl.ty->is_const;
+                emit_operator_method_name_cv(class_type, m->var_decl.name,
+                                              pty, np, mc);
             } else {
                 Type **pty = NULL;
                 int np = collect_func_param_types(m, &pty);
-                mangle_class_method(class_type, m->var_decl.name, pty, np);
+                bool mc = m->var_decl.ty && m->var_decl.ty->is_const;
+                mangle_class_method_cv(class_type, m->var_decl.name,
+                                        pty, np, mc);
             }
             /* Static methods: no 'this' parameter.
              * N4659 §10.1.1/6 [dcl.stc]. */
@@ -4401,44 +4354,8 @@ methods_phase:;
                          body->block.nstmts == 0;
             if (empty || !class_type->has_dtor) continue;
         }
-        /* Skip const/non-const overloads — same dedup as forward decls.
-         * Exclude destructors (same name as ctors but different mangle). */
-        if (m->func.is_destructor) goto emit_method;
-        Token *mn = m->func.name;
-        if (mn) {
-            Type **mpt = NULL;
-            collect_func_param_types(m, &mpt);
-            Type *mpt_copy[64];
-            for (int k = 0; k < m->func.nparams && k < 64; k++)
-                mpt_copy[k] = mpt ? mpt[k] : NULL;
-            bool mn_is_op = mn->kind == TK_KW_OPERATOR;
-            const char *mn_suffix = mn_is_op ? operator_suffix_for_name(mn) : NULL;
-            bool dup = false;
-            for (int j = 0; j < i; j++) {
-                Node *prev = n->class_def.members[j];
-                if (!prev || prev->kind != ND_FUNC_DEF) continue;
-                Token *pn = prev->func.name;
-                if (!pn || pn->len != mn->len) continue;
-                if (memcmp(pn->loc, mn->loc, mn->len) != 0) continue;
-                if (prev->func.nparams != m->func.nparams) continue;
-                if (mn_is_op) {
-                    const char *ps = operator_suffix_for_name(pn);
-                    if (!ps || !mn_suffix || strcmp(ps, mn_suffix) != 0) continue;
-                }
-                Type **ppt = NULL;
-                collect_func_param_types(prev, &ppt);
-                bool kinds_match = true;
-                for (int k = 0; k < m->func.nparams && k < 64; k++) {
-                    int mk = mpt_copy[k] ? (int)mpt_copy[k]->kind : -1;
-                    int pk = ppt && ppt[k] ? (int)ppt[k]->kind : -1;
-                    if (mk != pk) { kinds_match = false; break; }
-                }
-                if (!kinds_match) continue;
-                dup = true; break;
-            }
-            if (dup) continue;
-        }
-    emit_method:
+        /* Const/non-const overloads now get distinct mangled names
+         * (via _const suffix) — no dedup needed. N4659 §16.2/3. */
         emit_method_as_free_fn(m, class_type);
     }
     g_current_class_def = saved_cdef;
@@ -4568,39 +4485,8 @@ static void emit_top_level(Node *n) {
          * walk the class members in declaration order — same
          * machinery the in-class method-emission loop already uses. */
         if (n->func.class_type && n->func.class_type->tag) {
-            /* Dedup OOL method definitions: const/non-const overloads
-             * of the same operator (e.g. operator[] const vs non-const)
-             * produce the same mangled name. Skip destructors — they
-             * share the class tag name with ctors but mangle differently. */
-            if (!n->func.is_destructor) {
-                enum { OOL_DEDUP_CAP = 512 };
-                static Node *ool_seen[OOL_DEDUP_CAP];
-                static int ool_nseen = 0;
-                /* Build a pseudo-key: class tag + method name + nparams */
-                bool dup = false;
-                for (int oi = 0; oi < ool_nseen; oi++) {
-                    Node *prev = ool_seen[oi];
-                    if (prev->func.nparams != n->func.nparams) continue;
-                    if (!prev->func.class_type || !n->func.class_type) continue;
-                    Token *pt = prev->func.class_type->tag;
-                    Token *nt = n->func.class_type->tag;
-                    if (!pt || !nt || pt->len != nt->len ||
-                        memcmp(pt->loc, nt->loc, pt->len) != 0) continue;
-                    Token *pn = prev->func.name;
-                    Token *nn = n->func.name;
-                    if (!pn || !nn || pn->len != nn->len ||
-                        memcmp(pn->loc, nn->loc, pn->len) != 0) continue;
-                    /* Same operator suffix? */
-                    if (pn->kind == TK_KW_OPERATOR && nn->kind == TK_KW_OPERATOR) {
-                        const char *ps = operator_suffix_for_name(pn);
-                        const char *ns = operator_suffix_for_name(nn);
-                        if (ps && ns && strcmp(ps, ns) != 0) continue;
-                    }
-                    dup = true; break;
-                }
-                if (dup) return;
-                if (ool_nseen < OOL_DEDUP_CAP) ool_seen[ool_nseen++] = n;
-            }
+            /* Const/non-const overloads now get distinct mangled names
+             * (via _const suffix) — no dedup needed. N4659 §16.2/3. */
             Node *saved = g_current_class_def;
             if (n->func.is_constructor && n->func.class_type->class_def)
                 g_current_class_def = n->func.class_type->class_def;
