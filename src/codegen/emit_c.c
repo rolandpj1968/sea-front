@@ -3118,26 +3118,58 @@ static void emit_stmt(Node *n) {
          * user args. */
         if (n->var_decl.has_ctor_init && n->var_decl.ty &&
             n->var_decl.ty->kind == TY_STRUCT && n->var_decl.name) {
-            emit_indent();
-            {
-                Type **at = NULL;
-                int na = collect_call_arg_types(n->var_decl.ctor_args,
-                                                 n->var_decl.ctor_nargs, &at);
-                Type **pty = NULL;
-                int np = resolve_overload(n->var_decl.ty, NULL, true,
-                                           at, na, &pty);
-                if (np < 0)
-                    die_no_overload(n->var_decl.ty, NULL, na,
-                                     "direct-init ctor call");
-                mangle_class_ctor(n->var_decl.ty, pty, np);
-                fprintf(stdout, "(&%.*s",
+            /* N4659 §15.1/5 [class.copy.ctor]: copy construction.
+             * 'Foo x(other)' where 'other' is the same struct type
+             * (or deref of this) → emit as C struct assignment instead
+             * of a ctor call. The implicit copy ctor is always available
+             * in C++03 and is equivalent to memberwise copy. */
+            bool is_copy = false;
+            if (n->var_decl.ctor_nargs == 1) {
+                Node *arg0 = n->var_decl.ctor_args[0];
+                Type *arg_ty = arg0 ? arg0->resolved_type : NULL;
+                /* *this: TY_STRUCT matching the class */
+                if (arg_ty && arg_ty->kind == TY_STRUCT && n->var_decl.ty->tag &&
+                    arg_ty->tag && arg_ty->tag->len == n->var_decl.ty->tag->len &&
+                    memcmp(arg_ty->tag->loc, n->var_decl.ty->tag->loc,
+                           arg_ty->tag->len) == 0)
+                    is_copy = true;
+                /* const Foo& arg: TY_REF(TY_STRUCT) */
+                if (arg_ty && (arg_ty->kind == TY_REF || arg_ty->kind == TY_RVALREF) &&
+                    arg_ty->base && arg_ty->base->kind == TY_STRUCT &&
+                    n->var_decl.ty->tag && arg_ty->base->tag &&
+                    arg_ty->base->tag->len == n->var_decl.ty->tag->len &&
+                    memcmp(arg_ty->base->tag->loc, n->var_decl.ty->tag->loc,
+                           arg_ty->base->tag->len) == 0)
+                    is_copy = true;
+            }
+            if (is_copy) {
+                emit_indent();
+                fprintf(stdout, "%.*s = ",
                         n->var_decl.name->len, n->var_decl.name->loc);
-                for (int i = 0; i < n->var_decl.ctor_nargs; i++) {
-                    fputs(", ", stdout);
-                    emit_arg_for_param(n->var_decl.ctor_args[i],
-                                        i < np ? pty[i] : NULL);
+                emit_expr(n->var_decl.ctor_args[0]);
+                fputs(";\n", stdout);
+            } else {
+                emit_indent();
+                {
+                    Type **at = NULL;
+                    int na = collect_call_arg_types(n->var_decl.ctor_args,
+                                                     n->var_decl.ctor_nargs, &at);
+                    Type **pty = NULL;
+                    int np = resolve_overload(n->var_decl.ty, NULL, true,
+                                               at, na, &pty);
+                    if (np < 0)
+                        die_no_overload(n->var_decl.ty, NULL, na,
+                                         "direct-init ctor call");
+                    mangle_class_ctor(n->var_decl.ty, pty, np);
+                    fprintf(stdout, "(&%.*s",
+                            n->var_decl.name->len, n->var_decl.name->loc);
+                    for (int i = 0; i < n->var_decl.ctor_nargs; i++) {
+                        fputs(", ", stdout);
+                        emit_arg_for_param(n->var_decl.ctor_args[i],
+                                            i < np ? pty[i] : NULL);
+                    }
+                    fputs(");\n", stdout);
                 }
-                fputs(");\n", stdout);
             }
         }
         /* Default-init 'Foo a;' (no init, no parens) calls the
