@@ -4442,6 +4442,39 @@ static void emit_top_level(Node *n) {
          * walk the class members in declaration order — same
          * machinery the in-class method-emission loop already uses. */
         if (n->func.class_type && n->func.class_type->tag) {
+            /* Dedup OOL method definitions: const/non-const overloads
+             * of the same operator (e.g. operator[] const vs non-const)
+             * produce the same mangled name. Skip destructors — they
+             * share the class tag name with ctors but mangle differently. */
+            if (!n->func.is_destructor) {
+                enum { OOL_DEDUP_CAP = 512 };
+                static Node *ool_seen[OOL_DEDUP_CAP];
+                static int ool_nseen = 0;
+                /* Build a pseudo-key: class tag + method name + nparams */
+                bool dup = false;
+                for (int oi = 0; oi < ool_nseen; oi++) {
+                    Node *prev = ool_seen[oi];
+                    if (prev->func.nparams != n->func.nparams) continue;
+                    if (!prev->func.class_type || !n->func.class_type) continue;
+                    Token *pt = prev->func.class_type->tag;
+                    Token *nt = n->func.class_type->tag;
+                    if (!pt || !nt || pt->len != nt->len ||
+                        memcmp(pt->loc, nt->loc, pt->len) != 0) continue;
+                    Token *pn = prev->func.name;
+                    Token *nn = n->func.name;
+                    if (!pn || !nn || pn->len != nn->len ||
+                        memcmp(pn->loc, nn->loc, pn->len) != 0) continue;
+                    /* Same operator suffix? */
+                    if (pn->kind == TK_KW_OPERATOR && nn->kind == TK_KW_OPERATOR) {
+                        const char *ps = operator_suffix_for_name(pn);
+                        const char *ns = operator_suffix_for_name(nn);
+                        if (ps && ns && strcmp(ps, ns) != 0) continue;
+                    }
+                    dup = true; break;
+                }
+                if (dup) return;
+                if (ool_nseen < OOL_DEDUP_CAP) ool_seen[ool_nseen++] = n;
+            }
             Node *saved = g_current_class_def;
             if (n->func.is_constructor && n->func.class_type->class_def)
                 g_current_class_def = n->func.class_type->class_def;
