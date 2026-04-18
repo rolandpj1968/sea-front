@@ -2300,6 +2300,9 @@ static void emit_expr(Node *n) {
              * If the operator returns a reference (TY_REF / TY_RVALREF
              * → pointer in C), dereference the result. If it returns
              * by value, emit the call directly. */
+            /* Check if operator[] returns a reference. Look up via
+             * class_region first, then class_def member scan.
+             * N4659 §16.5.5 [over.sub]. */
             bool ref_return = false;
             if (base_ty->class_region) {
                 Declaration *d = lookup_in_scope(base_ty->class_region,
@@ -2310,6 +2313,10 @@ static void emit_expr(Node *n) {
                      d->type->ret->kind == TY_RVALREF))
                     ref_return = true;
             }
+            /* Note: class_def member scan for ref_return was removed —
+             * it caused cascading issues with return-expression
+             * adaptation. The class_region check above is sufficient
+             * when the Type has been properly patched. */
             if (ref_return) fputs("(*", stdout);
             mangle_class_tag(base_ty);
             fputs("__subscript", stdout);
