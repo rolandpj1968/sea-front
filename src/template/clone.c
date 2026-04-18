@@ -94,13 +94,14 @@ Type *subst_type(Type *ty, SubstMap *map, Arena *arena) {
          * TODO(seafront#two-phase-stage2): once all template params
          * reliably parse as TY_DEPENDENT, the tag-match fallback
          * becomes unnecessary. */
+        /* N4659 §13.8.3 [temp.dep.type]: check if any template-id arg
+         * is dependent. With the OOL scope fix (decl.c qscope→enclosing
+         * chain), template params reliably parse as TY_DEPENDENT. */
         bool needs_subst = false;
         for (int i = 0; i < tid->template_id.nargs; i++) {
             Node *a = tid->template_id.args[i];
             Type *at = (a && a->kind == ND_VAR_DECL) ? a->var_decl.ty : NULL;
             if (at && at->kind == TY_DEPENDENT) { needs_subst = true; break; }
-            if (at && at->tag && subst_map_lookup(map, at->tag->loc, at->tag->len))
-                { needs_subst = true; break; }
         }
 
         if (needs_subst) {
@@ -113,18 +114,8 @@ Type *subst_type(Type *ty, SubstMap *map, Arena *arena) {
             for (int i = 0; i < tid->template_id.nargs; i++) {
                 Node *a = tid->template_id.args[i];
                 Type *at = (a && a->kind == ND_VAR_DECL) ? a->var_decl.ty : NULL;
-                bool should_subst = at && (at->kind == TY_DEPENDENT ||
-                    (at->tag && subst_map_lookup(map, at->tag->loc, at->tag->len)));
-                if (should_subst) {
-                    /* Direct SubstMap lookup for non-TY_DEPENDENT args
-                     * whose tag matches a template parameter name.
-                     * subst_type handles TY_DEPENDENT canonically;
-                     * the direct lookup covers opaque-parse cases.
-                     * TODO(seafront#two-phase-stage2): same as above. */
-                    Type *sub = NULL;
-                    if (at->kind != TY_DEPENDENT && at->tag)
-                        sub = subst_map_lookup(map, at->tag->loc, at->tag->len);
-                    if (!sub) sub = subst_type(at, map, arena);
+                if (at && at->kind == TY_DEPENDENT) {
+                    Type *sub = subst_type(at, map, arena);
                     Node *ac = arena_alloc(arena, sizeof(Node));
                     *ac = *a;
                     ac->var_decl.ty = sub;
@@ -284,18 +275,32 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
                 n->qualified.nparts * sizeof(Token *));
             memcpy(c->qualified.parts, n->qualified.parts,
                    n->qualified.nparts * sizeof(Token *));
-            /* N4659 §17.7.1 [temp.inst]/1: at instantiation, replace
-             * each template parameter with its argument. For
-             * qualified names like 'A::release(v)', substitute the
-             * leading qualifier token so 'A' → 'va_heap'.
-             * This is token-level substitution; a full implementation
-             * would do qualified lookup in the concrete class_region.
-             * TODO(seafront#two-phase-stage2): replace token swap with
-             * real qualified lookup per docs/two-phase-lookup.md. */
+            /* N4659 §17.7.1 [temp.inst]/1 — Phase 2 qualified lookup:
+             * substitute the leading qualifier via SubstMap, then
+             * attempt qualified lookup in the concrete class_region
+             * to resolve the member and set resolved_type. If the
+             * class_region doesn't have the member (e.g. it's a
+             * member template), fall back to token-level swap. */
             Token *lead = c->qualified.parts[0];
             if (lead) {
                 Type *sub = subst_map_lookup(map, lead->loc, lead->len);
-                if (sub && sub->tag) c->qualified.parts[0] = sub->tag;
+                if (sub) {
+                    /* Replace the leading token with the concrete type's tag */
+                    if (sub->tag) c->qualified.parts[0] = sub->tag;
+                    /* Phase 2: look up the member in the concrete class.
+                     * N4659 §6.4.3 [basic.lookup.qual] — qualified name
+                     * lookup in the named class. */
+                    if (sub->class_region && c->qualified.nparts >= 2) {
+                        Token *member = c->qualified.parts[c->qualified.nparts - 1];
+                        if (member) {
+                            Declaration *md = lookup_in_scope(
+                                sub->class_region, member->loc, member->len);
+                            if (md && md->type) {
+                                c->resolved_type = md->type;
+                            }
+                        }
+                    }
+                }
             }
         }
         break;
