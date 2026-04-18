@@ -1344,8 +1344,35 @@ Node *parse_declaration(Parser *p) {
             /* Tag this function definition as a method of the class
              * the qualifier resolved to, so codegen can mangle the
              * name and inject a 'this' parameter. */
-            if (qscope->kind == REGION_CLASS && qscope->owner_type)
+            if (qscope->kind == REGION_CLASS && qscope->owner_type) {
                 func->func.class_type = qscope->owner_type;
+                /* Propagate 'static' from the in-class declaration to
+                 * the OOL definition. C++ puts 'static' only on the
+                 * declaration (N4659 §10.1.1/6 [dcl.stc]); the OOL
+                 * definition doesn't repeat it. Look up the method
+                 * in the class scope and copy storage_flags. */
+                if (func->func.name) {
+                    Declaration *cd = lookup_in_scope(qscope,
+                        func->func.name->loc, func->func.name->len);
+                    if (cd && cd->type && cd->type->kind == TY_FUNC) {
+                        /* Find the matching ND_VAR_DECL in the class_def */
+                        Type *oty = qscope->owner_type;
+                        if (oty && oty->class_def) {
+                            Node *cdef = oty->class_def;
+                            for (int mi = 0; mi < cdef->class_def.nmembers; mi++) {
+                                Node *mm = cdef->class_def.members[mi];
+                                if (!mm || mm->kind != ND_VAR_DECL) continue;
+                                if (!mm->var_decl.name) continue;
+                                if (mm->var_decl.name->len != func->func.name->len) continue;
+                                if (memcmp(mm->var_decl.name->loc, func->func.name->loc,
+                                           func->func.name->len) != 0) continue;
+                                func->func.storage_flags |= (mm->var_decl.storage_flags & DECL_STATIC);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
             /* Preserve the qualifier template-id on the func so the
              * template instantiation pass can bind OOL methods to the
              * matching specialization. */

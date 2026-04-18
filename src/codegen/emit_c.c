@@ -1793,21 +1793,30 @@ static void emit_expr(Node *n) {
                 Token *class_tok = callee_q->qualified.parts[0];
                 Token *method_tok = callee_q->qualified.parts[callee_q->qualified.nparts - 1];
                 if (class_tok && method_tok) {
-                    /* SHORTCUT (ours, not the standard): emit a mangled
-                     * class tag + method name + param suffix from CALL-SITE
-                     * arg types. N4659 §16.3 [over.match] says the DECL's
-                     * param types should be used; we approximate because
-                     * sema doesn't resolve ND_QUALIFIED to a declaration.
-                     * TODO(seafront#qual-sema): add ND_QUALIFIED resolution
-                     * in sema so the decl's param types are available. */
-                    Type **at = NULL;
-                    int na = collect_call_arg_types(n->call.args,
-                                                     n->call.nargs, &at);
-                    fputs("sf__", stdout);
-                    fprintf(stdout, "%.*s__%.*s",
-                            class_tok->len, class_tok->loc,
-                            method_tok->len, method_tok->loc);
-                    emit_local_param_suffix(at, na);
+                    /* N4659 §16.3 [over.match]: use the DECL's param
+                     * types for mangling. If the Phase-2 qualified
+                     * lookup (clone.c) resolved the method, use its
+                     * function type's params. Otherwise fall back to
+                     * call-site arg types. */
+                    Type *callee_ft = callee_q->resolved_type;
+                    if (callee_ft && callee_ft->kind == TY_FUNC &&
+                        callee_ft->nparams > 0) {
+                        fputs("sf__", stdout);
+                        fprintf(stdout, "%.*s__%.*s",
+                                class_tok->len, class_tok->loc,
+                                method_tok->len, method_tok->loc);
+                        emit_local_param_suffix(callee_ft->params,
+                                                 callee_ft->nparams);
+                    } else {
+                        Type **at = NULL;
+                        int na = collect_call_arg_types(n->call.args,
+                                                         n->call.nargs, &at);
+                        fputs("sf__", stdout);
+                        fprintf(stdout, "%.*s__%.*s",
+                                class_tok->len, class_tok->loc,
+                                method_tok->len, method_tok->loc);
+                        emit_local_param_suffix(at, na);
+                    }
                     fputc('(', stdout);
                     for (int i = 0; i < n->call.nargs; i++) {
                         if (i > 0) fputs(", ", stdout);
@@ -4148,14 +4157,23 @@ static void emit_class_def(Node *n) {
                 int np = collect_func_param_types(m, &pty);
                 mangle_class_method(class_type, m->var_decl.name, pty, np);
             }
-            fputs("(struct ", stdout);
-            mangle_class_tag(class_type);
-            fputs(" *this", stdout);
-            for (int k = 0; k < fty->nparams; k++) {
-                fputs(", ", stdout);
-                emit_type(fty->params[k]);
+            /* Static methods: no 'this' parameter.
+             * N4659 §10.1.1/6 [dcl.stc]. */
+            {
+                bool m_is_static = (m->var_decl.storage_flags & DECL_STATIC) != 0;
+                fputc('(', stdout);
+                if (!m_is_static) {
+                    fputs("struct ", stdout);
+                    mangle_class_tag(class_type);
+                    fputs(" *this", stdout);
+                }
+                for (int k = 0; k < fty->nparams; k++) {
+                    if (k > 0 || !m_is_static) fputs(", ", stdout);
+                    emit_type(fty->params[k]);
+                }
+                if (m_is_static && fty->nparams == 0) fputs("void", stdout);
+                fputs(");\n", stdout);
             }
-            fputs(");\n", stdout);
         }
     }
 
