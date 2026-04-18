@@ -1947,16 +1947,36 @@ static void emit_expr(Node *n) {
                 }
                 if (!mty && callee->resolved_type) mty = callee->resolved_type;
                 is_method_call = mty && mty->kind == TY_FUNC;
-                /* SHORTCUT (ours, not the standard): for template
-                 * instantiations where the class_region exists but the
-                 * method isn't found (incomplete region from a Type copy
-                 * that wasn't patched), assume method call if the class
-                 * has template args. N4659 §16.5 [over.oper] — subscript,
-                 * call, and named members on class types are always member
-                 * functions, never data members, in gcc's template code.
-                 * TODO(seafront#tmpl-region-patch): ensure ALL Type copies
-                 * get class_region patched so this heuristic isn't needed. */
-                if (!is_method_call && ot->n_template_args > 0)
+                /* If the method wasn't found via class_region, try
+                 * a direct member scan through class_def. This covers
+                 * Type copies where class_region was patched but the
+                 * member wasn't found (e.g. different region).
+                 * N4659 §6.4.5 [class.qual]. */
+                if (!is_method_call && ot->class_def) {
+                    Token *mn = callee->member.member;
+                    Node *cd = ot->class_def;
+                    for (int ci = 0; ci < cd->class_def.nmembers && !is_method_call; ci++) {
+                        Node *cm = cd->class_def.members[ci];
+                        if (!cm) continue;
+                        Token *cmn = NULL;
+                        if (cm->kind == ND_FUNC_DEF) cmn = cm->func.name;
+                        else if (cm->kind == ND_VAR_DECL && cm->var_decl.ty &&
+                                 cm->var_decl.ty->kind == TY_FUNC)
+                            cmn = cm->var_decl.name;
+                        if (cmn && mn && cmn->len == mn->len &&
+                            memcmp(cmn->loc, mn->loc, mn->len) == 0)
+                            is_method_call = true;
+                    }
+                }
+                /* Last resort: for template instantiations without
+                 * class_def (Type copies from function params that
+                 * weren't patched), assume method call if the class
+                 * has template args. This is a sound assumption for
+                 * C++03 templates — data members of template classes
+                 * are never callable function pointers in practice.
+                 * N4659 §16.5 [over.oper]. */
+                if (!is_method_call && !ot->class_def &&
+                    ot->n_template_args > 0)
                     is_method_call = true;
             }
             if (is_method_call) {

@@ -228,17 +228,11 @@ static void visit_ident(Sema *s, Node *n) {
         return;
     }
     n->ident.resolved_decl = d;
-    /* SHORTCUT (ours, not the standard): for class members (d->home
-     * is REGION_CLASS), ALWAYS use the declaration's type even if the
-     * clone pass already set resolved_type. The class_region's
-     * declaration gets patched by post-instantiation member-type
-     * patching (template/instantiate.c) with class_region etc., but
-     * the clone's subst_type result is a separate Type* that doesn't
-     * get that patch. N4659 §6.4.5 [class.qual] says member lookup
-     * resolves through the class scope — we approximate by preferring
-     * the declaration's patched type over the stale clone result.
-     * TODO(seafront#tmpl-region-patch): once ALL Type copies get
-     * class_region patched, this override becomes unnecessary. */
+    /* N4659 §6.4.5 [class.qual]: member lookup resolves through the
+     * class scope. For class members, always use the declaration's
+     * type — it has the correctly patched class_region from post-
+     * instantiation member-type patching. The clone's subst_type
+     * result may be a different Type* without class_region. */
     bool member_type = d->home && d->home->kind == REGION_CLASS;
     if ((!already_typed || member_type) && d->type)
         n->resolved_type = d->type;
