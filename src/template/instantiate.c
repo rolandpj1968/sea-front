@@ -295,19 +295,14 @@ static void collect_from_type(InstCollector *col, Type *ty) {
      * should be. This catches cases where the parser resolved 'A'
      * as an opaque TY_STRUCT/TY_INT instead of TY_DEPENDENT (scope
      * visibility issue in partial specialization bodies). */
+    /* N4659 §17.7.2 [temp.dep]: a template-id with dependent args
+     * can't be instantiated yet — the args must be resolved first.
+     * Skip collection; they'll be collected after the enclosing
+     * template is instantiated and the args become concrete. */
     for (int i = 0; i < tid->template_id.nargs; i++) {
         Node *arg = tid->template_id.args[i];
         Type *aty = (arg && arg->kind == ND_VAR_DECL) ? arg->var_decl.ty : NULL;
         if (aty && aty->kind == TY_DEPENDENT) return;
-        /* HEURISTIC (ours, not the standard): a 1-char uppercase tag
-         * on a non-TY_DEPENDENT type is almost certainly an unresolved
-         * template parameter. Skip it rather than instantiating with
-         * a bogus concrete type. TODO(seafront#dep-scope): fix the
-         * root cause — ensure template param scope is visible when
-         * parsing member types in partial specializations. */
-        if (aty && aty->tag && aty->tag->len == 1 &&
-            aty->tag->loc[0] >= 'A' && aty->tag->loc[0] <= 'Z' &&
-            aty->kind != TY_DEPENDENT) return;
     }
 
     Token *name = tid->template_id.name;

@@ -1325,6 +1325,13 @@ Node *parse_declaration(Parser *p) {
         p->qualified_decl_tid = NULL;
         DeclarativeRegion *saved_region = p->region;
         if (qscope && !p->tentative) {
+            /* N4659 §17.7/4 [temp.res]: in a template OOL definition
+             * like 'template<T,A> void vec<T,A,vl_ptr>::release()',
+             * the body must see BOTH the class members (via qscope)
+             * AND the template parameters (via the enclosing template
+             * scope). Chain the qualifier scope through the current
+             * region so the template scope stays visible. */
+            qscope->enclosing = p->region;
             p->region = qscope;
             /* Tag this function definition as a method of the class
              * the qualifier resolved to, so codegen can mangle the

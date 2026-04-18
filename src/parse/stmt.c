@@ -630,27 +630,20 @@ Node *parse_stmt(Parser *p) {
         }
     }
 
-    /* SHORTCUT (ours, not the standard): 'DepType::name(args);' where
-     * DepType is a TY_DEPENDENT template parameter is almost always a
-     * static method call, not a declaration. N4659 §17.7.1 [temp.inst]
-     * says this is resolved at instantiation (two-phase lookup). We
-     * can't defer, so we check the shape: IDENT :: IDENT ( — and if
-     * the leading ident is TY_DEPENDENT, force expression-statement.
-     * TODO(seafront#two-phase): proper two-phase name lookup. */
+    /* N4659 §17.7/5 [temp.res]: a qualified-id into an unknown
+     * specialization that is NOT prefixed by 'typename' does NOT
+     * refer to a type. So 'A::release(data)' where A is a dependent
+     * template parameter cannot be a declaration — it must be an
+     * expression-statement (function call).
+     *
+     * Detect the shape IDENT :: IDENT ( where the leading ident
+     * resolves to TY_DEPENDENT. */
     if (tok->kind == TK_IDENT &&
         parser_peek_ahead(p, 1)->kind == TK_SCOPE &&
         parser_peek_ahead(p, 2)->kind == TK_IDENT &&
         parser_peek_ahead(p, 3)->kind == TK_LPAREN) {
         Declaration *ld = lookup_unqualified(p, tok->loc, tok->len);
         if (ld && ld->type && ld->type->kind == TY_DEPENDENT)
-            goto parse_as_expr;
-        /* HEURISTIC (ours, not the standard): a 1-char uppercase
-         * ident in type position is likely an unresolved template
-         * param (e.g. 'A' in partial spec body where it resolved
-         * as TY_STRUCT instead of TY_DEPENDENT due to scope
-         * visibility issues).
-         * TODO(seafront#dep-scope): same root cause. */
-        if (tok->len == 1 && tok->loc[0] >= 'A' && tok->loc[0] <= 'Z')
             goto parse_as_expr;
     }
     if (parser_at_type_specifier(p) || might_be_decl_ident) {

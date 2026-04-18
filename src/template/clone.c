@@ -84,14 +84,16 @@ Type *subst_type(Type *ty, SubstMap *map, Arena *arena) {
         ty->template_id_node->kind == ND_TEMPLATE_ID) {
         Node *tid = ty->template_id_node;
 
-        /* Check if any arg would actually change. TY_DEPENDENT is the
-         * canonical marker (N4659 §13.8.3 [temp.dep.type]). Also check
-         * non-TY_DEPENDENT args whose tag matches a SubstMap entry —
-         * SHORTCUT (ours, not the standard): these are template params
-         * that the parser resolved as opaque types instead of
-         * TY_DEPENDENT due to scope visibility issues in partial spec
-         * bodies. TODO(seafront#dep-scope): fix the parser so template
-         * param scope is always visible. */
+        /* N4659 §17.7.1 [temp.inst]/1: at instantiation, every use of
+         * a template parameter is replaced with the corresponding arg.
+         * Check if any template-id arg matches a SubstMap entry —
+         * either by TY_DEPENDENT kind (the canonical marker per
+         * §13.8.3 [temp.dep.type]) or by tag-name match (covers
+         * args that went through an opaque-type parse path but still
+         * represent template parameters).
+         * TODO(seafront#two-phase-stage2): once all template params
+         * reliably parse as TY_DEPENDENT, the tag-match fallback
+         * becomes unnecessary. */
         bool needs_subst = false;
         for (int i = 0; i < tid->template_id.nargs; i++) {
             Node *a = tid->template_id.args[i];
@@ -114,13 +116,11 @@ Type *subst_type(Type *ty, SubstMap *map, Arena *arena) {
                 bool should_subst = at && (at->kind == TY_DEPENDENT ||
                     (at->tag && subst_map_lookup(map, at->tag->loc, at->tag->len)));
                 if (should_subst) {
-                    /* SHORTCUT (ours, not the standard): direct
-                     * SubstMap lookup for non-TY_DEPENDENT types (e.g.
-                     * TY_INT with tag "A"). subst_type only handles
-                     * TY_DEPENDENT (N4659 §13.8.3 [temp.dep.type]) and
-                     * TY_STRUCT injected names; for opaque types that
-                     * the parser mis-resolved, we do the lookup directly.
-                     * TODO(seafront#dep-scope): same root cause as above. */
+                    /* Direct SubstMap lookup for non-TY_DEPENDENT args
+                     * whose tag matches a template parameter name.
+                     * subst_type handles TY_DEPENDENT canonically;
+                     * the direct lookup covers opaque-parse cases.
+                     * TODO(seafront#two-phase-stage2): same as above. */
                     Type *sub = NULL;
                     if (at->kind != TY_DEPENDENT && at->tag)
                         sub = subst_map_lookup(map, at->tag->loc, at->tag->len);
@@ -284,18 +284,14 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
                 n->qualified.nparts * sizeof(Token *));
             memcpy(c->qualified.parts, n->qualified.parts,
                    n->qualified.nparts * sizeof(Token *));
-            /* SHORTCUT (ours, not the standard): substitute the
-             * leading qualifier token if it matches a SubstMap entry
-             * (e.g. 'A::release(v)' → 'va_heap::release(v)').
-             * N4659 §17.7.1 [temp.inst]/1 says substitution happens
-             * at instantiation, replacing each template parameter
-             * with the corresponding argument. We do this at the
-             * token level because the parser stored ND_QUALIFIED
-             * with the dependent name as a bare Token, not as a
-             * resolvable type reference.
-             * TODO(seafront#qual-dependent): resolve qualified names
-             * through the dependent base's class_region at
-             * instantiation time (two-phase lookup). */
+            /* N4659 §17.7.1 [temp.inst]/1: at instantiation, replace
+             * each template parameter with its argument. For
+             * qualified names like 'A::release(v)', substitute the
+             * leading qualifier token so 'A' → 'va_heap'.
+             * This is token-level substitution; a full implementation
+             * would do qualified lookup in the concrete class_region.
+             * TODO(seafront#two-phase-stage2): replace token swap with
+             * real qualified lookup per docs/two-phase-lookup.md. */
             Token *lead = c->qualified.parts[0];
             if (lead) {
                 Type *sub = subst_map_lookup(map, lead->loc, lead->len);
