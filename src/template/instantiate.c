@@ -875,9 +875,39 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
         DeclarativeRegion *cr = region_build_class(cloned, inst_ty, arena);
         inst_ty->class_region = cr;
         inst_ty->class_def = cloned;
+        /* Scan the cloned members for ctor/dtor/virtual flags.
+         * The original class template has these set during parsing;
+         * instantiated copies need them re-derived from the cloned
+         * member list. N4659 §15.1 [class.ctor], §15.4 [class.dtor],
+         * §13.3 [class.virtual]. */
         inst_ty->has_dtor = false;
         inst_ty->has_default_ctor = false;
         inst_ty->has_virtual_methods = false;
+        for (int i = 0; i < cloned->class_def.nmembers; i++) {
+            Node *m = cloned->class_def.members[i];
+            if (!m) continue;
+            if (m->kind == ND_FUNC_DEF) {
+                if (m->func.is_destructor) {
+                    bool empty = m->func.body &&
+                        m->func.body->kind == ND_BLOCK &&
+                        m->func.body->block.nstmts == 0;
+                    if (!empty) inst_ty->has_dtor = true;
+                }
+                if (m->func.is_constructor && m->func.nparams == 0)
+                    inst_ty->has_default_ctor = true;
+                if (m->func.is_virtual)
+                    inst_ty->has_virtual_methods = true;
+            } else if (m->kind == ND_VAR_DECL) {
+                if (m->var_decl.is_destructor)
+                    inst_ty->has_dtor = true;
+                if (m->var_decl.is_constructor &&
+                    m->var_decl.ty && m->var_decl.ty->kind == TY_FUNC &&
+                    m->var_decl.ty->nparams == 0)
+                    inst_ty->has_default_ctor = true;
+                if (m->var_decl.is_virtual)
+                    inst_ty->has_virtual_methods = true;
+            }
+        }
 
         /* Process base classes: for each base type on the cloned
          * class_def, find or create its class_region and add it to

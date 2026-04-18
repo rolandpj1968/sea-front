@@ -72,6 +72,31 @@ static Type *g_current_func_ret_ty = NULL;
  * ND_OFFSETOF to substitute unresolvable local typedefs. */
 static Type *g_current_method_class = NULL;
 
+/* Reference-parameter tracking — N4659 §11.3.2 [dcl.ref].
+ * C has no references; we lower T& to T* in the C signature.
+ * When the body uses a ref-param as a value, codegen must deref it.
+ * cf_begin_function populates this table from the func's params;
+ * is_ref_param checks it at ident-emission time. */
+#define REF_PARAM_CAP 32
+static Token *g_ref_params[REF_PARAM_CAP];
+static int    g_nref_params = 0;
+
+static bool is_ref_param(Token *name) {
+    if (!name) return false;
+    for (int i = 0; i < g_nref_params; i++) {
+        Token *rp = g_ref_params[i];
+        if (rp && rp->len == name->len &&
+            memcmp(rp->loc, name->loc, name->len) == 0)
+            return true;
+    }
+    return false;
+}
+
+/* Suppresses ref-param deref for one ident emission. Set by
+ * ND_MEMBER before emitting its object (the -> already derefs),
+ * and by ND_UNARY TK_AMP (address-of a ref is the pointer itself). */
+static bool g_suppress_ref_deref = false;
+
 static void emit_indent(void) {
     for (int i = 0; i < g_indent; i++) fputs("    ", stdout);
 }
@@ -1655,7 +1680,19 @@ static void emit_expr(Node *n) {
                 emit_base_chain(path, len);
             }
         }
-        emit_token_text(n->ident.name);
+        /* N4659 §11.3.2 [dcl.ref]: reference params are lowered to
+         * pointers in C. When used as a value (rvalue), deref them.
+         * Skip deref when the ident is the LHS of an assignment
+         * (handled by the caller) or when used with & (address-of). */
+        if (!n->ident.implicit_this && !g_suppress_ref_deref &&
+            is_ref_param(n->ident.name)) {
+            fputs("(*", stdout);
+            emit_token_text(n->ident.name);
+            fputc(')', stdout);
+        } else {
+            g_suppress_ref_deref = false;
+            emit_token_text(n->ident.name);
+        }
         return;
     case ND_BINARY: {
         /* Overloaded-operator dispatch — N4659 §16.5 [over.oper]:
@@ -1782,6 +1819,11 @@ static void emit_expr(Node *n) {
         return;
     }
     case ND_UNARY:
+        /* For &(ref_param): the ref is already a pointer, so &(*x)
+         * cancels out to just x. Suppress the deref. */
+        if (n->unary.op == TK_AMP) g_suppress_ref_deref = true;
+        /* For *(ref_param): deref the pointer, then deref again —
+         * the user explicitly asked for indirection on a ref. */
         fputc('(', stdout);
         fputs(unop_str(n->unary.op), stdout);
         emit_expr(n->unary.operand);
@@ -2307,6 +2349,8 @@ static void emit_expr(Node *n) {
             bool needs_paren = n->member.obj &&
                                n->member.obj->kind == ND_CAST;
             if (needs_paren) fputc('(', stdout);
+            /* Suppress ref-param deref: the -> already handles it. */
+            if (obj_is_ptr_in_c) g_suppress_ref_deref = true;
             emit_expr(n->member.obj);
             if (needs_paren) fputc(')', stdout);
             fputs(access_op, stdout);
@@ -3550,6 +3594,17 @@ static void cf_begin_function(Node *func) {
     g_cf.nlive = 0;
     g_cf.func_has_cleanups = func && func->func.body &&
                              subtree_has_cleanups(func->func.body);
+    /* Populate ref-param table for deref insertion at use sites. */
+    g_nref_params = 0;
+    if (func && (func->kind == ND_FUNC_DEF || func->kind == ND_FUNC_DECL)) {
+        for (int i = 0; i < func->func.nparams && g_nref_params < REF_PARAM_CAP; i++) {
+            Node *p = func->func.params[i];
+            if (p && p->param.ty &&
+                (p->param.ty->kind == TY_REF || p->param.ty->kind == TY_RVALREF) &&
+                p->param.name)
+                g_ref_params[g_nref_params++] = p->param.name;
+        }
+    }
 }
 
 /* When emit_class_def is iterating its method members it sets this
