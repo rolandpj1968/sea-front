@@ -40,6 +40,19 @@ typedef struct {
 } Sema;
 
 /* ------------------------------------------------------------------ */
+/* Two-phase lookup: dependency tracking (N4659 §17.7 [temp.res])    */
+/* ------------------------------------------------------------------ */
+
+static bool type_is_dependent(Type *ty) {
+    if (!ty) return false;
+    if (ty->kind == TY_DEPENDENT) return true;
+    if ((ty->kind == TY_PTR || ty->kind == TY_REF ||
+         ty->kind == TY_RVALREF || ty->kind == TY_ARRAY) && ty->base)
+        return type_is_dependent(ty->base);
+    return false;
+}
+
+/* ------------------------------------------------------------------ */
 /* Type construction (sema-side, no Parser)                           */
 /* ------------------------------------------------------------------ */
 
@@ -231,11 +244,18 @@ static void visit_ident(Sema *s, Node *n) {
         n->resolved_type = d->type;
     if (member_type)
         n->ident.implicit_this = true;
+    /* Phase 1: mark dependent — N4659 §17.7 [temp.res] */
+    if (type_is_dependent(n->resolved_type))
+        n->is_type_dependent = true;
 }
 
 static void visit_binary(Sema *s, Node *n) {
     if (n->binary.lhs) visit(s, n->binary.lhs);
     if (n->binary.rhs) visit(s, n->binary.rhs);
+    /* Propagate dependence from children */
+    if ((n->binary.lhs && n->binary.lhs->is_type_dependent) ||
+        (n->binary.rhs && n->binary.rhs->is_type_dependent))
+        n->is_type_dependent = true;
 
     if (!n->binary.lhs || !n->binary.rhs) return;
     Type *lt = n->binary.lhs->resolved_type;
@@ -286,6 +306,8 @@ static void visit_unary(Sema *s, Node *n) {
         n->resolved_type = ot;
         break;
     }
+    if (n->unary.operand && n->unary.operand->is_type_dependent)
+        n->is_type_dependent = true;
 }
 
 static void visit_assign(Sema *s, Node *n) {
@@ -293,6 +315,9 @@ static void visit_assign(Sema *s, Node *n) {
     visit(s, n->binary.rhs);
     /* Result of assignment is the lvalue's type. */
     n->resolved_type = n->binary.lhs->resolved_type;
+    if ((n->binary.lhs && n->binary.lhs->is_type_dependent) ||
+        (n->binary.rhs && n->binary.rhs->is_type_dependent))
+        n->is_type_dependent = true;
 }
 
 static void visit_ternary(Sema *s, Node *n) {
@@ -302,6 +327,10 @@ static void visit_ternary(Sema *s, Node *n) {
     /* Conservative: pick the then-branch type. The full rules in
      * §8.16/6 are intricate; this is fine for the first slice. */
     n->resolved_type = n->ternary.then_->resolved_type;
+    if ((n->ternary.cond && n->ternary.cond->is_type_dependent) ||
+        (n->ternary.then_ && n->ternary.then_->is_type_dependent) ||
+        (n->ternary.else_ && n->ternary.else_->is_type_dependent))
+        n->is_type_dependent = true;
 }
 
 /* ------------------------------------------------------------------ */
@@ -424,6 +453,8 @@ static void visit_member(Sema *s, Node *n) {
     Declaration *d = lookup_in_scope(ot->class_region, m->loc, m->len);
     if (d && d->type)
         n->resolved_type = d->type;
+    if (n->member.obj && n->member.obj->is_type_dependent)
+        n->is_type_dependent = true;
 }
 
 static void visit_subscript(Sema *s, Node *n) {
@@ -433,6 +464,9 @@ static void visit_subscript(Sema *s, Node *n) {
     Type *bt = n->subscript.base->resolved_type;
     if (bt && (bt->kind == TY_ARRAY || bt->kind == TY_PTR) && bt->base)
         n->resolved_type = bt->base;
+    if ((n->subscript.base && n->subscript.base->is_type_dependent) ||
+        (n->subscript.index && n->subscript.index->is_type_dependent))
+        n->is_type_dependent = true;
 }
 
 static void visit_call(Sema *s, Node *n) {
@@ -460,6 +494,12 @@ static void visit_call(Sema *s, Node *n) {
     if (ct && ct->kind == TY_PTR && ct->base) ct = ct->base;
     if (ct && ct->kind == TY_FUNC && ct->ret)
         n->resolved_type = ct->ret;
+    /* Propagate dependence from callee and args */
+    if (n->call.callee && n->call.callee->is_type_dependent)
+        n->is_type_dependent = true;
+    for (int i = 0; i < n->call.nargs; i++)
+        if (n->call.args[i] && n->call.args[i]->is_type_dependent)
+            n->is_type_dependent = true;
 }
 
 /* ------------------------------------------------------------------ */

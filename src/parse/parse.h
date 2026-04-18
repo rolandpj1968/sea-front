@@ -191,6 +191,16 @@ struct Node {
      * "type of the node" doesn't apply. */
     Type *resolved_type;
 
+    /* Two-phase lookup (N4659 §17.7 [temp.res]): true when this
+     * expression or sub-expression depends on a template parameter.
+     * Set during parsing (Phase 1); used by clone.c and sema.c
+     * to decide which names need Phase-2 lookup at instantiation.
+     *
+     * Base case: ND_IDENT whose resolved type is TY_DEPENDENT.
+     * Propagation: any compound expression/statement inherits
+     * dependence from its children (bottom-up). */
+    bool is_type_dependent;
+
     /* Codegen-only: when emit_c hoists a class-typed expression
      * into a synthesized local (Slice D temp materialization), the
      * original expression node is tagged with the local's name.
