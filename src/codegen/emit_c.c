@@ -2313,10 +2313,14 @@ static void emit_expr(Node *n) {
                      d->type->ret->kind == TY_RVALREF))
                     ref_return = true;
             }
-            /* Note: class_def member scan for ref_return was removed —
-             * it caused cascading issues with return-expression
-             * adaptation. The class_region check above is sufficient
-             * when the Type has been properly patched. */
+            /* Fallback for template types without class_region:
+             * N4659 §16.5.5 [over.sub] — operator[] on containers
+             * almost universally returns T&. For template types
+             * with n_template_args > 0 and no class_region, assume
+             * ref-return. This is sound for C++03 containers. */
+            if (!ref_return && !base_ty->class_region &&
+                base_ty->n_template_args > 0)
+                ref_return = true;
             if (ref_return) fputs("(*", stdout);
             mangle_class_tag(base_ty);
             fputs("__subscript", stdout);
