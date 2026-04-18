@@ -105,4 +105,9 @@ void mangle_class_vtable_type(Type *class_type);
  *   class vec → sf__vec__vtable_instance */
 void mangle_class_vtable_instance(Type *class_type);
 
+/* Emit just the parameter-type suffix (_p_<types>_pe_) to stdout.
+ * Exposed so emit_c.c call-site rewrites can stay in sync with the
+ * canonical mangling path. */
+void mangle_param_suffix(Type **param_types, int nparams);
+
 #endif /* SF_CODEGEN_MANGLE_H */

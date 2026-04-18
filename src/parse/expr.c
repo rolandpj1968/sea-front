@@ -541,6 +541,7 @@ static Node *primary_expr(Parser *p) {
     if (tok->kind == TK_IDENT || tok->kind == TK_SCOPE) {
         bool global_scope = false;
         Vec parts = vec_new(p->arena);
+        Node *lead_tid = NULL;  /* template-id for leading qualified segment */
 
         /* Leading :: means global scope */
         if (tok->kind == TK_SCOPE) {
@@ -632,6 +633,11 @@ static Node *primary_expr(Parser *p) {
                      * name and we continue building parts. */
                     if (!parser_at(p, TK_SCOPE) && parts.len == 1)
                         return tid;
+                    /* Qualified template-id: e.g. Box<int>::test.
+                     * Save the leading template-id so the ND_QUALIFIED
+                     * node can carry the template args for mangling. */
+                    if (parts.len == 1)
+                        lead_tid = tid;
                 }
             }
 
@@ -758,8 +764,12 @@ static Node *primary_expr(Parser *p) {
         if (parser_at(p, TK_LT) && lookup_is_template_name(p, last))
             return parse_template_id(p, last);
 
-        return new_qualified_node(p, (Token **)parts.data, parts.len,
-                                  global_scope, tok);
+        {
+            Node *qn = new_qualified_node(p, (Token **)parts.data, parts.len,
+                                          global_scope, tok);
+            qn->qualified.lead_tid = lead_tid;
+            return qn;
+        }
     }
 
     /* C++ named casts — N4659 §8.2.3-§8.2.7 [expr.cast]

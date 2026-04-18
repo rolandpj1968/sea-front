@@ -296,6 +296,12 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
                 }
             }
         }
+        /* Clone lead_tid with type substitution so template args
+         * like is_a_helper<T>::test get T→concrete_type. */
+        if (n->qualified.lead_tid) {
+            c->qualified.lead_tid = clone_node(n->qualified.lead_tid,
+                                                map, arena);
+        }
         break;
 
     /* -- Binary expressions -- */

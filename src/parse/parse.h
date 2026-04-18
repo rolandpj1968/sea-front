@@ -264,6 +264,10 @@ struct Node {
             Token **parts;
             int     nparts;
             bool    global_scope;   /* true if starts with :: */
+            Node   *lead_tid;      /* ND_TEMPLATE_ID for leading part's
+                                    * template-args (e.g. Box<int>::test
+                                    * → lead_tid carries <int>). NULL if
+                                    * the leading part has no template args. */
         } qualified;
 
         /* ND_BINARY, ND_ASSIGN — N4659 §8.5-§8.18

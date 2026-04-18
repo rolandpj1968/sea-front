@@ -209,7 +209,7 @@ void mangle_class_tag(Type *class_type) {
  *   _p_<t0>_<t1>_..._pe_
  * with 'void' for the empty list. Mirrors the _t_..._te_ shape used
  * for template arguments. N4659 §16.2 [over.load]. */
-static void emit_param_suffix(Type **param_types, int nparams) {
+void mangle_param_suffix(Type **param_types, int nparams) {
     fputs("_p_", stdout);
     if (nparams == 0) {
         fputs("void", stdout);
@@ -226,7 +226,7 @@ void mangle_class_method(Type *class_type, Token *method_name,
                           Type **param_types, int nparams) {
     emit_class_open(class_type);
     g_mangler->append_member(g_mangler, method_name);
-    emit_param_suffix(param_types, nparams);
+    mangle_param_suffix(param_types, nparams);
     emit_class_close();
 }
 
@@ -234,7 +234,7 @@ void mangle_class_ctor(Type *class_type,
                         Type **param_types, int nparams) {
     emit_class_open(class_type);
     g_mangler->append_ctor(g_mangler);
-    emit_param_suffix(param_types, nparams);
+    mangle_param_suffix(param_types, nparams);
     emit_class_close();
 }
 

@@ -327,6 +327,40 @@ static void emit_local_param_suffix(Type **param_types, int nparams) {
     fputs("_pe_", stdout);
 }
 
+/* Emit template-arg suffix (_t_<type>_te_) from an ND_TEMPLATE_ID node.
+ * Used when a qualified call's leading part has explicit template args
+ * (e.g. Box<int>::test → sf__Box_t_int_te___test_p_void_pe_). */
+static void emit_template_id_suffix(Node *tid) {
+    if (!tid || tid->kind != ND_TEMPLATE_ID || tid->template_id.nargs == 0)
+        return;
+    fputs("_t_", stdout);
+    for (int i = 0; i < tid->template_id.nargs; i++) {
+        if (i > 0) fputc('_', stdout);
+        Node *arg = tid->template_id.args[i];
+        Type *ty = NULL;
+        if (arg && arg->kind == ND_VAR_DECL) ty = arg->var_decl.ty;
+        if (!ty) { fputs("unknown", stdout); continue; }
+        switch (ty->kind) {
+        case TY_VOID:    fputs("void", stdout); break;
+        case TY_BOOL:    fputs("bool", stdout); break;
+        case TY_CHAR:    fputs(ty->is_unsigned ? "uchar" : "char", stdout); break;
+        case TY_SHORT:   fputs(ty->is_unsigned ? "ushort" : "short", stdout); break;
+        case TY_INT:     fputs(ty->is_unsigned ? "uint" : "int", stdout); break;
+        case TY_LONG:    fputs(ty->is_unsigned ? "ulong" : "long", stdout); break;
+        case TY_LLONG:   fputs(ty->is_unsigned ? "ullong" : "llong", stdout); break;
+        case TY_FLOAT:   fputs("float", stdout); break;
+        case TY_DOUBLE:  fputs("double", stdout); break;
+        case TY_PTR:     fputs("ptr", stdout); break;
+        case TY_STRUCT: case TY_UNION:
+            if (ty->tag) fprintf(stdout, "%.*s", ty->tag->len, ty->tag->loc);
+            else fputs("anon", stdout);
+            break;
+        default: fputs("unknown", stdout); break;
+        }
+    }
+    fputs("_te_", stdout);
+}
+
 /* Shared diagnostic for the "no matching overload" case. We fail
  * loudly rather than fall through to arg-type mangling — the prior
  * silent fallback would emit a symbol that doesn't resolve at link
@@ -1798,24 +1832,27 @@ static void emit_expr(Node *n) {
                      * lookup (clone.c) resolved the method, use its
                      * function type's params. Otherwise fall back to
                      * call-site arg types. */
+                    /* Emit mangled qualified call name. If the leading
+                     * part has a template-id (e.g. Box<int>::test), include
+                     * template arg suffix in the class name. */
+                    Node *ltid = callee_q->qualified.lead_tid;
                     Type *callee_ft = callee_q->resolved_type;
+                    fputs("sf__", stdout);
+                    fprintf(stdout, "%.*s",
+                            class_tok->len, class_tok->loc);
+                    if (ltid && ltid->kind == ND_TEMPLATE_ID)
+                        emit_template_id_suffix(ltid);
+                    fprintf(stdout, "__%.*s",
+                            method_tok->len, method_tok->loc);
                     if (callee_ft && callee_ft->kind == TY_FUNC &&
                         callee_ft->nparams > 0) {
-                        fputs("sf__", stdout);
-                        fprintf(stdout, "%.*s__%.*s",
-                                class_tok->len, class_tok->loc,
-                                method_tok->len, method_tok->loc);
-                        emit_local_param_suffix(callee_ft->params,
-                                                 callee_ft->nparams);
+                        mangle_param_suffix(callee_ft->params,
+                                             callee_ft->nparams);
                     } else {
                         Type **at = NULL;
                         int na = collect_call_arg_types(n->call.args,
                                                          n->call.nargs, &at);
-                        fputs("sf__", stdout);
-                        fprintf(stdout, "%.*s__%.*s",
-                                class_tok->len, class_tok->loc,
-                                method_tok->len, method_tok->loc);
-                        emit_local_param_suffix(at, na);
+                        mangle_param_suffix(at, na);
                     }
                     fputc('(', stdout);
                     for (int i = 0; i < n->call.nargs; i++) {
@@ -4723,7 +4760,11 @@ static void emit_top_level(Node *n) {
             emit_top_level(n->block.stmts[i]);
         return;
     case ND_TEMPLATE_DECL:
-        /* Templates aren't lowered yet — silently skip. */
+        /* Full specializations (nparams == 0) are concrete — emit them.
+         * N4659 §17.7.3 [temp.expl.spec] — an explicit specialization
+         * is not itself a template; it's a regular declaration. */
+        if (n->template_decl.nparams == 0 && n->template_decl.decl)
+            emit_top_level(n->template_decl.decl);
         return;
     case ND_TYPEDEF: {
         /* Emit the underlying type definition if applicable. */
@@ -4874,8 +4915,10 @@ static void emit_fwd_decl_walk(Node *n) {
             emit_fwd_decl_walk(n->block.stmts[i]);
         break;
     case ND_TEMPLATE_DECL:
-        /* Don't forward-declare template bodies — only instantiated
-         * copies (which appear as top-level ND_CLASS_DEF). */
+        /* Full specializations (nparams == 0) are concrete — forward-declare.
+         * N4659 §17.7.3 [temp.expl.spec]. */
+        if (n->template_decl.nparams == 0 && n->template_decl.decl)
+            emit_fwd_decl_walk(n->template_decl.decl);
         break;
     default:
         break;

@@ -292,6 +292,18 @@ DeclSpec parse_type_specifiers(Parser *p) {
                 if (parser_at(p, TK_LT)) {
                     Node *tid = parse_template_id(p, ty->tag);
                     ty->template_id_node = tid;
+                    /* Preserve template args for specialization mangling.
+                     * N4659 §17.7.3 [temp.expl.spec]. */
+                    if (tid && tid->template_id.nargs > 0) {
+                        ty->n_template_args = tid->template_id.nargs;
+                        ty->template_args = arena_alloc(p->arena,
+                            tid->template_id.nargs * sizeof(Type *));
+                        for (int i = 0; i < tid->template_id.nargs; i++) {
+                            Node *arg = tid->template_id.args[i];
+                            ty->template_args[i] = (arg && arg->kind == ND_VAR_DECL)
+                                ? arg->var_decl.ty : NULL;
+                        }
+                    }
                 }
                 while (parser_consume(p, TK_SCOPE)) {
                     if (parser_at(p, TK_IDENT)) {
@@ -320,7 +332,26 @@ DeclSpec parse_type_specifiers(Parser *p) {
              * TODO(seafront#elab-tmpl-id): consult lookup when we
              * need accurate diagnostics. */
             if (ty->tag && parser_at(p, TK_LT)) {
-                parse_template_id(p, ty->tag);
+                Node *tid = parse_template_id(p, ty->tag);
+                /* Preserve template args on the type — needed for
+                 * full specialization mangling and instantiation.
+                 * N4659 §17.7.3 [temp.expl.spec]: 'struct Foo<int>'
+                 * is a specialization that carries the args. */
+                if (tid) {
+                    ty->template_id_node = tid;
+                    ty->n_template_args = tid->template_id.nargs;
+                    if (tid->template_id.nargs > 0) {
+                        ty->template_args = arena_alloc(p->arena,
+                            tid->template_id.nargs * sizeof(Type *));
+                        for (int i = 0; i < tid->template_id.nargs; i++) {
+                            Node *arg = tid->template_id.args[i];
+                            /* Type args are ND_VAR_DECL with var_decl.ty;
+                             * expression args (non-type params) have no type. */
+                            ty->template_args[i] = (arg && arg->kind == ND_VAR_DECL)
+                                ? arg->var_decl.ty : NULL;
+                        }
+                    }
+                }
             }
 
             /* N4659 §6.3.2/7 [basic.scope.pdecl]: register tag name
