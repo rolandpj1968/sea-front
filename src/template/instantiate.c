@@ -472,6 +472,36 @@ static void collect_from_node(InstCollector *col, Node *n) {
         collect_from_node(col, n->friend_decl.decl);
         break;
 
+    case ND_QUALIFIED:
+        /* N4659 §17.2 [temp.names] / §8.1.4.3 [expr.prim.id.qual]:
+         * a qualified-id like Embed<int>::embedded_size carries the
+         * template-id on lead_tid. Build a synthetic Type with
+         * template_id_node so it goes through the class-template
+         * collection path (with proper dedup) rather than the
+         * function-template ND_TEMPLATE_ID path. */
+        if (n->qualified.lead_tid &&
+            n->qualified.lead_tid->kind == ND_TEMPLATE_ID) {
+            Node *tid = n->qualified.lead_tid;
+            Type *syn = arena_alloc(col->arena, sizeof(Type));
+            syn->kind = TY_STRUCT;
+            syn->tag = tid->template_id.name;
+            syn->template_id_node = tid;
+            /* Copy template args onto the synthetic type so the
+             * instantiation pass can match it. */
+            syn->n_template_args = tid->template_id.nargs;
+            if (tid->template_id.nargs > 0) {
+                syn->template_args = arena_alloc(col->arena,
+                    tid->template_id.nargs * sizeof(Type *));
+                for (int i = 0; i < tid->template_id.nargs; i++) {
+                    Node *arg = tid->template_id.args[i];
+                    syn->template_args[i] = (arg && arg->kind == ND_VAR_DECL)
+                        ? arg->var_decl.ty : NULL;
+                }
+            }
+            collect_from_type(col, syn);
+        }
+        break;
+
     case ND_TEMPLATE_ID: {
         /* A template-id in expression position (e.g. max_of<int> as
          * a call callee). Record as a function template instantiation
