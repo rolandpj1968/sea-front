@@ -1062,30 +1062,37 @@ static void emit_type(Type *ty) {
     case TY_DOUBLE:  fputs("double", stdout); return;
     case TY_LDOUBLE: fputs("long double", stdout); return;
     case TY_PTR:
-        /* Function-pointer type in type-expression position
-         * ('int (*)(int)' in a cast, sizeof, return type, etc.).
-         * The C declarator syntax interleaves '*' with the surrounding
-         * parentheses; emit_type alone can produce the abstract form
-         * 'ret (*)(params)'. N4659 §11.3.1 [dcl.ptr]. */
-        if (ty->base && ty->base->kind == TY_FUNC) {
-            Type *fty = ty->base;
-            emit_type(fty->ret);
-            fputs(" (*", stdout);
-            if (ty->is_const)    fputs("const ", stdout);
-            if (ty->is_volatile) fputs("volatile ", stdout);
-            fputs(")(", stdout);
-            for (int i = 0; i < fty->nparams; i++) {
-                if (i > 0) fputs(", ", stdout);
-                emit_type(fty->params[i]);
+        /* Function-pointer type in type-expression position.
+         * Handles arbitrary pointer depth: T(*)(args) for single
+         * pointer, T(**)(args) for pointer-to-function-pointer, etc.
+         * N4659 §11.3.1 [dcl.ptr] / §11.3.5 [dcl.fct]. */
+        {
+            Type *fty = NULL;
+            int pdepth = 0;
+            Type *t = ty;
+            while (t && t->kind == TY_PTR && t->base) {
+                pdepth++;
+                if (t->base->kind == TY_FUNC) { fty = t->base; break; }
+                t = t->base;
             }
-            if (fty->is_variadic) {
-                if (fty->nparams > 0) fputs(", ", stdout);
-                fputs("...", stdout);
-            } else if (fty->nparams == 0) {
-                fputs("void", stdout);
+            if (fty) {
+                emit_type(fty->ret);
+                fputs(" (", stdout);
+                for (int d = 0; d < pdepth; d++) fputc('*', stdout);
+                fputs(")(", stdout);
+                for (int i = 0; i < fty->nparams; i++) {
+                    if (i > 0) fputs(", ", stdout);
+                    emit_type(fty->params[i]);
+                }
+                if (fty->is_variadic) {
+                    if (fty->nparams > 0) fputs(", ", stdout);
+                    fputs("...", stdout);
+                } else if (fty->nparams == 0) {
+                    fputs("void", stdout);
+                }
+                fputc(')', stdout);
+                return;
             }
-            fputc(')', stdout);
-            return;
         }
         emit_type(ty->base);
         fputs("*", stdout);
@@ -1557,10 +1564,25 @@ static void emit_func_header(Type *ret_ty, Token *name,
  * already does that decay. Unnamed parameters get __sf_unused_N
  * because C requires named params in definitions. */
 static void emit_param_declarator(Type *ty, Token *name, int idx) {
-    if (ty && ty->kind == TY_PTR && ty->base && ty->base->kind == TY_FUNC) {
-        Type *fty = ty->base;
+    /* N4659 §11.3 [dcl.meaning]: function pointer parameters
+     * require declarator-interleaving in C:
+     *   void (*name)(int)     — pointer to function
+     *   void (**name)(int)    — pointer to pointer to function
+     * Count the indirection levels to emit the right number of *s. */
+    Type *fty = NULL;
+    int ptr_depth = 0;
+    {
+        Type *t = ty;
+        while (t && t->kind == TY_PTR && t->base) {
+            ptr_depth++;
+            if (t->base->kind == TY_FUNC) { fty = t->base; break; }
+            t = t->base;
+        }
+    }
+    if (fty) {
         emit_type(fty->ret);
-        fputs(" (*", stdout);
+        fputs(" (", stdout);
+        for (int i = 0; i < ptr_depth; i++) fputc('*', stdout);
         if (name)
             fprintf(stdout, "%.*s", name->len, name->loc);
         else
