@@ -1280,6 +1280,13 @@ void template_instantiate(Node *tu, Arena *arena) {
         Node *d = tu->tu.decls[i];
         if (d && (d->kind == ND_CLASS_DEF || d->kind == ND_BLOCK))
             insert_pos = i + 1;
+        /* Full specializations (template<> struct X<int> { ... }) are
+         * ND_TEMPLATE_DECL wrapping ND_CLASS_DEF — count them too so
+         * instantiations that reference the specialization come after. */
+        if (d && d->kind == ND_TEMPLATE_DECL &&
+            d->template_decl.nparams == 0 && d->template_decl.decl &&
+            d->template_decl.decl->kind == ND_CLASS_DEF)
+            insert_pos = i + 1;
     }
     /* If no classes found, insert at front (same as before) */
     int old_n = tu->tu.ndecls;
@@ -1506,6 +1513,13 @@ void template_instantiate(Node *tu, Arena *arena) {
             }
             if (is_inst) continue;
             if (d && (d->kind == ND_CLASS_DEF || d->kind == ND_BLOCK))
+                insert_pos = i + 1;
+            /* Full specializations: ND_TEMPLATE_DECL wrapping ND_CLASS_DEF
+             * with nparams == 0. Count them for insert ordering so
+             * instantiations that depend on specializations come after. */
+            if (d && d->kind == ND_TEMPLATE_DECL &&
+                d->template_decl.nparams == 0 && d->template_decl.decl &&
+                d->template_decl.decl->kind == ND_CLASS_DEF)
                 insert_pos = i + 1;
         }
         /* Count non-instantiated decls */
