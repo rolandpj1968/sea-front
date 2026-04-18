@@ -165,8 +165,8 @@ for src in $INPUTS; do
 
     # Step 3: Compile C → .o
     # Use -std=c99 for gcc 4.7 compatibility (for-init declarations)
-    log "  Compile: $SEA_CC -std=c99 -w -c $CC_FLAGS -o $OUTPUT $c_file"
-    $SEA_CC -std=c99 -w -c $CC_FLAGS -o "$OUTPUT" "$c_file"
+    log "  Compile: $SEA_CC -std=c99 -c $CC_FLAGS -o $OUTPUT $c_file"
+    $SEA_CC -std=c99 -c $CC_FLAGS -o "$OUTPUT" "$c_file"
 
     # Cleanup
     rm -f "$pp_file" "$c_file"

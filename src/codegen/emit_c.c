@@ -4840,7 +4840,12 @@ static void emit_prelude(void) {
     fputs("#include <stdint.h>\n", stdout);
     fputs("#include <stddef.h>\n", stdout);  /* wchar_t, size_t, NULL */
     fputs("\n", stdout);
-    fputs("/* sea-front cleanup protocol — see emit_c.c */\n", stdout);
+    fputs("/* sea-front cleanup protocol — see emit_c.c.\n", stdout);
+    fputs(" * The goto-chain destructor cleanup (N4659 §15.4 [class.dtor]/9)\n",
+          stdout);
+    fputs(" * emits __SF_cleanup_N labels structurally; not all paths\n", stdout);
+    fputs(" * reach every label, triggering -Wunused-label under -Wall. */\n",
+          stdout);
     fputs("#if defined(__GNUC__) || defined(__clang__)\n", stdout);
     fputs("#  pragma GCC diagnostic ignored \"-Wunused-label\"\n", stdout);
     fputs("#endif\n", stdout);
