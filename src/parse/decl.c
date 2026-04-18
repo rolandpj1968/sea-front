@@ -1329,9 +1329,17 @@ Node *parse_declaration(Parser *p) {
              * like 'template<T,A> void vec<T,A,vl_ptr>::release()',
              * the body must see BOTH the class members (via qscope)
              * AND the template parameters (via the enclosing template
-             * scope). Chain the qualifier scope through the current
-             * region so the template scope stays visible. */
-            qscope->enclosing = p->region;
+             * scope). Create a shallow copy of the class scope with
+             * its enclosing chain re-pointed through the current
+             * template scope. We don't modify the original class
+             * scope (it's persistent and shared across parse sites). */
+            {
+                DeclarativeRegion *wrapper = arena_alloc(p->arena,
+                    sizeof(DeclarativeRegion));
+                *wrapper = *qscope;
+                wrapper->enclosing = p->region;
+                qscope = wrapper;
+            }
             p->region = qscope;
             /* Tag this function definition as a method of the class
              * the qualifier resolved to, so codegen can mangle the
