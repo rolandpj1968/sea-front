@@ -524,6 +524,28 @@ static void visit(Sema *s, Node *n) {
         return;
     case ND_COMMA:     visit_binary(s, n);    return;
 
+    case ND_QUALIFIED:
+        /* N4659 §6.4.3 [basic.lookup.qual]: qualified name lookup.
+         * Resolve 'Class::method' by looking up the leading segment
+         * as a type, then the trailing segment in its class_region.
+         * Sets resolved_type so codegen can use decl param types
+         * for mangling instead of call-site arg types. */
+        if (n->qualified.nparts >= 2 && s->cur_scope) {
+            Token *lead = n->qualified.parts[0];
+            Token *member = n->qualified.parts[n->qualified.nparts - 1];
+            if (lead && member) {
+                Declaration *ld = lookup_unqualified_from(s->cur_scope,
+                    lead->loc, lead->len);
+                if (ld && ld->type && ld->type->class_region) {
+                    Declaration *md = lookup_in_scope(ld->type->class_region,
+                        member->loc, member->len);
+                    if (md && md->type)
+                        n->resolved_type = md->type;
+                }
+            }
+        }
+        return;
+
     /* Statements */
     case ND_BLOCK:     visit_block(s, n);     return;
     case ND_RETURN:    visit_return(s, n);    return;
