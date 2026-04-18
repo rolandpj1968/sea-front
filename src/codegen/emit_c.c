@@ -68,6 +68,9 @@ static Node *g_current_class_def = NULL;
  * emit_func_def / emit_method_as_free_fn so ND_RETURN can adapt to
  * reference returns (T& lowered to T*: 'return *x;' → 'return x;'). */
 static Type *g_current_func_ret_ty = NULL;
+/* Class type of the OOL method currently being emitted. Used by
+ * ND_OFFSETOF to substitute unresolvable local typedefs. */
+static Type *g_current_method_class = NULL;
 
 static void emit_indent(void) {
     for (int i = 0; i < g_indent; i++) fputs("    ", stdout);
@@ -2121,11 +2124,28 @@ static void emit_expr(Node *n) {
         fputc(')', stdout);
         return;
 
-    case ND_OFFSETOF:
+    case ND_OFFSETOF: {
         /* __builtin_offsetof(type, member) — emit with the sea-front
-         * type and the member-designator tokens verbatim. */
+         * type and the member-designator tokens verbatim.
+         * Fix-up: in cloned template bodies, the local typedef used
+         * as the type argument may not resolve (lost block scope).
+         * If the type fell back to TY_INT and we're inside a class
+         * method, substitute the class's struct type — the typedef
+         * was almost certainly 'typedef ThisClass vec_embedded;'. */
+        Type *off_ty = n->offsetof_.ty;
+        if (off_ty && off_ty->kind == TY_INT && !off_ty->tag) {
+            if (g_current_class_def && g_current_class_def->class_def.ty)
+                off_ty = g_current_class_def->class_def.ty;
+            else if (g_current_method_class)
+                off_ty = g_current_method_class;
+        }
         fputs("__builtin_offsetof(", stdout);
-        emit_type(n->offsetof_.ty);
+        if (off_ty && (off_ty->kind == TY_STRUCT || off_ty->kind == TY_UNION)) {
+            fputs("struct ", stdout);
+            emit_mangled_class_tag(off_ty);
+        } else {
+            emit_type(off_ty);
+        }
         fputs(", ", stdout);
         for (int i = 0; i < n->offsetof_.n_mem_toks; i++) {
             Token *t = &n->offsetof_.mem_toks[i];
@@ -2134,6 +2154,7 @@ static void emit_expr(Node *n) {
         }
         fputc(')', stdout);
         return;
+    }
     case ND_COMMA:
         fputc('(', stdout);
         emit_expr(n->comma.lhs);
@@ -3790,11 +3811,14 @@ static void emit_method_as_free_fn(Node *func, Type *class_type) {
     emit_source_comment(func->tok);
     cf_begin_function(func);
     Type *saved_ret = g_current_func_ret_ty;
+    Type *saved_mc = g_current_method_class;
     g_current_func_ret_ty = func->func.ret_ty;
+    g_current_method_class = class_type;
     emit_method_signature(func, class_type);
     fputc(' ', stdout);
     emit_func_body(func);
     g_current_func_ret_ty = saved_ret;
+    g_current_method_class = saved_mc;
 }
 
 static void emit_class_def(Node *n) {
