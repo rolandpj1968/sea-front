@@ -1350,6 +1350,32 @@ static int resolve_overload(Type *class_type, Token *name, bool is_ctor,
     return copy_member_param_types(best, pool);
 }
 
+/* Check if a method on class_type returns a reference (TY_REF / TY_RVALREF).
+ * Used to decide whether to wrap method calls in (*...) for ref-return deref. */
+static bool method_returns_ref(Type *class_type, Token *name) {
+    if (!class_type || !class_type->class_def || !name) return false;
+    Node *cd = class_type->class_def;
+    for (int i = 0; i < cd->class_def.nmembers; i++) {
+        Node *m = cd->class_def.members[i];
+        if (!m) continue;
+        Token *mn = NULL;
+        Type *ret = NULL;
+        if (m->kind == ND_FUNC_DEF) {
+            mn = m->func.name;
+            ret = m->func.ret_ty;
+        } else if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
+                   m->var_decl.ty->kind == TY_FUNC) {
+            mn = m->var_decl.name;
+            ret = m->var_decl.ty->ret;
+        }
+        if (!mn || mn->len != name->len) continue;
+        if (memcmp(mn->loc, name->loc, name->len) != 0) continue;
+        if (ret && (ret->kind == TY_REF || ret->kind == TY_RVALREF))
+            return true;
+    }
+    return false;
+}
+
 /* Walk class (+bases) collecting operator methods whose computed
  * suffix matches op_suffix ("__plus", "__subscript", etc.). Separate
  * from collect_overload_candidates because operator methods are all
@@ -2068,6 +2094,18 @@ static void emit_expr(Node *n) {
                     is_method_call = true;
             }
             if (is_method_call) {
+                /* N4659 §11.3.2 [dcl.ref]: if the method returns T&,
+                 * our C lowering returns T*. Wrap the call in (*...)
+                 * so the caller gets a value, not a pointer.
+                 * Exception: if the CURRENT function also returns a ref,
+                 * we're in a ref-forwarding chain (e.g. vl_ptr::at
+                 * delegates to vl_embed::at) — don't deref since the
+                 * caller expects a pointer. */
+                bool ref_ret = method_returns_ref(ot, callee->member.member);
+                bool cur_returns_ref = g_current_func_ret_ty &&
+                    (g_current_func_ret_ty->kind == TY_REF ||
+                     g_current_func_ret_ty->kind == TY_RVALREF);
+                if (ref_ret && !cur_returns_ref) fputs("(*", stdout);
                 bool virt = method_is_virtual(ot, callee->member.member);
                 /* Param types of the resolved method; used for arg
                  * lowering at line below. NULL on the virtual path
@@ -2194,6 +2232,7 @@ static void emit_expr(Node *n) {
                                             ? call_pty[i] : NULL);
                 }
                 fputc(')', stdout);
+                if (ref_ret && !cur_returns_ref) fputc(')', stdout);
                 return;
             }
         }
