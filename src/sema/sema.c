@@ -446,9 +446,8 @@ static void visit_member(Sema *s, Node *n) {
     if (!ot->class_region && ot->tag && s->cur_scope) {
         Declaration *td = lookup_unqualified_from(s->cur_scope,
             ot->tag->loc, ot->tag->len);
-        if (td && td->type && td->type->class_region)
-            ot = td->type;  /* use canonical type for lookup */
-        else if (td && td->type && td->type->class_def)
+        if (td && td->type &&
+            (td->type->class_region || td->type->class_def))
             ot = td->type;
     }
     if (!ot->class_region && ot->class_def) {
