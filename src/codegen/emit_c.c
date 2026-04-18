@@ -1376,6 +1376,31 @@ static bool method_returns_ref(Type *class_type, Token *name) {
     return false;
 }
 
+/* Check if a method on class_type is const-qualified. Scans class_def
+ * members for the first match. */
+static bool method_is_const(Type *class_type, Token *name) {
+    if (!class_type || !class_type->class_def || !name) return false;
+    Node *cd = class_type->class_def;
+    for (int i = 0; i < cd->class_def.nmembers; i++) {
+        Node *m = cd->class_def.members[i];
+        if (!m) continue;
+        Token *mn = NULL;
+        bool mc = false;
+        if (m->kind == ND_FUNC_DEF) {
+            mn = m->func.name;
+            mc = m->func.is_const_method;
+        } else if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
+                   m->var_decl.ty->kind == TY_FUNC) {
+            mn = m->var_decl.name;
+            mc = m->var_decl.ty->is_const;
+        }
+        if (!mn || mn->len != name->len) continue;
+        if (memcmp(mn->loc, name->loc, name->len) != 0) continue;
+        return mc;
+    }
+    return false;
+}
+
 /* Walk class (+bases) collecting operator methods whose computed
  * suffix matches op_suffix ("__plus", "__subscript", etc.). Separate
  * from collect_overload_candidates because operator methods are all
@@ -1981,7 +2006,10 @@ static void emit_expr(Node *n) {
                 if (np < 0)
                     die_no_overload(class_type, mname, na, "ND_CALL implicit-this");
                 call_np = np;
-                mangle_class_method(class_type, mname, call_pty, np);
+                {
+                    bool mc = method_is_const(class_type, mname);
+                    mangle_class_method_cv(class_type, mname, call_pty, np, mc);
+                }
                 if (base_len > 0) {
                     /* Inherited method — receiver is the base subobject. */
                     fputs("(&this->", stdout);
@@ -2180,8 +2208,10 @@ static void emit_expr(Node *n) {
                                  * if implicit conversions differ.
                                  * TODO(seafront#tmpl-resolve-full): resolve
                                  * through the actual instantiated class_def. */
-                                mangle_class_method(method_class,
-                                    callee->member.member, at, na);
+                                bool mc = method_is_const(method_class,
+                                    callee->member.member);
+                                mangle_class_method_cv(method_class,
+                                    callee->member.member, at, na, mc);
                                 call_np = na;
                                 call_pty = at;
                             } else {
@@ -2190,9 +2220,11 @@ static void emit_expr(Node *n) {
                             }
                         } else {
                             call_np = np;
-                            mangle_class_method(method_class,
-                                                 callee->member.member,
-                                                 call_pty, np);
+                            bool mc = method_is_const(method_class,
+                                callee->member.member);
+                            mangle_class_method_cv(method_class,
+                                                     callee->member.member,
+                                                     call_pty, np, mc);
                         }
                     }
                     fputc('(', stdout);
