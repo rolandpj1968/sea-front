@@ -434,6 +434,45 @@ static void visit_member(Sema *s, Node *n) {
     if (!ot) return;
     if (ot->kind == TY_PTR && ot->base) ot = ot->base;
     if (ot->kind != TY_STRUCT && ot->kind != TY_UNION) return;
+    /* For template instantiations whose Type copy lacks class_region
+     * but has class_def (e.g. function parameter types), fall back
+     * to scanning the class_def's members directly. This mirrors
+     * the codegen's class_def scan (emit_c.c). */
+    /* When a Type copy lacks class_region (e.g. from a typedef that
+     * was parsed before the struct body), look up the tag in scope
+     * to find the canonical Type with class_region/class_def.
+     * Use the canonical type for lookup WITHOUT modifying the copy.
+     * N4659 §6.4.1 [basic.lookup.unqual]. */
+    if (!ot->class_region && ot->tag && s->cur_scope) {
+        Declaration *td = lookup_unqualified_from(s->cur_scope,
+            ot->tag->loc, ot->tag->len);
+        if (td && td->type && td->type->class_region)
+            ot = td->type;  /* use canonical type for lookup */
+        else if (td && td->type && td->type->class_def)
+            ot = td->type;
+    }
+    if (!ot->class_region && ot->class_def) {
+        Token *m = n->member.member;
+        if (m && m->kind == TK_IDENT) {
+            Node *cd = ot->class_def;
+            for (int ci = 0; ci < cd->class_def.nmembers; ci++) {
+                Node *cm = cd->class_def.members[ci];
+                if (!cm) continue;
+                Token *cmn = NULL; Type *cmt = NULL;
+                if (cm->kind == ND_VAR_DECL) {
+                    cmn = cm->var_decl.name; cmt = cm->var_decl.ty;
+                } else if (cm->kind == ND_FUNC_DEF) {
+                    cmn = cm->func.name;
+                }
+                if (cmn && cmn->len == m->len &&
+                    memcmp(cmn->loc, m->loc, m->len) == 0) {
+                    if (cmt) n->resolved_type = cmt;
+                    break;
+                }
+            }
+        }
+        return;
+    }
     if (!ot->class_region) return;
     Token *m = n->member.member;
     if (!m || m->kind != TK_IDENT) return;
