@@ -1905,6 +1905,7 @@ static void emit_expr(Node *n) {
             bool is_method_call = false;
             if (ot && (ot->kind == TY_STRUCT || ot->kind == TY_UNION) &&
                 ot->tag && callee->member.member) {
+                /* (debug removed) */
                 Token *mn = callee->member.member;
                 Type *mty = NULL;
                 if (ot->class_region) {
@@ -1912,8 +1913,42 @@ static void emit_expr(Node *n) {
                                                       mn->loc, mn->len);
                     if (md && md->type) mty = md->type;
                 }
+                /* Fallback: class_def member scan when class_region
+                 * isn't set (substituted Type copies from template
+                 * param types don't get class_region patched). */
+                if (!mty && ot->class_def) {
+                    Node *cd = ot->class_def;
+                    for (int ci = 0; ci < cd->class_def.nmembers; ci++) {
+                        Node *cm = cd->class_def.members[ci];
+                        if (!cm) continue;
+                        Token *cmn = NULL; Type *cmt = NULL;
+                        if (cm->kind == ND_FUNC_DEF) { cmn = cm->func.name; cmt = cm->func.ret_ty; }
+                        else if (cm->kind == ND_VAR_DECL && cm->var_decl.ty &&
+                                 cm->var_decl.ty->kind == TY_FUNC) {
+                            cmn = cm->var_decl.name; cmt = cm->var_decl.ty;
+                        }
+                        if (cmn && cmn->len == mn->len &&
+                            memcmp(cmn->loc, mn->loc, mn->len) == 0) {
+                            mty = cmt ? cmt : cm->var_decl.ty;
+                            if (mty && mty->kind != TY_FUNC) {
+                                Type *f = mty; (void)f;
+                                mty = NULL;
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                }
                 if (!mty && callee->resolved_type) mty = callee->resolved_type;
                 is_method_call = mty && mty->kind == TY_FUNC;
+                /* For template instantiations where the class_region
+                 * exists but the method isn't found (incomplete region
+                 * from a different Type copy), assume method call if
+                 * the class has template args. Template classes never
+                 * have function-pointer data members with names like
+                 * 'address' or 'length'. */
+                if (!is_method_call && ot->n_template_args > 0)
+                    is_method_call = true;
             }
             if (is_method_call) {
                 bool virt = method_is_virtual(ot, callee->member.member);
@@ -1972,18 +2007,28 @@ static void emit_expr(Node *n) {
                                                    callee->member.member,
                                                    false, at, na, &call_pty);
                         if (np < 0) {
-                            /* Method not found in class_def — fall
-                             * through to plain call emission. This
-                             * handles out-of-class method definitions
-                             * in template classes whose class_region
-                             * has the method but class_def doesn't. */
-                            is_method_call = false;
-                            goto plain_call;
+                            /* Method not found in class_def. For
+                             * template instantiations, emit a best-
+                             * effort mangled call (using arg types
+                             * for the param suffix) rather than
+                             * falling through to plain 'obj.method()'
+                             * which is invalid C.
+                             * For non-template classes, fall through. */
+                            if (method_class->n_template_args > 0) {
+                                mangle_class_method(method_class,
+                                    callee->member.member, at, na);
+                                call_np = na;
+                                call_pty = at;
+                            } else {
+                                is_method_call = false;
+                                goto plain_call;
+                            }
+                        } else {
+                            call_np = np;
+                            mangle_class_method(method_class,
+                                                 callee->member.member,
+                                                 call_pty, np);
                         }
-                        call_np = np;
-                        mangle_class_method(method_class,
-                                             callee->member.member,
-                                             call_pty, np);
                     }
                     fputc('(', stdout);
                 }
