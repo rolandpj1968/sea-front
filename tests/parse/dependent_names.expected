@@ -1,0 +1,11 @@
+(translation-unit
+  (class-def "Alloc"
+    (template (params (param ? "T"))
+      (var-decl (func-type void ((ref (ptr dependent T)))) "release" )))
+  (template (params (param ? "T") (param ? "A"))
+    (class-def "Box"
+      (var-decl (ptr dependent T) "data")
+      (func-def void "cleanup" (params)
+        (block
+          (if (ident "data")
+            (call (qualified "A" "release") (ident "data"))))))))
