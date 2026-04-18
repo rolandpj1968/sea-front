@@ -248,16 +248,23 @@ static int resolve_operator_overload(Type *class_type,
  * If we don't know the param type (param_ty == NULL), fall back to
  * plain emit_expr — the caller is signalling 'no signature info,
  * trust the source'. */
+/* Emit a call-site argument adapted for a ref-typed parameter.
+ * N4659 §11.3.2 [dcl.ref]: references are lowered to pointers in C.
+ * When the param is T& (lowered to T*), the arg must be passed as &arg
+ * UNLESS the arg is already a ref/rvalref (i.e. already a pointer in
+ * our lowering). Plain pointers (TY_PTR) are NOT the same — a T*
+ * arg passed to a T*& param needs &(arg) to become T**. */
 static void emit_arg_for_param(Node *arg, Type *param_ty) {
     if (!arg) return;
     bool param_is_ref = param_ty &&
         (param_ty->kind == TY_REF || param_ty->kind == TY_RVALREF);
     if (!param_is_ref) { emit_expr(arg); return; }
     Type *at = arg->resolved_type;
-    if (at && (at->kind == TY_REF || at->kind == TY_RVALREF ||
-               at->kind == TY_PTR)) {
+    /* Already a ref in the AST (lowered to pointer) — pass as-is */
+    if (at && (at->kind == TY_REF || at->kind == TY_RVALREF)) {
         emit_expr(arg); return;
     }
+    /* Dereference cancellation: *X passed to T& → pass X directly */
     if (arg->kind == ND_UNARY && arg->unary.op == TK_STAR) {
         emit_expr(arg->unary.operand); return;
     }
@@ -1950,7 +1957,12 @@ static void emit_expr(Node *n) {
                     fputc('(', stdout);
                     for (int i = 0; i < n->call.nargs; i++) {
                         if (i > 0) fputs(", ", stdout);
-                        emit_expr(n->call.args[i]);
+                        /* N4659 §11.3.2 [dcl.ref]: adapt args for
+                         * ref-typed params (wrap in &). */
+                        Type *pty = (callee_ft && callee_ft->kind == TY_FUNC &&
+                                     i < callee_ft->nparams)
+                            ? callee_ft->params[i] : NULL;
+                        emit_arg_for_param(n->call.args[i], pty);
                     }
                     fputc(')', stdout);
                     return;
@@ -4931,6 +4943,15 @@ static void emit_fwd_decl_walk(Node *n) {
          * N4659 §17.7.3 [temp.expl.spec]. */
         if (n->template_decl.nparams == 0 && n->template_decl.decl)
             emit_fwd_decl_walk(n->template_decl.decl);
+        break;
+    case ND_FUNC_DEF:
+        /* Forward-declare instantiated member template functions so they're
+         * visible before any class method body that calls them.
+         * N4659 §17.5.2 [temp.mem]. */
+        if (n->func.class_type && n->func.name) {
+            emit_method_signature(n, n->func.class_type);
+            fputs(";\n", stdout);
+        }
         break;
     default:
         break;

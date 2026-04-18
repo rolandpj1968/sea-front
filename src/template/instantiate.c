@@ -29,6 +29,7 @@ struct TmplEntry {
     const char *name;
     int         name_len;
     Node       *tmpl;       /* ND_TEMPLATE_DECL */
+    Type       *owner_class; /* non-NULL for member templates (N4659 §17.5.2) */
     TmplEntry  *next;       /* hash chain */
 };
 
@@ -50,6 +51,52 @@ static void registry_add(TmplRegistry *reg, const char *name, int name_len,
     e->tmpl = tmpl;
     e->next = reg->buckets[idx];
     reg->buckets[idx] = e;
+}
+
+/* Register a member template with a compound key "ClassName\0memberName".
+ * N4659 §17.5.2 [temp.mem] — a template can be declared within a class. */
+static void registry_add_member(TmplRegistry *reg,
+                                 const char *class_name, int class_len,
+                                 const char *member_name, int member_len,
+                                 Node *tmpl, Type *owner_class) {
+    /* Build compound key: class_name + NUL + member_name */
+    int key_len = class_len + 1 + member_len;
+    char *key = arena_alloc(reg->arena, key_len);
+    memcpy(key, class_name, class_len);
+    key[class_len] = '\0';
+    memcpy(key + class_len + 1, member_name, member_len);
+
+    uint32_t idx = hash_name(key, key_len) % TMPL_REGISTRY_SIZE;
+    TmplEntry *e = arena_alloc(reg->arena, sizeof(TmplEntry));
+    e->name = key;
+    e->name_len = key_len;
+    e->tmpl = tmpl;
+    e->owner_class = owner_class;
+    e->next = reg->buckets[idx];
+    reg->buckets[idx] = e;
+}
+
+/* Find a member template by class name + member name.
+ * N4659 §6.4.3 [basic.lookup.qual] — qualified name lookup in
+ * a class scope. Returns the TmplEntry (not just the Node) so the
+ * caller can access owner_class. */
+static TmplEntry *registry_find_member(TmplRegistry *reg,
+                                        const char *class_name, int class_len,
+                                        const char *member_name, int member_len) {
+    int key_len = class_len + 1 + member_len;
+    char key[256];
+    if (key_len > 256) return NULL;
+    memcpy(key, class_name, class_len);
+    key[class_len] = '\0';
+    memcpy(key + class_len + 1, member_name, member_len);
+
+    uint32_t idx = hash_name(key, key_len) % TMPL_REGISTRY_SIZE;
+    for (TmplEntry *e = reg->buckets[idx]; e; e = e->next) {
+        if (e->name_len == key_len &&
+            memcmp(e->name, key, key_len) == 0)
+            return e;
+    }
+    return NULL;
 }
 
 /* Find the primary template for a given name. The primary is the
@@ -233,6 +280,25 @@ static void build_registry(TmplRegistry *reg, Node *n) {
         for (int i = 0; i < n->block.nstmts; i++)
             build_registry(reg, n->block.stmts[i]);
         break;
+    case ND_CLASS_DEF:
+        /* N4659 §17.5.2 [temp.mem]: a template can be declared within
+         * a class or class template. Walk class members and register
+         * any ND_TEMPLATE_DECL as a member template with a compound
+         * key so they're findable via registry_find_member. */
+        if (n->class_def.ty && n->class_def.tag) {
+            for (int i = 0; i < n->class_def.nmembers; i++) {
+                Node *m = n->class_def.members[i];
+                if (m && m->kind == ND_TEMPLATE_DECL) {
+                    Token *mname = template_name(m);
+                    if (mname)
+                        registry_add_member(reg,
+                            n->class_def.tag->loc, n->class_def.tag->len,
+                            mname->loc, mname->len,
+                            m, n->class_def.ty);
+                }
+            }
+        }
+        break;
     default:
         break;
     }
@@ -251,9 +317,23 @@ struct InstRequest {
     InstRequest *next;
 };
 
+/* N4659 §17.5.2 [temp.mem]: member template instantiation request.
+ * Created when a qualified call like Alloc::release(data) resolves
+ * to a member template. */
+typedef struct MemberTmplRequest MemberTmplRequest;
+struct MemberTmplRequest {
+    TmplEntry *entry;       /* registry entry (has tmpl + owner_class) */
+    Type     **arg_types;   /* call-site argument types for deduction */
+    int        nargs;
+    Node      *call_node;   /* ND_CALL node (to patch resolved_type) */
+    MemberTmplRequest *next;
+};
+
 typedef struct {
     InstRequest *head;
     int          count;
+    MemberTmplRequest *member_head;
+    int          member_count;
     Arena       *arena;
     TmplRegistry *reg;
 } InstCollector;
@@ -429,6 +509,40 @@ static void collect_from_node(InstCollector *col, Node *n) {
         collect_from_node(col, n->call.callee);
         for (int i = 0; i < n->call.nargs; i++)
             collect_from_node(col, n->call.args[i]);
+        /* N4659 §17.5.2 [temp.mem] / §17.8.2.1 [temp.deduct.call]:
+         * detect qualified calls to member templates.
+         * Pattern: Class::method(args) where method is a member template. */
+        if (n->call.callee && n->call.callee->kind == ND_QUALIFIED &&
+            n->call.callee->qualified.nparts >= 2) {
+            Token *class_tok = n->call.callee->qualified.parts[0];
+            Token *method_tok = n->call.callee->qualified.parts[
+                n->call.callee->qualified.nparts - 1];
+            if (class_tok && method_tok) {
+                TmplEntry *me = registry_find_member(col->reg,
+                    class_tok->loc, class_tok->len,
+                    method_tok->loc, method_tok->len);
+                if (me) {
+                    /* Collect call-site arg types for deduction */
+                    MemberTmplRequest *mr = arena_alloc(col->arena,
+                        sizeof(MemberTmplRequest));
+                    mr->entry = me;
+                    mr->nargs = n->call.nargs;
+                    mr->call_node = n;
+                    if (n->call.nargs > 0) {
+                        mr->arg_types = arena_alloc(col->arena,
+                            n->call.nargs * sizeof(Type *));
+                        for (int i = 0; i < n->call.nargs; i++)
+                            mr->arg_types[i] = n->call.args[i]
+                                ? n->call.args[i]->resolved_type : NULL;
+                    } else {
+                        mr->arg_types = NULL;
+                    }
+                    mr->next = col->member_head;
+                    col->member_head = mr;
+                    col->member_count++;
+                }
+            }
+        }
         break;
 
     case ND_MEMBER:
@@ -627,6 +741,88 @@ typedef struct {
 /* Reuse hash_name for dedup key hashing — same FNV-1a algorithm. */
 static uint32_t hash_key(const char *key, int len) {
     return hash_name(key, len);
+}
+
+/* ------------------------------------------------------------------ */
+/* Template Argument Deduction — N4659 §17.8.2.1 [temp.deduct.call]   */
+/*                                                                     */
+/* Inverse of subst_type: given a pattern type P (may contain          */
+/* TY_DEPENDENT) and a concrete argument type A, deduce the bindings.  */
+/* ------------------------------------------------------------------ */
+
+/* Deduce from a single (parameter-type, argument-type) pair.
+ * Returns true on success, false on deduction failure.
+ *
+ * N4659 §17.8.2.1/2: "If P is a reference type, the type referred
+ * to by P is used for type deduction."
+ * N4659 §17.8.2.5/8: for pointer types, recurse on pointee. */
+static bool deduce_from_pair(Type *P, Type *A, SubstMap *map) {
+    if (!P || !A) return true;  /* nothing to deduce */
+
+    /* §17.8.2.1/2: strip references from P */
+    if (P->kind == TY_REF || P->kind == TY_RVALREF)
+        P = P->base;
+    if (!P) return true;
+
+    /* TY_DEPENDENT: this IS the template parameter — bind it */
+    if (P->kind == TY_DEPENDENT && P->tag) {
+        /* Check if already bound (consistency) */
+        for (int i = 0; i < map->nentries; i++) {
+            Token *pn = map->entries[i].param_name;
+            if (pn && pn->len == P->tag->len &&
+                memcmp(pn->loc, P->tag->loc, pn->len) == 0) {
+                /* Already bound — must be consistent */
+                return true;  /* trust the first binding */
+            }
+        }
+        subst_map_add(map, P->tag, A);
+        return true;
+    }
+
+    /* Compound types: recurse structurally */
+    if (P->kind == TY_PTR && A->kind == TY_PTR)
+        return deduce_from_pair(P->base, A->base, map);
+    if (P->kind == TY_REF && A->kind == TY_REF)
+        return deduce_from_pair(P->base, A->base, map);
+    if (P->kind == TY_ARRAY && A->kind == TY_ARRAY)
+        return deduce_from_pair(P->base, A->base, map);
+
+    /* Non-dependent, non-compound: no deduction needed */
+    return true;
+}
+
+/* Deduce template arguments for a member template call.
+ * tmpl_func: the inner ND_FUNC_DEF/ND_FUNC_DECL of the member template
+ * arg_types: concrete types of the call-site arguments
+ * nargs: number of call-site arguments
+ * out: SubstMap to populate (must be pre-allocated)
+ *
+ * N4659 §17.8.2.1 [temp.deduct.call]/1: "Template arguments can be
+ * deduced from each function call argument by comparing the type of
+ * the function parameter with the corresponding function argument." */
+static bool deduce_template_args(Node *tmpl_func, Type **arg_types, int nargs,
+                                  SubstMap *out) {
+    if (!tmpl_func) return false;
+    int nparams = 0;
+    if (tmpl_func->kind == ND_FUNC_DEF || tmpl_func->kind == ND_FUNC_DECL)
+        nparams = tmpl_func->func.nparams;
+    else if (tmpl_func->kind == ND_VAR_DECL && tmpl_func->var_decl.ty &&
+             tmpl_func->var_decl.ty->kind == TY_FUNC)
+        nparams = tmpl_func->var_decl.ty->nparams;
+    else
+        return false;
+
+    int pairs = nparams < nargs ? nparams : nargs;
+    for (int i = 0; i < pairs; i++) {
+        Type *P = NULL;
+        if (tmpl_func->kind == ND_FUNC_DEF || tmpl_func->kind == ND_FUNC_DECL)
+            P = tmpl_func->func.params[i]->param.ty;
+        else
+            P = tmpl_func->var_decl.ty->params[i];
+        if (!deduce_from_pair(P, arg_types[i], out))
+            return false;
+    }
+    return out->nentries > 0;
 }
 
 /* Returns the existing Type* if already instantiated, else NULL. */
@@ -1097,10 +1293,105 @@ void template_instantiate(Node *tu, Arena *arena) {
     col.reg = &reg;
     for (int i = 0; i < tu->tu.ndecls; i++)
         collect_from_node(&col, tu->tu.decls[i]);
-    if (col.count == 0) break;
+    if (col.count == 0 && col.member_count == 0) break;
 
-    /* Phase 3: instantiate and patch */
+    /* Phase 3a: member template instantiations FIRST — they're
+     * standalone functions that class instantiation methods may call.
+     * Processing them first ensures they're earlier in all_instantiated[]
+     * and thus emitted before their callers. */
     int ninst_this_round = 0;
+    for (MemberTmplRequest *mr = col.member_head; mr; mr = mr->next) {
+        Node *tmpl = mr->entry->tmpl;
+        int np = tmpl->template_decl.nparams;
+        Node *inner = tmpl->template_decl.decl;
+        if (!inner) continue;
+
+        /* N4659 §17.8.2.1 [temp.deduct.call]: deduce template args */
+        SubstMap deduced = subst_map_new(arena, np > 0 ? np : 1);
+        if (!deduce_template_args(inner, mr->arg_types, mr->nargs, &deduced))
+            continue;
+
+        /* Dedup key: class + NUL + member + NUL + deduced arg types */
+        char key[MAX_DEDUP_KEY];
+        Token *class_tag = mr->entry->owner_class ? mr->entry->owner_class->tag : NULL;
+        Token *member_name = template_name(tmpl);
+        if (!class_tag || !member_name) continue;
+        int pos = 0;
+        if (pos + class_tag->len < MAX_DEDUP_KEY) {
+            memcpy(key, class_tag->loc, class_tag->len);
+            pos = class_tag->len;
+        }
+        key[pos++] = '\0';
+        if (pos + member_name->len < MAX_DEDUP_KEY) {
+            memcpy(key + pos, member_name->loc, member_name->len);
+            pos += member_name->len;
+        }
+        key[pos++] = '\0';
+        for (int i = 0; i < deduced.nentries; i++) {
+            pos = type_to_key(deduced.entries[i].concrete_type,
+                              key, pos, MAX_DEDUP_KEY);
+            key[pos++] = '\0';
+        }
+        if (dedup_find(&ds, key, pos)) continue;
+
+        /* N4659 §17.5.2/5 [temp.mem]: if in-class member is a
+         * declaration without body, find the OOL definition. */
+        Node *func_src = inner;
+        if ((inner->kind == ND_FUNC_DECL ||
+             (inner->kind == ND_FUNC_DEF && !inner->func.body)) &&
+            tu) {
+            for (int i = 0; i < tu->tu.ndecls; i++) {
+                Node *d = tu->tu.decls[i];
+                if (!d || d->kind != ND_TEMPLATE_DECL) continue;
+                Node *di = d->template_decl.decl;
+                if (!di || di->kind != ND_FUNC_DEF || !di->func.body) continue;
+                if (!di->func.class_type || !di->func.name) continue;
+                Token *ct = di->func.class_type->tag;
+                if (!ct || ct->len != class_tag->len ||
+                    memcmp(ct->loc, class_tag->loc, ct->len) != 0) continue;
+                if (di->func.name->len != member_name->len ||
+                    memcmp(di->func.name->loc, member_name->loc,
+                           member_name->len) != 0) continue;
+                func_src = di;
+                break;
+            }
+        }
+
+        /* Clone with deduced substitutions */
+        Node *cloned = clone_node(func_src, &deduced, arena);
+        if (!cloned) continue;
+        cloned->func.class_type = mr->entry->owner_class;
+
+        /* N4659 §16.3 [over.match]: build TY_FUNC from cloned params
+         * and set as resolved_type on the call-site callee so the
+         * param suffix matches between definition and call. */
+        if (mr->call_node && mr->call_node->call.callee) {
+            int cnp = cloned->func.nparams;
+            Type **cparams = NULL;
+            if (cnp > 0) {
+                cparams = arena_alloc(arena, cnp * sizeof(Type *));
+                for (int i = 0; i < cnp; i++)
+                    cparams[i] = cloned->func.params[i]->param.ty;
+            }
+            Type *ft = arena_alloc(arena, sizeof(Type));
+            ft->kind = TY_FUNC;
+            ft->ret = cloned->func.ret_ty;
+            ft->params = cparams;
+            ft->nparams = cnp;
+            mr->call_node->call.callee->resolved_type = ft;
+        }
+
+        /* Register in dedup set */
+        Type *dummy = arena_alloc(arena, sizeof(Type));
+        dummy->kind = TY_FUNC;
+        dedup_add(&ds, key, pos, dummy);
+
+        if (total_inst < MAX_INST)
+            all_instantiated[total_inst++] = cloned;
+        ninst_this_round++;
+    }
+
+    /* Phase 3b: class + function template instantiation */
     for (InstRequest *req = col.head; req; req = req->next) {
         /* Build a temporary SubstMap to compute the dedup key
          * (includes defaults). This is rebuilt inside instantiate_one
@@ -1328,6 +1619,7 @@ void template_instantiate(Node *tu, Arena *arena) {
             dedup_add(&ds, key, key_len, dummy);
         }
     }
+
     if (ninst_this_round == 0) break;
 
     /* Insert this round's instantiations into the TU. They go after
