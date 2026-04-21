@@ -1386,9 +1386,47 @@ Node *parse_declaration(Parser *p) {
             p->region = qscope;
             /* Tag this function definition as a method of the class
              * the qualifier resolved to, so codegen can mangle the
-             * name and inject a 'this' parameter. */
+             * name and inject a 'this' parameter.
+             *
+             * Full specialization bound to a concrete class:
+             *   template<> template<> inline bool
+             *   is_a_helper<cgraph_node>::test(...) { ... }
+             * The qualifier is 'is_a_helper<cgraph_node>' — qtid has
+             * a fully concrete template-id. Without extra handling,
+             * class_type is the primary template's Type and the
+             * cgraph_node / varpool_node variants mangle identically,
+             * causing link errors. Build a shallow Type copy carrying
+             * the concrete template_args so mangle_class_tag appends
+             * '_t_cgraph_node_te_'. N4659 §17.7.3 [temp.expl.spec]. */
+            Type *eff_class_type = qscope->owner_type;
+            if (qtid && qtid->kind == ND_TEMPLATE_ID &&
+                qtid->template_id.nargs > 0) {
+                bool all_concrete = true;
+                for (int i = 0; i < qtid->template_id.nargs; i++) {
+                    Node *a = qtid->template_id.args[i];
+                    Type *t = (a && a->kind == ND_VAR_DECL) ? a->var_decl.ty : NULL;
+                    if (!t || t->kind == TY_DEPENDENT) {
+                        all_concrete = false;
+                        break;
+                    }
+                }
+                if (all_concrete) {
+                    Type *spec = arena_alloc(p->arena, sizeof(Type));
+                    *spec = *qscope->owner_type;
+                    spec->n_template_args = qtid->template_id.nargs;
+                    spec->template_args = arena_alloc(p->arena,
+                        spec->n_template_args * sizeof(Type *));
+                    for (int i = 0; i < spec->n_template_args; i++) {
+                        Node *a = qtid->template_id.args[i];
+                        spec->template_args[i] = (a && a->kind == ND_VAR_DECL) ?
+                            a->var_decl.ty : NULL;
+                    }
+                    spec->template_id_node = qtid;
+                    eff_class_type = spec;
+                }
+            }
             if (qscope->kind == REGION_CLASS && qscope->owner_type) {
-                func->func.class_type = qscope->owner_type;
+                func->func.class_type = eff_class_type;
                 /* Propagate 'static' from the in-class declaration to
                  * the OOL definition. C++ puts 'static' only on the
                  * declaration (N4659 §10.1.1/6 [dcl.stc]); the OOL
