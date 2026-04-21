@@ -245,6 +245,28 @@ static int resolve_operator_overload(Type *class_type,
                                       Type ***out_param_types,
                                       Node **out_best);
 
+/* Type-peeling helpers — consolidate the many
+ * 'if (ty->kind == TY_PTR || TY_REF || TY_RVALREF) ty = ty->base;'
+ * open-coded patterns. References lower to pointers in C, so these
+ * three kinds are usually treated as a single 'indirection' concept.
+ * N4659 §11.3.1-§11.3.2 [dcl.ptr][dcl.ref]. */
+static inline bool ty_is_ref(Type *t) {
+    return t && (t->kind == TY_REF || t->kind == TY_RVALREF);
+}
+static inline bool ty_is_indirect(Type *t) {
+    return t && (t->kind == TY_PTR || t->kind == TY_REF || t->kind == TY_RVALREF);
+}
+/* Peel one level of reference (TY_REF / TY_RVALREF). Pointers are
+ * NOT peeled — callers that want pointer-peeling use ty_peel_indirect
+ * or do it explicitly. Returns the input unchanged if not a ref. */
+static inline Type *ty_peel_ref(Type *t) {
+    return ty_is_ref(t) && t->base ? t->base : t;
+}
+/* Peel one level of any indirection (TY_PTR / TY_REF / TY_RVALREF). */
+static inline Type *ty_peel_indirect(Type *t) {
+    return ty_is_indirect(t) && t->base ? t->base : t;
+}
+
 /* Emit a call-site argument with reference-parameter adaptation.
  *
  * Mirrors emit_return_expr in the opposite direction: when the
@@ -266,14 +288,12 @@ static int resolve_operator_overload(Type *class_type,
  * arg passed to a T*& param needs &(arg) to become T**. */
 static void emit_arg_for_param(Node *arg, Type *param_ty) {
     if (!arg) return;
-    bool param_is_ref = param_ty &&
-        (param_ty->kind == TY_REF || param_ty->kind == TY_RVALREF);
-    if (!param_is_ref) { emit_expr(arg); return; }
+    if (!ty_is_ref(param_ty)) { emit_expr(arg); return; }
     Type *at = arg->resolved_type;
     /* Already a ref in the AST (lowered to pointer) — pass as-is.
      * Suppress ref-param deref: if the arg is an ND_IDENT naming a
      * ref-param, we want the pointer value, not its dereference. */
-    if (at && (at->kind == TY_REF || at->kind == TY_RVALREF)) {
+    if (ty_is_ref(at)) {
         bool saved = g_suppress_ref_deref;
         g_suppress_ref_deref = true;
         emit_expr(arg);
@@ -303,10 +323,9 @@ static void emit_arg_for_param(Node *arg, Type *param_ty) {
  *   - otherwise → take the address: '&(E)'. Works for any lvalue. */
 static void emit_return_expr(Node *e) {
     Type *rt = g_current_func_ret_ty;
-    bool needs_ref = rt && (rt->kind == TY_REF || rt->kind == TY_RVALREF);
-    if (!needs_ref) { emit_expr(e); return; }
+    if (!ty_is_ref(rt)) { emit_expr(e); return; }
     Type *et = e ? e->resolved_type : NULL;
-    if (et && (et->kind == TY_REF || et->kind == TY_RVALREF)) {
+    if (ty_is_ref(et)) {
         emit_expr(e); return;
     }
     if (e->kind == ND_UNARY && e->unary.op == TK_STAR) {
@@ -1286,7 +1305,7 @@ static int overload_match_score(Node *m, Type **arg_types, int nargs) {
          * the underlying type: this is the copy/move-ctor pattern.
          * 'Box(const Box&)' with arg 'Box' (e.g. '*this') should beat
          * 'Box(int)' with the same arg. N4659 §16.3.3.2.1 [over.ics.rank]. */
-        if ((pt->kind == TY_REF || pt->kind == TY_RVALREF) && pt->base &&
+        if (ty_is_ref(pt) && pt->base &&
             pt->base->kind == at->kind) {
             score += 2;
             if ((at->kind == TY_STRUCT || at->kind == TY_UNION) &&
@@ -1382,10 +1401,8 @@ static void collect_overload_candidates(Type *class_type, Token *name,
 static bool receiver_type_is_const(Type *t) {
     while (t) {
         if (t->is_const) return true;
-        if (t->kind == TY_PTR || t->kind == TY_REF || t->kind == TY_RVALREF)
-            t = t->base;
-        else
-            break;
+        if (!ty_is_indirect(t)) break;
+        t = t->base;
     }
     return false;
 }
@@ -1472,7 +1489,7 @@ static bool method_returns_ref(Type *class_type, Token *name) {
         }
         if (!mn || mn->len != name->len) continue;
         if (memcmp(mn->loc, name->loc, name->len) != 0) continue;
-        if (ret && (ret->kind == TY_REF || ret->kind == TY_RVALREF))
+        if (ty_is_ref(ret))
             return true;
     }
     return false;
@@ -1892,8 +1909,7 @@ static void emit_expr(Node *n) {
          *   DIR* must emit as a plain pointer comparison, not
          *   sf__DIR__ne(&pchdir, NULL). */
         Type *lhs_ty = n->binary.lhs ? n->binary.lhs->resolved_type : NULL;
-        if (lhs_ty && (lhs_ty->kind == TY_REF || lhs_ty->kind == TY_RVALREF))
-            lhs_ty = lhs_ty->base;
+        if (ty_is_ref(lhs_ty)) lhs_ty = lhs_ty->base;
         if (lhs_ty && (lhs_ty->kind == TY_STRUCT || lhs_ty->kind == TY_UNION) &&
             lhs_ty->tag) {
             const char *suffix = binop_to_operator_suffix(n->binary.op);
@@ -1940,8 +1956,7 @@ static void emit_expr(Node *n) {
          * Same value-vs-pointer distinction as ND_BINARY — TY_PTR lhs
          * is native C pointer arithmetic, not a class operator. */
         Type *lhs_ty = n->binary.lhs ? n->binary.lhs->resolved_type : NULL;
-        if (lhs_ty && (lhs_ty->kind == TY_REF || lhs_ty->kind == TY_RVALREF))
-            lhs_ty = lhs_ty->base;
+        if (ty_is_ref(lhs_ty)) lhs_ty = lhs_ty->base;
         if (lhs_ty && (lhs_ty->kind == TY_STRUCT || lhs_ty->kind == TY_UNION) &&
             lhs_ty->tag && n->binary.op != TK_ASSIGN) {
             const char *suffix = binop_to_operator_suffix(n->binary.op);
@@ -1978,8 +1993,7 @@ static void emit_expr(Node *n) {
          * to the LHS; references bind transparently. */
         {
             Type *rhs_rt = n->binary.rhs ? n->binary.rhs->resolved_type : NULL;
-            bool rhs_is_ref = rhs_rt &&
-                (rhs_rt->kind == TY_REF || rhs_rt->kind == TY_RVALREF);
+            bool rhs_is_ref = ty_is_ref(rhs_rt);
             Type *lhs_t = n->binary.lhs ? n->binary.lhs->resolved_type : NULL;
             bool lhs_wants_value = lhs_t &&
                 (lhs_t->kind == TY_STRUCT || lhs_t->kind == TY_UNION);
@@ -2029,8 +2043,7 @@ static void emit_expr(Node *n) {
          * suffixes; unary vs binary is disambiguated by the 0-arg
          * param suffix '_p_void_pe_' vs '_p_T_pe_'). */
         Type *ot = n->unary.operand ? n->unary.operand->resolved_type : NULL;
-        if (ot && (ot->kind == TY_REF || ot->kind == TY_RVALREF))
-            ot = ot->base;
+        if (ty_is_ref(ot)) ot = ot->base;
         const char *usuf = NULL;
         if (ot && (ot->kind == TY_STRUCT || ot->kind == TY_UNION) &&
             ot->tag) {
@@ -2285,14 +2298,11 @@ static void emit_expr(Node *n) {
              * pointers, so 'obj_is_ptr' is true for both — the
              * call-site must pass the ref as-is, not take its
              * address. N4659 §11.3.2 [dcl.ref]. */
-            bool obj_is_ptr = ot && (ot->kind == TY_PTR ||
-                                      ot->kind == TY_REF ||
-                                      ot->kind == TY_RVALREF);
+            bool obj_is_ptr = ty_is_indirect(ot);
             if (obj_is_ptr) ot = ot->base;
             /* If the ref was TY_REF(TY_PTR(...)) or similar, peel
              * an inner ref/ptr once more so 'ot' lands on the class. */
-            if (ot && (ot->kind == TY_REF || ot->kind == TY_RVALREF))
-                ot = ot->base;
+            if (ty_is_ref(ot)) ot = ot->base;
             /* Method dispatch lowering applies when the member resolves
              * to a method declaration (type TY_FUNC). A function pointer
              * data field has type TY_PTR(TY_FUNC) and falls through to
@@ -2649,8 +2659,7 @@ static void emit_expr(Node *n) {
         Type *raw_obj_ty = n->member.obj ? n->member.obj->resolved_type : NULL;
         Type *obj_ty = raw_obj_ty;
         if (obj_ty && obj_ty->kind == TY_PTR) obj_ty = obj_ty->base;
-        if (obj_ty && (obj_ty->kind == TY_REF || obj_ty->kind == TY_RVALREF))
-            obj_ty = obj_ty->base;
+        if (ty_is_ref(obj_ty)) obj_ty = obj_ty->base;
         Token *mem = n->member.member;
         /* Pick the access operator. Source-level '.' must become '->'
          * when the operand has been lowered to a pointer in our C —
@@ -2658,10 +2667,7 @@ static void emit_expr(Node *n) {
          * (TY_REF / TY_RVALREF, lowered to T*). N4659 §8.2.5
          * [expr.ref] — references behave as the referenced object,
          * so source uses '.' even though our C lowers to a pointer. */
-        bool obj_is_ptr_in_c = raw_obj_ty &&
-            (raw_obj_ty->kind == TY_PTR ||
-             raw_obj_ty->kind == TY_REF ||
-             raw_obj_ty->kind == TY_RVALREF);
+        bool obj_is_ptr_in_c = ty_is_indirect(raw_obj_ty);
         const char *access_op =
             (n->member.op == TK_ARROW || obj_is_ptr_in_c) ? "->" : ".";
         bool did_base_rewrite = false;
@@ -2749,7 +2755,7 @@ static void emit_expr(Node *n) {
                     ret = winner->func.ret_ty;
                 else if (winner->kind == ND_VAR_DECL && winner->var_decl.ty)
                     ret = winner->var_decl.ty->ret;
-                if (ret && (ret->kind == TY_REF || ret->kind == TY_RVALREF))
+                if (ty_is_ref(ret))
                     ref_return = true;
             }
             /* Fallback for template types without resolution (class_def
@@ -2763,9 +2769,7 @@ static void emit_expr(Node *n) {
              * raw pointer (no extra deref), because our
              * emit_return_expr will convert value→pointer anyway.
              * Same rule as the method-call ref_ret handling. */
-            bool cur_returns_ref = g_current_func_ret_ty &&
-                (g_current_func_ret_ty->kind == TY_REF ||
-                 g_current_func_ret_ty->kind == TY_RVALREF);
+            bool cur_returns_ref = ty_is_ref(g_current_func_ret_ty);
             if (ref_return && !cur_returns_ref) fputs("(*", stdout);
             mangle_class_tag(base_ty);
             fputs("__subscript", stdout);
@@ -2975,8 +2979,7 @@ static void emit_var_decl_inner(Node *n) {
          * here. */
         Node *init_e = n->var_decl.init;
         Type *init_rt = init_e ? init_e->resolved_type : NULL;
-        bool init_is_ref = init_rt &&
-            (init_rt->kind == TY_REF || init_rt->kind == TY_RVALREF);
+        bool init_is_ref = ty_is_ref(init_rt);
         if (init_is_ref && init_e && init_e->kind == ND_SUBSCRIPT) {
             Type *base_ty = init_e->subscript.base ?
                 init_e->subscript.base->resolved_type : NULL;
@@ -2993,8 +2996,7 @@ static void emit_var_decl_inner(Node *n) {
          * Only takes address when the init's own type isn't already
          * a ref/ptr (where the address would be redundant).
          * N4659 §11.3.2 [dcl.ref]. */
-        bool var_is_ref = ty &&
-            (ty->kind == TY_REF || ty->kind == TY_RVALREF);
+        bool var_is_ref = ty_is_ref(ty);
         bool init_is_ptr = init_rt && init_rt->kind == TY_PTR;
         if (init_is_ref && var_is_struct) {
             fputs("(*", stdout);
@@ -3404,7 +3406,7 @@ static void emit_stmt(Node *n) {
                            arg_ty->tag->len) == 0)
                     is_copy = true;
                 /* const Foo& arg: TY_REF(TY_STRUCT) */
-                if (arg_ty && (arg_ty->kind == TY_REF || arg_ty->kind == TY_RVALREF) &&
+                if (ty_is_ref(arg_ty) &&
                     arg_ty->base && arg_ty->base->kind == TY_STRUCT &&
                     n->var_decl.ty->tag && arg_ty->base->tag &&
                     arg_ty->base->tag->len == n->var_decl.ty->tag->len &&
@@ -4006,9 +4008,7 @@ static void cf_begin_function(Node *func) {
     if (func && (func->kind == ND_FUNC_DEF || func->kind == ND_FUNC_DECL)) {
         for (int i = 0; i < func->func.nparams && g_nref_params < REF_PARAM_CAP; i++) {
             Node *p = func->func.params[i];
-            if (p && p->param.ty &&
-                (p->param.ty->kind == TY_REF || p->param.ty->kind == TY_RVALREF) &&
-                p->param.name)
+            if (p && ty_is_ref(p->param.ty) && p->param.name)
                 g_ref_params[g_nref_params++] = p->param.name;
         }
     }
@@ -5125,9 +5125,7 @@ static void emit_top_level(Node *n) {
     case ND_TYPEDEF: {
         /* Emit the underlying type definition if applicable. */
         Type *uty = n->var_decl.ty;
-        while (uty && (uty->kind == TY_PTR || uty->kind == TY_REF ||
-                        uty->kind == TY_RVALREF))
-            uty = uty->base;
+        while (ty_is_indirect(uty) && uty->base) uty = uty->base;
         /* Struct/union with body */
         if (uty && (uty->kind == TY_STRUCT || uty->kind == TY_UNION) &&
             uty->class_def)
@@ -5278,9 +5276,7 @@ static void emit_fwd_decl_structs_only(Node *n) {
          * so method forward declarations that reference 'struct X*'
          * as a param type land in file scope, not in the param list. */
         Type *uty = n->var_decl.ty;
-        while (uty && (uty->kind == TY_PTR || uty->kind == TY_REF ||
-                        uty->kind == TY_RVALREF))
-            uty = uty->base;
+        while (ty_is_indirect(uty) && uty->base) uty = uty->base;
         if (uty && (uty->kind == TY_STRUCT || uty->kind == TY_UNION) &&
             uty->tag) {
             fputs(uty->kind == TY_UNION ? "union " : "struct ", stdout);
