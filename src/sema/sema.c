@@ -21,10 +21,12 @@
  * time.
  */
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "sema.h"
 #include "../sea-front.h"
+#include "../template/clone.h"
 
 typedef struct {
     Arena *arena;
@@ -268,7 +270,13 @@ static void visit_ident(Sema *s, Node *n) {
      * retain scope tables. Cap at 16 which comfortably covers
      * everything gcc 4.8 throws at us — gt_pch_nx has 4 overloads,
      * vec's operator[] has 2, etc. */
-    if (d->type && d->type->kind == TY_FUNC) {
+    /* Populate overload_set when the name could be overloaded — i.e.
+     * is a function (d->type TY_FUNC) OR a function template (ENTITY_
+     * TEMPLATE whose tmpl_node wraps a function). Non-function kinds
+     * (variable, type, enum constant) aren't overloadable; skip. */
+    bool is_fn = d->type && d->type->kind == TY_FUNC;
+    bool is_fn_tmpl = d->entity == ENTITY_TEMPLATE && d->tmpl_node;
+    if (is_fn || is_fn_tmpl) {
         Declaration *buf[16];
         int n_ov = lookup_overload_set_from(s->cur_scope,
                                              name->loc, name->len,
@@ -757,44 +765,128 @@ static int ics_rank(Type *param, Type *arg) {
  * binding sub-ranks, partial ordering of templates.
  */
 #define MAX_OVLD_CANDS 16
+
+/* For each candidate we reduce to a concrete function signature before
+ * running ICS: non-template candidates use their declared TY_FUNC as-
+ * is; template candidates get their parameters deduced against the
+ * call's arg types (§17.8.2 [temp.deduct]) and then substituted, so
+ * ICS runs against concrete param types. The 'is_template' flag is
+ * carried through for the §16.3.3 tiebreaker (non-template beats
+ * equally-ranked template). The deduced SubstMap is carried so the
+ * caller can build a synthetic ND_TEMPLATE_ID (driving instantiation)
+ * when a template is the winner. */
+typedef struct {
+    Declaration *decl;
+    Type       **params;   /* effective param types */
+    int          nparams;
+    bool         is_variadic;
+    bool         is_template;
+    SubstMap     deduced;  /* only valid when is_template */
+} ViableCand;
+
+/* Extract the inner function node from a template declaration.
+ * Returns NULL if the template doesn't wrap a function (class
+ * template etc.) or the node shape is unexpected. */
+static Node *tmpl_inner_func(Node *tmpl) {
+    if (!tmpl || tmpl->kind != ND_TEMPLATE_DECL) return NULL;
+    Node *d = tmpl->template_decl.decl;
+    if (!d) return NULL;
+    /* Unwrap double template (member templates): template<T>
+     * template<U> — the outer template_decl wraps another
+     * template_decl. Peel to reach the func. */
+    while (d && d->kind == ND_TEMPLATE_DECL)
+        d = d->template_decl.decl;
+    if (d && (d->kind == ND_FUNC_DEF || d->kind == ND_FUNC_DECL))
+        return d;
+    return NULL;
+}
+
+/* Pick the best-viable overload. On return, *out_deduced is set to
+ * the SubstMap deduced against the winner IF the winner is a
+ * template (so the caller can build the ND_TEMPLATE_ID to drive
+ * instantiation); otherwise out_deduced is left untouched. */
 static Declaration *resolve_free_function_overload(
         Declaration **cands, int ncands,
-        Type **arg_types, int nargs) {
+        Type **arg_types, int nargs,
+        Arena *arena,
+        SubstMap *out_deduced, bool *out_is_template) {
+    if (out_is_template) *out_is_template = false;
     if (ncands <= 1) return ncands == 1 ? cands[0] : NULL;
 
-    Declaration *viable[MAX_OVLD_CANDS];
+    ViableCand viable[MAX_OVLD_CANDS];
     int ranks[MAX_OVLD_CANDS][MAX_OVLD_CANDS];
     int nv = 0;
     for (int i = 0; i < ncands && nv < MAX_OVLD_CANDS; i++) {
         Declaration *c = cands[i];
-        if (!c || !c->type || c->type->kind != TY_FUNC) continue;
-        Type *ft = c->type;
+        if (!c) continue;
+        ViableCand vc = {0};
+        vc.decl = c;
+        /* Populate effective params list depending on kind. */
+        if (c->type && c->type->kind == TY_FUNC) {
+            vc.params      = c->type->params;
+            vc.nparams     = c->type->nparams;
+            vc.is_variadic = c->type->is_variadic;
+            vc.is_template = false;
+        } else if (c->entity == ENTITY_TEMPLATE && c->tmpl_node) {
+            Node *inner = tmpl_inner_func(c->tmpl_node);
+            if (!inner) continue;
+            int np = inner->func.nparams;
+            /* Template argument deduction against the call args —
+             * §17.8.2.1 [temp.deduct.call]. */
+            SubstMap map = subst_map_new(arena,
+                np > 0 ? np : 1);
+            Type **pp = NULL;
+            if (np > 0) {
+                pp = arena_alloc(arena, np * sizeof(Type *));
+                for (int k = 0; k < np; k++)
+                    pp[k] = inner->func.params[k]->param.ty;
+            }
+            (void)deduce_template_args(inner, arg_types, nargs, &map);
+            /* Substitute the deduced bindings into the param types.
+             * Even if deduction bound nothing, subst_type is a no-op
+             * and the param types stay unchanged. */
+            Type **eff = pp;
+            if (np > 0 && map.nentries > 0) {
+                eff = arena_alloc(arena, np * sizeof(Type *));
+                for (int k = 0; k < np; k++)
+                    eff[k] = subst_type(pp[k], &map, arena);
+            }
+            vc.params      = eff;
+            vc.nparams     = np;
+            vc.is_variadic = inner->func.is_variadic;
+            vc.is_template = true;
+            vc.deduced     = map;
+        } else {
+            continue;
+        }
         /* Arity filter — §16.3.2/2. Variadic pass-through for
          * '...' handled by nargs >= nparams; strict match otherwise.
          * TODO(seafront#over-defaults): admit nargs < nparams when
          * trailing params have default-arg annotations. */
-        bool arity_ok = ft->is_variadic ? nargs >= ft->nparams
-                                        : nargs == ft->nparams;
+        bool arity_ok = vc.is_variadic ? nargs >= vc.nparams
+                                       : nargs == vc.nparams;
         if (!arity_ok) continue;
         bool ok = true;
         for (int j = 0; j < nargs && ok; j++) {
-            /* Variadic slot → ellipsis conversion (rank
-             * ICS_INCOMPATIBLE + 1 in a future tier; for now
-             * treat ellipsis args as exact-matching so variadic
-             * overloads stay viable when used literally). */
             int r;
-            if (j >= ft->nparams) {
-                r = ICS_EXACT;
+            if (j >= vc.nparams) {
+                r = ICS_EXACT;  /* variadic slot — see non-template branch */
             } else {
-                r = ics_rank(ft->params[j], arg_types[j]);
+                r = ics_rank(vc.params[j], arg_types[j]);
             }
             if (r >= ICS_INCOMPATIBLE) ok = false;
             ranks[nv][j] = r;
         }
-        if (ok) viable[nv++] = c;
+        if (ok) viable[nv++] = vc;
     }
     if (nv == 0) return NULL;
-    if (nv == 1) return viable[0];
+    if (nv == 1) {
+        if (viable[0].is_template) {
+            if (out_is_template) *out_is_template = true;
+            if (out_deduced) *out_deduced = viable[0].deduced;
+        }
+        return viable[0].decl;
+    }
 
     /* Pick best viable. */
     for (int i = 0; i < nv; i++) {
@@ -807,9 +899,22 @@ static Declaration *resolve_free_function_overload(
                 if (ranks[i][k] > ranks[j][k]) { le_all = false; break; }
                 if (ranks[i][k] < ranks[j][k]) lt_any = true;
             }
+            /* §16.3.3/1 final bullet: a non-template F beats an
+             * equally-ranked template G. Apply as an extra 'better'
+             * dimension. */
+            if (le_all && !lt_any) {
+                if (!viable[i].is_template && viable[j].is_template)
+                    lt_any = true;  /* i wins the tiebreak */
+            }
             if (!le_all || !lt_any) is_best = false;
         }
-        if (is_best) return viable[i];
+        if (is_best) {
+            if (viable[i].is_template) {
+                if (out_is_template) *out_is_template = true;
+                if (out_deduced) *out_deduced = viable[i].deduced;
+            }
+            return viable[i].decl;
+        }
     }
     return NULL;  /* ambiguous */
 }
@@ -828,7 +933,12 @@ static void visit_call(Sema *s, Node *n) {
      * Only runs for simple ident-callees (qualified-id calls and
      * member calls have their own resolution paths). Dependent
      * callees are skipped — they'll be resolved post-instantiation. */
+    /* Free-function overload resolution — skip implicit-this method
+     * calls (those route through the class-method resolver in
+     * codegen; sema picking a different overload here would change
+     * resolved_decl->home and confuse that dispatch). */
     if (n->call.callee && n->call.callee->kind == ND_IDENT &&
+        !n->call.callee->ident.implicit_this &&
         n->call.callee->ident.n_overloads > 1 &&
         !n->call.callee->is_type_dependent) {
         Type *at[MAX_OVLD_CANDS];
@@ -836,14 +946,78 @@ static void visit_call(Sema *s, Node *n) {
         if (na > MAX_OVLD_CANDS) na = MAX_OVLD_CANDS;
         for (int i = 0; i < na; i++)
             at[i] = n->call.args[i] ? n->call.args[i]->resolved_type : NULL;
+        SubstMap deduced = {0};
+        bool winner_is_template = false;
         Declaration *winner = resolve_free_function_overload(
             n->call.callee->ident.overload_set,
             n->call.callee->ident.n_overloads,
-            at, na);
+            at, na, s->arena,
+            &deduced, &winner_is_template);
         if (winner) {
             n->call.callee->ident.resolved_decl = winner;
             if (winner->type)
                 n->call.callee->resolved_type = winner->type;
+            /* If the winner is a function template, rewrite the
+             * callee from ND_IDENT to ND_TEMPLATE_ID with the
+             * deduced arg list. The instantiation pass that runs
+             * after sema scans ND_CALL for ND_TEMPLATE_ID callees,
+             * creates an InstRequest, clones the template with the
+             * substitution, and rewrites the callee again to an
+             * ND_IDENT pointing at the mangled instantiation.
+             * N4659 §17.8.1 [temp.inst]. */
+            if (winner_is_template && winner->tmpl_node) {
+                Node *tmpl = winner->tmpl_node;
+                Token *tname = n->call.callee->ident.name;
+                int ntp = tmpl->template_decl.nparams;
+                /* Only rewrite when deduction bound every template
+                 * parameter — a partial binding would produce an
+                 * ND_TEMPLATE_ID with NULL-typed args, which the
+                 * instantiation pass turns into broken mangled names
+                 * like 'foo_t___te_'. If any param is unbound, leave
+                 * the callee as ND_IDENT and fall back to whatever
+                 * the old resolved_decl pointed at.
+                 * TODO(seafront#over-defaults): once explicit
+                 * template args + default template args are threaded
+                 * through, unbound-then-default is fine; for now,
+                 * bail. */
+                Node **tid_args = NULL;
+                bool all_bound = ntp > 0;
+                if (all_bound) {
+                    tid_args = arena_alloc(s->arena,
+                        ntp * sizeof(Node *));
+                    for (int k = 0; k < ntp && all_bound; k++) {
+                        Node *tp = tmpl->template_decl.params[k];
+                        Token *pname = tp ? tp->param.name : NULL;
+                        Type *ct = NULL;
+                        if (pname) {
+                            for (int e = 0; e < deduced.nentries; e++) {
+                                Token *en = deduced.entries[e].param_name;
+                                if (en && en->len == pname->len &&
+                                    memcmp(en->loc, pname->loc, pname->len) == 0) {
+                                    ct = deduced.entries[e].concrete_type;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!ct) { all_bound = false; break; }
+                        Node *arg = arena_alloc(s->arena, sizeof(Node));
+                        memset(arg, 0, sizeof(Node));
+                        arg->kind = ND_VAR_DECL;
+                        arg->var_decl.ty = ct;
+                        tid_args[k] = arg;
+                    }
+                }
+                if (all_bound) {
+                    Node *tid = arena_alloc(s->arena, sizeof(Node));
+                    memset(tid, 0, sizeof(Node));
+                    tid->kind = ND_TEMPLATE_ID;
+                    tid->tok = n->call.callee->tok;
+                    tid->template_id.name = tname;
+                    tid->template_id.args = tid_args;
+                    tid->template_id.nargs = ntp;
+                    n->call.callee = tid;
+                }
+            }
         }
     }
     /* Functional-cast / explicit-type-conversion: 'Foo(args)' where

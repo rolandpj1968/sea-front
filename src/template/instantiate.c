@@ -856,8 +856,8 @@ static bool deduce_from_pair(Type *P, Type *A, SubstMap *map) {
  * N4659 §17.8.2.1 [temp.deduct.call]/1: "Template arguments can be
  * deduced from each function call argument by comparing the type of
  * the function parameter with the corresponding function argument." */
-static bool deduce_template_args(Node *tmpl_func, Type **arg_types, int nargs,
-                                  SubstMap *out) {
+bool deduce_template_args(Node *tmpl_func, Type **arg_types, int nargs,
+                          SubstMap *out) {
     if (!tmpl_func) return false;
     int nparams = 0;
     if (tmpl_func->kind == ND_FUNC_DEF || tmpl_func->kind == ND_FUNC_DECL)

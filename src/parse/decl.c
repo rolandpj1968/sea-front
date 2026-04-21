@@ -2342,9 +2342,17 @@ Node *parse_template_declaration(Parser *p) {
         else if (decl->kind == ND_TYPEDEF && decl->var_decl.ty)
             tmpl_class_type = decl->var_decl.ty;
     }
+    /* Build the ND_TEMPLATE_DECL node first so the registration
+     * below can stash a pointer to it on the Declaration — overload
+     * resolution reaches the inner function decl via this pointer
+     * to run template argument deduction (§17.8.2). */
+    Node *tmpl_node = new_template_decl_node(p, (Node **)params.data,
+                                              params.len, decl, tok);
+
     if (tmpl_name) {
-        region_declare(p, tmpl_name->loc, tmpl_name->len,
-                      ENTITY_TEMPLATE, /*type=*/NULL);
+        Declaration *td = region_declare(p, tmpl_name->loc, tmpl_name->len,
+                                          ENTITY_TEMPLATE, /*type=*/NULL);
+        if (td) td->tmpl_node = tmpl_node;
         /* Also register the class type so out-of-class qualifier
          * lookups ('void Foo<T>::bar') can reach the class_region. */
         if (tmpl_class_type) {
@@ -2365,14 +2373,16 @@ Node *parse_template_declaration(Parser *p) {
             DeclarativeRegion *ns = p->region;
             while (ns && ns->kind != REGION_NAMESPACE)
                 ns = ns->enclosing;
-            if (ns && ns != p->region)
-                region_declare_in(p, ns, tmpl_name->loc, tmpl_name->len,
-                                  ENTITY_TEMPLATE, /*type=*/NULL);
+            if (ns && ns != p->region) {
+                Declaration *fd = region_declare_in(p, ns,
+                    tmpl_name->loc, tmpl_name->len,
+                    ENTITY_TEMPLATE, /*type=*/NULL);
+                if (fd) fd->tmpl_node = tmpl_node;
+            }
         }
     }
 
-    return new_template_decl_node(p, (Node **)params.data, params.len,
-                                  decl, tok);
+    return tmpl_node;
 }
 
 /*

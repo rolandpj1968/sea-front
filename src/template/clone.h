@@ -41,4 +41,21 @@ Type *subst_type(Type *ty, SubstMap *map, Arena *arena);
  */
 Node *clone_node(Node *n, SubstMap *map, Arena *arena);
 
+/*
+ * Deduce template arguments for a function-template call —
+ * N4659 §17.8.2.1 [temp.deduct.call]/1.
+ *
+ *   tmpl_func  = the inner ND_FUNC_DEF / ND_FUNC_DECL of the template
+ *   arg_types  = concrete types of the call-site arguments
+ *   nargs      = number of call-site arguments
+ *   out        = SubstMap to populate (must be pre-allocated with
+ *                enough capacity)
+ *
+ * Returns true if deduction produced at least one binding (i.e. the
+ * pattern had some dependent param that unified with an arg); false
+ * on pattern/arg shape mismatch.
+ */
+bool deduce_template_args(Node *tmpl_func, Type **arg_types, int nargs,
+                          SubstMap *out);
+
 #endif /* TEMPLATE_CLONE_H */

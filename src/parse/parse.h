@@ -946,6 +946,11 @@ struct Declaration {
                               * lookup landed on a class member (region kind
                               * REGION_CLASS) so 'x' inside a method body can
                               * be rewritten to 'this->x'. */
+    Node        *tmpl_node; /* ENTITY_TEMPLATE: the ND_TEMPLATE_DECL node this
+                             * declaration names. Used by overload resolution
+                             * to reach the inner function decl for template
+                             * argument deduction (N4659 §17.8.2). NULL on
+                             * non-template entries. */
     Declaration *next;      /* hash chain within the declarative region */
 };
 
