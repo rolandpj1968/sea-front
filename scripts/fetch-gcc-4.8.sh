@@ -54,12 +54,35 @@ if [ ! -d gmp ] || [ ! -d mpfr ] || [ ! -d mpc ]; then
     ./contrib/download_prerequisites
 fi
 
-# Step 4: Configure libstdc++-v3 directly. We only need the generated
-#         headers (bits/c++config.h etc.) — these come from autoconf-
-#         generated configure, not from the build. Skipping the full gcc
-#         bootstrap because gcc 4.8 source doesn't compile cleanly under
-#         modern g++ (warnings-as-errors on things like fallthrough).
-#         libstdc++-v3's own configure runs fine with the host toolchain.
+# Step 4: Top-level configure — generates auto-host.h, gcc/config.h,
+#         gcc/Makefile, etc. We don't run `make` (gcc 4.8 source doesn't
+#         compile cleanly under modern g++, warnings-as-errors on
+#         fallthrough), but the configure outputs are enough for
+#         sea-front to preprocess gcc/*.c source files (which #include
+#         "config.h", "auto-host.h").
+if [ ! -f "$BUILD_DIR/gcc/config.h" ]; then
+    mkdir -p "$BUILD_DIR"
+    cd "$BUILD_DIR"
+    echo "Configuring gcc-$GCC_VERSION (top-level)..."
+    ../configure \
+        --prefix="$BUILD_DIR/install" \
+        --enable-languages=c,c++ \
+        --disable-multilib \
+        --disable-bootstrap \
+        --disable-nls
+    # 'configure' alone doesn't descend into per-subdir configures
+    # (that happens during `make`). We need gcc/config.h for gcc/*.c
+    # compilations. Invoke configure-gcc then build the cs-* header
+    # stubs (tiny wrappers over auto-host.h).
+    echo "Configuring gcc/ subdir..."
+    make configure-gcc
+    cd gcc
+    make cs-config.h cs-bconfig.h cs-tconfig.h
+fi
+
+# Step 5: Configure libstdc++-v3 directly to generate bits/c++config.h
+#         and per-target headers. libstdc++-v3's own configure runs fine
+#         with the host toolchain.
 LIBSTDCXX_BUILD_DIR="$BUILD_DIR/x86_64-unknown-linux-gnu/libstdc++-v3"
 if [ ! -f "$LIBSTDCXX_BUILD_DIR/include/x86_64-unknown-linux-gnu/bits/c++config.h" ]; then
     mkdir -p "$LIBSTDCXX_BUILD_DIR"

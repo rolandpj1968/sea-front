@@ -71,6 +71,12 @@ static Type *g_current_func_ret_ty = NULL;
 /* Class type of the OOL method currently being emitted. Used by
  * ND_OFFSETOF to substitute unresolvable local typedefs. */
 static Type *g_current_method_class = NULL;
+/* Const-qualification of the current method. Used to pick the right
+ * overload when an unqualified method call inside a const method
+ * invokes another method — N4659 §16.3.1.4 [over.match.funcs]/4
+ * says the implicit 'this' is 'const C*' when the enclosing method
+ * is const, which biases overload resolution toward const overloads. */
+static bool g_current_method_is_const = false;
 
 /* Reference-parameter tracking — N4659 §11.3.2 [dcl.ref].
  * C has no references; we lower T& to T* in the C signature.
@@ -228,7 +234,9 @@ static void emit_stmt(Node *n);
 static int collect_call_arg_types(Node **args, int nargs, Type ***out_types);
 static int resolve_overload(Type *class_type, Token *name, bool is_ctor,
                              Type **arg_types, int nargs,
-                             Type ***out_param_types);
+                             bool receiver_is_const,
+                             Type ***out_param_types,
+                             Node **out_best);
 static const char *operator_suffix_for_name(Token *name);
 static int resolve_operator_overload(Type *class_type,
                                       const char *op_suffix,
@@ -537,7 +545,7 @@ static void hoist_emit_decl(Node *call) {
                                              call->call.nargs, &at);
             Type **pty = NULL;
             int np = resolve_overload(call->resolved_type, NULL, true,
-                                       at, na, &pty);
+                                       at, na, false, &pty, NULL);
             if (np < 0) {
                 /* No matching ctor — skip ctor call. For plain C
                  * structs whose has_default_ctor was transitively
@@ -1337,11 +1345,40 @@ static void collect_overload_candidates(Type *class_type, Token *name,
  *     method call is either a bug in the input or a sea-front
  *     instantiation miss. Silent fallback was the wrong move last
  *     time; surfacing it loudly is the fix. */
+/* Walk a receiver's Type chain looking for const-ness. Handles
+ * 'const X', 'X const', 'const X*', 'const X&' — any const on the
+ * class itself (or on a ref/ptr's pointee) means the implicit
+ * 'this' is 'const C*'. N4659 §16.3.1.4 [over.match.funcs]/4. */
+static bool receiver_type_is_const(Type *t) {
+    while (t) {
+        if (t->is_const) return true;
+        if (t->kind == TY_PTR || t->kind == TY_REF || t->kind == TY_RVALREF)
+            t = t->base;
+        else
+            break;
+    }
+    return false;
+}
+
+/* Retrieve the const-ness of a candidate declaration (ND_FUNC_DEF or
+ * ND_VAR_DECL with TY_FUNC). Used for const-aware overload selection. */
+static bool candidate_is_const(Node *m) {
+    if (!m) return false;
+    if (m->kind == ND_FUNC_DEF) return m->func.is_const_method;
+    if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
+        m->var_decl.ty->kind == TY_FUNC)
+        return m->var_decl.ty->is_const;
+    return false;
+}
+
 static int resolve_overload(Type *class_type, Token *name, bool is_ctor,
                              Type **arg_types, int nargs,
-                             Type ***out_param_types) {
+                             bool receiver_is_const,
+                             Type ***out_param_types,
+                             Node **out_best) {
     static Type *pool[64];
     *out_param_types = NULL;
+    if (out_best) *out_best = NULL;
     enum { MAX_CAND = 32 };
     Node *cands[MAX_CAND];
     int ncands = 0;
@@ -1350,17 +1387,38 @@ static int resolve_overload(Type *class_type, Token *name, bool is_ctor,
     if (ncands == 0) return -1;  /* caller may still error — see above */
     if (ncands == 1) {
         *out_param_types = pool;
+        if (out_best) *out_best = cands[0];
         return copy_member_param_types(cands[0], pool);
     }
-    /* Pick by kind-match score. */
+    /* Pick by kind-match score, then break ties by const-qualification
+     * of the implicit 'this' parameter. N4659 §16.3.1.4
+     * [over.match.funcs]/4: the implicit object parameter is 'cv C&'
+     * whose cv-qualifiers match the function's. A const method is
+     * viable for both const and non-const receivers; a non-const
+     * method is viable only for non-const receivers. */
     Node *best = NULL;
     int best_score = -1;
     for (int i = 0; i < ncands; i++) {
-        int s = overload_match_score(cands[i], arg_types, nargs);
-        if (s > best_score) { best = cands[i]; best_score = s; }
+        Node *c = cands[i];
+        /* Viability filter: non-const method is not viable for const
+         * receiver. For ctors, no implicit-this constraint. */
+        if (!is_ctor && receiver_is_const && !candidate_is_const(c))
+            continue;
+        int s = overload_match_score(c, arg_types, nargs);
+        /* Tie-break: prefer the candidate whose const matches the
+         * receiver exactly (const method for const receiver, non-const
+         * for non-const receiver). */
+        if (s > best_score ||
+            (s == best_score && best &&
+             candidate_is_const(c) == receiver_is_const &&
+             candidate_is_const(best) != receiver_is_const)) {
+            best = c;
+            best_score = s;
+        }
     }
     if (!best) return -1;
     *out_param_types = pool;
+    if (out_best) *out_best = best;
     return copy_member_param_types(best, pool);
 }
 
@@ -2035,13 +2093,16 @@ static void emit_expr(Node *n) {
                 Type **at = NULL;
                 int na = collect_call_arg_types(n->call.args,
                                                  n->call.nargs, &at);
+                Node *winner = NULL;
                 int np = resolve_overload(class_type, mname, false,
-                                           at, na, &call_pty);
+                                           at, na,
+                                           g_current_method_is_const,
+                                           &call_pty, &winner);
                 if (np < 0)
                     die_no_overload(class_type, mname, na, "ND_CALL implicit-this");
                 call_np = np;
                 {
-                    bool mc = method_is_const(class_type, mname);
+                    bool mc = candidate_is_const(winner);
                     mangle_class_method_cv(class_type, mname, call_pty, np, mc);
                 }
                 if (base_len > 0) {
@@ -2220,9 +2281,14 @@ static void emit_expr(Node *n) {
                         Type **at = NULL;
                         int na = collect_call_arg_types(n->call.args,
                                                          n->call.nargs, &at);
+                        bool recv_const = receiver_type_is_const(
+                            obj ? obj->resolved_type : NULL);
+                        Node *winner = NULL;
                         int np = resolve_overload(method_class,
                                                    callee->member.member,
-                                                   false, at, na, &call_pty);
+                                                   false, at, na,
+                                                   recv_const,
+                                                   &call_pty, &winner);
                         if (np < 0) {
                             /* Method not found in class_def. For
                              * template instantiations, emit a best-
@@ -2254,8 +2320,7 @@ static void emit_expr(Node *n) {
                             }
                         } else {
                             call_np = np;
-                            bool mc = method_is_const(method_class,
-                                callee->member.member);
+                            bool mc = candidate_is_const(winner);
                             mangle_class_method_cv(method_class,
                                                      callee->member.member,
                                                      call_pty, np, mc);
@@ -3156,7 +3221,7 @@ static void emit_stmt(Node *n) {
                                                      n->var_decl.ctor_nargs, &at);
                     Type **pty = NULL;
                     int np = resolve_overload(n->var_decl.ty, NULL, true,
-                                               at, na, &pty);
+                                               at, na, false, &pty, NULL);
                     if (np < 0)
                         die_no_overload(n->var_decl.ty, NULL, na,
                                          "direct-init ctor call");
@@ -3825,7 +3890,8 @@ static void emit_ctor_member_inits(Node *func) {
                 Type **at = NULL;
                 int na = collect_call_arg_types(found->args, found->nargs, &at);
                 Type **pty = NULL;
-                int np = resolve_overload(mty, NULL, true, at, na, &pty);
+                int np = resolve_overload(mty, NULL, true, at, na,
+                                           false, &pty, NULL);
                 if (np < 0) {
                     /* No matching ctor. For a 0-arg mem-init (`: m()`)
                      * on a plain C struct whose has_default_ctor is
@@ -3856,7 +3922,8 @@ static void emit_ctor_member_inits(Node *func) {
                  * is the C trivial kind (zero-fill by the enclosing
                  * emit's {0} or nothing). N4659 §15.1/4 [class.ctor]. */
                 Type **pty = NULL;
-                int np = resolve_overload(mty, NULL, true, NULL, 0, &pty);
+                int np = resolve_overload(mty, NULL, true, NULL, 0,
+                                           false, &pty, NULL);
                 if (np >= 0) {
                     emit_indent();
                     mangle_class_ctor(mty, pty, np);
@@ -4103,11 +4170,14 @@ static void emit_method_as_free_fn(Node *func, Type *class_type) {
     cf_begin_function(func);
     Type *saved_ret = g_current_func_ret_ty;
     Type *saved_mc = g_current_method_class;
+    bool saved_mconst = g_current_method_is_const;
     g_current_func_ret_ty = func->func.ret_ty;
     g_current_method_class = class_type;
+    g_current_method_is_const = func->func.is_const_method;
     emit_method_signature(func, class_type);
     fputc(' ', stdout);
     emit_func_body(func);
+    g_current_method_is_const = saved_mconst;
     g_current_func_ret_ty = saved_ret;
     g_current_method_class = saved_mc;
 }
@@ -4354,8 +4424,11 @@ static void emit_class_def(Node *n) {
              * N4659 §10.1.1/6 [dcl.stc]. */
             {
                 bool m_is_static = (m->var_decl.storage_flags & DECL_STATIC) != 0;
+                bool m_is_const = m->var_decl.ty && m->var_decl.ty->is_const;
                 fputc('(', stdout);
                 if (!m_is_static) {
+                    /* N4659 §10.1.7.1 [dcl.type.cv]: const method → const this */
+                    if (m_is_const) fputs("const ", stdout);
                     fputs("struct ", stdout);
                     mangle_class_tag(class_type);
                     fputs(" *this", stdout);
