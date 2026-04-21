@@ -249,8 +249,23 @@ struct Node {
             bool implicit_this;
             /* Sema-set: the resolved declaration. NULL until sema runs.
              * Used by codegen to recover the home class for method-
-             * call mangling. */
+             * call mangling.
+             *
+             * For overloaded names this is ONE member of overload_set
+             * (historically the first-found, kept as-is so existing
+             * consumers keep working). Proper per-call overload
+             * resolution (N4659 §16.3 [over.match]) will pick the
+             * winner from overload_set at the call site. */
             Declaration *resolved_decl;
+            /* Sema-set: the full overload set (all declarations of
+             * this name in the scope where lookup landed). NULL +
+             * n_overloads=0 when not yet populated or the name
+             * resolved to a non-overloadable entity (type, namespace,
+             * template, variable). Populated for function names.
+             *
+             * Owned by the parser arena; callers read only. */
+            Declaration **overload_set;
+            int n_overloads;
         } ident;
 
         /* ND_QUALIFIED — N4659 §8.1.4.3 [expr.prim.id.qual]
@@ -1353,6 +1368,20 @@ Declaration *region_declare_in(Parser *p, DeclarativeRegion *r,
 Declaration *lookup_unqualified(Parser *p, const char *name, int name_len);
 Declaration *lookup_unqualified_from(DeclarativeRegion *start,
                                      const char *name, int name_len);
+
+/* Collect ALL declarations reachable by unqualified lookup for the
+ * given name, stopping at the innermost scope that contains any
+ * match (per N4659 §6.4.1/1 — inner scopes hide outer). Writes up
+ * to 'cap' pointers into 'out' and returns the count. If there are
+ * more matches than cap, truncates silently (caller's responsibility
+ * to pick a reasonable cap; 16 is plenty for gcc 4.8 overload sets).
+ *
+ * Used to build the overload set carried on ND_IDENT so per-call
+ * resolution (N4659 §16.3 [over.match]) can pick among candidates
+ * without the parser/sema having to collapse to a single winner. */
+int lookup_overload_set_from(DeclarativeRegion *start,
+                              const char *name, int name_len,
+                              Declaration **out, int cap);
 
 /* Look up by entity kind — needed for elaborated-type-specifier
  * (§10.1.7.3): 'struct Foo' must find ENTITY_TAG even if a variable

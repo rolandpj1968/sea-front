@@ -1293,6 +1293,8 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
         template_id->ident.name = mangled;
         template_id->ident.implicit_this = false;
         template_id->ident.resolved_decl = NULL;
+        template_id->ident.overload_set = NULL;
+        template_id->ident.n_overloads = 0;
 
         /* Set up param scope for sema */
         if (cloned->func.body && cloned->func.nparams > 0)
@@ -1568,6 +1570,8 @@ void template_instantiate(Node *tu, Arena *arena) {
                 req->template_id->ident.name = mangled;
                 req->template_id->ident.implicit_this = false;
                 req->template_id->ident.resolved_decl = NULL;
+                req->template_id->ident.overload_set = NULL;
+                req->template_id->ident.n_overloads = 0;
             }
             continue;
         }

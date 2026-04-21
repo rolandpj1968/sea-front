@@ -196,6 +196,7 @@ static Node *primary_expr(Parser *p) {
         parser_advance(p);
         Node *node = new_node(p, ND_IDENT, tok);
         node->ident.name = tok; node->ident.implicit_this = false; node->ident.resolved_decl = NULL;
+        node->ident.overload_set = NULL; node->ident.n_overloads = 0;
         return node;
     }
 
@@ -535,6 +536,7 @@ static Node *primary_expr(Parser *p) {
         }
         Node *node = new_node(p, ND_IDENT, op_tok);
         node->ident.name = op_tok; node->ident.implicit_this = false; node->ident.resolved_decl = NULL;
+        node->ident.overload_set = NULL; node->ident.n_overloads = 0;
         return node;
     }
 
@@ -754,6 +756,7 @@ static Node *primary_expr(Parser *p) {
         simple_ident:;
             Node *node = new_node(p, ND_IDENT, name);
             node->ident.name = name; node->ident.implicit_this = false; node->ident.resolved_decl = NULL;
+            node->ident.overload_set = NULL; node->ident.n_overloads = 0;
             return node;
         }
 

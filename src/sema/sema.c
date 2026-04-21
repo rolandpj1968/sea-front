@@ -258,6 +258,29 @@ static void visit_ident(Sema *s, Node *n) {
         return;
     }
     n->ident.resolved_decl = d;
+    /* N4659 §6.4.1/1 [basic.lookup.unqual] + §16.3 [over.match]:
+     * don't collapse overloaded names at lookup time — carry the
+     * full overload set so a per-call resolver can pick among them.
+     * Only bother for function-typed entities; other entities aren't
+     * overloadable (§6.3.10 hides type-names behind objects, etc.).
+     *
+     * Arena-allocate a small copy so the caller doesn't have to
+     * retain scope tables. Cap at 16 which comfortably covers
+     * everything gcc 4.8 throws at us — gt_pch_nx has 4 overloads,
+     * vec's operator[] has 2, etc. */
+    if (d->type && d->type->kind == TY_FUNC) {
+        Declaration *buf[16];
+        int n_ov = lookup_overload_set_from(s->cur_scope,
+                                             name->loc, name->len,
+                                             buf, 16);
+        if (n_ov > 1) {
+            Declaration **arr = arena_alloc(s->arena,
+                n_ov * sizeof(Declaration *));
+            for (int i = 0; i < n_ov; i++) arr[i] = buf[i];
+            n->ident.overload_set = arr;
+            n->ident.n_overloads = n_ov;
+        }
+    }
     /* N4659 §6.4.5 [class.qual]: member lookup resolves through the
      * class scope. For class members, always use the declaration's
      * type — it has the correctly patched class_region from post-

@@ -181,6 +181,47 @@ Declaration *lookup_unqualified(Parser *p, const char *name, int name_len) {
     return lookup_unqualified_from(p->region, name, name_len);
 }
 
+/* Collect all decls of 'name' in a single region (bucket walk only —
+ * does NOT recurse into base classes; callers walk bases themselves
+ * when needed). Writes into out[pos..cap], returns updated pos. */
+static int collect_in_region(DeclarativeRegion *r, const char *name,
+                              int name_len, Declaration **out,
+                              int pos, int cap) {
+    uint32_t idx = hash_name(name, name_len) % REGION_HASH_SIZE;
+    for (Declaration *d = r->buckets[idx]; d; d = d->next) {
+        if (d->name_len == name_len &&
+            memcmp(d->name, name, name_len) == 0 &&
+            pos < cap) {
+            out[pos++] = d;
+        }
+    }
+    return pos;
+}
+
+int lookup_overload_set_from(DeclarativeRegion *start,
+                              const char *name, int name_len,
+                              Declaration **out, int cap) {
+    /* N4659 §6.4.1/1: lookup ends at the first scope with any match.
+     * Within that scope, collect ALL overloads. Using-directives
+     * contribute to the same scope for lookup purposes (§10.3.4/2),
+     * so check them at the same level.
+     *
+     * NOTE: this step-(1) helper handles namespace/file/block scope.
+     * Class-scope (base-class merging per §13.5.2 [class.member.
+     * lookup]) is NOT folded in yet — the existing class-method
+     * resolve_overload in emit_c.c covers that. If/when we unify
+     * class + free-function resolution, extend here. */
+    for (DeclarativeRegion *r = start; r; r = r->enclosing) {
+        int pos = collect_in_region(r, name, name_len, out, 0, cap);
+        for (int i = 0; i < r->nusing; i++) {
+            pos = collect_in_region(r->using_regions[i], name,
+                                     name_len, out, pos, cap);
+        }
+        if (pos > 0) return pos;
+    }
+    return 0;
+}
+
 /*
  * Look up a name but only match a specific entity kind.
  *
