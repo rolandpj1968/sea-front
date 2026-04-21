@@ -2095,6 +2095,43 @@ static void emit_expr(Node *n) {
             fputs(n->codegen_temp_name, stdout);
             return;
         }
+        /* Function-style cast / value-init: 'T()' or 'T(v)' where T
+         * names a non-class type. This arises after template
+         * instantiation: 'val(T())' inside a template becomes
+         * 'val(int())' — which in C++ is int{0}. The ND_IDENT callee
+         * still names the template param ('T') but its resolved_type
+         * was substituted to a concrete type (int). Emit as a C99
+         * compound literal or cast so the concrete type comes out:
+         *   T()  → (int){0}          (0-arg value-init)
+         *   T(v) → ((int)(v))        (1-arg conversion)
+         * Struct/union types keep flowing through the ctor path
+         * (hoist_emit_decl) which has its own handling.
+         * N4659 §8.2.3/2 [expr.type.conv]. */
+        if (n->call.callee && n->call.callee->kind == ND_IDENT &&
+            n->call.callee->ident.resolved_decl &&
+            n->call.callee->ident.resolved_decl->entity == ENTITY_TYPE) {
+            /* Callee's resolved_type was post-subst'd to the concrete
+             * type; the CALL node's resolved_type may be NULL because
+             * sema's ND_CALL handler only copies ret-type from TY_FUNC
+             * callees. */
+            Type *conc = n->call.callee->resolved_type;
+            if (conc && conc->kind != TY_STRUCT && conc->kind != TY_UNION &&
+                conc->kind != TY_DEPENDENT) {
+                if (n->call.nargs == 0) {
+                    fputc('(', stdout);
+                    emit_type(conc);
+                    fputs("){0}", stdout);
+                } else {
+                    fputs("((", stdout);
+                    emit_type(conc);
+                    fputc(')', stdout);
+                    fputc('(', stdout);
+                    emit_expr(n->call.args[0]);
+                    fputs("))", stdout);
+                }
+                return;
+            }
+        }
         /* Qualified static method call: 'Class::method(args)' where
          * the callee is ND_QUALIFIED with 2 parts [ClassName, method].
          * Emit as a mangled free-function call without a 'this' arg.
