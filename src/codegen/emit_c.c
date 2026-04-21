@@ -78,6 +78,13 @@ static Type *g_current_method_class = NULL;
  * is const, which biases overload resolution toward const overloads. */
 static bool g_current_method_is_const = false;
 
+/* Translation unit root — set by emit_c at entry, consulted by
+ * helpers that need to find ND_CLASS_DEF nodes by tag+template_args
+ * (template-instantiated method bodies sometimes carry Type copies
+ * with class_def=NULL and we need the real body for overload
+ * resolution / const-qualification). */
+static Node *g_tu = NULL;
+
 /* Reference-parameter tracking — N4659 §11.3.2 [dcl.ref].
  * C has no references; we lower T& to T* in the C signature.
  * When the body uses a ref-param as a value, codegen must deref it.
@@ -1371,6 +1378,8 @@ static int copy_member_param_types(Node *m, Type **pool) {
     return n;
 }
 
+static Node *find_class_def_by_tag_args(Type *class_type);
+
 /* Collect same-named candidate methods from a class AND all its
  * base classes (recursive). Inherited methods need to be reachable
  * through the same-name lookup. Caller's 'found' vector accumulates. */
@@ -1387,6 +1396,15 @@ static void collect_overload_candidates(Type *class_type, Token *name,
         class_type->class_region->owner_type &&
         class_type->class_region->owner_type->class_def)
         cd = class_type->class_region->owner_type->class_def;
+    /* Template-instantiated Type copies carry neither class_def nor
+     * class_region — look the instantiated class up in the TU by
+     * (tag, template_args). Without this, calls inside instantiated
+     * method bodies miss the _const mangling suffix because overload
+     * resolution can't see the candidates. */
+    if (!cd) {
+        Node *d = find_class_def_by_tag_args(class_type);
+        if (d) cd = d;
+    }
     if (!cd) return;
     for (int i = 0; i < cd->class_def.nmembers; i++) {
         Node *m = cd->class_def.members[i];
@@ -1533,11 +1551,95 @@ static bool method_returns_ref(Type *class_type, Token *name) {
     return false;
 }
 
+/* Find a class_def in the TU matching tag + template_args. Template-
+ * instantiated method bodies can carry Type copies whose class_def
+ * pointer wasn't patched during cloning/substitution; the real
+ * instantiated ND_CLASS_DEF sits in the TU and is identifiable by
+ * (tag, template_args). Returns NULL if no match.
+ *
+ * SHORTCUT (ours, not the standard): template_args match by Type*
+ * identity — fine because the instantiation pass shares Type* for
+ * the same concrete args, but would miss a logically-equal arg
+ * constructed from a different pointer. */
+/* Structural equivalence between two Type pointers.
+ *
+ * Template instantiation and cloning sometimes produce distinct Type*
+ * copies for the same concrete type (e.g. two 'struct vl_embed' Types
+ * with different allocations). Compare by kind + tag + indirection
+ * chain so the tag-args lookup can still match cross-copy.
+ *
+ * This is narrow — only enough to recognise primitive types and
+ * named struct/enum tags. For TY_PTR/TY_REF/TY_ARRAY we recurse into
+ * the base; for TY_FUNC we just compare kind (rare as a template arg
+ * and punting is safe because different signatures would realistically
+ * end up at distinct instantiations anyway). */
+static bool types_equivalent(Type *a, Type *b) {
+    if (a == b) return true;
+    if (!a || !b) return false;
+    if (a->kind != b->kind) return false;
+    switch (a->kind) {
+    case TY_PTR:
+    case TY_REF:
+    case TY_RVALREF:
+        return types_equivalent(a->base, b->base);
+    case TY_ARRAY:
+        return types_equivalent(a->base, b->base);
+    case TY_STRUCT:
+    case TY_UNION:
+    case TY_ENUM:
+        if (!a->tag || !b->tag) return a->tag == b->tag;
+        if (a->tag->len != b->tag->len) return false;
+        if (memcmp(a->tag->loc, b->tag->loc, a->tag->len) != 0) return false;
+        if (a->n_template_args != b->n_template_args) return false;
+        for (int i = 0; i < a->n_template_args; i++)
+            if (!types_equivalent(a->template_args[i], b->template_args[i]))
+                return false;
+        return true;
+    default:
+        /* Primitives: same kind + same cv/sign flags. */
+        return a->is_unsigned == b->is_unsigned &&
+               a->is_const    == b->is_const &&
+               a->is_volatile == b->is_volatile;
+    }
+}
+
+static Node *find_class_def_by_tag_args(Type *class_type) {
+    if (!g_tu || !class_type || !class_type->tag ||
+        class_type->n_template_args <= 0)
+        return NULL;
+    for (int i = 0; i < g_tu->tu.ndecls; i++) {
+        Node *d = g_tu->tu.decls[i];
+        if (!d || d->kind != ND_CLASS_DEF) continue;
+        Type *t = d->class_def.ty;
+        if (!t || !t->tag) continue;
+        if (t->tag->len != class_type->tag->len) continue;
+        if (memcmp(t->tag->loc, class_type->tag->loc, t->tag->len) != 0)
+            continue;
+        if (t->n_template_args != class_type->n_template_args) continue;
+        bool ok = true;
+        for (int j = 0; j < t->n_template_args; j++) {
+            if (!types_equivalent(t->template_args[j],
+                                   class_type->template_args[j])) {
+                ok = false; break;
+            }
+        }
+        if (ok) return d;
+    }
+    return NULL;
+}
+
 /* Check if a method on class_type is const-qualified. Scans class_def
  * members for the first match. */
 static bool method_is_const(Type *class_type, Token *name) {
-    if (!class_type || !class_type->class_def || !name) return false;
+    if (!class_type || !name) return false;
     Node *cd = class_type->class_def;
+    /* Fall back to TU lookup when the Type carries no class_def —
+     * happens inside template-instantiated method bodies. */
+    if (!cd) {
+        Node *d = find_class_def_by_tag_args(class_type);
+        if (d) cd = d;
+    }
+    if (!cd) return false;
     for (int i = 0; i < cd->class_def.nmembers; i++) {
         Node *m = cd->class_def.members[i];
         if (!m) continue;
@@ -5477,6 +5579,7 @@ static void emit_forward_decl_structs(Node *tu) {
 
 void emit_c(Node *tu) {
     if (!tu || tu->kind != ND_TRANSLATION_UNIT) return;
+    g_tu = tu;
     emit_prelude();
 
     /* Forward-declare ALL struct types so pointer references
