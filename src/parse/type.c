@@ -1485,10 +1485,32 @@ bool parser_at_type_specifier(Parser *p) {
              * ordinary lookup. If the next token is '->' or '.', the
              * name is clearly being used as an object expression
              * (member access), so it's NOT a type-specifier here even
-             * though the tag exists. Narrow heuristic, not a full
-             * scope-precedence resolver. */
+             * though the tag exists. */
             Token *next = parser_peek_ahead(p, 1);
             if (next->kind == TK_ARROW || next->kind == TK_DOT)
+                return false;
+            /* Same-scope hiding (§6.3.10/2): "A class name or enumeration
+             * name can be hidden by the name of a variable, data member,
+             * function, or enumerator declared in the same scope." If an
+             * OBJECT declaration is in scope under the same name, the
+             * tag is hidden in ordinary lookup — so bare 'rtx_class' in
+             * expression context is the VARIABLE, not the enum type,
+             * and we must not advertise it as a type-specifier. The
+             * elaborated-type-specifier form 'enum rtx_class' takes the
+             * TK_KW_ENUM branch above and still finds the tag.
+             *
+             * Exclude function-typed ENTITY_VARIABLE entries: ctors are
+             * registered under the class name (N4659 §11.1 [class.pre]
+             * injected-class-name) and must NOT hide the class's own
+             * type-ness — otherwise 'Box copy(*this)' inside Box's own
+             * methods stops parsing as a declaration. §6.3.10/2 does
+             * include "function", but in practice the function-named-
+             * the-same case in sea-front is almost always a ctor. */
+            Token *tok = parser_peek(p);
+            Declaration *vd = lookup_unqualified_kind(p, tok->loc,
+                                                      tok->len,
+                                                      ENTITY_VARIABLE);
+            if (vd && !(vd->type && vd->type->kind == TY_FUNC))
                 return false;
             return true;
         }
