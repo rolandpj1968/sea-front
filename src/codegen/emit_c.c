@@ -246,25 +246,15 @@ static int resolve_operator_overload(Type *class_type,
                                       Node **out_best);
 
 /* Type-peeling helpers — consolidate the many
- * 'if (ty->kind == TY_PTR || TY_REF || TY_RVALREF) ty = ty->base;'
+ * 'if (ty->kind == TY_REF || ty->kind == TY_RVALREF)' and similar
  * open-coded patterns. References lower to pointers in C, so these
- * three kinds are usually treated as a single 'indirection' concept.
+ * three kinds are treated as a single 'indirection' concept.
  * N4659 §11.3.1-§11.3.2 [dcl.ptr][dcl.ref]. */
 static inline bool ty_is_ref(Type *t) {
     return t && (t->kind == TY_REF || t->kind == TY_RVALREF);
 }
 static inline bool ty_is_indirect(Type *t) {
     return t && (t->kind == TY_PTR || t->kind == TY_REF || t->kind == TY_RVALREF);
-}
-/* Peel one level of reference (TY_REF / TY_RVALREF). Pointers are
- * NOT peeled — callers that want pointer-peeling use ty_peel_indirect
- * or do it explicitly. Returns the input unchanged if not a ref. */
-static inline Type *ty_peel_ref(Type *t) {
-    return ty_is_ref(t) && t->base ? t->base : t;
-}
-/* Peel one level of any indirection (TY_PTR / TY_REF / TY_RVALREF). */
-static inline Type *ty_peel_indirect(Type *t) {
-    return ty_is_indirect(t) && t->base ? t->base : t;
 }
 
 /* Emit a call-site argument with reference-parameter adaptation.
@@ -1601,6 +1591,36 @@ static int resolve_operator_overload(Type *class_type,
     return copy_member_param_types(best, pool);
 }
 
+/* Resolve a class operator overload and emit its mangled name to
+ * stdout. Returns the winning decl's param count and sets *out_pty
+ * to its param types (for arg-by-arg emit with emit_arg_for_param).
+ * Optionally returns the winning Node* via *out_winner for callers
+ * that need per-candidate flags (e.g. subscript's ref-return check).
+ * Returns -1 if no candidate exists; in that case the mangled name
+ * is still emitted WITHOUT a param-suffix (best-effort; will likely
+ * fail to link — see the binary-op comment at the caller).
+ *
+ * Consolidates the scaffolding used by ND_BINARY, ND_ASSIGN (compound),
+ * and ND_SUBSCRIPT — each of which previously duplicated the resolve
+ * + mangle_class_tag + suffix + param-suffix + _const emission. The
+ * ND_UNARY site has a different shape (only emits on np == 0) and
+ * keeps its open-coded form. */
+static int emit_class_op_mangled_name(Type *class_ty, const char *op_suffix,
+                                       Type **args, int nargs,
+                                       bool receiver_is_const,
+                                       Type ***out_pty,
+                                       Node **out_winner) {
+    Node *winner = NULL;
+    int np = resolve_operator_overload(class_ty, op_suffix, args, nargs,
+                                        receiver_is_const, out_pty, &winner);
+    mangle_class_tag(class_ty);
+    fputs(op_suffix, stdout);
+    if (np >= 0) mangle_param_suffix(*out_pty, np);
+    if (candidate_is_const(winner)) fputs("_const", stdout);
+    if (out_winner) *out_winner = winner;
+    return np;
+}
+
 /* Emit a C function declarator — the 'ret name(params)' shape —
  * handling the case where ret itself is a function pointer, which
  * requires declarator-interleaving (N4659 §11.3 [dcl.meaning]):
@@ -1926,15 +1946,10 @@ static void emit_expr(Node *n) {
                 Type *rhs_ty = n->binary.rhs ? n->binary.rhs->resolved_type : NULL;
                 Type *args[1] = { rhs_ty };
                 Type **pty = NULL;
-                Node *winner = NULL;
                 bool lhs_const = receiver_type_is_const(
                     n->binary.lhs ? n->binary.lhs->resolved_type : NULL);
-                int np = resolve_operator_overload(lhs_ty, suffix, args, 1,
-                                                    lhs_const, &pty, &winner);
-                mangle_class_tag(lhs_ty);
-                fputs(suffix, stdout);
-                if (np >= 0) mangle_param_suffix(pty, np);
-                if (candidate_is_const(winner)) fputs("_const", stdout);
+                int np = emit_class_op_mangled_name(lhs_ty, suffix, args, 1,
+                                                     lhs_const, &pty, NULL);
                 fputs("(&", stdout);
                 emit_expr(n->binary.lhs);
                 fputs(", ", stdout);
@@ -1964,15 +1979,10 @@ static void emit_expr(Node *n) {
                 Type *rhs_ty = n->binary.rhs ? n->binary.rhs->resolved_type : NULL;
                 Type *args[1] = { rhs_ty };
                 Type **pty = NULL;
-                Node *winner = NULL;
                 bool lhs_const = receiver_type_is_const(
                     n->binary.lhs ? n->binary.lhs->resolved_type : NULL);
-                int np = resolve_operator_overload(lhs_ty, suffix, args, 1,
-                                                    lhs_const, &pty, &winner);
-                mangle_class_tag(lhs_ty);
-                fputs(suffix, stdout);
-                if (np >= 0) mangle_param_suffix(pty, np);
-                if (candidate_is_const(winner)) fputs("_const", stdout);
+                int np = emit_class_op_mangled_name(lhs_ty, suffix, args, 1,
+                                                     lhs_const, &pty, NULL);
                 fputs("(&", stdout);
                 emit_expr(n->binary.lhs);
                 fputs(", ", stdout);
