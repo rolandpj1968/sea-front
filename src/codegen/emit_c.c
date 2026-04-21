@@ -5630,6 +5630,9 @@ static void emit_fwd_decl_methods_only(Node *n) {
 static void emit_forward_decl_structs(Node *tu) {
     for (int i = 0; i < tu->tu.ndecls; i++)
         emit_fwd_decl_structs_only(tu->tu.decls[i]);
+}
+
+static void emit_forward_decl_funcs(Node *tu) {
     for (int i = 0; i < tu->tu.ndecls; i++)
         emit_fwd_decl_methods_only(tu->tu.decls[i]);
 }
@@ -5712,6 +5715,16 @@ void emit_c(Node *tu) {
      * defined before any method body dereferences a pointer to
      * another struct (e.g. vl_ptr methods accessing vl_embed
      * members through a pointer). */
+
+    /* Forward-declare methods + instantiated function templates
+     * AFTER enums. The method signatures can reference enum types by
+     * pointer (e.g. 'enum ld_plugin_symbol_resolution *'); without
+     * the enum body already visible, '-std=c99' lets gcc accept the
+     * pointer type but implicitly declares the enum, then the real
+     * enum definition emitted by the struct-body pass conflicts.
+     * C11 §6.7.2.3 — the enum type must be complete in the
+     * translation-unit scope before its name can be used. */
+    emit_forward_decl_funcs(tu);
 
     /* Pass 1: struct bodies only */
     g_emit_phase = PHASE_STRUCTS;
