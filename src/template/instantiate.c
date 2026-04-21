@@ -1474,25 +1474,36 @@ void template_instantiate(Node *tu, Arena *arena) {
                                       &tmp_map);
         }
         /* If deduction added bindings beyond the explicit usage args,
-         * rewrite req->template_id with a synthetic that carries the
-         * full arg list. instantiate_one builds its own SubstMap from
-         * template_id->args; without this rewrite it wouldn't see the
-         * deduced bindings. Must happen BEFORE the dedup key build so
-         * same-T-different-U requests produce distinct keys. */
+         * extend the template_id's args in place so it reflects the
+         * full instantiation (explicit + deduced). instantiate_one
+         * builds its own SubstMap from template_id->args; without
+         * this the downstream pass wouldn't see the deduced bindings
+         * and the dedup key would collide across same-T-different-U
+         * requests.
+         *
+         * PREVIOUSLY we created a synthetic Node and swapped
+         * req->template_id to it — but the rewrite at the end of the
+         * dedup branch (req->template_id->kind = ND_IDENT) then fired
+         * on the synthetic, leaving the real in-tree node unchanged.
+         * Calls in cloned bodies then reached emit_expr with an
+         * ND_TEMPLATE_ID kind and fell through to the placeholder.
+         * Extend in place so the same Node is the rewrite target. */
         if (tmp_map.nentries > na) {
-            Node *syn = arena_alloc(arena, sizeof(Node));
-            *syn = *req->template_id;
-            syn->template_id.nargs = tmp_map.nentries;
-            syn->template_id.args = arena_alloc(arena,
+            Node **new_args = arena_alloc(arena,
                 tmp_map.nentries * sizeof(Node *));
             for (int i = 0; i < tmp_map.nentries; i++) {
-                Node *arg = arena_alloc(arena, sizeof(Node));
-                memset(arg, 0, sizeof(Node));
-                arg->kind = ND_VAR_DECL;
-                arg->var_decl.ty = tmp_map.entries[i].concrete_type;
-                syn->template_id.args[i] = arg;
+                if (i < na) {
+                    new_args[i] = req->template_id->template_id.args[i];
+                } else {
+                    Node *arg = arena_alloc(arena, sizeof(Node));
+                    memset(arg, 0, sizeof(Node));
+                    arg->kind = ND_VAR_DECL;
+                    arg->var_decl.ty = tmp_map.entries[i].concrete_type;
+                    new_args[i] = arg;
+                }
             }
-            req->template_id = syn;
+            req->template_id->template_id.args = new_args;
+            req->template_id->template_id.nargs = tmp_map.nentries;
             na = tmp_map.nentries;
         }
 
