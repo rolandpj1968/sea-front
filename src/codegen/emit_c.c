@@ -5261,6 +5261,22 @@ static void emit_fwd_decl_structs_only(Node *n) {
         }
         break;
     }
+    case ND_TYPEDEF: {
+        /* 'typedef struct X { ... } Y;' — predeclare the struct tag
+         * so method forward declarations that reference 'struct X*'
+         * as a param type land in file scope, not in the param list. */
+        Type *uty = n->var_decl.ty;
+        while (uty && (uty->kind == TY_PTR || uty->kind == TY_REF ||
+                        uty->kind == TY_RVALREF))
+            uty = uty->base;
+        if (uty && (uty->kind == TY_STRUCT || uty->kind == TY_UNION) &&
+            uty->tag) {
+            fputs(uty->kind == TY_UNION ? "union " : "struct ", stdout);
+            emit_mangled_class_tag(uty);
+            fputs(";\n", stdout);
+        }
+        break;
+    }
     case ND_BLOCK:
         for (int i = 0; i < n->block.nstmts; i++)
             emit_fwd_decl_structs_only(n->block.stmts[i]);

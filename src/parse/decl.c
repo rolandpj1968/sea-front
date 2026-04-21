@@ -1254,6 +1254,19 @@ Node *parse_declaration(Parser *p) {
 
         parser_expect(p, TK_SEMI);
 
+        /* Reset the qualified-decl / pending-ctor state that
+         * parse_declarator may have stashed while parsing the
+         * typedef name. 'typedef struct Item { ... } Item;' has the
+         * typedef name 'Item' resolving to the just-created struct
+         * tag, which sets qualified_decl_scope to Item's class_region.
+         * Without this reset, the NEXT declaration (e.g. 'int main()')
+         * picks it up and gets class_type=Item. Same pattern as the
+         * param-declarator save/restore. */
+        p->qualified_decl_scope = NULL;
+        p->qualified_decl_tid = NULL;
+        p->pending_is_constructor = false;
+        p->pending_is_destructor = false;
+
         return new_typedef_node(p, decl->var_decl.ty, decl->var_decl.name,
                                 start_tok);
     }
