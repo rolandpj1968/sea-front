@@ -1379,6 +1379,35 @@ static int copy_member_param_types(Node *m, Type **pool) {
 }
 
 static Node *find_class_def_by_tag_args(Type *class_type);
+static bool types_equivalent(Type *a, Type *b);
+
+/* Two template-instantiated class types name the SAME instantiation
+ * when they're both class types (struct or union — catches both
+ * 'template<> struct S<int>' and 'template<> union U<int>'), both
+ * have non-NULL matching tags, and their template_args match
+ * structurally. Narrower-than-types_equivalent by design: we want to
+ * collapse 'vec<int,va_heap,vl_embed>' reached via two discovery
+ * paths, NOT two unrelated anonymous unions that happen to share a
+ * tag-less Type. Used by the struct-phase, method-phase, and TU-
+ * lookup dedup sites.
+ *
+ * N4659 §17.8.1 [temp.inst] — one instantiation per distinct
+ * template-id. Cross-TU merging is handled separately by the weak-
+ * linkage emission. */
+static bool same_template_instantiation(Type *a, Type *b) {
+    if (!a || !b) return false;
+    if (a->kind != b->kind) return false;
+    if (a->kind != TY_STRUCT && a->kind != TY_UNION) return false;
+    if (!a->tag || !b->tag) return false;
+    if (a->tag->len != b->tag->len) return false;
+    if (memcmp(a->tag->loc, b->tag->loc, a->tag->len) != 0) return false;
+    if (a->n_template_args <= 0) return false;
+    if (a->n_template_args != b->n_template_args) return false;
+    for (int i = 0; i < a->n_template_args; i++)
+        if (!types_equivalent(a->template_args[i], b->template_args[i]))
+            return false;
+    return true;
+}
 
 /* Collect same-named candidate methods from a class AND all its
  * base classes (recursive). Inherited methods need to be reachable
@@ -1611,19 +1640,7 @@ static Node *find_class_def_by_tag_args(Type *class_type) {
         Node *d = g_tu->tu.decls[i];
         if (!d || d->kind != ND_CLASS_DEF) continue;
         Type *t = d->class_def.ty;
-        if (!t || !t->tag) continue;
-        if (t->tag->len != class_type->tag->len) continue;
-        if (memcmp(t->tag->loc, class_type->tag->loc, t->tag->len) != 0)
-            continue;
-        if (t->n_template_args != class_type->n_template_args) continue;
-        bool ok = true;
-        for (int j = 0; j < t->n_template_args; j++) {
-            if (!types_equivalent(t->template_args[j],
-                                   class_type->template_args[j])) {
-                ok = false; break;
-            }
-        }
-        if (ok) return d;
+        if (same_template_instantiation(t, class_type)) return d;
     }
     return NULL;
 }
@@ -4618,29 +4635,12 @@ static void emit_class_def(Node *n) {
      * identity but the tag dedup would collapse them. The duplicate
      * problem is narrow to the template-instantiation pass producing
      * two ND_CLASS_DEFs for one template-id. */
-    if (class_type && class_type->tag && class_type->n_template_args > 0) {
+    if (class_type) {
         enum { CLS_DEDUP_CAP = 4096 };
         static Type *seen[CLS_DEDUP_CAP];
         static int nseen = 0;
-        for (int i = 0; i < nseen; i++) {
-            Type *s = seen[i];
-            if (!s->tag || s->tag->len != class_type->tag->len) continue;
-            if (memcmp(s->tag->loc, class_type->tag->loc, class_type->tag->len) != 0)
-                continue;
-            if (s->n_template_args != class_type->n_template_args) continue;
-            bool args_match = true;
-            for (int j = 0; j < class_type->n_template_args; j++) {
-                /* Structural compare — the instantiation/clone pipeline
-                 * sometimes produces distinct Type* for the same
-                 * concrete arg (e.g. separate vl_embed Types), so
-                 * pointer identity undercounts dupes. */
-                if (!types_equivalent(s->template_args[j],
-                                       class_type->template_args[j])) {
-                    args_match = false; break;
-                }
-            }
-            if (args_match) return;  /* same instantiation */
-        }
+        for (int i = 0; i < nseen; i++)
+            if (same_template_instantiation(seen[i], class_type)) return;
         if (nseen < CLS_DEDUP_CAP)
             seen[nseen++] = class_type;
     }
@@ -4945,25 +4945,12 @@ methods_phase:;
      * methods, producing 'redefinition' errors within one TU.
      * Mirror the tag+template_args structural dedup used by the
      * struct-phase path. */
-    if (class_type && class_type->tag && class_type->n_template_args > 0) {
+    if (class_type) {
         enum { MCLS_DEDUP_CAP = 4096 };
         static Type *seen_ty[MCLS_DEDUP_CAP];
         static int nseen_ty = 0;
-        for (int i = 0; i < nseen_ty; i++) {
-            Type *s = seen_ty[i];
-            if (!s->tag || s->tag->len != class_type->tag->len) continue;
-            if (memcmp(s->tag->loc, class_type->tag->loc, class_type->tag->len) != 0)
-                continue;
-            if (s->n_template_args != class_type->n_template_args) continue;
-            bool args_match = true;
-            for (int j = 0; j < class_type->n_template_args; j++) {
-                if (!types_equivalent(s->template_args[j],
-                                       class_type->template_args[j])) {
-                    args_match = false; break;
-                }
-            }
-            if (args_match) return;
-        }
+        for (int i = 0; i < nseen_ty; i++)
+            if (same_template_instantiation(seen_ty[i], class_type)) return;
         if (nseen_ty < MCLS_DEDUP_CAP)
             seen_ty[nseen_ty++] = class_type;
     }
