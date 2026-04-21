@@ -667,10 +667,185 @@ static void visit_subscript(Sema *s, Node *n) {
         n->is_type_dependent = true;
 }
 
+/* Minimal implicit conversion sequence rank — N4659 §16.3.3.1
+ * [over.best.ics]. Lower rank = better. We only distinguish two
+ * tiers for now: EXACT (types match structurally) and INCOMPATIBLE
+ * (no viable conversion). Promotion, qualification, user-defined
+ * etc. are future tiers that slot between these without changing
+ * the best-viable comparison code.
+ * TODO(seafront#over-match-ics): add promotion/conversion tiers. */
+enum {
+    ICS_EXACT        = 0,
+    ICS_PTR_SAME_TAG = 1,  /* T* ↔ T* where T's tag matches (same classes) */
+    ICS_INCOMPATIBLE = 100,
+};
+
+/* Structural equality for free-function overload resolution.
+ * Mirrors codegen's types_equivalent but kept separate to avoid
+ * pulling codegen into sema. Struct/union match on tag (and
+ * template_args if both sides carry them); pointers/refs recurse
+ * into base; primitives match on (kind, unsigned, cv).
+ * TODO(seafront#types-equiv-consolidate): factor out a shared
+ * helper in parse/ once emit_c.c's copy and this one have
+ * stabilised.
+ */
+static bool sema_types_equal(Type *a, Type *b) {
+    if (a == b) return true;
+    if (!a || !b) return false;
+    if (a->kind != b->kind) return false;
+    switch (a->kind) {
+    case TY_PTR: case TY_REF: case TY_RVALREF: case TY_ARRAY:
+        return sema_types_equal(a->base, b->base);
+    case TY_STRUCT: case TY_UNION: case TY_ENUM:
+        if (!a->tag || !b->tag) return a->tag == b->tag;
+        if (a->tag->len != b->tag->len) return false;
+        if (memcmp(a->tag->loc, b->tag->loc, a->tag->len) != 0) return false;
+        if (a->n_template_args != b->n_template_args) return false;
+        for (int i = 0; i < a->n_template_args; i++)
+            if (!sema_types_equal(a->template_args[i], b->template_args[i]))
+                return false;
+        return true;
+    case TY_FUNC:
+        /* Function types as template args — rare. Punt to identity. */
+        return false;
+    default:
+        return a->is_unsigned == b->is_unsigned &&
+               a->is_const    == b->is_const &&
+               a->is_volatile == b->is_volatile;
+    }
+}
+
+static int ics_rank(Type *param, Type *arg) {
+    if (!param || !arg) return ICS_INCOMPATIBLE;
+    if (sema_types_equal(param, arg)) return ICS_EXACT;
+    /* Pointer-to-same-tag: T* vs T* where both Ts are class types
+     * with matching tag but distinct Type* identity. Catches the
+     * common case where two free-function overloads differ only in
+     * their struct-pointer parameter type (e.g. gcc 4.8's
+     * dump_bitmap(bitmap_head_def*) vs dump_bitmap(simple_bitmap_def*)
+     * — at the call site we want the overload whose pointee tag
+     * matches the argument's pointee tag). */
+    if (param->kind == TY_PTR && arg->kind == TY_PTR &&
+        param->base && arg->base) {
+        Type *pb = param->base;
+        Type *ab = arg->base;
+        if ((pb->kind == TY_STRUCT || pb->kind == TY_UNION) &&
+            (ab->kind == TY_STRUCT || ab->kind == TY_UNION) &&
+            pb->tag && ab->tag &&
+            pb->tag->len == ab->tag->len &&
+            memcmp(pb->tag->loc, ab->tag->loc, pb->tag->len) == 0)
+            return ICS_PTR_SAME_TAG;
+    }
+    return ICS_INCOMPATIBLE;
+}
+
+/* Resolve an overloaded free-function call — N4659 §16.3.3
+ * [over.match.best].
+ *
+ *   Viable = arity-compatible + every arg has a non-INCOMPATIBLE ICS
+ *            to the matching parameter.
+ *   Best   = F such that for all viable G != F:
+ *              F's ICS[i] ≤ G's ICS[i] for all i, AND
+ *              F's ICS[i] <  G's ICS[i] for some i.
+ *   If no unique best → ambiguous → return NULL (keep existing
+ *   resolved_decl untouched; codegen will fall back to whatever
+ *   sema's first-found pick chose).
+ *
+ * Doesn't yet handle: variadic ellipsis in the param list, default
+ * arguments, function templates as candidates (each requires
+ * deduction first), ADL, user-defined conversions, reference-
+ * binding sub-ranks, partial ordering of templates.
+ */
+#define MAX_OVLD_CANDS 16
+static Declaration *resolve_free_function_overload(
+        Declaration **cands, int ncands,
+        Type **arg_types, int nargs) {
+    if (ncands <= 1) return ncands == 1 ? cands[0] : NULL;
+
+    Declaration *viable[MAX_OVLD_CANDS];
+    int ranks[MAX_OVLD_CANDS][MAX_OVLD_CANDS];
+    int nv = 0;
+    for (int i = 0; i < ncands && nv < MAX_OVLD_CANDS; i++) {
+        Declaration *c = cands[i];
+        if (!c || !c->type || c->type->kind != TY_FUNC) continue;
+        Type *ft = c->type;
+        /* Arity filter — §16.3.2/2. Variadic pass-through for
+         * '...' handled by nargs >= nparams; strict match otherwise.
+         * TODO(seafront#over-defaults): admit nargs < nparams when
+         * trailing params have default-arg annotations. */
+        bool arity_ok = ft->is_variadic ? nargs >= ft->nparams
+                                        : nargs == ft->nparams;
+        if (!arity_ok) continue;
+        bool ok = true;
+        for (int j = 0; j < nargs && ok; j++) {
+            /* Variadic slot → ellipsis conversion (rank
+             * ICS_INCOMPATIBLE + 1 in a future tier; for now
+             * treat ellipsis args as exact-matching so variadic
+             * overloads stay viable when used literally). */
+            int r;
+            if (j >= ft->nparams) {
+                r = ICS_EXACT;
+            } else {
+                r = ics_rank(ft->params[j], arg_types[j]);
+            }
+            if (r >= ICS_INCOMPATIBLE) ok = false;
+            ranks[nv][j] = r;
+        }
+        if (ok) viable[nv++] = c;
+    }
+    if (nv == 0) return NULL;
+    if (nv == 1) return viable[0];
+
+    /* Pick best viable. */
+    for (int i = 0; i < nv; i++) {
+        bool is_best = true;
+        for (int j = 0; j < nv && is_best; j++) {
+            if (i == j) continue;
+            bool le_all = true;
+            bool lt_any = false;
+            for (int k = 0; k < nargs; k++) {
+                if (ranks[i][k] > ranks[j][k]) { le_all = false; break; }
+                if (ranks[i][k] < ranks[j][k]) lt_any = true;
+            }
+            if (!le_all || !lt_any) is_best = false;
+        }
+        if (is_best) return viable[i];
+    }
+    return NULL;  /* ambiguous */
+}
+
 static void visit_call(Sema *s, Node *n) {
     visit(s, n->call.callee);
     for (int i = 0; i < n->call.nargs; i++)
         visit(s, n->call.args[i]);
+    /* Free-function overload resolution — N4659 §16.3 [over.match].
+     * When the callee is an overloaded name (the parser carried the
+     * full candidate set on ident.overload_set), pick the best
+     * viable per §16.3.3 using the arg types we just visited.
+     * Updates resolved_decl/resolved_type to the winner so codegen
+     * sees the correct signature.
+     *
+     * Only runs for simple ident-callees (qualified-id calls and
+     * member calls have their own resolution paths). Dependent
+     * callees are skipped — they'll be resolved post-instantiation. */
+    if (n->call.callee && n->call.callee->kind == ND_IDENT &&
+        n->call.callee->ident.n_overloads > 1 &&
+        !n->call.callee->is_type_dependent) {
+        Type *at[MAX_OVLD_CANDS];
+        int na = n->call.nargs;
+        if (na > MAX_OVLD_CANDS) na = MAX_OVLD_CANDS;
+        for (int i = 0; i < na; i++)
+            at[i] = n->call.args[i] ? n->call.args[i]->resolved_type : NULL;
+        Declaration *winner = resolve_free_function_overload(
+            n->call.callee->ident.overload_set,
+            n->call.callee->ident.n_overloads,
+            at, na);
+        if (winner) {
+            n->call.callee->ident.resolved_decl = winner;
+            if (winner->type)
+                n->call.callee->resolved_type = winner->type;
+        }
+    }
     /* Functional-cast / explicit-type-conversion: 'Foo(args)' where
      * Foo is a type-name. N4659 §8.2.3 [expr.type.conv]: a simple-
      * type-specifier (or typename-specifier) followed by a

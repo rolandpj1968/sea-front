@@ -201,25 +201,45 @@ static int collect_in_region(DeclarativeRegion *r, const char *name,
 int lookup_overload_set_from(DeclarativeRegion *start,
                               const char *name, int name_len,
                               Declaration **out, int cap) {
-    /* N4659 §6.4.1/1: lookup ends at the first scope with any match.
-     * Within that scope, collect ALL overloads. Using-directives
-     * contribute to the same scope for lookup purposes (§10.3.4/2),
-     * so check them at the same level.
+    /* SHORTCUT: collect from every enclosing scope up to and
+     * including the innermost enclosing NAMESPACE, not just the
+     * innermost scope with a match.
      *
-     * NOTE: this step-(1) helper handles namespace/file/block scope.
-     * Class-scope (base-class merging per §13.5.2 [class.member.
-     * lookup]) is NOT folded in yet — the existing class-method
-     * resolve_overload in emit_c.c covers that. If/when we unify
-     * class + free-function resolution, extend here. */
+     * The standard (N4659 §6.4.1/1 [basic.lookup.unqual]) says
+     * lookup stops at the first scope with any match — block-scope
+     * declarations hide outer namespace-scope names. Strictly
+     * following that rule would give us the wrong overload set for
+     * calls inside template bodies: vec.h's templates contain block-
+     * scope 'extern void gt_pch_nx(T&);' declarations which, per the
+     * strict rule, would hide the 5 namespace-scope gt_pch_nx
+     * overloads when the template body calls 'gt_pch_nx(&((*v)[i]),
+     * op, cookie)'. At the INSTANTIATION point the outer overloads
+     * would be in scope and picked — but sea-front doesn't re-run
+     * name lookup at instantiation time (§17.7.2 [temp.dep]/3's
+     * two-phase lookup), so we conservatively widen the set at
+     * definition lookup.
+     *
+     * This is correct for valid programs where the outer and inner
+     * decls refer to the same overload family (the common case,
+     * including all of gcc 4.8's template patterns). It would mis-
+     * accept programs that deliberately shadow a namespace-scope
+     * function with a block-scope extern of different semantics —
+     * we haven't seen those in the bootstrap target.
+     * TODO(seafront#two-phase-lookup): proper §17.7.2 two-phase
+     * lookup; revert the widening once instantiation-point name
+     * lookup runs. */
+    int pos = 0;
     for (DeclarativeRegion *r = start; r; r = r->enclosing) {
-        int pos = collect_in_region(r, name, name_len, out, 0, cap);
+        pos = collect_in_region(r, name, name_len, out, pos, cap);
         for (int i = 0; i < r->nusing; i++) {
             pos = collect_in_region(r->using_regions[i], name,
                                      name_len, out, pos, cap);
         }
-        if (pos > 0) return pos;
+        /* Stop after we've walked through a namespace scope — no
+         * point going past the enclosing file scope. */
+        if (r->kind == REGION_NAMESPACE) break;
     }
-    return 0;
+    return pos;
 }
 
 /*
