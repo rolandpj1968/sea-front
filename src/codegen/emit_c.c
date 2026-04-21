@@ -5584,6 +5584,42 @@ static void emit_fwd_decl_methods_only(Node *n) {
         if (n->func.class_type && n->func.name) {
             emit_method_signature(n, n->func.class_type);
             fputs(";\n", stdout);
+        } else if (n->func.name && n->func.body) {
+            /* Forward-declare instantiated function templates so
+             * call sites in earlier-emitted functions don't hit C's
+             * implicit-int declaration (then 'conflicting types' at
+             * the real definition). Narrow to the mangled shape
+             * '<name>_t_..._te_' produced by the instantiation pass
+             * so user-written free-function overloads (emitted with
+             * their plain source names and sometimes deduped) don't
+             * get false-positive duplicate decls.
+             *
+             * SHORTCUT (ours, not the standard): string-match the
+             * mangled suffix rather than carrying a
+             * came-from-instantiation flag on the Node. The flag
+             * would be cleaner but the string match is free and
+             * hasn't bitten us yet.
+             * TODO(seafront#inst-flag): add Node flag, drop the
+             * string match. */
+            Token *nm = n->func.name;
+            bool looks_instantiated = false;
+            if (nm && nm->len >= 7) {
+                const char *s = nm->loc;
+                int L = nm->len;
+                if (L >= 4 && memcmp(s + L - 4, "_te_", 4) == 0) {
+                    for (int i = 0; i + 3 < L; i++)
+                        if (s[i]=='_' && s[i+1]=='t' && s[i+2]=='_') {
+                            looks_instantiated = true; break;
+                        }
+                }
+            }
+            if (looks_instantiated) {
+                emit_storage_flags_for_def(n->func.storage_flags);
+                emit_func_header(n->func.ret_ty, n->func.name,
+                                 n->func.params, n->func.nparams,
+                                 n->func.is_variadic);
+                fputs(";\n", stdout);
+            }
         }
         break;
     default:
