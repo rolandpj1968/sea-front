@@ -2714,33 +2714,13 @@ static void emit_expr(Node *n) {
             base_ty->tag;
         if (base_is_class_value) {
             /* operator[] → mangled method call.
-             * If the operator returns a reference (TY_REF / TY_RVALREF
-             * → pointer in C), dereference the result. If it returns
-             * by value, emit the call directly. */
-            /* Check if operator[] returns a reference. Look up via
-             * class_region first, then class_def member scan.
-             * N4659 §16.5.5 [over.sub]. */
-            bool ref_return = false;
-            if (base_ty->class_region) {
-                Declaration *d = lookup_in_scope(base_ty->class_region,
-                    "operator", 8);
-                if (d && d->type && d->type->kind == TY_FUNC &&
-                    d->type->ret &&
-                    (d->type->ret->kind == TY_REF ||
-                     d->type->ret->kind == TY_RVALREF))
-                    ref_return = true;
-            }
-            /* Fallback for template types without class_region:
-             * N4659 §16.5.5 [over.sub] — operator[] on containers
-             * almost universally returns T&. For template types
-             * with n_template_args > 0 and no class_region, assume
-             * ref-return. This is sound for C++03 containers. */
-            if (!ref_return && !base_ty->class_region &&
-                base_ty->n_template_args > 0)
-                ref_return = true;
-            if (ref_return) fputs("(*", stdout);
-            mangle_class_tag(base_ty);
-            fputs("__subscript", stdout);
+             * Resolve the specific overload FIRST so we can check
+             * the WINNING candidate's return type for ref-return.
+             * The previous 'lookup_in_scope(..., "operator", 8)'
+             * would match any operator method (==, !=, etc.) in the
+             * class, not specifically operator[] — giving wrong
+             * ref-return decisions for classes with multiple
+             * operators. N4659 §16.5.5 [over.sub]. */
             Type *idx_ty = n->subscript.index ? n->subscript.index->resolved_type : NULL;
             Type *args[1] = { idx_ty };
             Type **pty = NULL;
@@ -2750,6 +2730,24 @@ static void emit_expr(Node *n) {
             int np = resolve_operator_overload(base_ty, "__subscript",
                                                 args, 1, base_const,
                                                 &pty, &winner);
+            bool ref_return = false;
+            if (winner) {
+                Type *ret = NULL;
+                if (winner->kind == ND_FUNC_DEF)
+                    ret = winner->func.ret_ty;
+                else if (winner->kind == ND_VAR_DECL && winner->var_decl.ty)
+                    ret = winner->var_decl.ty->ret;
+                if (ret && (ret->kind == TY_REF || ret->kind == TY_RVALREF))
+                    ref_return = true;
+            }
+            /* Fallback for template types without resolution (class_def
+             * not reachable): operator[] on container templates returns
+             * T& by convention. */
+            if (!ref_return && !winner && base_ty->n_template_args > 0)
+                ref_return = true;
+            if (ref_return) fputs("(*", stdout);
+            mangle_class_tag(base_ty);
+            fputs("__subscript", stdout);
             if (np >= 0) mangle_param_suffix(pty, np);
             if (candidate_is_const(winner)) fputs("_const", stdout);
             fputs("(&", stdout);
