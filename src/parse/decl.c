@@ -409,7 +409,18 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
          * pending_is_destructor branch above already handles the
          * dtor case ('Foo::~Foo'); ctors don't have a leading
          * marker so we have to check name equality. */
-        if (qscope && qscope->kind == REGION_CLASS && qscope->owner_type &&
+        /* Only treat as out-of-class ctor when the declarator WAS a
+         * qualified name: 'Foo::Foo(...)'. Without 'name_was_qualified'
+         * the leading qscope was set merely from the ident's own type
+         * lookup — this happens for parameter names or field names
+         * that share a type's identifier ('bitmap_obstack *obstack'
+         * → 'obstack' is a param NAME that also names a class type).
+         * In those cases the ident is NOT a ctor and we must not set
+         * pending_is_constructor (it'd leak into the next declaration).
+         * N4659 §6.4.3 [basic.lookup.qual] — only qualified-ids name
+         * out-of-class members. */
+        if (name_was_qualified &&
+            qscope && qscope->kind == REGION_CLASS && qscope->owner_type &&
             qscope->owner_type->tag && name &&
             name->len == qscope->owner_type->tag->len &&
             memcmp(name->loc, qscope->owner_type->tag->loc, name->len) == 0) {
@@ -628,7 +639,20 @@ parse_suffixes:
                         DeclSpec pspec = parse_type_specifiers(p);
                         parse_absorb_trailing_cv(p, &pspec);
                         Type *param_base = pspec.type;
+                        /* parse_declarator for a parameter must not
+                         * leak its qualified_decl_scope / ctor-pending
+                         * state into the enclosing declaration. Param
+                         * names sometimes coincide with class type
+                         * names (e.g. 'bitmap_obstack *obstack'), which
+                         * would otherwise stash obstack's class_region
+                         * as the enclosing function's qualified scope. */
+                        DeclarativeRegion *saved_qds = p->qualified_decl_scope;
+                        bool saved_pic = p->pending_is_constructor;
+                        bool saved_pid = p->pending_is_destructor;
                         Node *param_decl = parse_declarator(p, param_base);
+                        p->qualified_decl_scope = saved_qds;
+                        p->pending_is_constructor = saved_pic;
+                        p->pending_is_destructor = saved_pid;
                         if (param_decl)
                             param_decl->kind = ND_PARAM;
                         /* C++11 attribute-specifier-seq AFTER the
@@ -759,7 +783,14 @@ parse_suffixes:
                     DeclSpec pspec2 = parse_type_specifiers(p);
                     parse_absorb_trailing_cv(p, &pspec2);
                     Type *param_base = pspec2.type;
+                    /* Save/restore — see the matching block above. */
+                    DeclarativeRegion *saved_qds = p->qualified_decl_scope;
+                    bool saved_pic = p->pending_is_constructor;
+                    bool saved_pid = p->pending_is_destructor;
                     Node *param_decl = parse_declarator(p, param_base);
+                    p->qualified_decl_scope = saved_qds;
+                    p->pending_is_constructor = saved_pic;
+                    p->pending_is_destructor = saved_pid;
                     if (param_decl) param_decl->kind = ND_PARAM;
                     /* Trailing attribute-specifier-seq after the
                      * declarator (libstdc++ uses [[gnu::unused]]). */
