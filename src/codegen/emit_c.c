@@ -2331,7 +2331,12 @@ static void emit_expr(Node *n) {
                     }
                 }
                 if (!mty && callee->resolved_type) mty = callee->resolved_type;
-                is_method_call = mty && mty->kind == TY_FUNC;
+                /* Don't clobber is_method_call=true if the class_def
+                 * scan above matched on name alone (no TY_FUNC in hand).
+                 * Only promote to true when mty is a concrete TY_FUNC;
+                 * never demote from true to false here. */
+                if (!is_method_call)
+                    is_method_call = mty && mty->kind == TY_FUNC;
                 /* If the method wasn't found via class_region, try
                  * a direct member scan through class_def. This covers
                  * Type copies where class_region was patched but the
