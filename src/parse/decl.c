@@ -2334,6 +2334,13 @@ Node *parse_template_declaration(Parser *p) {
                   decl->var_decl.ty->kind == TY_UNION) &&
                  decl->var_decl.ty->tag == tmpl_name)
             tmpl_class_type = decl->var_decl.ty;
+        /* Alias template (N4659 §17.6.1 [temp.alias]):
+         *   template<typename... _Args> using __uses_alloc_t = ...;
+         * names a TYPE, not a function — parser_at_type_specifier's
+         * class-template-only check needs to find ENTITY_TYPE for it,
+         * so register the aliased type under the template name. */
+        else if (decl->kind == ND_TYPEDEF && decl->var_decl.ty)
+            tmpl_class_type = decl->var_decl.ty;
     }
     if (tmpl_name) {
         region_declare(p, tmpl_name->loc, tmpl_name->len,

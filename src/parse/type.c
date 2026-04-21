@@ -1514,8 +1514,29 @@ bool parser_at_type_specifier(Parser *p) {
                 return false;
             return true;
         }
-        if (lookup_is_template_name(p, parser_peek(p)))
-            return parser_peek_ahead(p, 1)->kind == TK_LT;
+        if (lookup_is_template_name(p, parser_peek(p))) {
+            if (parser_peek_ahead(p, 1)->kind != TK_LT) return false;
+            /* A template-id is a simple-type-specifier only when the
+             * template names a TYPE (class template, alias template) —
+             * not when it's a function template. §17.2/4:
+             * simple-template-id → template-name < template-args >;
+             * it's a type-id only if template-name refers to a class
+             * template (§17.3 [temp.dep.type]).
+             *
+             * sea-front registers class templates under both
+             * ENTITY_TEMPLATE and ENTITY_TYPE/ENTITY_TAG (see
+             * parse_template_declaration), but function templates
+             * under ENTITY_TEMPLATE alone. Gate on ENTITY_TYPE to
+             * exclude the function-template case. Without this,
+             * 'is_a<T>(p)' (is_a being a function template) in an
+             * if-condition was misparsed as a declaration
+             * 'is_a<T> p(...)' and the init got dropped. */
+            Token *tok = parser_peek(p);
+            return lookup_unqualified_kind(p, tok->loc, tok->len,
+                                            ENTITY_TYPE) != NULL ||
+                   lookup_unqualified_kind(p, tok->loc, tok->len,
+                                            ENTITY_TAG) != NULL;
+        }
         return false;
     default:
         return false;
