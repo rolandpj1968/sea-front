@@ -600,6 +600,23 @@ static void visit(Sema *s, Node *n) {
     case ND_SUBSCRIPT: visit_subscript(s, n); return;
     case ND_MEMBER:    visit_member(s, n);    return;
 
+    /* switch / case / labels — N4659 §9.4.2 [stmt.switch], §9.1
+     * [stmt.label]. Walk the sub-expressions so identifiers inside
+     * (e.g. 'switch(obj.method())') get resolved_type and member
+     * access dispatches correctly at codegen. */
+    case ND_SWITCH:
+        if (n->switch_.init) visit(s, n->switch_.init);
+        if (n->switch_.expr) visit(s, n->switch_.expr);
+        if (n->switch_.body) visit(s, n->switch_.body);
+        return;
+    case ND_CASE:
+        if (n->case_.expr) visit(s, n->case_.expr);
+        if (n->case_.stmt) visit(s, n->case_.stmt);
+        return;
+    case ND_DEFAULT:
+        if (n->default_.stmt) visit(s, n->default_.stmt);
+        return;
+
     /* Declarations */
     case ND_VAR_DECL:  visit_var_decl(s, n);  return;
     case ND_FUNC_DEF:  visit_func_def(s, n);  return;

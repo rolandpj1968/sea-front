@@ -2274,6 +2274,13 @@ static void emit_expr(Node *n) {
         if (callee && callee->kind == ND_MEMBER) {
             Node *obj = callee->member.obj;
             Type *ot = obj ? obj->resolved_type : NULL;
+            /* Sema-missed fallback: when obj is itself a member access
+             * ('outer.inner.method()') and inner's resolved_type wasn't
+             * set (happens for certain anonymous-typedef / field paths),
+             * resolve the member type on-demand by looking up the field
+             * name in the outer's class_region. This keeps method
+             * dispatch working when sema's member-type propagation is
+             * incomplete. N4659 §6.4.5 [class.qual]. */
             /* References (TY_REF / TY_RVALREF) are lowered to C
              * pointers, so 'obj_is_ptr' is true for both — the
              * call-site must pass the ref as-is, not take its
