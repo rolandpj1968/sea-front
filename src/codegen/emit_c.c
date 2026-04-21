@@ -2566,7 +2566,19 @@ static void emit_expr(Node *n) {
             }
         }
     plain_call:
-        emit_expr(n->call.callee);
+        /* When the callee is a cast expression '(T)x', C precedence
+         * would parse '(T)x(args)' as '(T)(x(args))' — cast the CALL
+         * result rather than calling the cast result. Source idiom
+         * '((T)func)(args)' expects the outer call. Parenthesise the
+         * cast callee to force the intended grouping. N4659 §8.2.2
+         * [expr.call] / C §6.5.2.2. */
+        {
+            bool paren_callee = n->call.callee &&
+                                n->call.callee->kind == ND_CAST;
+            if (paren_callee) fputc('(', stdout);
+            emit_expr(n->call.callee);
+            if (paren_callee) fputc(')', stdout);
+        }
         fputc('(', stdout);
         /* Extract callee's function type for ref-param adaptation.
          * Handles function pointers (TY_PTR(TY_FUNC)) and direct
