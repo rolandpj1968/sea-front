@@ -841,14 +841,21 @@ typedef struct {
     const char *loc;
     int len;
     bool is_def;
-    /* Coarse signature fingerprint: (nparams, first_param_kind).
-     * Used to detect same-name-different-type overloads at the
-     * decl↔def boundary, e.g. 'int abs(int)' decl vs 'long abs(long)'
-     * def. Full type encoding is overkill — parameter count plus the
-     * first parameter's TypeKind is enough to separate the cases
-     * that actually arise in preprocessed headers. */
+    /* Coarse signature fingerprint: (nparams, first_param_kind,
+     * first_param_tag). Used to detect same-name-different-type
+     * overloads at the decl↔def boundary.
+     *
+     * nparams + first_param_kind alone was insufficient when both
+     * overloads took a TY_PTR (e.g. gcc 4.8's
+     *   extern bool bitmap_bit_p(bitmap_head_def*, int)   [bitmap.h]
+     *   static inline ulong bitmap_bit_p(simple_bitmap_def*, int)  [sbitmap.h]
+     * ). Record the first param's struct/union TAG too for TY_PTR,
+     * so the two overloads stay distinct and we skip the conflicting
+     * definition. */
     int nparams;
     int first_param_kind;
+    const char *first_param_tag;  /* NULL when not TY_PTR to a tagged struct/union */
+    int first_param_tag_len;
 } FuncSeen;
 static FuncSeen g_func_seen[8192];
 static int g_func_nseen = 0;
@@ -857,6 +864,28 @@ static int func_first_param_kind(Type *fty) {
     if (!fty || fty->kind != TY_FUNC || fty->nparams < 1) return -1;
     Type *p = fty->params[0];
     return p ? (int)p->kind : -1;
+}
+
+/* First param's struct/union tag (for disambiguating TY_PTR overloads
+ * like bitmap_bit_p(bitmap_head_def*,int) vs bitmap_bit_p(simple_bitmap_def*,int)).
+ * Returns NULL when not a pointer to a tagged struct/union. */
+static Token *func_first_param_ptr_tag(Type *fty) {
+    if (!fty || fty->kind != TY_FUNC || fty->nparams < 1) return NULL;
+    Type *p = fty->params[0];
+    if (!p || p->kind != TY_PTR || !p->base) return NULL;
+    Type *pointee = p->base;
+    if ((pointee->kind == TY_STRUCT || pointee->kind == TY_UNION))
+        return pointee->tag;
+    return NULL;
+}
+
+/* Compare two (tag-pointer, len) fingerprints. NULL matches NULL. */
+static bool func_tag_match(const char *a, int a_len,
+                            const char *b, int b_len) {
+    if (!a && !b) return true;
+    if (!a || !b) return false;
+    if (a_len != b_len) return false;
+    return memcmp(a, b, a_len) == 0;
 }
 
 static FuncSeen *func_seen_find(Token *name) {
@@ -874,24 +903,31 @@ static FuncSeen *func_seen_find(Token *name) {
  * (like union_or_struct_p(enum) vs union_or_struct_p(type_p)) aren't
  * incorrectly deduped. */
 static FuncSeen *func_seen_find_sig(Token *name, int nparams,
-                                      int first_param_kind) {
+                                      int first_param_kind,
+                                      Token *first_param_tag) {
     if (!name) return NULL;
+    const char *tag_loc = first_param_tag ? first_param_tag->loc : NULL;
+    int tag_len = first_param_tag ? first_param_tag->len : 0;
     for (int i = 0; i < g_func_nseen; i++) {
         if (g_func_seen[i].len != name->len) continue;
         if (memcmp(g_func_seen[i].loc, name->loc, name->len) != 0) continue;
         if (g_func_seen[i].nparams == nparams &&
-            g_func_seen[i].first_param_kind == first_param_kind)
+            g_func_seen[i].first_param_kind == first_param_kind &&
+            func_tag_match(g_func_seen[i].first_param_tag,
+                           g_func_seen[i].first_param_tag_len,
+                           tag_loc, tag_len))
             return &g_func_seen[i];
     }
     return NULL;
 }
 
-/* Both kinds' dedup take (nparams, first_param_kind) so we can
- * compare signatures. Callers pass -1 when the info is unavailable;
- * that matches any recorded signature (conservative — matches the
- * pre-signature behavior). */
+/* Both kinds' dedup take (nparams, first_param_kind, first_param_tag)
+ * to compare signatures. Callers pass -1/NULL when info is unavailable;
+ * that matches any recorded signature (conservative — preserves pre-
+ * signature behavior for older call sites). */
 static bool func_decl_dedup_check_sig(Token *name, int nparams,
-                                       int first_param_kind) {
+                                       int first_param_kind,
+                                       Token *first_param_tag) {
     if (!name) return false;
     if (func_seen_find(name)) return true;
     if (g_func_nseen < 8192) {
@@ -900,19 +936,29 @@ static bool func_decl_dedup_check_sig(Token *name, int nparams,
         g_func_seen[g_func_nseen].is_def = false;
         g_func_seen[g_func_nseen].nparams = nparams;
         g_func_seen[g_func_nseen].first_param_kind = first_param_kind;
+        g_func_seen[g_func_nseen].first_param_tag =
+            first_param_tag ? first_param_tag->loc : NULL;
+        g_func_seen[g_func_nseen].first_param_tag_len =
+            first_param_tag ? first_param_tag->len : 0;
         g_func_nseen++;
     }
     return false;
 }
 
 static bool func_def_dedup_check_sig(Token *name, int nparams,
-                                      int first_param_kind) {
+                                      int first_param_kind,
+                                      Token *first_param_tag) {
     if (!name) return false;
+    const char *tag_loc = first_param_tag ? first_param_tag->loc : NULL;
+    int tag_len = first_param_tag ? first_param_tag->len : 0;
     FuncSeen *fs = func_seen_find(name);
     if (fs) {
         if (fs->is_def) return true;
         /* Decl→def upgrade only when signatures match. */
-        if (fs->nparams != nparams || fs->first_param_kind != first_param_kind)
+        if (fs->nparams != nparams ||
+            fs->first_param_kind != first_param_kind ||
+            !func_tag_match(fs->first_param_tag, fs->first_param_tag_len,
+                            tag_loc, tag_len))
             return true;
         fs->is_def = true;
         return false;
@@ -923,6 +969,8 @@ static bool func_def_dedup_check_sig(Token *name, int nparams,
         g_func_seen[g_func_nseen].is_def = true;
         g_func_seen[g_func_nseen].nparams = nparams;
         g_func_seen[g_func_nseen].first_param_kind = first_param_kind;
+        g_func_seen[g_func_nseen].first_param_tag = tag_loc;
+        g_func_seen[g_func_nseen].first_param_tag_len = tag_len;
         g_func_nseen++;
     }
     return false;
@@ -4992,9 +5040,14 @@ static void emit_top_level(Node *n) {
                             n->func.params[0] &&
                             n->func.params[0]->param.ty)
                     ? n->func.params[0]->param.ty : NULL;
+                Token *p0_tag = NULL;
+                if (p0 && p0->kind == TY_PTR && p0->base &&
+                    (p0->base->kind == TY_STRUCT || p0->base->kind == TY_UNION))
+                    p0_tag = p0->base->tag;
                 if (func_def_dedup_check_sig(n->func.name,
                                               n->func.nparams,
-                                              p0 ? (int)p0->kind : -1))
+                                              p0 ? (int)p0->kind : -1,
+                                              p0_tag))
                     return;
             }
             emit_func_def(n);
@@ -5048,7 +5101,8 @@ static void emit_top_level(Node *n) {
                 Type *fty = n->var_decl.ty;
                 int np = fty ? fty->nparams : -1;
                 int k  = func_first_param_kind(fty);
-                if (func_decl_dedup_check_sig(n->var_decl.name, np, k))
+                Token *tag = func_first_param_ptr_tag(fty);
+                if (func_decl_dedup_check_sig(n->var_decl.name, np, k, tag))
                     return;
             }
             emit_source_comment(n->tok);
