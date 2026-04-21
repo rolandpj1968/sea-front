@@ -14,3 +14,8 @@ claude-resume*
 # for eyeballing the lowering. Cleared at the start of each test run.)
 gen/
 *.o
+
+# Emacs autosave/lock/backup files
+\#*\#
+.\#*
+*~

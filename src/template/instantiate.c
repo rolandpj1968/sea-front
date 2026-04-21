@@ -314,6 +314,13 @@ struct InstRequest {
     Node  *template_id;     /* ND_TEMPLATE_ID with args */
     Node  *tmpl_def;        /* resolved ND_TEMPLATE_DECL */
     Type  *usage_type;      /* the Type* at the usage site (to patch) */
+    /* Call-site argument types for function-template deduction
+     * (N4659 §17.8.2.1 [temp.deduct.call]). NULL when this request
+     * comes from a type-position use where no deduction is needed.
+     * Used when the explicit template args don't cover all template
+     * parameters; the remaining ones are deduced from call args. */
+    Type **arg_types;
+    int    nargs;
     InstRequest *next;
 };
 
@@ -506,7 +513,50 @@ static void collect_from_node(InstCollector *col, Node *n) {
         break;
 
     case ND_CALL:
-        collect_from_node(col, n->call.callee);
+        /* Function-template call with deducible U: 'is_a<Cat>(p)' in
+         * 'template<T, U> bool is_a(U*)' — the ND_TEMPLATE_ID callee
+         * only has T explicit; U must be deduced from the call args.
+         * When the callee is ND_TEMPLATE_ID, create the request HERE
+         * with arg_types from the call (so the instantiation phase
+         * can run deduce_template_args). Skip the recursive
+         * collect_from_node(callee) so we don't ALSO add a
+         * no-arg-types duplicate via the ND_TEMPLATE_ID case.
+         * N4659 §17.8.2.1 [temp.deduct.call]. */
+        if (n->call.callee && n->call.callee->kind == ND_TEMPLATE_ID) {
+            Node *tid = n->call.callee;
+            Token *tname = tid->template_id.name;
+            bool has_dep = false;
+            for (int i = 0; i < tid->template_id.nargs && !has_dep; i++) {
+                Node *arg = tid->template_id.args[i];
+                Type *aty = (arg && arg->kind == ND_VAR_DECL) ? arg->var_decl.ty : NULL;
+                if (aty && aty->kind == TY_DEPENDENT) has_dep = true;
+            }
+            if (!has_dep && tname) {
+                Node *tmpl = registry_find(col->reg, tname->loc, tname->len);
+                if (tmpl) {
+                    InstRequest *req = arena_alloc(col->arena, sizeof(InstRequest));
+                    req->name = tname;
+                    req->template_id = tid;
+                    req->tmpl_def = tmpl;
+                    req->usage_type = NULL;
+                    req->nargs = n->call.nargs;
+                    if (n->call.nargs > 0) {
+                        req->arg_types = arena_alloc(col->arena,
+                            n->call.nargs * sizeof(Type *));
+                        for (int i = 0; i < n->call.nargs; i++)
+                            req->arg_types[i] = n->call.args[i]
+                                ? n->call.args[i]->resolved_type : NULL;
+                    } else {
+                        req->arg_types = NULL;
+                    }
+                    req->next = col->head;
+                    col->head = req;
+                    col->count++;
+                }
+            }
+        } else {
+            collect_from_node(col, n->call.callee);
+        }
         for (int i = 0; i < n->call.nargs; i++)
             collect_from_node(col, n->call.args[i]);
         /* N4659 §17.5.2 [temp.mem] / §17.8.2.1 [temp.deduct.call]:
@@ -1410,6 +1460,40 @@ void template_instantiate(Node *tu, Arena *arena) {
                 arg_ty = subst_type(param->param.default_type, &tmp_map, arena);
             if (arg_ty)
                 subst_map_add(&tmp_map, param->param.name, arg_ty);
+        }
+        /* Deduce remaining function-template params from call args.
+         * Pattern: 'template<T, U> bool is_a(U*)' invoked as
+         * 'is_a<Cat>(&thing)' — only T is explicit; U deduces from
+         * the arg. Adds bindings to tmp_map for any deducible
+         * parameter not already bound by explicit args or defaults.
+         * N4659 §17.8.2.1 [temp.deduct.call]. */
+        if (req->arg_types && tmp_map.nentries < np) {
+            Node *inner = tmpl->template_decl.decl;
+            if (inner)
+                deduce_template_args(inner, req->arg_types, req->nargs,
+                                      &tmp_map);
+        }
+        /* If deduction added bindings beyond the explicit usage args,
+         * rewrite req->template_id with a synthetic that carries the
+         * full arg list. instantiate_one builds its own SubstMap from
+         * template_id->args; without this rewrite it wouldn't see the
+         * deduced bindings. Must happen BEFORE the dedup key build so
+         * same-T-different-U requests produce distinct keys. */
+        if (tmp_map.nentries > na) {
+            Node *syn = arena_alloc(arena, sizeof(Node));
+            *syn = *req->template_id;
+            syn->template_id.nargs = tmp_map.nentries;
+            syn->template_id.args = arena_alloc(arena,
+                tmp_map.nentries * sizeof(Node *));
+            for (int i = 0; i < tmp_map.nentries; i++) {
+                Node *arg = arena_alloc(arena, sizeof(Node));
+                memset(arg, 0, sizeof(Node));
+                arg->kind = ND_VAR_DECL;
+                arg->var_decl.ty = tmp_map.entries[i].concrete_type;
+                syn->template_id.args[i] = arg;
+            }
+            req->template_id = syn;
+            na = tmp_map.nentries;
         }
 
         /* Dedup check — use ALL usage args (not just the map, which
