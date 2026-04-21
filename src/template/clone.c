@@ -12,6 +12,8 @@
  * variants — the rest of the node stays zero.
  */
 
+#include <assert.h>
+
 #include "clone.h"
 
 /* ------------------------------------------------------------------ */
@@ -189,7 +191,9 @@ Type *subst_type(Type *ty, SubstMap *map, Arena *arena) {
 /* ------------------------------------------------------------------ */
 
 static Node **clone_node_array(Node **arr, int n, SubstMap *map, Arena *arena) {
-    if (!arr || n <= 0) return NULL;
+    assert(n >= 0);
+    if (n == 0) return NULL;
+    assert(arr != NULL);
     Node **out = arena_alloc(arena, n * sizeof(Node *));
     for (int i = 0; i < n; i++)
         out[i] = clone_node(arr[i], map, arena);
@@ -198,8 +202,9 @@ static Node **clone_node_array(Node **arr, int n, SubstMap *map, Arena *arena) {
 
 static MemInit *clone_mem_inits(MemInit *inits, int n,
                                  SubstMap *map, Arena *arena) {
-    (void)map;
-    if (!inits || n <= 0) return NULL;
+    assert(n >= 0);
+    if (n == 0) return NULL;
+    assert(inits != NULL);
     MemInit *copy = arena_alloc(arena, n * sizeof(MemInit));
     for (int i = 0; i < n; i++) {
         copy[i].name = inits[i].name;
@@ -510,6 +515,12 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
     case ND_TRANSLATION_UNIT:
         c->tu = n->tu;
         /* Should not be cloned — top-level container */
+        break;
+    default:
+        /* Hygiene: NodeKinds above cover everything parse/expr.c,
+         * parse/stmt.c, parse/decl.c produce. A future NodeKind
+         * added without updating clone_node ends up here; it passes
+         * through with just kind/tok/resolved_type copied. */
         break;
     }
 
