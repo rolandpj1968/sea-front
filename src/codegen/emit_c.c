@@ -624,6 +624,19 @@ static void hoist_temps_in_expr(Node *n) {
         return;
     case ND_MEMBER:
         hoist_temps_in_expr(n->member.obj);
+        /* Method dispatch needs an lvalue for '&obj'. If the obj is
+         * an rvalue struct-returning call that wasn't already hoisted
+         * (e.g. no dtor), force-hoist so '&__SF_temp_N' is valid C.
+         * Pattern: 'make_value().method()' or
+         * 'double_int::from_shwi(1).lshift(...)'.
+         * N4659 §16.3.1.4 [over.match.funcs] — implicit this must
+         * bind to an lvalue that the callee can take the address of. */
+        if (n->member.obj && n->member.obj->kind == ND_CALL &&
+            !n->member.obj->codegen_temp_name &&
+            n->member.obj->resolved_type &&
+            (n->member.obj->resolved_type->kind == TY_STRUCT ||
+             n->member.obj->resolved_type->kind == TY_UNION))
+            hoist_emit_decl(n->member.obj);
         return;
     case ND_SUBSCRIPT:
         hoist_temps_in_expr(n->subscript.base);
@@ -1307,8 +1320,17 @@ static int copy_member_param_types(Node *m, Type **pool) {
 static void collect_overload_candidates(Type *class_type, Token *name,
                                          bool is_ctor,
                                          Node **found, int *nfound, int cap) {
-    if (!class_type || !class_type->class_def) return;
+    if (!class_type) return;
+    /* class_def may be unset on a Type obtained via a method return
+     * type or function param, even when class_region IS set. Fall
+     * back through class_region->owner_type which is the canonical
+     * Type (the one used when parsing the class body). */
     Node *cd = class_type->class_def;
+    if (!cd && class_type->class_region &&
+        class_type->class_region->owner_type &&
+        class_type->class_region->owner_type->class_def)
+        cd = class_type->class_region->owner_type->class_def;
+    if (!cd) return;
     for (int i = 0; i < cd->class_def.nmembers; i++) {
         Node *m = cd->class_def.members[i];
         if (!m) continue;
@@ -1999,7 +2021,45 @@ static void emit_expr(Node *n) {
         fputc(')', stdout);
         return;
     }
-    case ND_UNARY:
+    case ND_UNARY: {
+        /* Unary class-operator dispatch — N4659 §16.5 [over.oper].
+         * 'op x' where x has class type with matching unary operator
+         * method becomes 'Class__suffix(&x)'. The suffix IS the same
+         * as the binary case (operator '+', '-', '*', etc. all share
+         * suffixes; unary vs binary is disambiguated by the 0-arg
+         * param suffix '_p_void_pe_' vs '_p_T_pe_'). */
+        Type *ot = n->unary.operand ? n->unary.operand->resolved_type : NULL;
+        if (ot && (ot->kind == TY_REF || ot->kind == TY_RVALREF))
+            ot = ot->base;
+        const char *usuf = NULL;
+        if (ot && (ot->kind == TY_STRUCT || ot->kind == TY_UNION) &&
+            ot->tag) {
+            switch (n->unary.op) {
+            case TK_MINUS: usuf = "__minus"; break;
+            case TK_PLUS:  usuf = "__plus";  break;
+            case TK_EXCL:  usuf = "__not";   break;
+            case TK_TILDE: usuf = "__compl"; break;
+            default: break;
+            }
+        }
+        if (usuf) {
+            Type **pty = NULL;
+            Node *winner = NULL;
+            bool op_const = receiver_type_is_const(
+                n->unary.operand ? n->unary.operand->resolved_type : NULL);
+            int np = resolve_operator_overload(ot, usuf, NULL, 0,
+                                                op_const, &pty, &winner);
+            if (np == 0) {
+                mangle_class_tag(ot);
+                fputs(usuf, stdout);
+                mangle_param_suffix(NULL, 0);
+                if (candidate_is_const(winner)) fputs("_const", stdout);
+                fputs("(&", stdout);
+                emit_expr(n->unary.operand);
+                fputc(')', stdout);
+                return;
+            }
+        }
         /* For &(ref_param): the ref is already a pointer, so &(*x)
          * cancels out to just x. Suppress the deref. */
         if (n->unary.op == TK_AMP) g_suppress_ref_deref = true;
@@ -2010,6 +2070,7 @@ static void emit_expr(Node *n) {
         emit_expr(n->unary.operand);
         fputc(')', stdout);
         return;
+    }
     case ND_POSTFIX:
         fputc('(', stdout);
         emit_expr(n->unary.operand);
@@ -2197,7 +2258,6 @@ static void emit_expr(Node *n) {
             bool is_method_call = false;
             if (ot && (ot->kind == TY_STRUCT || ot->kind == TY_UNION) &&
                 ot->tag && callee->member.member) {
-                /* (debug removed) */
                 Token *mn = callee->member.member;
                 Type *mty = NULL;
                 if (ot->class_region) {
@@ -2207,27 +2267,29 @@ static void emit_expr(Node *n) {
                 }
                 /* Fallback: class_def member scan when class_region
                  * isn't set (substituted Type copies from template
-                 * param types don't get class_region patched). */
+                 * param types don't get class_region patched).
+                 * For ND_FUNC_DEF members we only set is_method_call
+                 * directly — ND_FUNC_DEF has no single TY_FUNC, just
+                 * ret_ty + params fields. */
                 if (!mty && ot->class_def) {
                     Node *cd = ot->class_def;
                     for (int ci = 0; ci < cd->class_def.nmembers; ci++) {
                         Node *cm = cd->class_def.members[ci];
                         if (!cm) continue;
-                        Token *cmn = NULL; Type *cmt = NULL;
-                        if (cm->kind == ND_FUNC_DEF) { cmn = cm->func.name; cmt = cm->func.ret_ty; }
-                        else if (cm->kind == ND_VAR_DECL && cm->var_decl.ty &&
+                        Token *cmn = NULL;
+                        bool is_fn = false;
+                        if (cm->kind == ND_FUNC_DEF) {
+                            cmn = cm->func.name; is_fn = true;
+                        } else if (cm->kind == ND_VAR_DECL && cm->var_decl.ty &&
                                  cm->var_decl.ty->kind == TY_FUNC) {
-                            cmn = cm->var_decl.name; cmt = cm->var_decl.ty;
+                            cmn = cm->var_decl.name;
+                            mty = cm->var_decl.ty;
+                            is_fn = true;
                         }
-                        if (cmn && cmn->len == mn->len &&
+                        if (is_fn && cmn && cmn->len == mn->len &&
                             memcmp(cmn->loc, mn->loc, mn->len) == 0) {
-                            mty = cmt ? cmt : cm->var_decl.ty;
-                            if (mty && mty->kind != TY_FUNC) {
-                                Type *f = mty; (void)f;
-                                mty = NULL;
-                            } else {
-                                break;
-                            }
+                            is_method_call = true;
+                            break;
                         }
                     }
                 }
@@ -2263,6 +2325,17 @@ static void emit_expr(Node *n) {
                  * N4659 §16.5 [over.oper]. */
                 if (!is_method_call && !ot->class_def &&
                     ot->n_template_args > 0)
+                    is_method_call = true;
+                /* Last-last resort: if class_def/class_region are both
+                 * unset (e.g. the obj is a function-call return whose
+                 * TY_STRUCT wasn't wired to the original class def),
+                 * but we have a tag and a member name, assume it's a
+                 * method call. Class field access that happens to share
+                 * a member name with a nonexistent method would fail at
+                 * link time — a better diagnostic than silently emitting
+                 * 'obj.member(args)' which is invalid C for a non-fptr. */
+                if (!is_method_call && !ot->class_def && !ot->class_region &&
+                    ot->tag && callee->member.member)
                     is_method_call = true;
             }
             if (is_method_call) {
