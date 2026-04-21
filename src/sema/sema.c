@@ -372,9 +372,57 @@ static void visit_ternary(Sema *s, Node *n) {
      * per N4659 §8.16/6 [expr.cond]. The full rules go through
      * lvalue-to-rvalue, qualification, and derived-to-base
      * conversions, then a tiebreaker between the arms. For now we
-     * take the then-branch type, which is wrong when the else-branch
-     * has a wider arithmetic type or a common base class. */
-    n->resolved_type = n->ternary.then_->resolved_type;
+     * take the then-branch type.
+     *
+     * Guard rails: assert on mismatches that would definitely break
+     * downstream — same kind + same tag for tagged types. If either
+     * arm is TY_DEPENDENT (template body, pre-instantiation) or
+     * NULL (unresolved sub-expression), skip the check — the
+     * substitution pass fills those in. Arithmetic mismatches (int
+     * vs long) pass because downstream callers treat 'arithmetic'
+     * uniformly. If the assertion fires we've found a case that
+     * demands the real §8.16/6 algorithm. */
+    Type *tt = n->ternary.then_ ? n->ternary.then_->resolved_type : NULL;
+    Type *et = n->ternary.else_ ? n->ternary.else_->resolved_type : NULL;
+    bool either_dependent = (tt && tt->kind == TY_DEPENDENT) ||
+                            (et && et->kind == TY_DEPENDENT);
+    if (tt && et && tt != et && !either_dependent) {
+        /* Structural-compatibility check. Pure arithmetic / FP
+         * mismatches (int vs long, int vs double) are ubiquitous in
+         * C/C++ and survive the then-branch-wins placeholder because
+         * downstream callers don't dispatch on exact arithmetic kind.
+         * The cases that genuinely break are ones where a class type
+         * on one side and a non-class on the other drive different
+         * codegen (method dispatch, ctor materialisation, ref
+         * handling, etc.), or two different struct tags. */
+        bool tt_cls = tt->kind == TY_STRUCT || tt->kind == TY_UNION;
+        bool et_cls = et->kind == TY_STRUCT || et->kind == TY_UNION;
+        bool concerning = false;
+        if (tt_cls != et_cls) {
+            concerning = true;                    /* class vs non-class */
+        } else if (tt_cls && et_cls) {
+            if (!tt->tag || !et->tag ||
+                tt->tag->len != et->tag->len ||
+                memcmp(tt->tag->loc, et->tag->loc, tt->tag->len) != 0)
+                concerning = true;                /* different tags */
+        }
+        if (concerning) {
+            fprintf(stderr, "sea-front: ternary arms have incompatible "
+                    "types (kind %d vs %d); the then-branch-wins "
+                    "placeholder in visit_ternary needs the real "
+                    "§8.16/6 [expr.cond] composite-type rule. See "
+                    "TODO(seafront#ternary-common-type).\n",
+                    tt->kind, et->kind);
+            abort();
+        }
+    }
+    /* Prefer the non-dependent arm when one is TY_DEPENDENT: after
+     * instantiation the dependent side becomes concrete, but pre-
+     * instantiation callers need a usable type NOW. */
+    if (tt && tt->kind == TY_DEPENDENT && et && et->kind != TY_DEPENDENT)
+        n->resolved_type = et;
+    else
+        n->resolved_type = tt;
     if ((n->ternary.cond && n->ternary.cond->is_type_dependent) ||
         (n->ternary.then_ && n->ternary.then_->is_type_dependent) ||
         (n->ternary.else_ && n->ternary.else_->is_type_dependent))
