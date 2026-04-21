@@ -357,10 +357,25 @@ DeclSpec parse_type_specifiers(Parser *p) {
             /* N4659 §6.3.2/7 [basic.scope.pdecl]: register tag name
              * before parsing the body so members can reference the class.
              * N4659 §6.3.10/2 [basic.scope.hiding]: C++ class name
-             * injection — bare 'Foo' works without 'struct' prefix. */
+             * injection — bare 'Foo' works without 'struct' prefix.
+             *
+             * Skip registration when the tag already names a COMPLETE
+             * definition (existing Declaration has class_region or
+             * class_def on its Type). Re-registering a bodyless
+             * elaborated-type-specifier like 'struct Foo *' after the
+             * definition would prepend a Type without class_region
+             * to the bucket, which later lookups (head-first) would
+             * return — masking the definition. N4659 §10.1.7.3
+             * [dcl.type.elab]. */
             if (ty->tag) {
-                region_declare(p, ty->tag->loc, ty->tag->len, ENTITY_TAG, ty);
-                region_declare(p, ty->tag->loc, ty->tag->len, ENTITY_TYPE, ty);
+                Declaration *existing = lookup_unqualified_kind(p,
+                    ty->tag->loc, ty->tag->len, ENTITY_TAG);
+                bool has_complete_def = existing && existing->type &&
+                    (existing->type->class_region || existing->type->class_def);
+                if (!has_complete_def)
+                    region_declare(p, ty->tag->loc, ty->tag->len, ENTITY_TAG, ty);
+                if (!has_complete_def)
+                    region_declare(p, ty->tag->loc, ty->tag->len, ENTITY_TYPE, ty);
                 /* If we're inside a template-parameter region, this class
                  * is itself a template. Register the injected-class-name
                  * as ENTITY_TEMPLATE so its body can refer to itself with

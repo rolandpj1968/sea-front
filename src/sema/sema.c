@@ -493,8 +493,16 @@ static void visit_member(Sema *s, Node *n) {
      * Use the canonical type for lookup WITHOUT modifying the copy.
      * N4659 §6.4.1 [basic.lookup.unqual]. */
     if (!ot->class_region && ot->tag && s->cur_scope) {
-        Declaration *td = lookup_unqualified_from(s->cur_scope,
-            ot->tag->loc, ot->tag->len);
+        /* Prefer ENTITY_TAG (the struct/union tag registered by the
+         * 'struct X { ... }' definition carries class_region/class_def)
+         * over ENTITY_TYPE (a typedef name may alias a pre-body Type
+         * copy that was registered before the body was parsed).
+         * N4659 §10.1.7.3 [dcl.type.elab]. */
+        Declaration *td = lookup_kind_from(s->cur_scope,
+            ot->tag->loc, ot->tag->len, ENTITY_TAG);
+        if (!td)
+            td = lookup_unqualified_from(s->cur_scope,
+                ot->tag->loc, ot->tag->len);
         if (td && td->type &&
             (td->type->class_region || td->type->class_def))
             ot = td->type;
