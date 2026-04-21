@@ -423,10 +423,35 @@ static void visit_expr_stmt(Sema *s, Node *n) {
 }
 
 static void visit_if(Sema *s, Node *n) {
+    /* Push the if-statement scope when one was captured by the parser
+     * (always set for if-with-init-declaration — N4659 §9.4.1/2,
+     * §9.4.1/3). The scope contains the init's declared name so
+     * references in then/else resolve.
+     *
+     * Only push when there's an actual init-declaration (cond is an
+     * ND_VAR_DECL). The parser pushes a block region for every if,
+     * but when there's no decl the block is empty — pushing it would
+     * cut the enclosing chain for the common case (the if_.scope was
+     * built at parse time against a chain that may not include the
+     * class/param scopes sema layers in at visit_func_def time). */
+    DeclarativeRegion *saved = s->cur_scope;
+    bool has_init_decl = n->if_.cond && n->if_.cond->kind == ND_VAR_DECL;
+    DeclarativeRegion *saved_enclosing = NULL;
+    if (has_init_decl && n->if_.scope) {
+        /* Re-chain the if-scope's enclosing onto the current sema
+         * cur_scope so lookups walk out through class/param regions
+         * that weren't visible at parse time. Restore after. */
+        saved_enclosing = n->if_.scope->enclosing;
+        n->if_.scope->enclosing = s->cur_scope;
+        s->cur_scope = n->if_.scope;
+    }
     if (n->if_.init)  visit(s, n->if_.init);
     if (n->if_.cond)  visit(s, n->if_.cond);
     if (n->if_.then_) visit(s, n->if_.then_);
     if (n->if_.else_) visit(s, n->if_.else_);
+    s->cur_scope = saved;
+    if (has_init_decl && n->if_.scope)
+        n->if_.scope->enclosing = saved_enclosing;
 }
 
 static void visit_while(Sema *s, Node *n) {

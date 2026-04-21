@@ -3600,6 +3600,36 @@ static void emit_stmt(Node *n) {
             }
             return;
         }
+        /* C++ init-declaration as condition:
+         *   if (T *v = expr) { ... }
+         * N4659 §9.4.1 [stmt.select]/2. Parser stores an ND_VAR_DECL
+         * in if_.cond. C has no declarations inside parens, so lift
+         * the declaration into an enclosing block and test the
+         * variable's value:
+         *   { T *v = expr; if (v) { ... } }
+         * The block scopes the variable correctly — same visibility
+         * as the source (available in then/else but not beyond). */
+        if (n->if_.cond && n->if_.cond->kind == ND_VAR_DECL &&
+            n->if_.cond->var_decl.name) {
+            Token *nm = n->if_.cond->var_decl.name;
+            fputs("{\n", stdout);
+            g_indent++;
+            emit_indent();
+            emit_var_decl_inner(n->if_.cond);
+            fputs(";\n", stdout);
+            emit_indent();
+            fprintf(stdout, "if (%.*s) ", nm->len, nm->loc);
+            emit_stmt(n->if_.then_);
+            if (n->if_.else_) {
+                emit_indent();
+                fputs("else ", stdout);
+                emit_stmt(n->if_.else_);
+            }
+            g_indent--;
+            emit_indent();
+            fputs("}", stdout);
+            return;
+        }
         fputs("if (", stdout);
         emit_expr(n->if_.cond);
         fputs(") ", stdout);

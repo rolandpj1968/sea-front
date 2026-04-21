@@ -401,6 +401,11 @@ struct Node {
             Node *then_;
             Node *else_;    /* NULL if no else */
             bool is_constexpr;  /* C++17 if constexpr */
+            /* Scope containing the if-init declaration (when cond
+             * is an ND_VAR_DECL per C++ if-with-init). Sema pushes
+             * this before walking then/else so the declared name
+             * resolves in both branches. N4659 §9.4.1/2. */
+            DeclarativeRegion *scope;
         } if_;
 
         /* ND_WHILE — N4659 §9.5.1 [stmt.while] */

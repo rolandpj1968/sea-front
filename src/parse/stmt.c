@@ -94,6 +94,10 @@ static Node *parse_if_stmt(Parser *p) {
      * scoped to the if-statement. Push a block region so the name
      * doesn't leak into the enclosing function. */
     region_push(p, REGION_BLOCK, /*name=*/NULL);
+    /* Stash the if-scope on the node so sema can push it when
+     * walking then/else — without this, a ref to a var declared in
+     * the if-cond fails to resolve at sema time. */
+    node->if_.scope = p->region;
 
     /* Declaration in condition — N4659 §9.4.1 [stmt.select]
      *   condition: expression
