@@ -4504,6 +4504,39 @@ static void emit_class_def(Node *n) {
 
     /* Skip if already emitted (dedup for dependency-driven emit). */
     if (class_type && class_type->codegen_emitted) return;
+    /* Cross-instance dedup: two different Type pointers can carry
+     * the same instantiated-class tag + template_args (e.g. the
+     * instantiation pass produces two ND_CLASS_DEFs for the same
+     * template-id from different discovery paths). Per-Type
+     * codegen_emitted doesn't catch this. Dedup by comparing tag
+     * and ALL template_args by Type* identity (the instantiation
+     * pass shares Type* for the same concrete args). */
+    /* Gate on template instantiations only: plain classes with the
+     * same tag (e.g. 'struct Thing' in two namespaces) have DIFFERENT
+     * identity but the tag dedup would collapse them. The duplicate
+     * problem is narrow to the template-instantiation pass producing
+     * two ND_CLASS_DEFs for one template-id. */
+    if (class_type && class_type->tag && class_type->n_template_args > 0) {
+        enum { CLS_DEDUP_CAP = 4096 };
+        static Type *seen[CLS_DEDUP_CAP];
+        static int nseen = 0;
+        for (int i = 0; i < nseen; i++) {
+            Type *s = seen[i];
+            if (!s->tag || s->tag->len != class_type->tag->len) continue;
+            if (memcmp(s->tag->loc, class_type->tag->loc, class_type->tag->len) != 0)
+                continue;
+            if (s->n_template_args != class_type->n_template_args) continue;
+            bool args_match = true;
+            for (int j = 0; j < class_type->n_template_args; j++) {
+                if (s->template_args[j] != class_type->template_args[j]) {
+                    args_match = false; break;
+                }
+            }
+            if (args_match) return;  /* same instantiation */
+        }
+        if (nseen < CLS_DEDUP_CAP)
+            seen[nseen++] = class_type;
+    }
     if (class_type) class_type->codegen_emitted = true;
 
     /* Emit struct dependencies first: any by-value struct/union
