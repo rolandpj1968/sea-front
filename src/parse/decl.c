@@ -1446,23 +1446,31 @@ Node *parse_declaration(Parser *p) {
                  * definition doesn't repeat it. Look up the method
                  * in the class scope and copy storage_flags. */
                 if (func->func.name) {
-                    Declaration *cd = lookup_in_scope(qscope,
-                        func->func.name->loc, func->func.name->len);
-                    if (cd && cd->type && cd->type->kind == TY_FUNC) {
-                        /* Find the matching ND_VAR_DECL in the class_def */
-                        Type *oty = qscope->owner_type;
-                        if (oty && oty->class_def) {
-                            Node *cdef = oty->class_def;
-                            for (int mi = 0; mi < cdef->class_def.nmembers; mi++) {
-                                Node *mm = cdef->class_def.members[mi];
-                                if (!mm || mm->kind != ND_VAR_DECL) continue;
-                                if (!mm->var_decl.name) continue;
-                                if (mm->var_decl.name->len != func->func.name->len) continue;
-                                if (memcmp(mm->var_decl.name->loc, func->func.name->loc,
-                                           func->func.name->len) != 0) continue;
-                                func->func.storage_flags |= (mm->var_decl.storage_flags & DECL_STATIC);
-                                break;
-                            }
+                    /* Walk the class body looking for a matching method
+                     * declaration. The in-class declaration can be:
+                     *   - ND_VAR_DECL with TY_FUNC (plain method)
+                     *   - ND_TEMPLATE_DECL wrapping ND_VAR_DECL (member template;
+                     *     pattern for is_a_helper<T>::test which is
+                     *     'static inline bool test(U*)' inside the class)
+                     * We propagate DECL_STATIC from whichever matches.
+                     * N4659 §10.1.1/6 [dcl.stc] — 'static' sits on the
+                     * declaration, not the out-of-class definition. */
+                    Type *oty = qscope->owner_type;
+                    if (oty && oty->class_def) {
+                        Node *cdef = oty->class_def;
+                        for (int mi = 0; mi < cdef->class_def.nmembers; mi++) {
+                            Node *mm = cdef->class_def.members[mi];
+                            if (!mm) continue;
+                            Node *vd = mm;
+                            if (vd->kind == ND_TEMPLATE_DECL && vd->template_decl.decl)
+                                vd = vd->template_decl.decl;
+                            if (vd->kind != ND_VAR_DECL) continue;
+                            if (!vd->var_decl.name) continue;
+                            if (vd->var_decl.name->len != func->func.name->len) continue;
+                            if (memcmp(vd->var_decl.name->loc, func->func.name->loc,
+                                       func->func.name->len) != 0) continue;
+                            func->func.storage_flags |= (vd->var_decl.storage_flags & DECL_STATIC);
+                            break;
                         }
                     }
                 }
