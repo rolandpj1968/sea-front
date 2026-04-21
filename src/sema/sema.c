@@ -274,8 +274,8 @@ static void visit_ident(Sema *s, Node *n) {
 }
 
 static void visit_binary(Sema *s, Node *n) {
-    if (n->binary.lhs) visit(s, n->binary.lhs);
-    if (n->binary.rhs) visit(s, n->binary.rhs);
+    visit(s, n->binary.lhs);
+    visit(s, n->binary.rhs);
     /* Propagate dependence from children */
     if ((n->binary.lhs && n->binary.lhs->is_type_dependent) ||
         (n->binary.rhs && n->binary.rhs->is_type_dependent))
@@ -368,8 +368,12 @@ static void visit_ternary(Sema *s, Node *n) {
     visit(s, n->ternary.cond);
     visit(s, n->ternary.then_);
     visit(s, n->ternary.else_);
-    /* Conservative: pick the then-branch type. The full rules in
-     * §8.16/6 are intricate; this is fine for the first slice. */
+    /* TODO(seafront#ternary-common-type): pick the composite type
+     * per N4659 §8.16/6 [expr.cond]. The full rules go through
+     * lvalue-to-rvalue, qualification, and derived-to-base
+     * conversions, then a tiebreaker between the arms. For now we
+     * take the then-branch type, which is wrong when the else-branch
+     * has a wider arithmetic type or a common base class. */
     n->resolved_type = n->ternary.then_->resolved_type;
     if ((n->ternary.cond && n->ternary.cond->is_type_dependent) ||
         (n->ternary.then_ && n->ternary.then_->is_type_dependent) ||
@@ -389,7 +393,7 @@ static void visit_var_decl(Sema *s, Node *n) {
      * get resolved_type, which downstream overload resolution needs
      * to pick the right ctor (e.g. copy vs converting). */
     for (int i = 0; i < n->var_decl.ctor_nargs; i++)
-        if (n->var_decl.ctor_args[i]) visit(s, n->var_decl.ctor_args[i]);
+        visit(s, n->var_decl.ctor_args[i]);
     /* The declared type is already on var_decl.ty (set by the parser).
      * We just propagate it onto the node's resolved_type so consumers
      * can ask 'what's the type of this declaration?' uniformly. */
@@ -417,9 +421,9 @@ static void visit_func_def(Sema *s, Node *n) {
     for (int i = 0; i < n->func.n_mem_inits; i++) {
         MemInit *mi = &n->func.mem_inits[i];
         for (int k = 0; k < mi->nargs; k++)
-            if (mi->args[k]) visit(s, mi->args[k]);
+            visit(s, mi->args[k]);
     }
-    if (n->func.body) visit(s, n->func.body);
+    visit(s, n->func.body);
     s->cur_scope = saved;
     s->cur_class_type = saved_class;
 }
@@ -444,12 +448,16 @@ static void visit_class_def(Sema *s, Node *n) {
     s->cur_class_type = saved;
 }
 
+/* The per-field 'if (x) visit(s, x)' idiom is redundant — visit()
+ * already returns on NULL at its entry. We drop the guards below and
+ * just call visit() with potentially-NULL children. */
+
 static void visit_return(Sema *s, Node *n) {
-    if (n->ret.expr) visit(s, n->ret.expr);
+    visit(s, n->ret.expr);
 }
 
 static void visit_expr_stmt(Sema *s, Node *n) {
-    if (n->expr_stmt.expr) visit(s, n->expr_stmt.expr);
+    visit(s, n->expr_stmt.expr);
 }
 
 static void visit_if(Sema *s, Node *n) {
@@ -475,30 +483,30 @@ static void visit_if(Sema *s, Node *n) {
         n->if_.scope->enclosing = s->cur_scope;
         s->cur_scope = n->if_.scope;
     }
-    if (n->if_.init)  visit(s, n->if_.init);
-    if (n->if_.cond)  visit(s, n->if_.cond);
-    if (n->if_.then_) visit(s, n->if_.then_);
-    if (n->if_.else_) visit(s, n->if_.else_);
+    visit(s, n->if_.init);
+    visit(s, n->if_.cond);
+    visit(s, n->if_.then_);
+    visit(s, n->if_.else_);
     s->cur_scope = saved;
     if (has_init_decl && n->if_.scope)
         n->if_.scope->enclosing = saved_enclosing;
 }
 
 static void visit_while(Sema *s, Node *n) {
-    if (n->while_.cond) visit(s, n->while_.cond);
-    if (n->while_.body) visit(s, n->while_.body);
+    visit(s, n->while_.cond);
+    visit(s, n->while_.body);
 }
 
 static void visit_do(Sema *s, Node *n) {
-    if (n->do_.body) visit(s, n->do_.body);
-    if (n->do_.cond) visit(s, n->do_.cond);
+    visit(s, n->do_.body);
+    visit(s, n->do_.cond);
 }
 
 static void visit_for(Sema *s, Node *n) {
-    if (n->for_.init) visit(s, n->for_.init);
-    if (n->for_.cond) visit(s, n->for_.cond);
-    if (n->for_.inc)  visit(s, n->for_.inc);
-    if (n->for_.body) visit(s, n->for_.body);
+    visit(s, n->for_.init);
+    visit(s, n->for_.cond);
+    visit(s, n->for_.inc);
+    visit(s, n->for_.body);
 }
 
 static void visit_member(Sema *s, Node *n) {
@@ -592,15 +600,21 @@ static void visit_call(Sema *s, Node *n) {
     visit(s, n->call.callee);
     for (int i = 0; i < n->call.nargs; i++)
         visit(s, n->call.args[i]);
-    /* Functional-cast / ctor temp construction: 'Foo(args)' where
-     * Foo is a type-name. The callee is an ND_IDENT whose resolved
-     * declaration is either ENTITY_TYPE or ENTITY_TAG (a class tag
-     * may be registered as both). The expression's value is a
-     * temporary of that type — codegen materializes it via D-Hoist
-     * when the type has a non-trivial dtor. */
+    /* Functional-cast / explicit-type-conversion: 'Foo(args)' where
+     * Foo is a type-name. N4659 §8.2.3 [expr.type.conv]: a simple-
+     * type-specifier (or typename-specifier) followed by a
+     * parenthesised expression-list is an explicit type conversion
+     * whose value is a prvalue of that type. For class types the
+     * prvalue materialises a temporary via direct-initialisation
+     * from the argument list — codegen emits that via D-Hoist when
+     * the type has a non-trivial dtor.
+     *
+     * The callee is an ND_IDENT whose resolved declaration is either
+     * ENTITY_TYPE or ENTITY_TAG (a class tag can be registered as
+     * both; see §10.1.7.3 [dcl.type.elab]/2 and the injected-class-
+     * name rule §12.2 [class.pre]/2). */
     if (n->call.callee && n->call.callee->kind == ND_IDENT) {
         Declaration *d = n->call.callee->ident.resolved_decl;
-        Token *nm = n->call.callee->ident.name;
         if (d && (d->entity == ENTITY_TYPE || d->entity == ENTITY_TAG) &&
             d->type && d->type->kind == TY_STRUCT) {
             n->resolved_type = d->type;
@@ -627,27 +641,32 @@ static void visit_call(Sema *s, Node *n) {
 
 static void visit(Sema *s, Node *n) {
     if (!n) return;
+    /* Convention: 'break' means 'done with this case, continue after
+     * the switch'. 'return' is reserved for the single early-exit at
+     * the top of the function. Nothing runs after the switch today;
+     * the convention keeps the difference meaningful if a later
+     * change adds post-switch work. */
     switch (n->kind) {
     /* Literals */
-    case ND_NUM:       visit_num(s, n);       return;
-    case ND_FNUM:      visit_fnum(s, n);      return;
-    case ND_CHAR:      visit_chr(s, n);       return;
-    case ND_BOOL_LIT:  visit_bool_lit(s, n);  return;
-    case ND_IDENT:     visit_ident(s, n);     return;
+    case ND_NUM:       visit_num(s, n);       break;
+    case ND_FNUM:      visit_fnum(s, n);      break;
+    case ND_CHAR:      visit_chr(s, n);       break;
+    case ND_BOOL_LIT:  visit_bool_lit(s, n);  break;
+    case ND_IDENT:     visit_ident(s, n);     break;
 
     /* Operators */
-    case ND_BINARY:    visit_binary(s, n);    return;
-    case ND_UNARY:     visit_unary(s, n);     return;
-    case ND_POSTFIX:   visit_unary(s, n);     return;
-    case ND_ASSIGN:    visit_assign(s, n);    return;
-    case ND_TERNARY:   visit_ternary(s, n);   return;
+    case ND_BINARY:    visit_binary(s, n);    break;
+    case ND_UNARY:     visit_unary(s, n);     break;
+    case ND_POSTFIX:   visit_unary(s, n);     break;
+    case ND_ASSIGN:    visit_assign(s, n);    break;
+    case ND_TERNARY:   visit_ternary(s, n);   break;
     case ND_CAST:
-        if (n->cast.operand) visit(s, n->cast.operand);
-        return;
+        visit(s, n->cast.operand);
+        break;
     case ND_SIZEOF:
-        if (n->sizeof_.expr) visit(s, n->sizeof_.expr);
-        return;
-    case ND_COMMA:     visit_binary(s, n);    return;
+        visit(s, n->sizeof_.expr);
+        break;
+    case ND_COMMA:     visit_binary(s, n);    break;
 
     case ND_QUALIFIED:
         /* N4659 §6.4.3 [basic.lookup.qual]: qualified name lookup.
@@ -669,41 +688,41 @@ static void visit(Sema *s, Node *n) {
                 }
             }
         }
-        return;
+        break;
 
     /* Statements */
-    case ND_BLOCK:     visit_block(s, n);     return;
-    case ND_RETURN:    visit_return(s, n);    return;
-    case ND_EXPR_STMT: visit_expr_stmt(s, n); return;
-    case ND_IF:        visit_if(s, n);        return;
-    case ND_WHILE:     visit_while(s, n);     return;
-    case ND_DO:        visit_do(s, n);        return;
-    case ND_FOR:       visit_for(s, n);       return;
-    case ND_CALL:      visit_call(s, n);      return;
-    case ND_SUBSCRIPT: visit_subscript(s, n); return;
-    case ND_MEMBER:    visit_member(s, n);    return;
+    case ND_BLOCK:     visit_block(s, n);     break;
+    case ND_RETURN:    visit_return(s, n);    break;
+    case ND_EXPR_STMT: visit_expr_stmt(s, n); break;
+    case ND_IF:        visit_if(s, n);        break;
+    case ND_WHILE:     visit_while(s, n);     break;
+    case ND_DO:        visit_do(s, n);        break;
+    case ND_FOR:       visit_for(s, n);       break;
+    case ND_CALL:      visit_call(s, n);      break;
+    case ND_SUBSCRIPT: visit_subscript(s, n); break;
+    case ND_MEMBER:    visit_member(s, n);    break;
 
     /* switch / case / labels — N4659 §9.4.2 [stmt.switch], §9.1
      * [stmt.label]. Walk the sub-expressions so identifiers inside
      * (e.g. 'switch(obj.method())') get resolved_type and member
      * access dispatches correctly at codegen. */
     case ND_SWITCH:
-        if (n->switch_.init) visit(s, n->switch_.init);
-        if (n->switch_.expr) visit(s, n->switch_.expr);
-        if (n->switch_.body) visit(s, n->switch_.body);
-        return;
+        visit(s, n->switch_.init);
+        visit(s, n->switch_.expr);
+        visit(s, n->switch_.body);
+        break;
     case ND_CASE:
-        if (n->case_.expr) visit(s, n->case_.expr);
-        if (n->case_.stmt) visit(s, n->case_.stmt);
-        return;
+        visit(s, n->case_.expr);
+        visit(s, n->case_.stmt);
+        break;
     case ND_DEFAULT:
-        if (n->default_.stmt) visit(s, n->default_.stmt);
-        return;
+        visit(s, n->default_.stmt);
+        break;
 
     /* Declarations */
-    case ND_VAR_DECL:  visit_var_decl(s, n);  return;
-    case ND_FUNC_DEF:  visit_func_def(s, n);  return;
-    case ND_CLASS_DEF: visit_class_def(s, n); return;
+    case ND_VAR_DECL:  visit_var_decl(s, n);  break;
+    case ND_FUNC_DEF:  visit_func_def(s, n);  break;
+    case ND_CLASS_DEF: visit_class_def(s, n); break;
 
     case ND_TEMPLATE_DECL:
         /* Descend into the template's inner declaration so identifiers
@@ -713,19 +732,19 @@ static void visit(Sema *s, Node *n) {
          * body, expressions like '(__pos += __off)' inside an
          * instantiated method end up un-typed and don't get rewritten
          * to the operator+= call. */
-        if (n->template_decl.decl) visit(s, n->template_decl.decl);
-        return;
+        visit(s, n->template_decl.decl);
+        break;
 
     case ND_TRANSLATION_UNIT:
         for (int i = 0; i < n->tu.ndecls; i++)
             visit(s, n->tu.decls[i]);
-        return;
+        break;
 
     default:
         /* Everything else: walk children we know about, leave
          * resolved_type as NULL. The codegen falls back to source-form
          * dumping for these. */
-        return;
+        break;
     }
 }
 
