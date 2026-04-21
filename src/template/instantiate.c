@@ -9,14 +9,15 @@
  *   Phase 3: clone + substitute + prepend to TU
  */
 
+#include <stdio.h>
+#include <string.h>
+
 #include "instantiate.h"
 #include "clone.h"
 
 /* region_add_base_raw, region_declare_raw, region_build_class,
  * region_build_prototype, region_lookup_own, hash_name are all
  * declared in parse.h and defined in lookup.c. */
-#include <stdio.h>
-#include <string.h>
 
 /* ------------------------------------------------------------------ */
 /* Template Registry — Phase 1                                        */
@@ -28,9 +29,9 @@ typedef struct TmplEntry TmplEntry;
 struct TmplEntry {
     const char *name;
     int         name_len;
-    Node       *tmpl;       /* ND_TEMPLATE_DECL */
-    Type       *owner_class; /* non-NULL for member templates (N4659 §17.5.2) */
-    TmplEntry  *next;       /* hash chain */
+    Node       *tmpl;         /* ND_TEMPLATE_DECL */
+    Type       *owner_class;  /* non-NULL for member templates (N4659 §17.5.2) */
+    TmplEntry  *next;         /* hash chain */
 };
 
 typedef struct {
@@ -53,18 +54,46 @@ static void registry_add(TmplRegistry *reg, const char *name, int name_len,
     reg->buckets[idx] = e;
 }
 
-/* Register a member template with a compound key "ClassName\0memberName".
+/* Build a (class, member) compound key as a single byte run
+ * "ClassName\0memberName". The embedded NUL is a separator, not a
+ * terminator — the caller tracks the full length. This keeps the
+ * key short (no mangling) while guaranteeing (classA::f, classB::g)
+ * can't collide via concatenation.
+ *
+ * Writes into dst[0..MEMBER_KEY_CAP]; aborts if the encoding doesn't
+ * fit rather than silently truncating (a truncated key would produce
+ * a cross-class collision and a very confusing debugging session).
+ * Returns the length written. */
+#define MEMBER_KEY_CAP 256
+static int build_member_key(char *dst,
+                             const char *class_name, int class_len,
+                             const char *member_name, int member_len) {
+    int key_len = class_len + 1 + member_len;
+    if (key_len > MEMBER_KEY_CAP) {
+        fprintf(stderr, "sea-front: member-template key overflow "
+                "(class=%.*s member=%.*s len=%d cap=%d)\n",
+                class_len, class_name, member_len, member_name,
+                key_len, MEMBER_KEY_CAP);
+        abort();
+    }
+    memcpy(dst, class_name, class_len);
+    dst[class_len] = '\0';
+    memcpy(dst + class_len + 1, member_name, member_len);
+    return key_len;
+}
+
+/* Register a member template with a compound (class, member) key.
  * N4659 §17.5.2 [temp.mem] — a template can be declared within a class. */
 static void registry_add_member(TmplRegistry *reg,
                                  const char *class_name, int class_len,
                                  const char *member_name, int member_len,
                                  Node *tmpl, Type *owner_class) {
-    /* Build compound key: class_name + NUL + member_name */
-    int key_len = class_len + 1 + member_len;
+    char tmp[MEMBER_KEY_CAP];
+    int key_len = build_member_key(tmp, class_name, class_len,
+                                    member_name, member_len);
+    /* Copy into arena so the entry outlives this stack frame. */
     char *key = arena_alloc(reg->arena, key_len);
-    memcpy(key, class_name, class_len);
-    key[class_len] = '\0';
-    memcpy(key + class_len + 1, member_name, member_len);
+    memcpy(key, tmp, key_len);
 
     uint32_t idx = hash_name(key, key_len) % TMPL_REGISTRY_SIZE;
     TmplEntry *e = arena_alloc(reg->arena, sizeof(TmplEntry));
@@ -83,12 +112,9 @@ static void registry_add_member(TmplRegistry *reg,
 static TmplEntry *registry_find_member(TmplRegistry *reg,
                                         const char *class_name, int class_len,
                                         const char *member_name, int member_len) {
-    int key_len = class_len + 1 + member_len;
-    char key[256];
-    if (key_len > 256) return NULL;
-    memcpy(key, class_name, class_len);
-    key[class_len] = '\0';
-    memcpy(key + class_len + 1, member_name, member_len);
+    char key[MEMBER_KEY_CAP];
+    int key_len = build_member_key(key, class_name, class_len,
+                                    member_name, member_len);
 
     uint32_t idx = hash_name(key, key_len) % TMPL_REGISTRY_SIZE;
     for (TmplEntry *e = reg->buckets[idx]; e; e = e->next) {
@@ -216,7 +242,17 @@ static Node *registry_find_specialization(TmplRegistry *reg,
         }
         if (!match) continue;
         /* Prefer full specializations (nparams == 0) over partial.
-         * Among partials, prefer more specialized (fewer params). */
+         * Among partials, prefer more specialized (fewer params) as
+         * a SHORTCUT for "most specialized". N4659 §17.8.3.2
+         * [temp.class.order] specifies the actual partial-order rule
+         * via §16.5.6.2 [temp.func.order]: one spec P1 is more
+         * specialized than P2 iff deducing P1's args from P2's
+         * pattern succeeds AND the reverse fails. Our nparam-count
+         * proxy is right for the simple cases the bootstrap throws
+         * at us (e.g. vec<T,A,vl_embed> more specialized than
+         * vec<T,A,L>) but would mispick when two partial specs have
+         * the same nparams but different specificity.
+         * TODO(seafront#partial-order): real §16.5.6.2 ordering. */
         int np = tmpl->template_decl.nparams;
         if (best == NULL || np < best_nparams) {
             best = tmpl;
@@ -337,12 +373,12 @@ struct MemberTmplRequest {
 };
 
 typedef struct {
-    InstRequest *head;
-    int          count;
+    InstRequest       *head;
+    int                count;
     MemberTmplRequest *member_head;
-    int          member_count;
-    Arena       *arena;
-    TmplRegistry *reg;
+    int                member_count;
+    Arena             *arena;
+    TmplRegistry      *reg;
 } InstCollector;
 
 /*
@@ -375,17 +411,11 @@ static void collect_from_type(InstCollector *col, Type *ty) {
     /* Skip template-ids that still have dependent (unresolved) args.
      * These appear inside cloned template bodies where an outer
      * template parameter hasn't been substituted yet. They'll be
-     * collected once the outer template is instantiated.
+     * collected once the outer template is instantiated and the
+     * clone produces concrete args.
      *
-     * Also skip args that look like unresolved template params:
-     * short (1-2 char) uppercase tags that aren't TY_DEPENDENT but
-     * should be. This catches cases where the parser resolved 'A'
-     * as an opaque TY_STRUCT/TY_INT instead of TY_DEPENDENT (scope
-     * visibility issue in partial specialization bodies). */
-    /* N4659 §17.7.2 [temp.dep]: a template-id with dependent args
-     * can't be instantiated yet — the args must be resolved first.
-     * Skip collection; they'll be collected after the enclosing
-     * template is instantiated and the args become concrete. */
+     * N4659 §17.7.2 [temp.dep]: a template-id with dependent args
+     * can't be instantiated yet. */
     for (int i = 0; i < tid->template_id.nargs; i++) {
         Node *arg = tid->template_id.args[i];
         Type *aty = (arg && arg->kind == ND_VAR_DECL) ? arg->var_decl.ty : NULL;
@@ -745,30 +775,6 @@ static int type_to_key(Type *ty, char *buf, int pos, int max) {
     default:
         pos += snprintf(buf+pos, max-pos, "?");
         break;
-    }
-    return pos;
-}
-
-/*
- * Build a dedup key from the template name + resolved substitution
- * map (which includes defaults). This ensures that e.g. vec<int>
- * and vec<int, int, int> produce the same key when defaults fill
- * in the same types.
- */
-static int build_dedup_key_from_map(Token *name, SubstMap *map,
-                                     char *buf) {
-    int pos = 0;
-    /* Template name */
-    if (name && pos + name->len < MAX_DEDUP_KEY) {
-        memcpy(buf, name->loc, name->len);
-        pos = name->len;
-    }
-    buf[pos++] = '\0';
-    /* Resolved args (from substitution map, includes defaults) */
-    for (int i = 0; i < map->nentries; i++) {
-        pos = type_to_key(map->entries[i].concrete_type,
-                          buf, pos, MAX_DEDUP_KEY);
-        buf[pos++] = '\0';
     }
     return pos;
 }
