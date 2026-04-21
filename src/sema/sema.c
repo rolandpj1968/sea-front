@@ -433,6 +433,10 @@ static void visit_member(Sema *s, Node *n) {
     Type *ot = n->member.obj->resolved_type;
     if (!ot) return;
     if (ot->kind == TY_PTR && ot->base) ot = ot->base;
+    /* Peel TY_REF/TY_RVALREF — reference members that resolved to
+     * their lowered form (pointer). */
+    if (ot->kind == TY_REF || ot->kind == TY_RVALREF) ot = ot->base;
+    if (!ot) return;
     if (ot->kind != TY_STRUCT && ot->kind != TY_UNION) return;
     /* For template instantiations whose Type copy lacks class_region
      * but has class_def (e.g. function parameter types), fall back

@@ -5,5 +5,5 @@
   (class-def "C"
     (func-def void "f" (params)
       (block
-        (var-decl struct uptr "p" (ctor-args (cast struct MR (null))))))
+        (var-decl struct uptr<struct MR> "p" (ctor-args (cast struct MR (null))))))
     (class-def "MR")))

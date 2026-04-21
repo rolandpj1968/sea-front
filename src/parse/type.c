@@ -1135,12 +1135,26 @@ DeclSpec parse_type_specifiers(Parser *p) {
                 }
                 /* The resulting type carries the template-id node so the
                  * instantiation pass can recover the template name and
-                 * arguments. Before instantiation, the type is opaque. */
+                 * arguments. Before instantiation, the type is opaque.
+                 * ALSO extract the concrete template_args onto the
+                 * Type so field types like 'vec<T> regs_saved_in_regs'
+                 * carry their args for codegen's instantiation dispatch.
+                 * N4659 §17.7.3 [temp.expl.spec]. */
                 Type *ty = new_type(p, TY_STRUCT);
                 ty->is_const = is_const;
                 ty->is_volatile = is_volatile;
                 ty->tag = name_tok;
                 ty->template_id_node = tid;
+                if (tid && tid->template_id.nargs > 0) {
+                    ty->n_template_args = tid->template_id.nargs;
+                    ty->template_args = arena_alloc(p->arena,
+                        tid->template_id.nargs * sizeof(Type *));
+                    for (int i = 0; i < tid->template_id.nargs; i++) {
+                        Node *arg = tid->template_id.args[i];
+                        ty->template_args[i] = (arg && arg->kind == ND_VAR_DECL)
+                            ? arg->var_decl.ty : NULL;
+                    }
+                }
                 result.type = ty; return result;
             }
 

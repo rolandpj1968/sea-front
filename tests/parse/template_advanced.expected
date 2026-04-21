@@ -18,8 +18,8 @@
       (var-decl int "special")))
   (func-def int "main" (params)
     (block
-      (var-decl struct Box "deep")
-      (var-decl struct Pair "mixed")
+      (var-decl struct Box<struct Box<struct Box<int>>> "deep")
+      (var-decl struct Pair<int,struct Box<int>> "mixed")
       (var-decl int "x" (call (template-id "identity" (var-decl int)) (num 42)))
-      (var-decl struct Fixed "f")
+      (var-decl struct Fixed<?> "f")
       (return (ident "x")))))

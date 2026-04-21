@@ -9,7 +9,7 @@
       (typedef)))
   (func-def void "qualified_template_id_in_type" (params)
     (block
-      (var-decl struct e "x" (num 0))
+      (var-decl struct e<struct s<int,struct C>> "x" (num 0))
       (cast void (ident "x"))))
   (func-def void "cast_vs_paren" (params)
     (block
@@ -25,7 +25,7 @@
       (func-def ctor void "A" (params (param (ref const struct A)))
         (block))
       (template (params (param ? "U"))
-        (friend (func-def bool "operator" (params (param (ref const struct A)) (param (ref const struct A)))
+        (friend (func-def bool "operator" (params (param (ref const struct A)) (param (ref const struct A<dependent U>)))
             (block
               (return (true))))))))
   (template (params (param ? "T"))

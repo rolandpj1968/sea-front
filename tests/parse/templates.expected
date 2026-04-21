@@ -16,7 +16,7 @@
   (func-def int "main" (params)
     (block
       (var-decl int "x" (call (template-id "add" (var-decl int)) (num 1) (num 2)))
-      (var-decl struct Array "arr")
-      (var-decl struct Box "nested")
-      (var-decl struct Box "complex")
+      (var-decl struct Array<int,?> "arr")
+      (var-decl struct Box<struct Box<int>> "nested")
+      (var-decl struct Box<struct Pair<int,int>> "complex")
       (return (ident "x")))))

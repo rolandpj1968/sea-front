@@ -6,5 +6,5 @@
     (class-def "Pair"
       (var-decl dependent A "first")
       (var-decl dependent B "second")))
-  (var-decl struct Box "b")
-  (var-decl struct Pair "p"))
+  (var-decl struct Box<int> "b")
+  (var-decl struct Pair<int,double> "p"))

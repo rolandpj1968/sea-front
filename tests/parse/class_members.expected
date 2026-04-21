@@ -20,7 +20,7 @@
         (block
           (return (ident "value"))))))
   (var-decl struct Point "p")
-  (var-decl struct Container "c")
+  (var-decl struct Container<int> "c")
   (func-def int "main" (params)
     (block
       (= (. (ident "p") "x") (num 1))
