@@ -2745,7 +2745,16 @@ static void emit_expr(Node *n) {
              * T& by convention. */
             if (!ref_return && !winner && base_ty->n_template_args > 0)
                 ref_return = true;
-            if (ref_return) fputs("(*", stdout);
+            /* Ref-forwarding chain: if the current function itself
+             * returns a reference (lowered to T*), a ref-returning
+             * subscript is used to FORWARD the reference — emit the
+             * raw pointer (no extra deref), because our
+             * emit_return_expr will convert value→pointer anyway.
+             * Same rule as the method-call ref_ret handling. */
+            bool cur_returns_ref = g_current_func_ret_ty &&
+                (g_current_func_ret_ty->kind == TY_REF ||
+                 g_current_func_ret_ty->kind == TY_RVALREF);
+            if (ref_return && !cur_returns_ref) fputs("(*", stdout);
             mangle_class_tag(base_ty);
             fputs("__subscript", stdout);
             if (np >= 0) mangle_param_suffix(pty, np);
@@ -2755,7 +2764,7 @@ static void emit_expr(Node *n) {
             fputs(", ", stdout);
             emit_expr(n->subscript.index);
             fputc(')', stdout);
-            if (ref_return) fputc(')', stdout);
+            if (ref_return && !cur_returns_ref) fputc(')', stdout);
         } else {
             /* Precedence: subscript [] binds tighter than cast.
              * Source '((cast)expr)[idx]' must keep the grouping, else
@@ -2946,20 +2955,22 @@ static void emit_var_decl_inner(Node *n) {
         /* If the variable is a struct value but the init expression
          * returns a reference (TY_REF lowered to T*), dereference.
          * Patterns:
-         *   T elem = vec[i];       — subscript on class returns T&
          *   T elem = func_ref();   — function returning T&
-         * Detected by: resolved_type is TY_REF, or init is a class
-         * subscript (which the emit rewrites to a ref-returning call). */
+         * Detected by: resolved_type is TY_REF.
+         *
+         * ND_SUBSCRIPT on a class already bakes its own '(*...)'
+         * into the emit when ref_return — we must NOT double-wrap
+         * here. */
         Node *init_e = n->var_decl.init;
         Type *init_rt = init_e ? init_e->resolved_type : NULL;
         bool init_is_ref = init_rt &&
             (init_rt->kind == TY_REF || init_rt->kind == TY_RVALREF);
-        if (!init_is_ref && init_e && init_e->kind == ND_SUBSCRIPT) {
+        if (init_is_ref && init_e && init_e->kind == ND_SUBSCRIPT) {
             Type *base_ty = init_e->subscript.base ?
                 init_e->subscript.base->resolved_type : NULL;
             if (base_ty && (base_ty->kind == TY_STRUCT ||
                             base_ty->kind == TY_UNION))
-                init_is_ref = true;
+                init_is_ref = false;  /* subscript handles its own deref */
         }
         bool var_is_struct = ty &&
             (ty->kind == TY_STRUCT || ty->kind == TY_UNION);
