@@ -2755,9 +2755,25 @@ static void emit_expr(Node *n) {
             if (callee_ft && callee_ft->kind == TY_PTR && callee_ft->base)
                 callee_ft = callee_ft->base;
             if (callee_ft && callee_ft->kind != TY_FUNC) callee_ft = NULL;
+            /* Arity mismatch: the ident resolved to an overload whose
+             * param count doesn't match the call's arg count. Our
+             * sema doesn't do full C++ overload resolution for free-
+             * function calls and may pick a same-named-but-different-
+             * arity overload (e.g. gcc 4.8 has 'gt_pch_nx(T&)' 1-arg
+             * and 'gt_pch_nx(T*, op, cookie)' 3-arg; we sometimes
+             * resolve the 3-arg call to the 1-arg overload). Using
+             * its param types for ref-adaptation is wrong — the 1-arg
+             * overload's T& param would trigger '&(...)' wrapping of
+             * a 3-arg call's first arg, producing invalid C like
+             * '&((&(*x)))'. Fall back to NULL param_ty on mismatch
+             * so no spurious adaptation happens.
+             * TODO(seafront#free-func-overload): proper overload
+             * resolution per N4659 §16.3 [over.match]. */
+            bool arity_ok = callee_ft &&
+                            callee_ft->nparams == n->call.nargs;
             for (int i = 0; i < n->call.nargs; i++) {
                 if (i > 0) fputs(", ", stdout);
-                Type *pt = (callee_ft && i < callee_ft->nparams)
+                Type *pt = (arity_ok && i < callee_ft->nparams)
                     ? callee_ft->params[i] : NULL;
                 emit_arg_for_param(n->call.args[i], pt);
             }
