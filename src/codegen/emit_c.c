@@ -241,7 +241,9 @@ static const char *operator_suffix_for_name(Token *name);
 static int resolve_operator_overload(Type *class_type,
                                       const char *op_suffix,
                                       Type **arg_types, int nargs,
-                                      Type ***out_param_types);
+                                      bool receiver_is_const,
+                                      Type ***out_param_types,
+                                      Node **out_best);
 
 /* Emit a call-site argument with reference-parameter adaptation.
  *
@@ -268,9 +270,15 @@ static void emit_arg_for_param(Node *arg, Type *param_ty) {
         (param_ty->kind == TY_REF || param_ty->kind == TY_RVALREF);
     if (!param_is_ref) { emit_expr(arg); return; }
     Type *at = arg->resolved_type;
-    /* Already a ref in the AST (lowered to pointer) — pass as-is */
+    /* Already a ref in the AST (lowered to pointer) — pass as-is.
+     * Suppress ref-param deref: if the arg is an ND_IDENT naming a
+     * ref-param, we want the pointer value, not its dereference. */
     if (at && (at->kind == TY_REF || at->kind == TY_RVALREF)) {
-        emit_expr(arg); return;
+        bool saved = g_suppress_ref_deref;
+        g_suppress_ref_deref = true;
+        emit_expr(arg);
+        g_suppress_ref_deref = saved;
+        return;
     }
     /* Dereference cancellation: *X passed to T& → pass X directly */
     if (arg->kind == ND_UNARY && arg->unary.op == TK_STAR) {
@@ -1508,13 +1516,18 @@ static void collect_operator_candidates(Type *class_type,
 /* Same selection rules as resolve_overload, keyed by operator suffix
  * rather than by name token. Returns the winning decl's param count,
  * and sets *out_param_types to the decl's param types (for mangling).
- * Returns -1 if no candidate exists. */
+ * Also returns the winning Node* via *out_best (nullable) so callers
+ * can read per-candidate flags like is_const_method for _const
+ * suffix mangling. Returns -1 if no candidate exists. */
 static int resolve_operator_overload(Type *class_type,
                                       const char *op_suffix,
                                       Type **arg_types, int nargs,
-                                      Type ***out_param_types) {
+                                      bool receiver_is_const,
+                                      Type ***out_param_types,
+                                      Node **out_best) {
     static Type *pool[64];
     *out_param_types = NULL;
+    if (out_best) *out_best = NULL;
     enum { MAX_CAND = 32 };
     Node *cands[MAX_CAND];
     int ncands = 0;
@@ -1523,16 +1536,29 @@ static int resolve_operator_overload(Type *class_type,
     if (ncands == 0) return -1;
     if (ncands == 1) {
         *out_param_types = pool;
+        if (out_best) *out_best = cands[0];
         return copy_member_param_types(cands[0], pool);
     }
+    /* Same const-aware selection as resolve_overload; see comment there.
+     * N4659 §16.3.1.4 [over.match.funcs]/4. */
     Node *best = NULL;
     int best_score = -1;
     for (int i = 0; i < ncands; i++) {
-        int s = overload_match_score(cands[i], arg_types, nargs);
-        if (s > best_score) { best = cands[i]; best_score = s; }
+        Node *c = cands[i];
+        if (receiver_is_const && !candidate_is_const(c))
+            continue;
+        int s = overload_match_score(c, arg_types, nargs);
+        if (s > best_score ||
+            (s == best_score && best &&
+             candidate_is_const(c) == receiver_is_const &&
+             candidate_is_const(best) != receiver_is_const)) {
+            best = c;
+            best_score = s;
+        }
     }
     if (!best) return -1;
     *out_param_types = pool;
+    if (out_best) *out_best = best;
     return copy_member_param_types(best, pool);
 }
 
@@ -1862,10 +1888,15 @@ static void emit_expr(Node *n) {
                 Type *rhs_ty = n->binary.rhs ? n->binary.rhs->resolved_type : NULL;
                 Type *args[1] = { rhs_ty };
                 Type **pty = NULL;
-                int np = resolve_operator_overload(lhs_ty, suffix, args, 1, &pty);
+                Node *winner = NULL;
+                bool lhs_const = receiver_type_is_const(
+                    n->binary.lhs ? n->binary.lhs->resolved_type : NULL);
+                int np = resolve_operator_overload(lhs_ty, suffix, args, 1,
+                                                    lhs_const, &pty, &winner);
                 mangle_class_tag(lhs_ty);
                 fputs(suffix, stdout);
                 if (np >= 0) mangle_param_suffix(pty, np);
+                if (candidate_is_const(winner)) fputs("_const", stdout);
                 fputs("(&", stdout);
                 emit_expr(n->binary.lhs);
                 fputs(", ", stdout);
@@ -1896,10 +1927,15 @@ static void emit_expr(Node *n) {
                 Type *rhs_ty = n->binary.rhs ? n->binary.rhs->resolved_type : NULL;
                 Type *args[1] = { rhs_ty };
                 Type **pty = NULL;
-                int np = resolve_operator_overload(lhs_ty, suffix, args, 1, &pty);
+                Node *winner = NULL;
+                bool lhs_const = receiver_type_is_const(
+                    n->binary.lhs ? n->binary.lhs->resolved_type : NULL);
+                int np = resolve_operator_overload(lhs_ty, suffix, args, 1,
+                                                    lhs_const, &pty, &winner);
                 mangle_class_tag(lhs_ty);
                 fputs(suffix, stdout);
                 if (np >= 0) mangle_param_suffix(pty, np);
+                if (candidate_is_const(winner)) fputs("_const", stdout);
                 fputs("(&", stdout);
                 emit_expr(n->binary.lhs);
                 fputs(", ", stdout);
@@ -1937,8 +1973,15 @@ static void emit_expr(Node *n) {
                     lhs_wants_value = true;
             }
             if (rhs_is_ref && lhs_wants_value && n->binary.op == TK_ASSIGN) {
+                /* Suppress the ident-ref-param deref: we add our own
+                 * '(*' here, so emit_expr should not additionally
+                 * wrap an ND_IDENT ref-param. Otherwise we get
+                 * '(*(*obj))' on a '*slot = obj' pattern. */
                 fputs("(*", stdout);
+                bool saved = g_suppress_ref_deref;
+                g_suppress_ref_deref = true;
                 emit_expr(n->binary.rhs);
+                g_suppress_ref_deref = saved;
                 fputc(')', stdout);
             } else if (lhs_wants_value && n->binary.op == TK_ASSIGN &&
                        n->binary.rhs && n->binary.rhs->kind == ND_NUM &&
@@ -2591,9 +2634,14 @@ static void emit_expr(Node *n) {
             Type *idx_ty = n->subscript.index ? n->subscript.index->resolved_type : NULL;
             Type *args[1] = { idx_ty };
             Type **pty = NULL;
+            Node *winner = NULL;
+            bool base_const = receiver_type_is_const(
+                n->subscript.base ? n->subscript.base->resolved_type : NULL);
             int np = resolve_operator_overload(base_ty, "__subscript",
-                                                args, 1, &pty);
+                                                args, 1, base_const,
+                                                &pty, &winner);
             if (np >= 0) mangle_param_suffix(pty, np);
+            if (candidate_is_const(winner)) fputs("_const", stdout);
             fputs("(&", stdout);
             emit_expr(n->subscript.base);
             fputs(", ", stdout);
@@ -5080,7 +5128,9 @@ static void emit_prelude(void) {
 /* Recursively emit forward declarations for all struct/union types
  * in the TU so ordering between classes (and template instantiations)
  * doesn't matter. */
-static void emit_fwd_decl_walk(Node *n) {
+/* Phase A — struct/union predecls only. Walks nested namespaces and
+ * descends into full specializations. */
+static void emit_fwd_decl_structs_only(Node *n) {
     if (!n) return;
     switch (n->kind) {
     case ND_CLASS_DEF: {
@@ -5094,13 +5144,33 @@ static void emit_fwd_decl_walk(Node *n) {
     }
     case ND_BLOCK:
         for (int i = 0; i < n->block.nstmts; i++)
-            emit_fwd_decl_walk(n->block.stmts[i]);
+            emit_fwd_decl_structs_only(n->block.stmts[i]);
         break;
     case ND_TEMPLATE_DECL:
         /* Full specializations (nparams == 0) are concrete — forward-declare.
          * N4659 §17.7.3 [temp.expl.spec]. */
         if (n->template_decl.nparams == 0 && n->template_decl.decl)
-            emit_fwd_decl_walk(n->template_decl.decl);
+            emit_fwd_decl_structs_only(n->template_decl.decl);
+        break;
+    default:
+        break;
+    }
+}
+
+/* Phase B — method forward declarations for instantiated member
+ * templates. Must run AFTER all struct predecls so parameter lists
+ * that reference other class tags resolve to the file-scope type
+ * rather than creating a param-list-scoped implicit type. */
+static void emit_fwd_decl_methods_only(Node *n) {
+    if (!n) return;
+    switch (n->kind) {
+    case ND_BLOCK:
+        for (int i = 0; i < n->block.nstmts; i++)
+            emit_fwd_decl_methods_only(n->block.stmts[i]);
+        break;
+    case ND_TEMPLATE_DECL:
+        if (n->template_decl.nparams == 0 && n->template_decl.decl)
+            emit_fwd_decl_methods_only(n->template_decl.decl);
         break;
     case ND_FUNC_DEF:
         /* Forward-declare instantiated member template functions so they're
@@ -5118,7 +5188,9 @@ static void emit_fwd_decl_walk(Node *n) {
 
 static void emit_forward_decl_structs(Node *tu) {
     for (int i = 0; i < tu->tu.ndecls; i++)
-        emit_fwd_decl_walk(tu->tu.decls[i]);
+        emit_fwd_decl_structs_only(tu->tu.decls[i]);
+    for (int i = 0; i < tu->tu.ndecls; i++)
+        emit_fwd_decl_methods_only(tu->tu.decls[i]);
 }
 
 void emit_c(Node *tu) {
