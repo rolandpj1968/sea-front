@@ -70,11 +70,11 @@ static Type *sema_new_type(Sema *s, TypeKind kind) {
  * Type per fundamental kind on the Sema struct so equality checks
  * could be pointer comparisons; with a per-TU arena the per-call
  * cost is small enough that we haven't bothered yet. */
-static Type *ty_int(Sema *s)  { return sema_new_type(s, TY_INT); }
-static Type *ty_long(Sema *s) { return sema_new_type(s, TY_LONG); }
-static Type *ty_bool(Sema *s) { return sema_new_type(s, TY_BOOL); }
+static Type *ty_int   (Sema *s) { return sema_new_type(s, TY_INT); }
+static Type *ty_long  (Sema *s) { return sema_new_type(s, TY_LONG); }
+static Type *ty_bool  (Sema *s) { return sema_new_type(s, TY_BOOL); }
 static Type *ty_double(Sema *s) { return sema_new_type(s, TY_DOUBLE); }
-static Type *ty_char(Sema *s) { return sema_new_type(s, TY_CHAR); }
+static Type *ty_char  (Sema *s) { return sema_new_type(s, TY_CHAR); }
 
 /* ------------------------------------------------------------------ */
 /* Type predicates                                                    */
@@ -91,29 +91,42 @@ static bool is_integer(const Type *t) {
     }
 }
 
-static bool is_floating(const Type *t) {
+static bool is_fp(const Type *t) {
     return t && (t->kind == TY_FLOAT || t->kind == TY_DOUBLE || t->kind == TY_LDOUBLE);
 }
 
 static bool is_arithmetic(const Type *t) {
-    return is_integer(t) || is_floating(t);
+    return is_integer(t) || is_fp(t);
 }
 
 /* Rank for the usual arithmetic conversions — higher wins.
  * N4659 §8/2 [conv.prom], §8/3 [conv.arith]. Conservative: we just
- * pick the wider operand. */
+ * pick the wider operand. Named constants so the threshold used by
+ * the integer-promotion rule reads as intent, not as '3'. */
+enum {
+    RANK_BOOL = 0,
+    RANK_CHAR,
+    RANK_SHORT,
+    RANK_INT,       /* = 3; integer-promotion threshold */
+    RANK_LONG,
+    RANK_LLONG,
+    RANK_FLOAT,
+    RANK_DOUBLE,
+    RANK_LDOUBLE,
+};
+
 static int arith_rank(const Type *t) {
     if (!t) return -1;
     switch (t->kind) {
-    case TY_BOOL:    return 0;
-    case TY_CHAR:    return 1;
-    case TY_SHORT:   return 2;
-    case TY_INT:     return 3;
-    case TY_LONG:    return 4;
-    case TY_LLONG:   return 5;
-    case TY_FLOAT:   return 6;
-    case TY_DOUBLE:  return 7;
-    case TY_LDOUBLE: return 8;
+    case TY_BOOL:    return RANK_BOOL;
+    case TY_CHAR:    return RANK_CHAR;
+    case TY_SHORT:   return RANK_SHORT;
+    case TY_INT:     return RANK_INT;
+    case TY_LONG:    return RANK_LONG;
+    case TY_LLONG:   return RANK_LLONG;
+    case TY_FLOAT:   return RANK_FLOAT;
+    case TY_DOUBLE:  return RANK_DOUBLE;
+    case TY_LDOUBLE: return RANK_LDOUBLE;
     default:         return -1;
     }
 }
@@ -123,9 +136,9 @@ static Type *common_arith_type(Sema *s, const Type *a, const Type *b) {
     if (!is_arithmetic(a) || !is_arithmetic(b)) return NULL;
     int ra = arith_rank(a), rb = arith_rank(b);
     const Type *winner = (ra >= rb) ? a : b;
-    /* int promotion: anything narrower than int gets promoted to int.
-     * arith_rank(TY_INT) is 3 by construction. */
-    if (arith_rank(winner) < 3)
+    /* Integer promotion: anything narrower than int gets promoted to int.
+     * N4659 §7.6 [conv.prom]. */
+    if (arith_rank(winner) < RANK_INT)
         return ty_int(s);
     /* Return a fresh copy so callers can mutate freely. */
     return sema_new_type(s, winner->kind);
@@ -142,10 +155,23 @@ static void visit(Sema *s, Node *n);
 /* ------------------------------------------------------------------ */
 
 static void visit_num(Sema *s, Node *n) {
-    /* Integer literal — N4659 §5.13.2 [lex.icon]. The token's
-     * suffix decides the type (l, ll, u, ul, etc.); for the first
-     * slice we just say 'int' for plain literals and 'long' for
-     * anything that needed more bits. */
+    /* Integer literal — N4659 §5.13.2 [lex.icon]. First-slice
+     * approximation: 'int' when the value fits in signed 32-bit,
+     * 'long' otherwise. This conflates two independent questions:
+     *   (a) Suffix: l, ll, u, ul, etc. — steers the resolved type.
+     *   (b) Platform: on LP64 'long' is 64-bit so overflow into it
+     *       is the right widening; on LLP64 we'd want 'long long'.
+     * N4659 §5.13.2/3 actually requires checking a list of candidate
+     * types per literal shape (decimal vs hex/octal), and the suffix
+     * may force the answer. None of that is modelled here.
+     *
+     * The 0x7fffffff check tests 'does the value fit in signed 32-bit
+     * int' — so lo > INT32_MAX, or any set bit in hi, promotes to
+     * long. Correct for LP64 with unsuffixed decimal literals; both
+     * simplifications hold for all current sea-front targets.
+     *
+     * TODO(seafront#literal-suffix): read n->num's suffix and
+     * N4659-conformant candidate-type selection. */
     if (n->num.hi != 0 || n->num.lo > 0x7fffffffu)
         n->resolved_type = ty_long(s);
     else
@@ -157,6 +183,10 @@ static void visit_bool_lit(Sema *s, Node *n) {
 }
 
 static void visit_fnum(Sema *s, Node *n) {
+    /* Floating literal — N4659 §5.13.4 [lex.fcon]. Always 'double'
+     * here; suffix 'f' / 'F' would yield float, 'l' / 'L' long double.
+     * Parser currently discards the suffix; revisit when literal
+     * suffixes are tracked. TODO(seafront#literal-suffix). */
     n->resolved_type = ty_double(s);
 }
 

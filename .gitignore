@@ -19,3 +19,6 @@ gen/
 \#*\#
 .\#*
 *~
+
+# Meta-files for user↔Claude code-review communication, kept local.
+rpj-comments-for-claude
