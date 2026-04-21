@@ -441,16 +441,39 @@ parse_operator_id:
         name = parser_advance(p);  /* consume 'operator' */
         /* conversion-function-id — N4659 §16.3.2 [class.conv.fct]
          *   operator conversion-type-id
-         * If the token after 'operator' starts a type-specifier, parse a
-         * type-id as the conversion target (and let parse_declarator
-         * accumulate any *, &, etc. that follow). */
+         * The conversion-type-id IS the return type of the function
+         * (§16.3.2/1: "A conversion function shall have no parameters
+         * and specifies a conversion from its class type to the type
+         * specified by the conversion-type-id"). Parse it and overwrite
+         * ty/base_ty — which were set to the TY_VOID placeholder
+         * produced by parse_type_specifiers for operator-id syntax —
+         * so the function type built at parse_suffixes uses the
+         * conversion target as ret. */
         if (parser_at_type_specifier(p)) {
-            parse_type_specifiers(p);
-            /* Optional ptr/ref operators on the conversion type */
-            while (parser_consume(p, TK_STAR) || parser_consume(p, TK_AMP) ||
-                   parser_consume(p, TK_LAND) || parser_consume(p, TK_KW_CONST) ||
-                   parser_consume(p, TK_KW_VOLATILE))
-                ;
+            DeclSpec cspec = parse_type_specifiers(p);
+            Type *conv_ty = cspec.type;
+            /* Optional ptr/ref operators on the conversion target */
+            for (;;) {
+                if (parser_consume(p, TK_STAR)) {
+                    conv_ty = new_ptr_type(p, conv_ty);
+                    while (parser_at(p, TK_KW_CONST) || parser_at(p, TK_KW_VOLATILE)) {
+                        if (parser_consume(p, TK_KW_CONST))    conv_ty->is_const = true;
+                        if (parser_consume(p, TK_KW_VOLATILE)) conv_ty->is_volatile = true;
+                    }
+                } else if (parser_consume(p, TK_LAND)) {
+                    conv_ty = new_rvalref_type(p, conv_ty);
+                } else if (parser_consume(p, TK_AMP)) {
+                    conv_ty = new_ref_type(p, conv_ty);
+                } else if (parser_consume(p, TK_KW_CONST)) {
+                    conv_ty->is_const = true;
+                } else if (parser_consume(p, TK_KW_VOLATILE)) {
+                    conv_ty->is_volatile = true;
+                } else {
+                    break;
+                }
+            }
+            base_ty = conv_ty;
+            ty = conv_ty;
         }
         /* Consume the operator symbol(s).
          * Special cases: operator() and operator[] are multi-token. */
