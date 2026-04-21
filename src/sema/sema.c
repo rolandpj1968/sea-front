@@ -266,6 +266,26 @@ static void visit_binary(Sema *s, Node *n) {
         break;
     }
 
+    /* Pointer arithmetic — N4659 §8.7 [expr.add] / C11 §6.5.6:
+     *   ptr + int / int + ptr / ptr - int → same pointer type
+     *   ptr - ptr                         → ptrdiff_t
+     * ptrdiff_t is a typedef; on the LP64 targets sea-front supports
+     * it is 'long'. Using ty_long here is exact on LP64 and would
+     * need revisiting only if we added an LLP64 target (Windows x64
+     * has long=32, ptrdiff_t=long long). Without this, any 'p + n'
+     * expression produces NULL resolved_type and chained member
+     * accesses don't resolve. */
+    if (n->binary.op == TK_PLUS || n->binary.op == TK_MINUS) {
+        bool lt_ptr = lt && (lt->kind == TY_PTR || lt->kind == TY_ARRAY);
+        bool rt_ptr = rt && (rt->kind == TY_PTR || rt->kind == TY_ARRAY);
+        if (lt_ptr && !rt_ptr) { n->resolved_type = lt; return; }
+        if (!lt_ptr && rt_ptr && n->binary.op == TK_PLUS) {
+            n->resolved_type = rt; return;
+        }
+        if (lt_ptr && rt_ptr && n->binary.op == TK_MINUS) {
+            n->resolved_type = ty_long(s); return;
+        }
+    }
     /* Arithmetic ops use the usual arithmetic conversions. */
     n->resolved_type = common_arith_type(s, lt, rt);
 }
