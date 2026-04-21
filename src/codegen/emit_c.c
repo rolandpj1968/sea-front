@@ -2133,10 +2133,16 @@ static void emit_expr(Node *n) {
         if (callee && callee->kind == ND_MEMBER) {
             Node *obj = callee->member.obj;
             Type *ot = obj ? obj->resolved_type : NULL;
-            bool obj_is_ptr = ot && ot->kind == TY_PTR;
+            /* References (TY_REF / TY_RVALREF) are lowered to C
+             * pointers, so 'obj_is_ptr' is true for both — the
+             * call-site must pass the ref as-is, not take its
+             * address. N4659 §11.3.2 [dcl.ref]. */
+            bool obj_is_ptr = ot && (ot->kind == TY_PTR ||
+                                      ot->kind == TY_REF ||
+                                      ot->kind == TY_RVALREF);
             if (obj_is_ptr) ot = ot->base;
-            /* Also peel TY_REF/TY_RVALREF — reference members that
-             * resolved to their lowered form (pointer). */
+            /* If the ref was TY_REF(TY_PTR(...)) or similar, peel
+             * an inner ref/ptr once more so 'ot' lands on the class. */
             if (ot && (ot->kind == TY_REF || ot->kind == TY_RVALREF))
                 ot = ot->base;
             /* Method dispatch lowering applies when the member resolves
@@ -2351,7 +2357,14 @@ static void emit_expr(Node *n) {
                     if (base_idx_for_this == 0) fputs("__sf_base", stdout);
                     else fprintf(stdout, "__sf_base%d", base_idx_for_this);
                 } else if (obj_is_ptr) {
+                    /* Obj is already ptr/ref (lowered to ptr) — pass
+                     * as-is. Suppress the ref-param deref in case obj
+                     * is an identifier that names a ref-param: we
+                     * need the pointer itself, not its dereference. */
+                    bool saved_suppress = g_suppress_ref_deref;
+                    g_suppress_ref_deref = true;
                     emit_expr(obj);
+                    g_suppress_ref_deref = saved_suppress;
                 } else {
                     fputc('&', stdout);
                     emit_expr(obj);
@@ -2794,10 +2807,23 @@ static void emit_var_decl_inner(Node *n) {
         }
         bool var_is_struct = ty &&
             (ty->kind == TY_STRUCT || ty->kind == TY_UNION);
+        /* Reference variable initialized from an lvalue: the C
+         * lowering is a pointer that must hold the lvalue's address.
+         *   T& r  = x;      →  T* r  = &x;
+         *   const T& cr = x;→  const T* cr = &x;
+         * Only takes address when the init's own type isn't already
+         * a ref/ptr (where the address would be redundant).
+         * N4659 §11.3.2 [dcl.ref]. */
+        bool var_is_ref = ty &&
+            (ty->kind == TY_REF || ty->kind == TY_RVALREF);
+        bool init_is_ptr = init_rt && init_rt->kind == TY_PTR;
         if (init_is_ref && var_is_struct) {
             fputs("(*", stdout);
             emit_expr(n->var_decl.init);
             fputc(')', stdout);
+        } else if (var_is_ref && !init_is_ref && !init_is_ptr) {
+            fputc('&', stdout);
+            emit_expr(n->var_decl.init);
         } else {
             emit_expr(n->var_decl.init);
         }

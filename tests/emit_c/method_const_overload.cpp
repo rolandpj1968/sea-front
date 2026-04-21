@@ -14,13 +14,12 @@ struct X {
 int* X::at()       { return &val; }
 int  X::at() const { return val; }
 
-int call_const(const X* p) { return p->at(); }  // must pick const
-int call_mut(X* p)         { *p->at() = 7; return *p->at(); }  // non-const
-
 int main() {
     X x;
     x.val = 5;
-    int v = call_const(&x);    // 5 (calls const at())
-    int w = call_mut(&x);      // 7 (non-const at() writes val, then reads)
-    return v + w;              // 12
+    const X& cx = x;
+    int  v = cx.at();      // must pick const overload — cx is const-ref
+    int* p = x.at();       // must pick non-const overload
+    *p = 7;                // writes x.val through non-const return
+    return v + *p;         // 5 (old v) + 7 = 12
 }
