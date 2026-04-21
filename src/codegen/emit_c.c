@@ -4630,7 +4630,12 @@ static void emit_class_def(Node *n) {
             if (s->n_template_args != class_type->n_template_args) continue;
             bool args_match = true;
             for (int j = 0; j < class_type->n_template_args; j++) {
-                if (s->template_args[j] != class_type->template_args[j]) {
+                /* Structural compare — the instantiation/clone pipeline
+                 * sometimes produces distinct Type* for the same
+                 * concrete arg (e.g. separate vl_embed Types), so
+                 * pointer identity undercounts dupes. */
+                if (!types_equivalent(s->template_args[j],
+                                       class_type->template_args[j])) {
                     args_match = false; break;
                 }
             }
@@ -4932,6 +4937,35 @@ methods_phase:;
         for (int i = 0; i < nseen; i++)
             if (seen[i] == n) return;
         if (nseen < METHODS_EMIT_CAP) seen[nseen++] = n;
+    }
+    /* Cross-instance method-phase dedup: two distinct ND_CLASS_DEF
+     * nodes for the same instantiated class (different discovery
+     * paths) have different Node* identity, so the pointer-set above
+     * doesn't collapse them — both emit the same weakly-linked
+     * methods, producing 'redefinition' errors within one TU.
+     * Mirror the tag+template_args structural dedup used by the
+     * struct-phase path. */
+    if (class_type && class_type->tag && class_type->n_template_args > 0) {
+        enum { MCLS_DEDUP_CAP = 4096 };
+        static Type *seen_ty[MCLS_DEDUP_CAP];
+        static int nseen_ty = 0;
+        for (int i = 0; i < nseen_ty; i++) {
+            Type *s = seen_ty[i];
+            if (!s->tag || s->tag->len != class_type->tag->len) continue;
+            if (memcmp(s->tag->loc, class_type->tag->loc, class_type->tag->len) != 0)
+                continue;
+            if (s->n_template_args != class_type->n_template_args) continue;
+            bool args_match = true;
+            for (int j = 0; j < class_type->n_template_args; j++) {
+                if (!types_equivalent(s->template_args[j],
+                                       class_type->template_args[j])) {
+                    args_match = false; break;
+                }
+            }
+            if (args_match) return;
+        }
+        if (nseen_ty < MCLS_DEDUP_CAP)
+            seen_ty[nseen_ty++] = class_type;
     }
 
     /* Re-scan for user dtor (needed for methods phase regardless
