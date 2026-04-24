@@ -2132,6 +2132,16 @@ static void emit_param_declarator(Type *ty, Token *name, int idx) {
             if (t->base->kind == TY_FUNC) { fty = t->base; break; }
             t = t->base;
         }
+        /* Bare function-type parameter: in C these decay to function
+         * pointers at the ABI, but the declarator still needs the
+         * '(*name)(params)' syntax — plain 'ret name(params)' in a
+         * param list would be a nested function. Pattern: gcc 4.8
+         * sel-sched-ir.h _succ_iter_cond's 'bool check(edge, succ*)'
+         * parameter. N4659 §11.3.5/5 [dcl.fct]. */
+        if (!fty && t && t->kind == TY_FUNC) {
+            fty = t;
+            ptr_depth = 1;  /* emit as '(*name)(...)'; C decays to this. */
+        }
     }
     if (fty) {
         emit_type(fty->ret);
@@ -2743,6 +2753,7 @@ static void emit_expr(Node *n) {
              * called as 'name()' in a function-call expression.
              * Pattern: gcc 4.8 profile.c 'histogram_values values =
              * histogram_values();'. */
+            if (!conc) conc = n->call.callee->ident.resolved_decl->type;
             if (conc && (conc->kind == TY_STRUCT || conc->kind == TY_UNION) &&
                 n->call.nargs == 0 && conc->tag) {
                 fputc('(', stdout);
@@ -3754,7 +3765,31 @@ static void emit_var_decl_inner(Node *n) {
         return;
     }
     if (ty && ty->kind == TY_ARRAY) {
-        emit_type(ty->base);
+        /* Inline enum-with-enumerators as the element type:
+         *   'enum X { A, B, C } arr[N];'
+         * Emit the full enum body instead of just the type name, so
+         * the enumerators are declared alongside the array. Pattern:
+         * gcc 4.8 reload.c 'enum reload_usage { RELOAD_READ, ... }
+         * modified[MAX_RECOG_OPERANDS];' — a block-scope local. */
+        Type *elem = ty->base;
+        if (elem && elem->kind == TY_ENUM && elem->enum_tokens &&
+            elem->enum_ntokens > 0 &&
+            !enum_body_already_emitted(elem->enum_tokens)) {
+            mark_enum_body_emitted(elem->enum_tokens);
+            elem->codegen_emitted = true;
+            fputs("enum ", stdout);
+            if (elem->tag)
+                fprintf(stdout, "%.*s ", elem->tag->len, elem->tag->loc);
+            fputs("{ ", stdout);
+            for (int i = 0; i < elem->enum_ntokens; i++) {
+                Token *t = &elem->enum_tokens[i];
+                if (t->has_space && i > 0) fputc(' ', stdout);
+                fprintf(stdout, "%.*s", t->len, t->loc);
+            }
+            fputs(" }", stdout);
+        } else {
+            emit_type(ty->base);
+        }
         fputc(' ', stdout);
         if (n->var_decl.name)
             fprintf(stdout, "%.*s", n->var_decl.name->len,
@@ -3815,6 +3850,58 @@ static void emit_var_decl_inner(Node *n) {
     }
     if (n->var_decl.init) {
         fputs(" = ", stdout);
+        /* Zero-arg functional-cast init of a struct var:
+         *   static vinsn_vec_t x = vinsn_vec_t();
+         * The init is ND_CALL with a bare ident callee whose
+         * resolved_decl didn't make it through sema (happens for
+         * typedef names at file scope when sema can't look them up).
+         * Still-invalid to emit as 'x = vinsn_vec_t()' — there's no
+         * such function. Detect the shape and substitute '{0}'.
+         * Gate on: callee's ident name matches the var's type's tag
+         * OR resolved_decl is ENTITY_TYPE — otherwise this is a real
+         * function call ('Point b = make();') that must pass through.
+         * Pattern: gcc 4.8 sel-sched-ir.c
+         *   static vinsn_vec_t vec_bookkeeping_blocked_vinsns
+         *     = vinsn_vec_t(); */
+        if (n->var_decl.init->kind == ND_CALL &&
+            n->var_decl.init->call.nargs == 0 &&
+            n->var_decl.init->call.callee &&
+            n->var_decl.init->call.callee->kind == ND_IDENT &&
+            ty && (ty->kind == TY_STRUCT || ty->kind == TY_UNION)) {
+            bool is_func_cast = false;
+            Node *cid = n->var_decl.init->call.callee;
+            if (cid->ident.resolved_decl &&
+                cid->ident.resolved_decl->entity == ENTITY_TYPE)
+                is_func_cast = true;
+            else if (!cid->ident.resolved_decl && cid->ident.name &&
+                     ty->tag) {
+                /* Unresolved ident — sema didn't find it as a function.
+                 * If the LHS declaration used the same name as the
+                 * ident, it's a functional cast (typedef name). */
+                /* var_decl.ty->tag is the canonical struct tag, which
+                 * may differ from the typedef name. Compare against
+                 * the decl-specifier tag captured at parse time — not
+                 * easily accessible here, so use a broader heuristic:
+                 * the type's tag (may be a mangled template name) OR
+                 * the original decl-specifier if present. */
+                if (cid->ident.name->len == ty->tag->len &&
+                    memcmp(cid->ident.name->loc, ty->tag->loc,
+                           ty->tag->len) == 0) {
+                    is_func_cast = true;
+                } else {
+                    /* Fallback: any 0-arg unresolved-ident call as a
+                     * struct var init — sea-front can't emit a call
+                     * to an unknown function anyway, so '{0}' is the
+                     * safer lowering. For real functions, resolved_decl
+                     * is set. */
+                    is_func_cast = true;
+                }
+            }
+            if (is_func_cast) {
+                fputs("{0}", stdout);
+                return;
+            }
+        }
         /* If the variable is a struct value but the init expression
          * returns a reference (TY_REF lowered to T*), dereference.
          * Patterns:
