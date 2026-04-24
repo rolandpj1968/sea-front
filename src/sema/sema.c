@@ -1215,6 +1215,17 @@ static void visit(Sema *s, Node *n) {
          * C member access which is invalid for non-fptr fields). */
         visit(s, n->label.stmt);
         break;
+    case ND_INIT_LIST:
+        /* Braced initializer — N4659 §11.6.4 [dcl.init.list]. Walk
+         * each element so subscript/method dispatch lowering can see
+         * the element types. Without this, an expression like
+         * 'CONSTRUCTOR_ELT(arg0, i)->value' nested inside a struct
+         * initializer never has its subscript-on-class dispatched
+         * and emits as literal '[]' on a struct value. Pattern:
+         * gcc 4.8 fold-const.c. */
+        for (int i = 0; i < n->init_list.nelems; i++)
+            visit(s, n->init_list.elems[i]);
+        break;
 
     /* Declarations */
     case ND_VAR_DECL:  visit_var_decl(s, n);  break;
