@@ -3185,11 +3185,18 @@ static void emit_expr(Node *n) {
                     }
                 }
                 if (base_idx_for_this >= 0) {
+                    /* Use '->' not '.' when obj is a pointer (source
+                     * 'p->method()' with p being a pointer to a class
+                     * inheriting from the method's owner). Pattern:
+                     * gcc 4.8 web.c 'entry->unionfind_root()' where
+                     * unionfind_root is inherited from web_entry_base. */
                     fputs("&(", stdout);
                     emit_expr(obj);
-                    fputs(").", stdout);
+                    fputs(obj_is_ptr ? "->" : ".", stdout);
                     if (base_idx_for_this == 0) fputs("__sf_base", stdout);
                     else fprintf(stdout, "__sf_base%d", base_idx_for_this);
+                    fputc(')', stdout);
+                    goto after_base_this_emit;
                 } else if (obj_is_ptr) {
                     /* Obj is already ptr/ref (lowered to ptr) — pass
                      * as-is. Suppress the ref-param deref in case obj
@@ -3203,6 +3210,7 @@ static void emit_expr(Node *n) {
                     fputc('&', stdout);
                     emit_expr(obj);
                 }
+                after_base_this_emit:;
                 /* Default-argument injection for method calls. Reach
                  * the method's TY_FUNC through the winner node to pull
                  * its param_defaults. N4659 §11.3.6 [dcl.fct.default].
