@@ -283,6 +283,25 @@ static inline bool ty_is_indirect(Type *t) {
  * UNLESS the arg is already a ref/rvalref (i.e. already a pointer in
  * our lowering). Plain pointers (TY_PTR) are NOT the same — a T*
  * arg passed to a T*& param needs &(arg) to become T**. */
+/* Is the node a C lvalue — can we safely take its address with '&'?
+ * Covers the common shapes: identifier, member access, array subscript,
+ * and pointer dereference. Conservative: returns false for anything
+ * we're not sure about, which routes through the compound-literal path
+ * in emit_arg_for_param. N4659 §7.2.1 [basic.lval]. */
+static bool is_addressable_lvalue(Node *n) {
+    if (!n) return false;
+    switch (n->kind) {
+    case ND_IDENT:
+    case ND_MEMBER:
+    case ND_SUBSCRIPT:
+        return true;
+    case ND_UNARY:
+        return n->unary.op == TK_STAR;
+    default:
+        return false;
+    }
+}
+
 static void emit_arg_for_param(Node *arg, Type *param_ty) {
     if (!arg) return;
     if (!ty_is_ref(param_ty)) { emit_expr(arg); return; }
@@ -300,6 +319,27 @@ static void emit_arg_for_param(Node *arg, Type *param_ty) {
     /* Dereference cancellation: *X passed to T& → pass X directly */
     if (arg->kind == ND_UNARY && arg->unary.op == TK_STAR) {
         emit_expr(arg->unary.operand); return;
+    }
+    /* Non-lvalue rvalue passed to a reference param: '&(a + b)' is
+     * illegal C. For scalar-type args (int, long, ptr, etc.), wrap
+     * in a C99 compound literal '(T){expr}' which IS an lvalue and
+     * has the block-scoped lifetime we need. Struct rvalues are
+     * handled earlier via hoist_temps_in_expr's force-hoist; if we
+     * get one here it means the hoist missed it — still wrap in
+     * '&(...)' below which will error, giving a clear diagnostic.
+     * Pattern: gcc 4.8 cfgexpand.c
+     *   data->asan_vec.safe_push(offset + stack_vars[i].size);
+     * N4659 §7.2.1 [basic.lval] / C11 §6.5.2.5 compound literals. */
+    if (!is_addressable_lvalue(arg) && at &&
+        (at->kind == TY_INT || at->kind == TY_BOOL || at->kind == TY_CHAR ||
+         at->kind == TY_SHORT || at->kind == TY_LONG ||
+         at->kind == TY_LLONG || at->kind == TY_PTR)) {
+        fputs("&((", stdout);
+        emit_type(at);
+        fputs("){", stdout);
+        emit_expr(arg);
+        fputs("})", stdout);
+        return;
     }
     fputs("&(", stdout);
     emit_expr(arg);
