@@ -1072,13 +1072,24 @@ static void parse_func_body(Parser *p, Node *func) {
     if (parser_consume(p, TK_COLON)) {
         Vec inits = vec_new(p->arena);
         for (;;) {
+            /* mem-initializer — N4659 §15.6.2 [class.base.init]:
+             *   mem-initializer-id ( expression-list(opt) )     C++03 form
+             *   mem-initializer-id braced-init-list             C++11 uniform init
+             * Both capture the same (name, args) shape; the choice of
+             * paren vs. brace is only a syntactic wrapping. Pattern from
+             * libstdc++ 13 atomic_base.h / stl_list.h / bitset:
+             *   : _M_to{__to}, _M_goff{-1, -1, -1}
+             *   : __atomic_flag_base{ _S_init(__i) } */
             bool simple = parser_at(p, TK_IDENT) &&
-                          parser_peek_ahead(p, 1)->kind == TK_LPAREN;
+                          (parser_peek_ahead(p, 1)->kind == TK_LPAREN ||
+                           parser_peek_ahead(p, 1)->kind == TK_LBRACE);
             if (simple) {
                 Token *member_name = parser_advance(p);
-                parser_advance(p);  /* '(' */
+                bool braced = parser_at(p, TK_LBRACE);
+                parser_advance(p);  /* '(' or '{' */
+                TokenKind close = braced ? TK_RBRACE : TK_RPAREN;
                 Vec args = vec_new(p->arena);
-                if (!parser_at(p, TK_RPAREN)) {
+                if (!parser_at(p, close)) {
                     vec_push(&args, parse_assign_expr(p));
                     parser_consume(p, TK_ELLIPSIS);
                     while (parser_consume(p, TK_COMMA)) {
@@ -1086,7 +1097,7 @@ static void parse_func_body(Parser *p, Node *func) {
                         parser_consume(p, TK_ELLIPSIS);
                     }
                 }
-                parser_expect(p, TK_RPAREN);
+                parser_expect(p, close);
 
                 MemInit *mi = arena_alloc(p->arena, sizeof(MemInit));
                 mi->name = member_name;
@@ -1529,12 +1540,38 @@ Node *parse_declaration(Parser *p) {
             int start = p->pos;
             /* Walk past optional ctor-init list ': ...' to the body
              * '{', tracking parens/braces/angles to handle the
-             * mem-init list correctly without parsing it. */
+             * mem-init list correctly without parsing it.
+             *
+             * A mem-init can be 'name(args)' OR 'name{args}' (C++11
+             * uniform init). For the brace-init form, the '{' sits at
+             * depth 0 but is NOT the body — it's the mem-init's args.
+             * Distinguish by looking at the previous token: a '{'
+             * preceded by an IDENT (the mem-init-id) opens a brace-
+             * init-list; a '{' preceded by ')' / '}' (closing of a
+             * previous mem-init) or the colon itself opens the body.
+             * Pattern: libstdc++ 13 atomic_base.h
+             *   : __atomic_flag_base{ _S_init(__i) } { }
+             * N4659 §15.6.2 [class.base.init]. */
             int paren = 0, brace = 0, angle = 0;
+            TokenKind prev = TK_EOF;
             while (!parser_at_eof(p)) {
                 TokenKind k = parser_peek(p)->kind;
                 if (paren == 0 && angle == 0 && brace == 0 &&
                     k == TK_LBRACE) {
+                    if (prev == TK_IDENT || prev == TK_GT || prev == TK_SHR) {
+                        /* mem-init brace-init ('name{args}' or
+                         * 'template_id<...>{args}'). Skip balanced. */
+                        brace = 1;
+                        parser_advance(p);
+                        while (brace > 0 && !parser_at_eof(p)) {
+                            TokenKind kk = parser_peek(p)->kind;
+                            if (kk == TK_LBRACE) brace++;
+                            else if (kk == TK_RBRACE) brace--;
+                            parser_advance(p);
+                        }
+                        prev = TK_RBRACE;
+                        continue;
+                    }
                     /* Top of body */
                     brace = 1;
                     parser_advance(p);
@@ -1551,6 +1588,7 @@ Node *parse_declaration(Parser *p) {
                 else if (k == TK_LT) angle++;
                 else if (k == TK_GT) { if (angle > 0) angle--; }
                 else if (k == TK_SHR) { if (angle >= 2) angle -= 2; else if (angle > 0) angle = 0; }
+                prev = k;
                 parser_advance(p);
             }
             int end = p->pos;
