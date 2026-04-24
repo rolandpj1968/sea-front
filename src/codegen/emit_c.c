@@ -4503,6 +4503,8 @@ static void cf_begin_function(Node *func) {
  * in the mem-init-list use the user's args; class members not
  * listed but with non-trivial default ctors get the default ctor
  * call; non-class members listed get a plain assignment. */
+static void emit_ctor_mem_init_one(Node *func, Node *m);
+
 static void emit_ctor_member_inits(Node *func) {
     if (!func->func.is_constructor) return;
     if (!g_current_class_def) return;
@@ -4544,12 +4546,31 @@ static void emit_ctor_member_inits(Node *func) {
     }
     for (int i = 0; i < cdef->class_def.nmembers; i++) {
         Node *m = cdef->class_def.members[i];
-        if (!m || m->kind != ND_VAR_DECL) continue;
-        Type *mty = m->var_decl.ty;
-        if (!mty) continue;
-        if (!m->var_decl.name) continue;
-        /* Skip member functions. */
-        if (mty->kind == TY_FUNC) continue;
+        if (!m) continue;
+        /* Flat blocks from comma-separated declarations:
+         * 'int a, b, c;' parses as ND_BLOCK(is_flat) containing
+         * individual ND_VAR_DECLs. Flatten and run the mem-init
+         * lookup on each. Same unpacking emit_class_def does. */
+        if (m->kind == ND_BLOCK && m->block.is_flat) {
+            for (int j = 0; j < m->block.nstmts; j++)
+                emit_ctor_mem_init_one(func, m->block.stmts[j]);
+            continue;
+        }
+        emit_ctor_mem_init_one(func, m);
+    }
+}
+
+/* Emit a single member's mem-init assignment or ctor call. Factored
+ * out so the flat-block unpacking above can reuse it without
+ * duplicating the whole body. */
+static void emit_ctor_mem_init_one(Node *func, Node *m) {
+    if (!m || m->kind != ND_VAR_DECL) return;
+    Type *mty = m->var_decl.ty;
+    if (!mty) return;
+    if (!m->var_decl.name) return;
+    /* Skip member functions. */
+    if (mty->kind == TY_FUNC) return;
+    {
 
         /* Look up this member in the user's mem-init-list. */
         MemInit *found = NULL;

@@ -1,4 +1,4 @@
-// EXPECT: 0
+// EXPECT: 42
 // C++11 uniform initialization in mem-initializer-list:
 //   mem-initializer-id braced-init-list
 // alongside the classic paren form
@@ -15,9 +15,10 @@
 //   : __atomic_flag_base{ _S_init(__i) } { }
 //   : _M_to{__to}, _M_goff{-1, -1, -1}, _M_poff{-1, -1, -1} { ... }
 //
-// This test verifies the parser accepts both forms. Emit-side
-// mem-init-to-assignment lowering for OOL ctor definitions is a
-// separate issue (pre-existing); here we just assert no parse errors.
+// Also verifies OOL-ctor mem-init emit: 'int a, b, c;' parses as one
+// flat ND_BLOCK containing three ND_VAR_DECLs; the ctor mem-init walk
+// must unpack the flat block, otherwise none of the scalar-member
+// assignments fire and the ctor body emits empty.
 
 struct Base {
     int a, b, c;
@@ -32,7 +33,7 @@ struct Derived {
 Derived::Derived(int v) : d{v + 1} {}
 
 int main() {
-    Base b(1, 2, 3);
-    Derived d(5);
-    return 0;
+    Base b(10, 5, 20);       // a=10, b=5, c=20
+    Derived d(6);            // d=7
+    return b.a + b.b + b.c + d.d; // 10+5+20+7 = 42
 }
