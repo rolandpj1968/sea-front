@@ -631,12 +631,16 @@ static void hoist_emit_decl(Node *call) {
      * the underlying operator becomes a mangled free-fn call that
      * returns the struct by value, and the temp catches the result. */
     if (call->kind == ND_BINARY || call->kind == ND_UNARY ||
-        call->kind == ND_POSTFIX) {
+        call->kind == ND_POSTFIX || call->kind == ND_TERNARY) {
         Type *ty = call->resolved_type;
         if (!ty) {
-            Node *operand = (call->kind == ND_BINARY)
-                ? call->binary.lhs : call->unary.operand;
+            Node *operand = NULL;
+            if (call->kind == ND_BINARY) operand = call->binary.lhs;
+            else if (call->kind == ND_TERNARY) operand = call->ternary.then_;
+            else operand = call->unary.operand;
             if (operand) ty = operand->resolved_type;
+            if (!ty && call->kind == ND_TERNARY && call->ternary.else_)
+                ty = call->ternary.else_->resolved_type;
         }
         /* Bail WITHOUT setting codegen_temp_name if we can't
          * determine the temp's type — otherwise we'd leave a
@@ -900,6 +904,18 @@ static void hoist_temps_in_expr(Node *n) {
                 if (ty && (ty->kind == TY_STRUCT || ty->kind == TY_UNION))
                     hoist_emit_decl(obj);
             }
+            /* Ternary rvalue: '(c ? a : b).method()' where both
+             * branches return struct. Pattern: gcc 4.8 tree-ssa-ccp.c
+             * '(cond ? mask(prec) : from_shwi(-1)).and_not(...)'. */
+            else if (k == ND_TERNARY) {
+                Type *ty = obj->resolved_type;
+                if (!ty && obj->ternary.then_)
+                    ty = obj->ternary.then_->resolved_type;
+                if (!ty && obj->ternary.else_)
+                    ty = obj->ternary.else_->resolved_type;
+                if (ty && (ty->kind == TY_STRUCT || ty->kind == TY_UNION))
+                    hoist_emit_decl(obj);
+            }
         }
         return;
     case ND_SUBSCRIPT:
@@ -970,6 +986,21 @@ static void hoist_stmt_temps(Node *s) {
         return;
     case ND_RETURN:
         hoist_temps_in_expr(s->ret.expr);
+        return;
+    case ND_CASE:
+        /* Recurse into the case body so statement-like children with
+         * hoist-needing expressions still get their rvalues
+         * materialized. The switch-body walker passes each ND_CASE
+         * through hoist_stmt_temps; without this, case bodies were
+         * silently skipped. Pattern: gcc 4.8 tree-ssa-ccp.c switch
+         * with 'r1mask.bitor(r2mask).bitand(...)' in a case body. */
+        hoist_stmt_temps(s->case_.stmt);
+        return;
+    case ND_DEFAULT:
+        hoist_stmt_temps(s->default_.stmt);
+        return;
+    case ND_LABEL:
+        hoist_stmt_temps(s->label.stmt);
         return;
     /* ND_IF/WHILE/DO/FOR conditions are NOT hoisted at the outer
      * block level — that would put the temp in extended-lifetime
