@@ -330,16 +330,27 @@ static void emit_arg_for_param(Node *arg, Type *param_ty) {
      * Pattern: gcc 4.8 cfgexpand.c
      *   data->asan_vec.safe_push(offset + stack_vars[i].size);
      * N4659 §7.2.1 [basic.lval] / C11 §6.5.2.5 compound literals. */
-    if (!is_addressable_lvalue(arg) && at &&
-        (at->kind == TY_INT || at->kind == TY_BOOL || at->kind == TY_CHAR ||
-         at->kind == TY_SHORT || at->kind == TY_LONG ||
-         at->kind == TY_LLONG || at->kind == TY_PTR)) {
-        fputs("&((", stdout);
-        emit_type(at);
-        fputs("){", stdout);
-        emit_expr(arg);
-        fputs("})", stdout);
-        return;
+    if (!is_addressable_lvalue(arg)) {
+        /* Fall back to the ref param's base type if arg has no
+         * resolved_type — happens for ND_NULLPTR / ND_NUM literals
+         * whose sema-phase type isn't recorded but the call-site
+         * context tells us exactly what type they'll be converted
+         * to. Using the expected type keeps the compound literal
+         * valid. */
+        Type *lit_ty = at;
+        if (!lit_ty && ty_is_ref(param_ty)) lit_ty = param_ty->base;
+        if (lit_ty &&
+            (lit_ty->kind == TY_INT || lit_ty->kind == TY_BOOL ||
+             lit_ty->kind == TY_CHAR || lit_ty->kind == TY_SHORT ||
+             lit_ty->kind == TY_LONG || lit_ty->kind == TY_LLONG ||
+             lit_ty->kind == TY_PTR)) {
+            fputs("&((", stdout);
+            emit_type(lit_ty);
+            fputs("){", stdout);
+            emit_expr(arg);
+            fputs("})", stdout);
+            return;
+        }
     }
     fputs("&(", stdout);
     emit_expr(arg);
@@ -2730,6 +2741,7 @@ static void emit_expr(Node *n) {
                  * arg coercion is a TODO). */
                 Type **call_pty = NULL;
                 int call_np = -1;
+                Node *winner_method = NULL;
                 if (virt) {
                     /* Virtual dispatch: load __sf_vptr then call slot.
                      * Emit the receiver expression once into the slot
@@ -2783,6 +2795,7 @@ static void emit_expr(Node *n) {
                                                    false, at, na,
                                                    recv_const,
                                                    &call_pty, &winner);
+                        winner_method = winner;
                         if (np < 0) {
                             /* Method not found in class_def. For
                              * template instantiations, emit a best-
@@ -2857,9 +2870,37 @@ static void emit_expr(Node *n) {
                     fputc('&', stdout);
                     emit_expr(obj);
                 }
-                for (int i = 0; i < n->call.nargs; i++) {
+                /* Default-argument injection for method calls. Reach
+                 * the method's TY_FUNC through the winner node to pull
+                 * its param_defaults. N4659 §11.3.6 [dcl.fct.default].
+                 * Pattern: gcc 4.8 gimplify.c 'stack.reserve(8)' where
+                 * vec::reserve(unsigned, bool exact = false). */
+                Type *win_fty = NULL;
+                if (winner_method) {
+                    if (winner_method->kind == ND_VAR_DECL &&
+                        winner_method->var_decl.ty &&
+                        winner_method->var_decl.ty->kind == TY_FUNC)
+                        win_fty = winner_method->var_decl.ty;
+                    /* ND_FUNC_DEF has no single TY_FUNC, but we can
+                     * recover param_defaults from the method's
+                     * recorded TY_FUNC when in-class. Skipped here —
+                     * defaults are typically on declarations, not
+                     * OOL definitions. */
+                }
+                int total = n->call.nargs;
+                if (win_fty && win_fty->param_defaults &&
+                    win_fty->nparams > n->call.nargs) {
+                    bool all_tail = true;
+                    for (int i = n->call.nargs; i < win_fty->nparams; i++)
+                        if (!win_fty->param_defaults[i]) { all_tail = false; break; }
+                    if (all_tail) total = win_fty->nparams;
+                }
+                for (int i = 0; i < total; i++) {
                     fputs(", ", stdout);
-                    emit_arg_for_param(n->call.args[i],
+                    Node *arg = (i < n->call.nargs)
+                        ? n->call.args[i]
+                        : win_fty->param_defaults[i];
+                    emit_arg_for_param(arg,
                                         (call_pty && i < call_np)
                                             ? call_pty[i] : NULL);
                 }
