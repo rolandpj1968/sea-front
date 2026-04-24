@@ -304,6 +304,22 @@ static bool is_addressable_lvalue(Node *n) {
 
 static void emit_arg_for_param(Node *arg, Type *param_ty) {
     if (!arg) return;
+    /* 'vNULL' passed as a function argument to a struct-typed param:
+     * same issue as the ND_ASSIGN / return paths — ND_IDENT vNULL
+     * lowers to '{0}' which C only accepts in init-declarators.
+     * Emit a compound literal using the param type. Pattern:
+     * gcc 4.8 function.c 'convert_jumps_to_returns(bb, false, vNULL)'. */
+    if (arg->kind == ND_IDENT && arg->ident.name &&
+        arg->ident.name->len == 5 &&
+        memcmp(arg->ident.name->loc, "vNULL", 5) == 0 &&
+        param_ty && (param_ty->kind == TY_STRUCT ||
+                     param_ty->kind == TY_UNION) &&
+        param_ty->tag) {
+        fputc('(', stdout);
+        emit_type(param_ty);
+        fputs("){0}", stdout);
+        return;
+    }
     if (!ty_is_ref(param_ty)) { emit_expr(arg); return; }
     Type *at = arg->resolved_type;
     /* Already a ref in the AST (lowered to pointer) — pass as-is.
@@ -3119,8 +3135,23 @@ static void emit_expr(Node *n) {
          * [expr.ref] — references behave as the referenced object,
          * so source uses '.' even though our C lowers to a pointer. */
         bool obj_is_ptr_in_c = ty_is_indirect(raw_obj_ty);
+        /* Ref-returning method call as the obj: the ND_CALL emit
+         * wraps with '(*...)' to convert the lowered T* back to a
+         * value (unless the current function also returns a ref,
+         * in which case it forwards as-is). Downstream member
+         * access on that wrapped value must use '.' not '->'.
+         * Without this, '(*call())->field' ends up emitted but
+         * '*' dereffed to a struct value which has no '->'.
+         * Pattern: gcc 4.8 dwarf2out.c 'files->last().info'. */
+        bool obj_is_ref_call_unwrapped = false;
+        if (ty_is_ref(raw_obj_ty) && n->member.obj &&
+            n->member.obj->kind == ND_CALL) {
+            bool cur_returns_ref = ty_is_ref(g_current_func_ret_ty);
+            if (!cur_returns_ref) obj_is_ref_call_unwrapped = true;
+        }
         const char *access_op =
-            (n->member.op == TK_ARROW || obj_is_ptr_in_c) ? "->" : ".";
+            (!obj_is_ref_call_unwrapped &&
+             (n->member.op == TK_ARROW || obj_is_ptr_in_c)) ? "->" : ".";
         bool did_base_rewrite = false;
         if (obj_ty && (obj_ty->kind == TY_STRUCT || obj_ty->kind == TY_UNION) &&
             obj_ty->class_region && mem) {
@@ -3617,6 +3648,15 @@ static bool expr_has_class_temp(Node *e) {
                expr_has_class_temp(e->ternary.then_) ||
                expr_has_class_temp(e->ternary.else_);
     case ND_MEMBER:
+        /* Also true when the member access is on a struct-returning
+         * call result — the ND_MEMBER emit will take '&call()' which
+         * needs the call hoisted into a named temp first. Mirrors the
+         * force-hoist branch in hoist_temps_in_expr's ND_MEMBER case. */
+        if (e->member.obj && e->member.obj->kind == ND_CALL &&
+            e->member.obj->resolved_type &&
+            (e->member.obj->resolved_type->kind == TY_STRUCT ||
+             e->member.obj->resolved_type->kind == TY_UNION))
+            return true;
         return expr_has_class_temp(e->member.obj);
     case ND_SUBSCRIPT:
         return expr_has_class_temp(e->subscript.base) ||
