@@ -3586,8 +3586,29 @@ static void emit_expr(Node *n) {
             bool needs_paren = n->member.obj &&
                                n->member.obj->kind == ND_CAST;
             if (needs_paren) fputc('(', stdout);
-            /* Suppress ref-param deref: the -> already handles it. */
-            if (obj_is_ptr_in_c) g_suppress_ref_deref = true;
+            /* Suppress ref-param deref: the -> already handles it.
+             * Only when the referent is a STRUCT (T&) — 'a->x' on a
+             * T& param lowered to T* emits correctly as 'a->x'. For
+             * T*& (ref to pointer) the param is lowered to T**, and
+             * source 'a->x' needs '(*a)->x' — don't suppress the
+             * deref there. Pattern: gcc 4.8 tree-ssa-structalias.c
+             * 'constraint_less(const constraint_t &a, ...)' with
+             * typedef constraint* constraint_t. */
+            bool suppress_for_member = false;
+            if (obj_is_ptr_in_c) {
+                if (!ty_is_ref(raw_obj_ty)) {
+                    /* Plain pointer / array — no ref to unwrap. */
+                    suppress_for_member = true;
+                } else if (raw_obj_ty->base) {
+                    /* Ref: suppress only when referent is a struct/
+                     * union value (the '(*a).field' case collapses
+                     * cleanly to 'a->field'). */
+                    Type *refd = raw_obj_ty->base;
+                    if (refd->kind == TY_STRUCT || refd->kind == TY_UNION)
+                        suppress_for_member = true;
+                }
+            }
+            if (suppress_for_member) g_suppress_ref_deref = true;
             emit_expr(n->member.obj);
             if (needs_paren) fputc(')', stdout);
             fputs(access_op, stdout);
