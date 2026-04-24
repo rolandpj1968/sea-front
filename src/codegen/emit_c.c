@@ -1641,8 +1641,17 @@ static bool method_is_const(Type *class_type, Token *name) {
 static void collect_operator_candidates(Type *class_type,
                                          const char *op_suffix,
                                          Node **found, int *nfound, int cap) {
-    if (!class_type || !class_type->class_def) return;
+    if (!class_type) return;
     Node *cd = class_type->class_def;
+    /* Instantiated-class Type* copies often have class_def unhooked;
+     * fall back to a TU lookup by (tag, template_args) to find the
+     * real class node with its member list. Same fallback used by
+     * collect_overload_candidates for regular methods. */
+    if (!cd) {
+        Node *d = find_class_def_by_tag_args(class_type);
+        if (d) cd = d;
+    }
+    if (!cd) return;
     for (int i = 0; i < cd->class_def.nmembers; i++) {
         Node *m = cd->class_def.members[i];
         if (!m) continue;
@@ -2735,6 +2744,28 @@ static void emit_expr(Node *n) {
                 for (int i = 0; i < na; i++) {
                     at[i] = n->call.args[i] ? n->call.args[i]->resolved_type : NULL;
                     if (!at[i]) { all_resolved = false; break; }
+                }
+                if (getenv("SF_DBG_CALL")) {
+                    Token *nm = n->call.callee->ident.name;
+                    if (nm && nm->len == 9 && memcmp(nm->loc, "gt_pch_nx", 9) == 0 && na == 3) {
+                        fprintf(stderr, "DBG call gt_pch_nx na=3 arg0.kind=%d",
+                            n->call.args[0] ? n->call.args[0]->kind : -1);
+                        /* Walk into arg[0]. */
+                        Node *a = n->call.args[0];
+                        int depth = 0;
+                        while (a && depth < 6) {
+                            fprintf(stderr, " | d=%d kind=%d rt=%p",
+                                depth, a->kind, (void*)a->resolved_type);
+                            if (a->resolved_type)
+                                fprintf(stderr, "(tk=%d)", a->resolved_type->kind);
+                            if (a->kind == ND_UNARY) a = a->unary.operand;
+                            else if (a->kind == ND_SUBSCRIPT) a = a->subscript.base;
+                            else if (a->kind == ND_CALL) a = a->call.callee;
+                            else break;
+                            depth++;
+                        }
+                        fprintf(stderr, "\n");
+                    }
                 }
                 if (all_resolved) {
                     emit_free_func_mangled_name(

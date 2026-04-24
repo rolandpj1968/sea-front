@@ -30,6 +30,14 @@
 
 typedef struct {
     Arena *arena;
+    /* Translation unit root — used by helpers that need to search
+     * the TU for an ND_CLASS_DEF matching (tag, template_args). The
+     * instantiation/clone pipeline can produce multiple Type*
+     * instances for the same logical struct; some carry class_def
+     * (hooked up to a real class-body Node), others don't. When a
+     * visit-site has one of the un-hooked copies, a TU-wide lookup
+     * by tag+args finds the hooked one. */
+    Node *tu;
     /* Current lexical scope. The parser stashes a region pointer on
      * each ND_BLOCK / ND_FUNC_DEF; visit() walks them as it descends.
      * Lookup of an unqualified identifier walks this chain via the
@@ -663,13 +671,84 @@ static void visit_member(Sema *s, Node *n) {
         n->is_type_dependent = true;
 }
 
+/* Look for an ND_CLASS_DEF in the TU whose Type matches class_ty
+ * by tag + template_args (structural). Template instantiation /
+ * cloning can leave a Type* copy without class_def populated even
+ * though a real one exists in the TU — find it the explicit way.
+ * Returns the Node's class_def.ty (which has class_def hooked up). */
+static Node *find_class_def_node_by_tag_args(Node *tu, Type *class_ty) {
+    if (!tu || !class_ty || !class_ty->tag) return NULL;
+    for (int i = 0; i < tu->tu.ndecls; i++) {
+        Node *d = tu->tu.decls[i];
+        if (!d || d->kind != ND_CLASS_DEF) continue;
+        Type *t = d->class_def.ty;
+        if (types_equivalent(t, class_ty)) return d;
+    }
+    return NULL;
+}
+
+/* Find a class member whose name is 'operator' and whose operator-
+ * suffix matches '[]' — i.e. the operator[] member. Returns the
+ * method node (ND_FUNC_DEF or ND_VAR_DECL with TY_FUNC) or NULL.
+ * Linear scan of the class's member list. Falls back through the
+ * TU when class_ty->class_def isn't hooked up on this Type* copy. */
+static Node *find_class_operator_subscript(Sema *s, Type *class_ty) {
+    if (!class_ty) return NULL;
+    Node *cd = class_ty->class_def;
+    if (!cd && s && s->tu) {
+        Node *d = find_class_def_node_by_tag_args(s->tu, class_ty);
+        if (d) cd = d;
+    }
+    if (!cd) return NULL;
+    for (int i = 0; i < cd->class_def.nmembers; i++) {
+        Node *m = cd->class_def.members[i];
+        if (!m) continue;
+        Token *mn = NULL;
+        if (m->kind == ND_FUNC_DEF) mn = m->func.name;
+        else if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
+                 m->var_decl.ty->kind == TY_FUNC)
+            mn = m->var_decl.name;
+        if (!mn || mn->kind != TK_KW_OPERATOR) continue;
+        const char *after = mn->loc + mn->len;
+        while (*after == ' ' || *after == '\t') after++;
+        if (after[0] == '[') return m;
+    }
+    return NULL;
+}
+
 static void visit_subscript(Sema *s, Node *n) {
     visit(s, n->subscript.base);
     visit(s, n->subscript.index);
     /* arr[i] / p[i] — element type. */
     Type *bt = n->subscript.base->resolved_type;
+    if (bt && (bt->kind == TY_REF || bt->kind == TY_RVALREF) && bt->base)
+        bt = bt->base;
     if (bt && (bt->kind == TY_ARRAY || bt->kind == TY_PTR) && bt->base)
         n->resolved_type = bt->base;
+    /* Class-type subscript: dispatch through operator[] — N4659 §16.5
+     * [over.oper]. Use the method's return type so downstream
+     * callers (e.g. free-function-overload mangling at the call site
+     * wrapping this subscript) see a concrete type rather than NULL.
+     *
+     * Strip the outer TY_REF if the method returns a reference — the
+     * 'value category' downstream code expects from 'v[i]' is the
+     * element type T, not T&. Returning TY_REF here would make
+     * member access 'v[i].foo' fail downstream (codegen treats the
+     * value as a struct rather than a dereffed ref). */
+    if (!n->resolved_type && bt &&
+        (bt->kind == TY_STRUCT || bt->kind == TY_UNION)) {
+        Node *m = find_class_operator_subscript(s, bt);
+        if (m) {
+            Type *ret = NULL;
+            if (m->kind == ND_FUNC_DEF) ret = m->func.ret_ty;
+            else if (m->kind == ND_VAR_DECL && m->var_decl.ty)
+                ret = m->var_decl.ty->ret;
+            if (ret && (ret->kind == TY_REF || ret->kind == TY_RVALREF) &&
+                ret->base)
+                ret = ret->base;
+            if (ret) n->resolved_type = ret;
+        }
+    }
     if ((n->subscript.base && n->subscript.base->is_type_dependent) ||
         (n->subscript.index && n->subscript.index->is_type_dependent))
         n->is_type_dependent = true;
@@ -1138,6 +1217,6 @@ static void visit(Sema *s, Node *n) {
 /* ------------------------------------------------------------------ */
 
 void sema_run(Node *tu, Arena *arena) {
-    Sema s = { .arena = arena, .cur_scope = NULL };
+    Sema s = { .arena = arena, .tu = tu, .cur_scope = NULL };
     visit(&s, tu);
 }
