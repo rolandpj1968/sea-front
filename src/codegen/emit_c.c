@@ -620,6 +620,48 @@ static void hoist_temps_in_expr(Node *n) {
         if (n->call.callee) hoist_temps_in_expr(n->call.callee);
         for (int i = 0; i < n->call.nargs; i++)
             hoist_temps_in_expr(n->call.args[i]);
+        /* Arg passed to a reference parameter is lowered to '&(arg)'.
+         * If the arg is itself an rvalue call, '&f()' is illegal C.
+         * Force-hoist the arg call so it lands in a named local.
+         * Works for any element type — hoist_emit_decl prints
+         * 'T __tmp = call();' and tags the call for emit_expr to
+         * substitute the temp name. Pattern: gcc 4.8 cgraphunit.c
+         *   vargs.quick_push(thunk_adjust(&bsi, a, 1, ...));
+         * — thunk_adjust returns tree (pointer); quick_push's 2nd
+         * param is T& (→ tree*&). N4659 §11.3.2 [dcl.ref]. */
+        {
+            Type *callee_ty = n->call.callee ? n->call.callee->resolved_type : NULL;
+            /* Function pointers have TY_PTR(TY_FUNC); peel the pointer. */
+            if (callee_ty && callee_ty->kind == TY_PTR && callee_ty->base)
+                callee_ty = callee_ty->base;
+            bool is_method_call = n->call.callee &&
+                                   n->call.callee->kind == ND_MEMBER;
+            bool have_free_fn_types = callee_ty && callee_ty->kind == TY_FUNC &&
+                                       callee_ty->nparams == n->call.nargs;
+            for (int i = 0; i < n->call.nargs; i++) {
+                Node *arg = n->call.args[i];
+                if (!arg || arg->kind != ND_CALL ||
+                    arg->codegen_temp_name || !arg->resolved_type ||
+                    ty_is_ref(arg->resolved_type))
+                    continue;
+                bool pass_by_ref;
+                if (have_free_fn_types) {
+                    /* Free function with arity match: only hoist when
+                     * the specific param is TY_REF. */
+                    pass_by_ref = ty_is_ref(callee_ty->params[i]);
+                } else if (is_method_call) {
+                    /* Method call: we don't have callee_ty's params
+                     * here (resolution lives at emit time), so we
+                     * can't tell which params are ref. Force-hoist
+                     * any call-valued arg — possible extra temp is
+                     * harmless; missing one yields invalid '&f()'. */
+                    pass_by_ref = true;
+                } else {
+                    pass_by_ref = false;
+                }
+                if (pass_by_ref) hoist_emit_decl(arg);
+            }
+        }
         if (is_class_temp_call(n)) hoist_emit_decl(n);
         return;
     case ND_BINARY:
@@ -627,11 +669,32 @@ static void hoist_temps_in_expr(Node *n) {
         /* Both share the 'binary' member layout. */
         hoist_temps_in_expr(n->binary.lhs);
         hoist_temps_in_expr(n->binary.rhs);
+        /* Struct-typed lhs of a binary/compound-assign op dispatches
+         * through an overloaded operator: 'a == b' → 'sf__T__eq(&a, b)'.
+         * If lhs is an rvalue call 'f() == b', the emitted '&f()' is
+         * illegal C. Force-hoist same as the ND_MEMBER case below.
+         * Pattern: gcc 4.8 cgraph.c cgraph_add_thunk
+         *   tree_to_double_int(virtual_offset) == double_int::from_shwi(...) */
+        if (n->binary.lhs && n->binary.lhs->kind == ND_CALL &&
+            !n->binary.lhs->codegen_temp_name &&
+            n->binary.lhs->resolved_type &&
+            (n->binary.lhs->resolved_type->kind == TY_STRUCT ||
+             n->binary.lhs->resolved_type->kind == TY_UNION))
+            hoist_emit_decl(n->binary.lhs);
         return;
     case ND_UNARY:
     case ND_POSTFIX:
         /* Both share the 'unary' member layout. */
         hoist_temps_in_expr(n->unary.operand);
+        /* Unary overload on a struct operand: '-x' → 'sf__T__minus(&x)'.
+         * Force-hoist an rvalue struct-returning call operand so the
+         * emitted '&f()' stays valid. N4659 §16.5 [over.oper]. */
+        if (n->unary.operand && n->unary.operand->kind == ND_CALL &&
+            !n->unary.operand->codegen_temp_name &&
+            n->unary.operand->resolved_type &&
+            (n->unary.operand->resolved_type->kind == TY_STRUCT ||
+             n->unary.operand->resolved_type->kind == TY_UNION))
+            hoist_emit_decl(n->unary.operand);
         return;
     case ND_TERNARY:
         hoist_temps_in_expr(n->ternary.cond);
@@ -657,6 +720,15 @@ static void hoist_temps_in_expr(Node *n) {
     case ND_SUBSCRIPT:
         hoist_temps_in_expr(n->subscript.base);
         hoist_temps_in_expr(n->subscript.index);
+        /* Class-type subscript lowers to 'sf__T__subscript(&base, idx)'.
+         * Force-hoist an rvalue struct-returning call base so '&f()'
+         * stays valid. N4659 §16.5.5 [over.sub]. */
+        if (n->subscript.base && n->subscript.base->kind == ND_CALL &&
+            !n->subscript.base->codegen_temp_name &&
+            n->subscript.base->resolved_type &&
+            (n->subscript.base->resolved_type->kind == TY_STRUCT ||
+             n->subscript.base->resolved_type->kind == TY_UNION))
+            hoist_emit_decl(n->subscript.base);
         return;
     case ND_CAST:
         hoist_temps_in_expr(n->cast.operand);
@@ -3573,6 +3645,28 @@ static void emit_block(Node *n) {
 
 static void emit_class_def(Node *n);
 
+/* If an if/while/for single-statement body needs hoisting (e.g. a
+ * method call argument is itself a call whose result must be
+ * addressed), the hoisted temp has no valid scope in 'if (cond)
+ * stmt;' — there's no block to host the decl. Wrap non-block bodies
+ * in '{ }' so hoist_stmt_temps can emit the temp decl before the
+ * statement inside the block. For ND_BLOCK bodies, emit_block
+ * handles per-statement hoisting itself — just delegate.
+ * Pattern: gcc 4.8 cgraphunit.c assemble_thunk 'if (this_adjusting)
+ * vargs.quick_push(thunk_adjust(...));'. */
+static void emit_if_body_with_hoist(Node *body) {
+    if (!body) { fputs(";\n", stdout); return; }
+    if (body->kind == ND_BLOCK) { emit_stmt(body); return; }
+    fputs("{\n", stdout);
+    g_indent++;
+    hoist_stmt_temps(body);
+    emit_indent();
+    emit_stmt(body);
+    g_indent--;
+    emit_indent();
+    fputs("}\n", stdout);
+}
+
 static void emit_stmt(Node *n) {
     if (!n) { fputs(";\n", stdout); return; }
     switch (n->kind) {
@@ -3848,11 +3942,11 @@ static void emit_stmt(Node *n) {
         fputs("if (", stdout);
         emit_expr(n->if_.cond);
         fputs(") ", stdout);
-        emit_stmt(n->if_.then_);
+        emit_if_body_with_hoist(n->if_.then_);
         if (n->if_.else_) {
             emit_indent();
             fputs("else ", stdout);
-            emit_stmt(n->if_.else_);
+            emit_if_body_with_hoist(n->if_.else_);
         }
         return;
     case ND_WHILE: {
