@@ -90,6 +90,29 @@ Declaration *region_declare_in(Parser *p, DeclarativeRegion *r,
 
     uint32_t idx = hash_name(name, name_len) % REGION_HASH_SIZE;
 
+    /* Merge param_defaults from a prior function declaration of the
+     * same name. N4659 §11.3.6 [dcl.fct.default]/4 — default args
+     * may appear on ANY declaration and accumulate across them.
+     * Typical pattern: header has 'extern f(T, U = 0);' with default,
+     * .c file has the definition 'f(T x, U y) { ... }' without. The
+     * definition's Type lacks param_defaults; copy them forward so
+     * call sites can still find the defaults via resolved_decl->type. */
+    if (entity == ENTITY_VARIABLE && type && type->kind == TY_FUNC &&
+        !type->param_defaults) {
+        for (Declaration *d = r->buckets[idx]; d; d = d->next) {
+            if (d->name_len != name_len) continue;
+            if (memcmp(d->name, name, name_len) != 0) continue;
+            if (d->entity != ENTITY_VARIABLE) continue;
+            Type *dt = d->type;
+            if (!dt || dt->kind != TY_FUNC) continue;
+            if (dt->nparams != type->nparams) continue;
+            if (dt->param_defaults) {
+                type->param_defaults = dt->param_defaults;
+                break;
+            }
+        }
+    }
+
     Declaration *decl = arena_alloc(p->arena, sizeof(Declaration));
     decl->name = name;
     decl->name_len = name_len;

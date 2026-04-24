@@ -3293,6 +3293,20 @@ static void emit_expr(Node *n) {
              * injection. Emit the user's args then the default exprs. */
             bool arity_ok = callee_ft &&
                             callee_ft->nparams == n->call.nargs;
+            /* param_defaults may be missing on the callee_ft Type
+             * reached via the ident's resolved_type (sometimes a Type
+             * copy without the defaults attached). Fall back to the
+             * resolved_decl's Type which carries the original. */
+            if (callee_ft && !callee_ft->param_defaults &&
+                n->call.callee && n->call.callee->kind == ND_IDENT &&
+                n->call.callee->ident.resolved_decl &&
+                n->call.callee->ident.resolved_decl->type) {
+                Type *dt = n->call.callee->ident.resolved_decl->type;
+                if (dt->kind == TY_PTR && dt->base) dt = dt->base;
+                if (dt->kind == TY_FUNC && dt->param_defaults &&
+                    dt->nparams == callee_ft->nparams)
+                    callee_ft = dt;
+            }
             int inject_from = -1;
             if (!arity_ok && callee_ft && callee_ft->param_defaults &&
                 n->call.nargs < callee_ft->nparams) {

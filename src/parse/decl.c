@@ -852,9 +852,11 @@ parse_suffixes:
                      * declarator (libstdc++ uses [[gnu::unused]]). */
                     parser_skip_cxx_attributes(p);
                     parser_skip_gnu_attributes(p);
+                    Node *def_val2 = NULL;
                     if (parser_consume(p, TK_ASSIGN))
-                        parse_assign_expr(p);  /* default arg — §11.3.6 */
+                        def_val2 = parse_assign_expr(p);  /* default arg — §11.3.6 */
                     if (param_decl) {
+                        param_decl->param.default_value = def_val2;
                         vec_push(&params, param_decl);
                         vec_push(&param_types, param_decl->var_decl.ty);
                     }
@@ -889,6 +891,25 @@ parse_suffixes:
 
             ty = new_func_type(p, ty, (Type **)param_types.data,
                                param_types.len, variadic);
+            /* Capture per-param defaults — same as the other
+             * new_func_type call site. Pattern: gcc 4.8 rtl.h
+             * 'extern rtx *strip_address_mutations(rtx*, enum* = 0);'. */
+            {
+                bool any_default = false;
+                for (int i = 0; i < param_types.len; i++) {
+                    Node *pn = ((Node **)params.data)[i];
+                    if (pn && pn->param.default_value) { any_default = true; break; }
+                }
+                if (any_default) {
+                    Node **defs = arena_alloc(p->arena,
+                        param_types.len * sizeof(Node *));
+                    for (int i = 0; i < param_types.len; i++) {
+                        Node *pn = ((Node **)params.data)[i];
+                        defs[i] = pn ? pn->param.default_value : NULL;
+                    }
+                    ty->param_defaults = defs;
+                }
+            }
             if (mc) ty->is_const = true;
         }
 
