@@ -28,7 +28,7 @@ hex0 → ... → mescc → tcc → gcc 4.7.4
                     modern gcc builds itself
 ```
 
-~12K lines of auditable C. No dependencies beyond a C compiler.
+~23K lines of auditable C. No dependencies beyond a C compiler.
 
 ## Status
 
@@ -56,14 +56,14 @@ Stages B and C extend upward to modern compilers. See
 | Sema | First slice — type propagation, member resolution, implicit `this` |
 | **Template Instantiation** | **Working** — class templates, function templates, defaults, dedup, transitive deps |
 | C Codegen | Working — structs, vtables, ctors/dtors, scope cleanup, name mangling |
-| Standard Library | 50/50 libstdc++ headers parse and emit through `--emit-c` |
+| Standard Library | 72/80 libstdc++ headers parse and emit through `--emit-c` |
 
 ### Test Suite
 
 - 144 unit tests (lexer)
-- 41 parser integration tests
-- 81 emit-c end-to-end tests (C++ in → C out → compile → execute → verify)
-- 28 gated + 52 stretch libstdc++ header smoke tests
+- 42 parser integration tests
+- 178 emit-c end-to-end tests (C++ in → C out → compile → execute → verify)
+- 24/28 gated + 48/52 stretch libstdc++ header smoke tests
 - 1 multi-TU test
 
 ### Template Instantiation
@@ -128,6 +128,7 @@ bash bootstrap.sh   # single-command build with no make dependency
 | [Coding Standards](doc/coding-standards.md) | Project coding conventions |
 | [Mangling Design](docs/mangling.md) | Name mangling framework (human-readable + Itanium) |
 | [Inline & Dedup](docs/inline_and_dedup.md) | Multi-TU deduplication strategy |
+| [Two-Phase Lookup](docs/two-phase-lookup.md) | Template name lookup — current state and remaining shortcuts |
 
 ### Generated Output Examples
 
@@ -147,13 +148,13 @@ the transpiler's output quality. Each emitted C definition includes a
 
 ## Known Gaps
 
-- Template specialization (full/partial) — not yet implemented
-- Inheritance in template classes — base class members not resolved
-- Operator overloading — not lowered to function calls yet
+- Partial template specialization — not yet implemented (full specialization works)
+- SFINAE / `enable_if` — not yet supported
 - Lambda lowering — parsed but not transpiled
 - `auto` / `decltype` type deduction — parsed but not resolved
-- Standard library instantiation — headers emit but library internals
-  use advanced patterns (SFINAE, partial specialization) not yet supported
+- Standard library instantiation — headers parse and emit, but some
+  library internals use advanced patterns (partial specialization,
+  SFINAE) not yet supported
 
 ## License
 
