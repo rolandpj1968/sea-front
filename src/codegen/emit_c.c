@@ -1379,7 +1379,6 @@ static int copy_member_param_types(Node *m, Type **pool) {
 }
 
 static Node *find_class_def_by_tag_args(Type *class_type);
-static bool types_equivalent(Type *a, Type *b);
 
 /* Two template-instantiated class types name the SAME instantiation
  * when they're both class types (struct or union — catches both
@@ -1590,48 +1589,6 @@ static bool method_returns_ref(Type *class_type, Token *name) {
  * identity — fine because the instantiation pass shares Type* for
  * the same concrete args, but would miss a logically-equal arg
  * constructed from a different pointer. */
-/* Structural equivalence between two Type pointers.
- *
- * Template instantiation and cloning sometimes produce distinct Type*
- * copies for the same concrete type (e.g. two 'struct vl_embed' Types
- * with different allocations). Compare by kind + tag + indirection
- * chain so the tag-args lookup can still match cross-copy.
- *
- * This is narrow — only enough to recognise primitive types and
- * named struct/enum tags. For TY_PTR/TY_REF/TY_ARRAY we recurse into
- * the base; for TY_FUNC we just compare kind (rare as a template arg
- * and punting is safe because different signatures would realistically
- * end up at distinct instantiations anyway). */
-static bool types_equivalent(Type *a, Type *b) {
-    if (a == b) return true;
-    if (!a || !b) return false;
-    if (a->kind != b->kind) return false;
-    switch (a->kind) {
-    case TY_PTR:
-    case TY_REF:
-    case TY_RVALREF:
-        return types_equivalent(a->base, b->base);
-    case TY_ARRAY:
-        return types_equivalent(a->base, b->base);
-    case TY_STRUCT:
-    case TY_UNION:
-    case TY_ENUM:
-        if (!a->tag || !b->tag) return a->tag == b->tag;
-        if (a->tag->len != b->tag->len) return false;
-        if (memcmp(a->tag->loc, b->tag->loc, a->tag->len) != 0) return false;
-        if (a->n_template_args != b->n_template_args) return false;
-        for (int i = 0; i < a->n_template_args; i++)
-            if (!types_equivalent(a->template_args[i], b->template_args[i]))
-                return false;
-        return true;
-    default:
-        /* Primitives: same kind + same cv/sign flags. */
-        return a->is_unsigned == b->is_unsigned &&
-               a->is_const    == b->is_const &&
-               a->is_volatile == b->is_volatile;
-    }
-}
-
 static Node *find_class_def_by_tag_args(Type *class_type) {
     if (!g_tu || !class_type || !class_type->tag ||
         class_type->n_template_args <= 0)

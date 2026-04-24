@@ -688,44 +688,9 @@ enum {
     ICS_INCOMPATIBLE = 100,
 };
 
-/* Structural equality for free-function overload resolution.
- * Mirrors codegen's types_equivalent but kept separate to avoid
- * pulling codegen into sema. Struct/union match on tag (and
- * template_args if both sides carry them); pointers/refs recurse
- * into base; primitives match on (kind, unsigned, cv).
- * TODO(seafront#types-equiv-consolidate): factor out a shared
- * helper in parse/ once emit_c.c's copy and this one have
- * stabilised.
- */
-static bool sema_types_equal(Type *a, Type *b) {
-    if (a == b) return true;
-    if (!a || !b) return false;
-    if (a->kind != b->kind) return false;
-    switch (a->kind) {
-    case TY_PTR: case TY_REF: case TY_RVALREF: case TY_ARRAY:
-        return sema_types_equal(a->base, b->base);
-    case TY_STRUCT: case TY_UNION: case TY_ENUM:
-        if (!a->tag || !b->tag) return a->tag == b->tag;
-        if (a->tag->len != b->tag->len) return false;
-        if (memcmp(a->tag->loc, b->tag->loc, a->tag->len) != 0) return false;
-        if (a->n_template_args != b->n_template_args) return false;
-        for (int i = 0; i < a->n_template_args; i++)
-            if (!sema_types_equal(a->template_args[i], b->template_args[i]))
-                return false;
-        return true;
-    case TY_FUNC:
-        /* Function types as template args — rare. Punt to identity. */
-        return false;
-    default:
-        return a->is_unsigned == b->is_unsigned &&
-               a->is_const    == b->is_const &&
-               a->is_volatile == b->is_volatile;
-    }
-}
-
 static int ics_rank(Type *param, Type *arg) {
     if (!param || !arg) return ICS_INCOMPATIBLE;
-    if (sema_types_equal(param, arg)) return ICS_EXACT;
+    if (types_equivalent(param, arg)) return ICS_EXACT;
     /* Pointer-to-same-tag: T* vs T* where both Ts are class types
      * with matching tag but distinct Type* identity. Catches the
      * common case where two free-function overloads differ only in

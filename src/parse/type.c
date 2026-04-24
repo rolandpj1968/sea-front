@@ -1820,3 +1820,64 @@ no_grouped_abstract:;
 
     return base;
 }
+
+/* ------------------------------------------------------------------ */
+/* Structural type equivalence                                        */
+/* ------------------------------------------------------------------ */
+
+/* types_equivalent — are two Type pointers the same type?
+ *
+ * Structural equality for sea-front's purposes: two Types are
+ * equivalent when they have the same kind and the same sub-structure.
+ * Distinct Type* allocations with identical shape are equivalent —
+ * template instantiation, cloning, and sema sometimes synthesise
+ * multiple Type* for one concrete type.
+ *
+ * Rules:
+ *   - PTR / REF / RVALREF / ARRAY: recurse on base.
+ *   - STRUCT / UNION / ENUM: same tag (by spelling), same
+ *     n_template_args, recurse on each template_args[i].
+ *   - FUNC: punt to pointer identity (function types as template
+ *     args or call-site comparands are rare, and a full param-list
+ *     recurse would need nothing we don't already do via the
+ *     containing struct's template_args).
+ *   - primitives: same kind + same cv / sign flags.
+ *
+ * Used by:
+ *   - codegen dedup for cross-instance template-instantiated class
+ *     defs (same template_args reached via different Node paths)
+ *   - sema's free-function overload resolution ICS-EXACT predicate
+ *     (N4659 §16.3.3.1 [over.best.ics]).
+ *
+ * Intentionally narrow — no implicit conversions (qualification,
+ * promotion, derived-to-base). Callers that need those wrap us with
+ * extra tiers. */
+bool types_equivalent(Type *a, Type *b) {
+    if (a == b) return true;
+    if (!a || !b) return false;
+    if (a->kind != b->kind) return false;
+    switch (a->kind) {
+    case TY_PTR:
+    case TY_REF:
+    case TY_RVALREF:
+    case TY_ARRAY:
+        return types_equivalent(a->base, b->base);
+    case TY_STRUCT:
+    case TY_UNION:
+    case TY_ENUM:
+        if (!a->tag || !b->tag) return a->tag == b->tag;
+        if (a->tag->len != b->tag->len) return false;
+        if (memcmp(a->tag->loc, b->tag->loc, a->tag->len) != 0) return false;
+        if (a->n_template_args != b->n_template_args) return false;
+        for (int i = 0; i < a->n_template_args; i++)
+            if (!types_equivalent(a->template_args[i], b->template_args[i]))
+                return false;
+        return true;
+    case TY_FUNC:
+        return false;
+    default:
+        return a->is_unsigned == b->is_unsigned &&
+               a->is_const    == b->is_const &&
+               a->is_volatile == b->is_volatile;
+    }
+}

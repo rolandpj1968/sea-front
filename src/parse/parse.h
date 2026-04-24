@@ -1334,6 +1334,11 @@ Type *new_rvalref_type(Parser *p, Type *base);
 Type *new_array_type(Parser *p, Type *base, int len);
 Type *new_func_type(Parser *p, Type *ret, Type **params, int nparams, bool variadic);
 
+/* Structural type equivalence — two Types match iff same kind + same
+ * sub-structure. See type.c for the rules and caller list. Used by
+ * codegen dedup and sema overload resolution. */
+bool types_equivalent(Type *a, Type *b);
+
 /* Check if current token starts a declaration (type-specifier keyword
  * or, with name lookup, a user-defined type-name) */
 bool parser_at_type_specifier(Parser *p);
