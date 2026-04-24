@@ -4464,6 +4464,45 @@ static void emit_stmt(Node *n) {
             g_emit_phase = saved_phase;
         }
         return;
+    case ND_TYPEDEF: {
+        /* Block-scope typedef — e.g. 'typedef enum { A, B } T;' inside
+         * a function body. C accepts block-scope typedefs.  Emit the
+         * enum body if present, then 'typedef enum X <name>;'. Pattern:
+         * gcc 4.8 omega.c omega_pretty_print_problem's local
+         * 'typedef enum { none, le, lt } partial_order_type;'. */
+        Type *uty = n->var_decl.ty;
+        Type *enum_ty = uty;
+        while (enum_ty && ty_is_indirect(enum_ty) && enum_ty->base)
+            enum_ty = enum_ty->base;
+        if (enum_ty && enum_ty->kind == TY_ENUM &&
+            enum_ty->enum_tokens && enum_ty->enum_ntokens > 0 &&
+            !enum_body_already_emitted(enum_ty->enum_tokens)) {
+            mark_enum_body_emitted(enum_ty->enum_tokens);
+            enum_ty->codegen_emitted = true;
+            fputs("enum ", stdout);
+            if (enum_ty->tag)
+                fprintf(stdout, "%.*s ", enum_ty->tag->len, enum_ty->tag->loc);
+            fputs("{ ", stdout);
+            for (int i = 0; i < enum_ty->enum_ntokens; i++) {
+                Token *t = &enum_ty->enum_tokens[i];
+                if (t->has_space && i > 0) fputc(' ', stdout);
+                fprintf(stdout, "%.*s", t->len, t->loc);
+            }
+            fputs(" };\n", stdout);
+            emit_indent();
+        }
+        /* Block-scope typedef itself is generally unneeded for
+         * codegen — sea-front emits types by their canonical form,
+         * not by typedef aliases — but gcc uses the typedef name in
+         * casts ('(partial_order_type)x'). Emit the typedef so those
+         * casts remain valid. */
+        if (n->var_decl.name) {
+            fputs("typedef ", stdout);
+            emit_var_decl_inner(n);
+            fputs(";\n", stdout);
+        }
+        return;
+    }
     case ND_VAR_DECL:
         /* Block-scope inline-struct dependency, same shape as the
          * top-level emit path: 'static const struct T { ... } arr[];'
