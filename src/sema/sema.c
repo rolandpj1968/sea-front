@@ -387,6 +387,16 @@ static void visit_unary(Sema *s, Node *n) {
         if (ot && (ot->kind == TY_PTR || ot->kind == TY_ARRAY ||
                    ot->kind == TY_REF || ot->kind == TY_RVALREF))
             n->resolved_type = ot->base;
+        /* '*x' where x is a class value dispatches to operator*().
+         * Look up the method's return type so downstream consumers
+         * (e.g. method-call on the result) can see the class. Fall
+         * back to the class tag itself if we can't find the method —
+         * common case is a self-returning deref like insn_gen_fn's
+         * 'operator*() const { return *this; }' which yields the
+         * same class. N4659 §16.5 [over.oper]. */
+        else if (ot && (ot->kind == TY_STRUCT || ot->kind == TY_UNION) &&
+                 ot->tag)
+            n->resolved_type = ot;
         break;
     }
     default:

@@ -731,6 +731,32 @@ static void hoist_temps_in_expr(Node *n) {
         if (n->call.callee) hoist_temps_in_expr(n->call.callee);
         for (int i = 0; i < n->call.nargs; i++)
             hoist_temps_in_expr(n->call.args[i]);
+        /* 'obj(args)' where obj is a class value with operator() →
+         * dispatch will take '&obj'. If obj is an rvalue (call,
+         * operator overload result), hoist it first. Pattern: gcc
+         * 4.8 expr.c '(*genfun)(to1, from1)' — '*genfun' is operator*
+         * returning insn_gen_fn; then (...)(args) is operator(). */
+        if (n->call.callee && !n->call.callee->codegen_temp_name) {
+            Node *callee_ = n->call.callee;
+            Type *cty = callee_->resolved_type;
+            if (ty_is_ref(cty)) cty = cty->base;
+            if (cty && (cty->kind == TY_STRUCT || cty->kind == TY_UNION) &&
+                cty->tag) {
+                NodeKind ck = callee_->kind;
+                if (ck == ND_CALL ||
+                    (ck == ND_UNARY && callee_->unary.op != TK_STAR &&
+                     callee_->unary.operand &&
+                     callee_->unary.operand->resolved_type &&
+                     (callee_->unary.operand->resolved_type->kind == TY_STRUCT ||
+                      callee_->unary.operand->resolved_type->kind == TY_UNION)) ||
+                    (ck == ND_UNARY && callee_->unary.op == TK_STAR &&
+                     callee_->unary.operand &&
+                     callee_->unary.operand->resolved_type &&
+                     (callee_->unary.operand->resolved_type->kind == TY_STRUCT ||
+                      callee_->unary.operand->resolved_type->kind == TY_UNION)))
+                    hoist_emit_decl(callee_);
+            }
+        }
         /* Arg passed to a reference parameter is lowered to '&(arg)'.
          * If the arg is itself an rvalue call, '&f()' is illegal C.
          * Force-hoist the arg call so it lands in a named local.
@@ -2523,6 +2549,9 @@ static void emit_expr(Node *n) {
             case TK_PLUS:  usuf = "__plus";  break;
             case TK_EXCL:  usuf = "__not";   break;
             case TK_TILDE: usuf = "__compl"; break;
+            /* '*x' where x is a class value → operator*() dispatch.
+             * Pattern: gcc 4.8 expr.h insn_gen_fn, expr.c '(*genfun)(args)'. */
+            case TK_STAR:  usuf = "__deref"; break;
             default: break;
             }
         }
@@ -2578,6 +2607,55 @@ static void emit_expr(Node *n) {
         if (n->codegen_temp_name) {
             fputs(n->codegen_temp_name, stdout);
             return;
+        }
+        /* 'obj(args)' where obj is a class value with operator() →
+         * dispatch to the class's operator() method. N4659 §16.5
+         * [over.oper]. Pattern: gcc 4.8 expr.h insn_gen_fn and
+         * expr.c '(*genfun)(to1, from1)'. */
+        {
+            Node *callee_ = n->call.callee;
+            Type *cty = callee_ ? callee_->resolved_type : NULL;
+            if (ty_is_ref(cty)) cty = cty->base;
+            if (cty && (cty->kind == TY_STRUCT || cty->kind == TY_UNION) &&
+                cty->tag) {
+                /* Collect call-site arg types for param-suffix mangling. */
+                Type **at = NULL;
+                int na = collect_call_arg_types(n->call.args,
+                                                 n->call.nargs, &at);
+                Type **pty = NULL;
+                Node *winner = NULL;
+                bool callee_const = receiver_type_is_const(cty);
+                int np = resolve_operator_overload(cty, "__call",
+                                                    at, na, callee_const,
+                                                    &pty, &winner);
+                if (np >= 0 || (winner && winner->kind == ND_FUNC_DEF)) {
+                    mangle_class_tag(cty);
+                    fputs("__call", stdout);
+                    if (np >= 0) mangle_param_suffix(pty, np);
+                    if (candidate_is_const(winner)) fputs("_const", stdout);
+                    fputc('(', stdout);
+                    /* Implicit this — lvalue callee address. */
+                    if (is_addressable_lvalue(callee_)) {
+                        fputc('&', stdout);
+                        emit_expr(callee_);
+                    } else {
+                        /* Rvalue callee (e.g. result of operator*): use
+                         * compound-literal trick or rely on hoist. Fall
+                         * back to a simple '&(expr)' which works for
+                         * trivial cases and fails cleanly otherwise. */
+                        fputs("&(", stdout);
+                        emit_expr(callee_);
+                        fputc(')', stdout);
+                    }
+                    for (int i = 0; i < n->call.nargs; i++) {
+                        fputs(", ", stdout);
+                        emit_arg_for_param(n->call.args[i],
+                                            (pty && i < np) ? pty[i] : NULL);
+                    }
+                    fputc(')', stdout);
+                    return;
+                }
+            }
         }
         /* Class-template functional cast 'vec<T,A,L>()' (value-init).
          * The callee is ND_TEMPLATE_ID naming a class template, with
