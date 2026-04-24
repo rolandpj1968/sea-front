@@ -4428,7 +4428,8 @@ static void emit_stmt(Node *n) {
          *   static const struct elims {const int from, to;} elim_regs[] = ...; */
         {
             Type *dep = n->var_decl.ty;
-            while (dep && dep->kind == TY_ARRAY) dep = dep->base;
+            while (dep && (dep->kind == TY_ARRAY || dep->kind == TY_PTR)
+                   && dep->base) dep = dep->base;
             if (dep && (dep->kind == TY_STRUCT || dep->kind == TY_UNION) &&
                 dep->class_def && !dep->codegen_emitted) {
                 int saved_phase = g_emit_phase;
@@ -6476,10 +6477,13 @@ static void emit_top_level(Node *n) {
          * where the anonymous/named struct is defined inline with the
          * array and has no separate ND_CLASS_DEF at top level. Without
          * this the C output references 'struct __sf_anon_N' that was
-         * never defined. */
+         * never defined. Also peel TY_PTR — the 'static struct X
+         * { ... } *p;' idiom defines X inline but declares a pointer.
+         * Pattern: gcc 4.8 tree-cfg.c label_for_bb, tree-eh.c labels. */
         {
             Type *dep = n->var_decl.ty;
-            while (dep && dep->kind == TY_ARRAY) dep = dep->base;
+            while (dep && (dep->kind == TY_ARRAY || dep->kind == TY_PTR)
+                   && dep->base) dep = dep->base;
             if (dep && (dep->kind == TY_STRUCT || dep->kind == TY_UNION) &&
                 dep->class_def && !dep->codegen_emitted) {
                 /* Pass 2 (PHASE_METHODS) skips the struct body, so we
