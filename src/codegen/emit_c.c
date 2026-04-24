@@ -1755,10 +1755,20 @@ static void collect_operator_candidates(Type *class_type,
                                          Node **found, int *nfound, int cap) {
     if (!class_type) return;
     Node *cd = class_type->class_def;
-    /* Instantiated-class Type* copies often have class_def unhooked;
-     * fall back to a TU lookup by (tag, template_args) to find the
-     * real class node with its member list. Same fallback used by
-     * collect_overload_candidates for regular methods. */
+    /* class_def may be unset on a Type obtained via a method return
+     * type. Fall back through class_region->owner_type (the canonical
+     * Type used when parsing the class body). Same fallback chain as
+     * collect_overload_candidates — without it, the lhs of a binary
+     * op that came from a hoisted struct-returning call can miss its
+     * class def and resolve_operator_overload returns -1, emitting an
+     * unmangled 'sf__T__bitor(...)' that doesn't match any definition.
+     * Pattern: gcc 4.8 combine.c 'o = o.and_not(m) | i' — the hoist
+     * materializes o.and_not(m) as __SF_temp_0, whose Type's class_def
+     * is unhooked. */
+    if (!cd && class_type->class_region &&
+        class_type->class_region->owner_type &&
+        class_type->class_region->owner_type->class_def)
+        cd = class_type->class_region->owner_type->class_def;
     if (!cd) {
         Node *d = find_class_def_by_tag_args(class_type);
         if (d) cd = d;

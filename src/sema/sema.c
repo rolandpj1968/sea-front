@@ -1182,6 +1182,16 @@ static void visit(Sema *s, Node *n) {
     case ND_DEFAULT:
         visit(s, n->default_.stmt);
         break;
+    case ND_LABEL:
+        /* Labeled statement — N4659 §9.1 [stmt.label]. Recurse into
+         * the inner statement so identifiers get resolved_type set.
+         * Without this, the labeled stmt's expressions never see
+         * sema and method-dispatch lowering at codegen fails (obj's
+         * resolved_type is NULL, so obj.method() can't be lowered
+         * to the mangled free-function form and emits as literal
+         * C member access which is invalid for non-fptr fields). */
+        visit(s, n->label.stmt);
+        break;
 
     /* Declarations */
     case ND_VAR_DECL:  visit_var_decl(s, n);  break;
