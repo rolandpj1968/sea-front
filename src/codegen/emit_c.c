@@ -844,14 +844,27 @@ static void hoist_temps_in_expr(Node *n) {
         /* Both share the 'unary' member layout. */
         hoist_temps_in_expr(n->unary.operand);
         /* Unary overload on a struct operand: '-x' → 'sf__T__minus(&x)'.
-         * Force-hoist an rvalue struct-returning call operand so the
-         * emitted '&f()' stays valid. N4659 §16.5 [over.oper]. */
-        if (n->unary.operand && n->unary.operand->kind == ND_CALL &&
-            !n->unary.operand->codegen_temp_name &&
-            n->unary.operand->resolved_type &&
-            (n->unary.operand->resolved_type->kind == TY_STRUCT ||
-             n->unary.operand->resolved_type->kind == TY_UNION))
-            hoist_emit_decl(n->unary.operand);
+         * Force-hoist rvalue struct-returning operand so the emitted
+         * '&f()' stays valid. N4659 §16.5 [over.oper]. */
+        if (n->unary.operand && !n->unary.operand->codegen_temp_name) {
+            Node *op = n->unary.operand;
+            NodeKind ok = op->kind;
+            if (ok == ND_CALL && op->resolved_type &&
+                (op->resolved_type->kind == TY_STRUCT ||
+                 op->resolved_type->kind == TY_UNION))
+                hoist_emit_decl(op);
+            /* Nested struct-operator '~(a op b)': infer from operand's
+             * own lhs since sema leaves the binary's resolved_type NULL
+             * for struct operands. Pattern: gcc 4.8 tree-vrp.c
+             * 'complement = ~(bound - double_int_one);'. */
+            else if (ok == ND_BINARY) {
+                Type *sub_ty = op->binary.lhs ?
+                    op->binary.lhs->resolved_type : NULL;
+                if (sub_ty && (sub_ty->kind == TY_STRUCT ||
+                                sub_ty->kind == TY_UNION))
+                    hoist_emit_decl(op);
+            }
+        }
         return;
     case ND_TERNARY:
         hoist_temps_in_expr(n->ternary.cond);
@@ -2552,6 +2565,21 @@ static void emit_expr(Node *n) {
         Type *ot = n->unary.operand ? n->unary.operand->resolved_type : NULL;
         if (ty_is_ref(ot)) ot = ot->base;
         const char *usuf = NULL;
+        /* Operator-overload rvalue operand ('~(a - b)' where '-' is
+         * struct operator-, returns struct, then '~' dispatches to
+         * operator~). sema's common_arith_type returns NULL for
+         * struct ND_BINARY, so the operand's resolved_type is missing
+         * — infer from the operand's own lhs. Pattern: gcc 4.8
+         * tree-vrp.c 'complement = ~(bound - double_int_one);'. */
+        if (!ot && n->unary.operand &&
+            (n->unary.operand->kind == ND_BINARY ||
+             n->unary.operand->kind == ND_UNARY ||
+             n->unary.operand->kind == ND_POSTFIX)) {
+            Node *sub = n->unary.operand;
+            Node *sub_op = (sub->kind == ND_BINARY)
+                ? sub->binary.lhs : sub->unary.operand;
+            if (sub_op) ot = sub_op->resolved_type;
+        }
         if (ot && (ot->kind == TY_STRUCT || ot->kind == TY_UNION) &&
             ot->tag) {
             switch (n->unary.op) {
@@ -4097,6 +4125,24 @@ static bool expr_has_class_temp(Node *e) {
                expr_has_class_temp(e->binary.rhs);
     case ND_UNARY:
     case ND_POSTFIX:
+        /* Struct-operator-overload rvalue operand ('~(a - b)' where
+         * '-' returns struct). Mirrors the force-hoist branch in
+         * hoist_temps_in_expr's ND_UNARY case. */
+        if (e->unary.operand) {
+            Node *op = e->unary.operand;
+            NodeKind ok = op->kind;
+            if (ok == ND_CALL && op->resolved_type &&
+                (op->resolved_type->kind == TY_STRUCT ||
+                 op->resolved_type->kind == TY_UNION))
+                return true;
+            if (ok == ND_BINARY) {
+                Type *sub_ty = op->binary.lhs ?
+                    op->binary.lhs->resolved_type : NULL;
+                if (sub_ty && (sub_ty->kind == TY_STRUCT ||
+                                sub_ty->kind == TY_UNION))
+                    return true;
+            }
+        }
         return expr_has_class_temp(e->unary.operand);
     case ND_TERNARY:
         return expr_has_class_temp(e->ternary.cond) ||
@@ -4580,11 +4626,11 @@ static void emit_stmt(Node *n) {
             /* Now emit the actual if using the synthetic. */
             emit_indent();
             fprintf(stdout, "if (%s) ", cond_name);
-            emit_stmt(n->if_.then_);
+            emit_if_body_with_hoist(n->if_.then_);
             if (n->if_.else_) {
                 emit_indent();
                 fputs("else ", stdout);
-                emit_stmt(n->if_.else_);
+                emit_if_body_with_hoist(n->if_.else_);
             }
             return;
         }
@@ -4607,11 +4653,11 @@ static void emit_stmt(Node *n) {
             fputs(";\n", stdout);
             emit_indent();
             fprintf(stdout, "if (%.*s) ", nm->len, nm->loc);
-            emit_stmt(n->if_.then_);
+            emit_if_body_with_hoist(n->if_.then_);
             if (n->if_.else_) {
                 emit_indent();
                 fputs("else ", stdout);
-                emit_stmt(n->if_.else_);
+                emit_if_body_with_hoist(n->if_.else_);
             }
             g_indent--;
             emit_indent();
