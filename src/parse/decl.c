@@ -42,6 +42,7 @@
  */
 
 #include "parse.h"
+#include "../template/clone.h"
 
 /* Forward declaration. consume_trailing_qualifiers returns true if
  * the trailing qualifier list included 'const'. It is a helper of
@@ -2503,6 +2504,95 @@ Node *parse_template_id(Parser *p, Token *name) {
     }
 
     p->template_depth--;
+
+    /* Expand missing template arguments from declared defaults —
+     * N4659 §17.6.4 [temp.arg.default]. A template-id with fewer
+     * args than the template parameter list pulls defaults from
+     * the template's declaration. Defaults may be dependent on
+     * earlier parameters (e.g. 'typename A::default_layout'); for
+     * those, substitute the already-bound earlier args via
+     * subst_type, which replaces TY_DEPENDENT param references
+     * with concrete types.
+     *
+     * Without this, a call-site like 'vec<int, va_gc>' carries 2
+     * template-id args while the primary 'vec<T,A,L>' declares 3,
+     * so overload resolution and deduction both short-circuit on
+     * arity mismatch. The instantiation pass filled defaults later,
+     * but only ran after the first sema pass — so sema's pass-1
+     * overload resolution couldn't see viable templates. */
+    /* Walk ALL ENTITY_TEMPLATE declarations for this name and pick
+     * the PRIMARY — the one whose inner class/func has no
+     * template_id_node (partial specs have one, primary doesn't).
+     * Template defaults are declared on the primary (§17.6.4/9);
+     * partial specs inherit their pattern but don't carry defaults
+     * we can use for arg filling.
+     *
+     * Defaults can accumulate across multiple primary declarations
+     * (§17.6.4/10). When more than one candidate primary is found,
+     * prefer the one with the most default_types populated — that's
+     * the latest declaration in source order and carries merged
+     * defaults. */
+    Declaration *decls[16];
+    int nd = lookup_overload_set_from(p->region, name->loc, name->len,
+                                       decls, 16);
+    Node *primary = NULL;
+    int primary_defaults = -1;
+    for (int i = 0; i < nd; i++) {
+        Declaration *cand = decls[i];
+        if (!cand || cand->entity != ENTITY_TEMPLATE ||
+            !cand->tmpl_node ||
+            cand->tmpl_node->kind != ND_TEMPLATE_DECL)
+            continue;
+        Node *inner = cand->tmpl_node->template_decl.decl;
+        if (!inner) continue;
+        Type *ity = NULL;
+        if (inner->kind == ND_CLASS_DEF)     ity = inner->class_def.ty;
+        else if (inner->kind == ND_VAR_DECL) ity = inner->var_decl.ty;
+        /* Primary: no template_id_node on inner type. For function
+         * templates there's no inner type; treat any func-template
+         * as primary. */
+        bool is_primary = false;
+        if (inner->kind == ND_FUNC_DEF || inner->kind == ND_FUNC_DECL)
+            is_primary = true;
+        else if (ity && !ity->template_id_node)
+            is_primary = true;
+        if (!is_primary) continue;
+        /* Score by how many default_types are populated. */
+        int ndef = 0;
+        int np = cand->tmpl_node->template_decl.nparams;
+        for (int k = 0; k < np; k++) {
+            Node *tp = cand->tmpl_node->template_decl.params[k];
+            if (tp && tp->param.default_type) ndef++;
+        }
+        if (ndef > primary_defaults) {
+            primary_defaults = ndef;
+            primary = cand->tmpl_node;
+        }
+    }
+
+    if (primary) {
+        int np = primary->template_decl.nparams;
+        if (args.len < np) {
+            SubstMap map = subst_map_new(p->arena, np > 0 ? np : 1);
+            for (int i = 0; i < args.len && i < np; i++) {
+                Node *tp = primary->template_decl.params[i];
+                Node *arg = (Node *)args.data[i];
+                if (!tp || !tp->param.name) continue;
+                Type *at = (arg && arg->kind == ND_VAR_DECL)
+                    ? arg->var_decl.ty : NULL;
+                if (at) subst_map_add(&map, tp->param.name, at);
+            }
+            for (int i = args.len; i < np; i++) {
+                Node *tp = primary->template_decl.params[i];
+                if (!tp || !tp->param.default_type) break;
+                Type *dt = subst_type(tp->param.default_type, &map, p->arena);
+                Node *vd = new_var_decl_node(p, dt, /*name=*/NULL, tok);
+                vec_push(&args, vd);
+                if (tp->param.name)
+                    subst_map_add(&map, tp->param.name, dt);
+            }
+        }
+    }
 
     return new_template_id_node(p, name, (Node **)args.data, args.len, tok);
 }

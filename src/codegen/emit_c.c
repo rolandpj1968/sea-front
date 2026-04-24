@@ -3543,6 +3543,23 @@ static void emit_stmt(Node *n) {
         fputs(";\n", stdout);
         return;
     case ND_VAR_DECL:
+        /* Block-scope extern function declarations inside cloned
+         * template bodies — e.g. the 'extern void gt_pch_nx(T *, ...)'
+         * inside vec.h's gt_pch_nx<vec<T,A,vl_embed>*> template —
+         * pass through substitution to become a different-signature
+         * extern at instantiation time. In C those conflict with
+         * the file-scope extern of the same (unmangled) name. Drop
+         * them: the call site's unmangled free-function lookup
+         * (which we don't emit a prototype for either) will match
+         * implicitly. Standard C++ (§3.5/6 [basic.link]) treats the
+         * block-scope extern as referring to the same entity as the
+         * file-scope one; the block-scope redeclaration is purely a
+         * visibility hint.
+         * TODO(seafront#block-extern-func): prototype-only emit if
+         * a strict C-level cross-check ever becomes necessary. */
+        if (n->var_decl.ty && n->var_decl.ty->kind == TY_FUNC &&
+            (n->var_decl.storage_flags & DECL_EXTERN))
+            return;
         emit_var_decl_inner(n);
         fputs(";\n", stdout);
         /* Direct-init 'T x(args)' lowers to a ctor call right
