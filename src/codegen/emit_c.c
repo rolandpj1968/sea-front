@@ -5752,16 +5752,30 @@ static void emit_class_def(Node *n) {
      * member whose type has a class_def must be emitted before
      * this struct. This handles the line-map.h pattern where
      * a union contains by-value struct members. Also handles
-     * arrays of structs (i386.h stringop_strategy pattern). */
+     * arrays of structs (i386.h stringop_strategy pattern).
+     * For template-instantiated by-value members, the member's Type
+     * may be a copy without class_def hooked (the instantiation
+     * pass only patches the usage_type it was given). Fall back to
+     * a TU tag+template_args lookup so we still emit the definition
+     * first. Pattern: gcc 4.8 tree-data-ref.h
+     *   struct rdg_vertex { vec<data_reference_p> datarefs; ... };
+     * where the vec instantiation's class_def isn't on this Type copy. */
     for (int i = 0; i < n->class_def.nmembers; i++) {
         Node *m = n->class_def.members[i];
         if (!m || m->kind != ND_VAR_DECL) continue;
         Type *mty = m->var_decl.ty;
         if (!mty) continue;
         while (mty->kind == TY_ARRAY && mty->base) mty = mty->base;
-        if ((mty->kind == TY_STRUCT || mty->kind == TY_UNION) &&
-            mty->class_def && !mty->codegen_emitted)
-            emit_class_def(mty->class_def);
+        if (mty->kind != TY_STRUCT && mty->kind != TY_UNION) continue;
+        Node *dep_cd = mty->class_def;
+        if (!dep_cd && mty->tag) {
+            Node *d = find_class_def_by_tag_args(mty);
+            if (!d) d = find_class_def_by_tag_only(mty);
+            if (d) dep_cd = d;
+        }
+        if (dep_cd && dep_cd->class_def.ty &&
+            !dep_cd->class_def.ty->codegen_emitted)
+            emit_class_def(dep_cd);
     }
     /* Also emit base class definitions first. */
     if (class_type && class_type->class_region) {
