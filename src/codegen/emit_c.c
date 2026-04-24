@@ -624,6 +624,35 @@ static void hoist_emit_decl(Node *call) {
     char *name = name_pool[name_idx++];
     snprintf(name, 24, "__SF_temp_%d", id);
 
+    /* ND_BINARY / ND_UNARY as the hoist target: operator overloads
+     * on struct values. Their resolved_type is often NULL (sema's
+     * common_arith_type returns NULL for struct operands) so derive
+     * the temp's type from an operand. Emit as direct-copy form —
+     * the underlying operator becomes a mangled free-fn call that
+     * returns the struct by value, and the temp catches the result. */
+    if (call->kind == ND_BINARY || call->kind == ND_UNARY ||
+        call->kind == ND_POSTFIX) {
+        Type *ty = call->resolved_type;
+        if (!ty) {
+            Node *operand = (call->kind == ND_BINARY)
+                ? call->binary.lhs : call->unary.operand;
+            if (operand) ty = operand->resolved_type;
+        }
+        /* Bail WITHOUT setting codegen_temp_name if we can't
+         * determine the temp's type — otherwise we'd leave a
+         * dangling tag that emit_expr substitutes with an
+         * undeclared name. */
+        if (!ty || (ty->kind != TY_STRUCT && ty->kind != TY_UNION))
+            return;
+        emit_indent();
+        emit_type(ty);
+        fprintf(stdout, " %s = ", name);
+        emit_expr(call);
+        fputs(";\n", stdout);
+        call->codegen_temp_name = name;
+        return;
+    }
+
     /* Detect ctor-call shape: callee is an ND_IDENT whose
      * resolved_decl is a type-name (ENTITY_TYPE). For these we
      * emit the two-line construction form
@@ -757,12 +786,32 @@ static void hoist_temps_in_expr(Node *n) {
          * illegal C. Force-hoist same as the ND_MEMBER case below.
          * Pattern: gcc 4.8 cgraph.c cgraph_add_thunk
          *   tree_to_double_int(virtual_offset) == double_int::from_shwi(...) */
-        if (n->binary.lhs && n->binary.lhs->kind == ND_CALL &&
-            !n->binary.lhs->codegen_temp_name &&
-            n->binary.lhs->resolved_type &&
-            (n->binary.lhs->resolved_type->kind == TY_STRUCT ||
-             n->binary.lhs->resolved_type->kind == TY_UNION))
-            hoist_emit_decl(n->binary.lhs);
+        if (n->binary.lhs && !n->binary.lhs->codegen_temp_name) {
+            Node *lhs = n->binary.lhs;
+            NodeKind lk = lhs->kind;
+            /* Struct-returning call LHS — hoist for the '&lhs' emit. */
+            if (lk == ND_CALL && lhs->resolved_type &&
+                (lhs->resolved_type->kind == TY_STRUCT ||
+                 lhs->resolved_type->kind == TY_UNION))
+                hoist_emit_decl(lhs);
+            /* Nested operator-overload LHS '(a op1 b) op2 c' where op1
+             * returns struct — same issue. Skip plain pointer deref
+             * '*p' (lvalue, safe to address without hoist). */
+            else if (lk == ND_BINARY) {
+                Type *op_ty = lhs->binary.lhs ?
+                    lhs->binary.lhs->resolved_type : NULL;
+                if (op_ty && (op_ty->kind == TY_STRUCT ||
+                               op_ty->kind == TY_UNION))
+                    hoist_emit_decl(lhs);
+            } else if ((lk == ND_UNARY || lk == ND_POSTFIX) &&
+                        lhs->unary.op != TK_STAR) {
+                Type *op_ty = lhs->unary.operand ?
+                    lhs->unary.operand->resolved_type : NULL;
+                if (op_ty && (op_ty->kind == TY_STRUCT ||
+                               op_ty->kind == TY_UNION))
+                    hoist_emit_decl(lhs);
+            }
+        }
         return;
     case ND_UNARY:
     case ND_POSTFIX:
@@ -792,12 +841,27 @@ static void hoist_temps_in_expr(Node *n) {
          * 'double_int::from_shwi(1).lshift(...)'.
          * N4659 §16.3.1.4 [over.match.funcs] — implicit this must
          * bind to an lvalue that the callee can take the address of. */
-        if (n->member.obj && n->member.obj->kind == ND_CALL &&
-            !n->member.obj->codegen_temp_name &&
-            n->member.obj->resolved_type &&
-            (n->member.obj->resolved_type->kind == TY_STRUCT ||
-             n->member.obj->resolved_type->kind == TY_UNION))
-            hoist_emit_decl(n->member.obj);
+        if (n->member.obj && !n->member.obj->codegen_temp_name) {
+            Node *obj = n->member.obj;
+            NodeKind k = obj->kind;
+            /* Struct-returning call result — hoist to a named temp so
+             * '&obj' works for the implicit-this arg. */
+            if (k == ND_CALL && obj->resolved_type &&
+                (obj->resolved_type->kind == TY_STRUCT ||
+                 obj->resolved_type->kind == TY_UNION))
+                hoist_emit_decl(obj);
+            /* Operator-overload rvalue: '(a op b).method()' where 'op'
+             * is an overloaded binary/unary on struct operands. sema's
+             * resolved_type is often NULL for this; infer from an
+             * operand. Pattern: gcc 4.8 gimple-fold.c '(a - b).sext(p)'. */
+            else if (k == ND_BINARY || k == ND_UNARY || k == ND_POSTFIX) {
+                Node *op = (k == ND_BINARY) ? obj->binary.lhs : obj->unary.operand;
+                Type *ty = obj->resolved_type;
+                if (!ty && op) ty = op->resolved_type;
+                if (ty && (ty->kind == TY_STRUCT || ty->kind == TY_UNION))
+                    hoist_emit_decl(obj);
+            }
+        }
         return;
     case ND_SUBSCRIPT:
         hoist_temps_in_expr(n->subscript.base);
@@ -2175,6 +2239,16 @@ static void emit_token_text(Token *t) {
 
 static void emit_expr(Node *n) {
     if (!n) return;
+    /* Universal temp substitution: any hoisted node — ND_CALL, ND_BINARY
+     * (operator overload result), etc. — carries the synthesized temp
+     * name. Substitute at the top of emit_expr so every kind benefits
+     * without per-kind branches. The ND_CALL kind also checks further
+     * down (historical, before this universal check), which is a
+     * redundant but harmless shortcut. */
+    if (n->codegen_temp_name) {
+        fputs(n->codegen_temp_name, stdout);
+        return;
+    }
     switch (n->kind) {
     case ND_NUM:
         if (n->num.is_signed)
@@ -2268,6 +2342,22 @@ static void emit_expr(Node *n) {
          *   sf__DIR__ne(&pchdir, NULL). */
         Type *lhs_ty = n->binary.lhs ? n->binary.lhs->resolved_type : NULL;
         if (ty_is_ref(lhs_ty)) lhs_ty = lhs_ty->base;
+        /* Operator-overload rvalue LHS like '(a + b) == c' where the
+         * + is an overloaded operator on structs: sema leaves the
+         * ND_BINARY+'s resolved_type NULL (common_arith_type bails).
+         * Infer from an operand. Pattern: gcc 4.8 fold-const.c
+         * 'c1.bitand(c2) == c1' — lhs is ND_CALL already (its
+         * resolved_type is set); but '(a op b) == c' where the op
+         * is struct-operator gets caught here. */
+        if (!lhs_ty && n->binary.lhs &&
+            (n->binary.lhs->kind == ND_BINARY ||
+             n->binary.lhs->kind == ND_UNARY)) {
+            Node *op = (n->binary.lhs->kind == ND_BINARY)
+                ? n->binary.lhs->binary.lhs
+                : n->binary.lhs->unary.operand;
+            if (op) lhs_ty = op->resolved_type;
+            if (ty_is_ref(lhs_ty)) lhs_ty = lhs_ty->base;
+        }
         if (lhs_ty && (lhs_ty->kind == TY_STRUCT || lhs_ty->kind == TY_UNION) &&
             lhs_ty->tag) {
             const char *suffix = binop_to_operator_suffix(n->binary.op);
@@ -2707,6 +2797,18 @@ static void emit_expr(Node *n) {
         if (callee && callee->kind == ND_MEMBER) {
             Node *obj = callee->member.obj;
             Type *ot = obj ? obj->resolved_type : NULL;
+            /* Struct-operator-overload rvalue: for '(a op b).method()'
+             * the obj is ND_BINARY with NULL resolved_type (sema's
+             * common_arith_type returns NULL for struct operands).
+             * Infer from an operand. Pattern: gcc 4.8 gimple-fold.c
+             * '(a - b).sext(p)'. */
+            if (!ot && obj && (obj->kind == ND_BINARY ||
+                                obj->kind == ND_UNARY ||
+                                obj->kind == ND_POSTFIX)) {
+                Node *op = (obj->kind == ND_BINARY)
+                    ? obj->binary.lhs : obj->unary.operand;
+                if (op) ot = op->resolved_type;
+            }
             /* Sema-missed fallback: when obj is itself a member access
              * ('outer.inner.method()') and inner's resolved_type wasn't
              * set (happens for certain anonymous-typedef / field paths),
@@ -3748,6 +3850,42 @@ static bool expr_has_class_temp(Node *e) {
         return false;
     case ND_BINARY:
     case ND_ASSIGN:
+        /* Operator overload on a struct-returning rvalue LHS needs
+         * hoisting: the emit path does 'op(&lhs, rhs)' which can't
+         * take '&' of an rvalue call. Mirror the force-hoist branch
+         * in hoist_temps_in_expr's ND_BINARY/ND_ASSIGN case.
+         * Pattern: gcc 4.8 fold-const.c 'c1.bitand(c2) == c1' AND
+         * '(c1 & c2) == c1' (nested struct operators). */
+        if (e->binary.lhs) {
+            Node *lhs = e->binary.lhs;
+            NodeKind lk = lhs->kind;
+            if (lk == ND_CALL && lhs->resolved_type &&
+                (lhs->resolved_type->kind == TY_STRUCT ||
+                 lhs->resolved_type->kind == TY_UNION))
+                return true;
+            /* Nested struct-operator: '(a op b)' where both operands
+             * are struct-typed. ND_UNARY TK_STAR is a regular pointer
+             * deref (lvalue) unless the operand is itself a struct —
+             * which would be 'operator*' overload. */
+            if (lk == ND_BINARY) {
+                Type *lhs_op_ty = lhs->binary.lhs ?
+                    lhs->binary.lhs->resolved_type : NULL;
+                if (lhs_op_ty && (lhs_op_ty->kind == TY_STRUCT ||
+                                   lhs_op_ty->kind == TY_UNION))
+                    return true;
+            } else if (lk == ND_UNARY || lk == ND_POSTFIX) {
+                /* Only trigger for non-deref unary: deref '*p' where
+                 * p is a ptr IS an lvalue; 'operator-' etc. on struct
+                 * operand is an rvalue. */
+                if (lhs->unary.op != TK_STAR) {
+                    Type *op_ty = lhs->unary.operand ?
+                        lhs->unary.operand->resolved_type : NULL;
+                    if (op_ty && (op_ty->kind == TY_STRUCT ||
+                                   op_ty->kind == TY_UNION))
+                        return true;
+                }
+            }
+        }
         return expr_has_class_temp(e->binary.lhs) ||
                expr_has_class_temp(e->binary.rhs);
     case ND_UNARY:
