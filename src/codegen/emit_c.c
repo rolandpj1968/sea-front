@@ -1880,6 +1880,9 @@ static void emit_param_declarator(Type *ty, Token *name, int idx) {
 /* ------------------------------------------------------------------ */
 
 static void emit_expr(Node *n);
+static bool free_func_name_is_overloaded(Token *name);
+static void emit_free_func_mangled_name(Token *name, Type **param_types,
+                                         int nparams);
 
 static const char *binop_str(TokenKind k) {
     switch (k) {
@@ -2038,7 +2041,21 @@ static void emit_expr(Node *n) {
             fputc(')', stdout);
         } else {
             g_suppress_ref_deref = false;
-            emit_token_text(n->ident.name);
+            /* Overloaded free-function reference — emit the signature-
+             * mangled C symbol of the resolved overload. The
+             * resolved_decl carries the specific overload (sema set
+             * it via free-function overload resolution); without the
+             * mangle, all overloads collide on one C name. */
+            Declaration *rd = n->ident.resolved_decl;
+            if (!n->ident.implicit_this && rd &&
+                rd->type && rd->type->kind == TY_FUNC &&
+                free_func_name_is_overloaded(n->ident.name)) {
+                emit_free_func_mangled_name(n->ident.name,
+                                             rd->type->params,
+                                             rd->type->nparams);
+            } else {
+                emit_token_text(n->ident.name);
+            }
         }
         return;
     case ND_BINARY: {
@@ -2700,7 +2717,32 @@ static void emit_expr(Node *n) {
             bool paren_callee = n->call.callee &&
                                 n->call.callee->kind == ND_CAST;
             if (paren_callee) fputc('(', stdout);
-            emit_expr(n->call.callee);
+            /* Overloaded free-function call: emit the mangled name
+             * using the CALL-SITE argument types as the signature.
+             * Using resolved_decl->type->params instead falls over
+             * when sema's resolver points at a template declaration
+             * whose params are still TY_DEPENDENT — the suffix would
+             * come out as 'unknown_ptr_unknown_ptr_...'. Arg types
+             * are always concrete (by the time sema has visited the
+             * args). */
+            bool emitted_mangled = false;
+            if (n->call.callee && n->call.callee->kind == ND_IDENT &&
+                !n->call.callee->ident.implicit_this &&
+                free_func_name_is_overloaded(n->call.callee->ident.name)) {
+                Type *at[32];
+                int na = n->call.nargs < 32 ? n->call.nargs : 32;
+                bool all_resolved = na == n->call.nargs;
+                for (int i = 0; i < na; i++) {
+                    at[i] = n->call.args[i] ? n->call.args[i]->resolved_type : NULL;
+                    if (!at[i]) { all_resolved = false; break; }
+                }
+                if (all_resolved) {
+                    emit_free_func_mangled_name(
+                        n->call.callee->ident.name, at, na);
+                    emitted_mangled = true;
+                }
+            }
+            if (!emitted_mangled) emit_expr(n->call.callee);
             if (paren_callee) fputc(')', stdout);
         }
         fputc('(', stdout);
@@ -3054,7 +3096,15 @@ static void emit_var_decl_inner(Node *n) {
      * not 'functype name;'. Emit the full prototype. */
     if (ty && ty->kind == TY_FUNC && n->var_decl.name) {
         emit_type(ty->ret);
-        fprintf(stdout, " %.*s(", n->var_decl.name->len, n->var_decl.name->loc);
+        fputc(' ', stdout);
+        if (free_func_name_is_overloaded(n->var_decl.name)) {
+            emit_free_func_mangled_name(n->var_decl.name,
+                                         ty->params, ty->nparams);
+        } else {
+            fprintf(stdout, "%.*s", n->var_decl.name->len,
+                    n->var_decl.name->loc);
+        }
+        fputc('(', stdout);
         for (int i = 0; i < ty->nparams; i++) {
             if (i > 0) fputs(", ", stdout);
             emit_type(ty->params[i]);
@@ -4400,14 +4450,227 @@ static void emit_func_body(Node *func) {
     fputs("}\n", stdout);
 }
 
+/* ------------------------------------------------------------------ */
+/* Free-function name mangling                                         */
+/* ------------------------------------------------------------------ */
+/* C++ allows overloaded free functions; C does not. Sea-front
+ * historically left free-function names unmangled, relying on dedup
+ * to skip duplicate declarations. That works for simple cases but
+ * fails when both overloads must be emitted and called (e.g. gcc
+ * 4.8's gt_pch_nx with both a file-scope extern 'gt_pch_nx(edge_def*)'
+ * AND a block-scope extern 'gt_pch_nx(T*, op, void*)' inside a
+ * template body).
+ *
+ * We now produce a signature-mangled C symbol for any free function
+ * whose NAME has 2+ declarations at TU scope. Singleton names (the
+ * vast majority — malloc, printf, user functions that aren't
+ * overloaded) stay unmangled, so interop with the C library and
+ * hand-written C code is preserved without needing 'extern "C"'
+ * tracking on every Declaration.
+ *
+ * Mangle form: '<name>_p_<param_suffix>_pe_'. Reuses the existing
+ * mangle_param_suffix helper so forward decls, definitions, and
+ * call sites produce the same bytes. N4659 §16.5 [over.oper] on
+ * overloaded names; the C-level encoding is our own. */
+
+/* Which free-function names at TU scope have >1 declaration?
+ * Populated once at emit_c entry; consulted by every free-func
+ * emission site. We store pointers to Token.loc (owned by the
+ * source buffer) so no copies; equality is length+memcmp. */
+#define FREE_OVLD_NAMES_CAP 4096
+static Token *g_free_ovld_names[FREE_OVLD_NAMES_CAP];
+static int    g_n_free_ovld_names = 0;
+
+/* Called by emit_c at entry. Walks tu->tu.decls[] (plus flat blocks
+ * like 'extern "C"' or namespace contents) counting free-function
+ * declarations per name; every name with count >= 2 gets its Token
+ * added to g_free_ovld_names. Quadratic scan is fine for one-shot
+ * emission. Block-scope externs aren't seen here — those get
+ * handled opportunistically at their call site. */
+static void free_ovld_register(Token *name) {
+    if (!name) return;
+    for (int i = 0; i < g_n_free_ovld_names; i++) {
+        Token *e = g_free_ovld_names[i];
+        if (e->len == name->len &&
+            memcmp(e->loc, name->loc, name->len) == 0)
+            return;  /* already registered */
+    }
+    if (g_n_free_ovld_names < FREE_OVLD_NAMES_CAP)
+        g_free_ovld_names[g_n_free_ovld_names++] = name;
+}
+
+/* (name-ptr, per-param signature key) used to detect OVERLOADING:
+ * multiple declarations with the same name AND DIFFERENT signatures.
+ * A forward decl + matching definition is NOT overloading — same
+ * signature → same function. Per-param tag matters for cases like
+ * 'dump_bitmap(FILE*, bitmap_head_def*)' vs
+ * 'dump_bitmap(FILE*, simple_bitmap_def*)' — first param matches
+ * but second diverges. */
+#define FFSIG_MAX_PARAMS 16
+typedef struct {
+    Token *name;
+    int    nparams;
+    int    kind[FFSIG_MAX_PARAMS];      /* TypeKind or -1 */
+    const char *tag[FFSIG_MAX_PARAMS];  /* struct/union tag for TY_PTR->TY_STRUCT, or NULL */
+    int    tag_len[FFSIG_MAX_PARAMS];
+} FreeFuncSig;
+
+static bool ffsig_matches_name(const FreeFuncSig *a, Token *name) {
+    return a->name && name && a->name->len == name->len &&
+           memcmp(a->name->loc, name->loc, name->len) == 0;
+}
+
+static bool ffsig_same_sig(const FreeFuncSig *a, const FreeFuncSig *b) {
+    if (a->nparams != b->nparams) return false;
+    int n = a->nparams < FFSIG_MAX_PARAMS ? a->nparams : FFSIG_MAX_PARAMS;
+    for (int i = 0; i < n; i++) {
+        if (a->kind[i] != b->kind[i]) return false;
+        if (!!a->tag[i] != !!b->tag[i]) return false;
+        if (a->tag[i]) {
+            if (a->tag_len[i] != b->tag_len[i]) return false;
+            if (memcmp(a->tag[i], b->tag[i], a->tag_len[i]) != 0) return false;
+        }
+    }
+    return true;
+}
+
+/* Fill a FreeFuncSig from a TY_FUNC Type. */
+static void ffsig_fill(FreeFuncSig *out, Token *name, Type *fty) {
+    out->name = name;
+    out->nparams = fty->nparams;
+    int n = fty->nparams < FFSIG_MAX_PARAMS ? fty->nparams : FFSIG_MAX_PARAMS;
+    for (int i = 0; i < n; i++) {
+        Type *p = fty->params[i];
+        out->kind[i] = p ? (int)p->kind : -1;
+        out->tag[i] = NULL;
+        out->tag_len[i] = 0;
+        if (p && p->kind == TY_PTR && p->base &&
+            (p->base->kind == TY_STRUCT || p->base->kind == TY_UNION) &&
+            p->base->tag) {
+            out->tag[i] = p->base->tag->loc;
+            out->tag_len[i] = p->base->tag->len;
+        }
+    }
+}
+
+static void free_ovld_walk(Node *n, FreeFuncSig *seen, int *nseen, int cap) {
+    if (!n) return;
+    if (n->kind == ND_BLOCK && n->block.is_flat) {
+        for (int i = 0; i < n->block.nstmts; i++)
+            free_ovld_walk(n->block.stmts[i], seen, nseen, cap);
+        return;
+    }
+    Token *name = NULL;
+    Type  *fty  = NULL;
+    if (n->kind == ND_FUNC_DEF || n->kind == ND_FUNC_DECL) {
+        name = n->func.name;
+        /* Synthesize a signature view from func.params. */
+        static Type tmp;
+        static Type *tmp_params[32];
+        tmp.kind = TY_FUNC;
+        int np = n->func.nparams < 32 ? n->func.nparams : 32;
+        for (int i = 0; i < np; i++)
+            tmp_params[i] = n->func.params[i] ? n->func.params[i]->param.ty : NULL;
+        tmp.params = tmp_params;
+        tmp.nparams = np;
+        fty = &tmp;
+    } else if (n->kind == ND_VAR_DECL && n->var_decl.ty &&
+               n->var_decl.ty->kind == TY_FUNC) {
+        name = n->var_decl.name;
+        fty = n->var_decl.ty;
+    }
+    /* Skip class methods — they mangle via their own path. */
+    if (name && n->kind == ND_FUNC_DEF && n->func.class_type) name = NULL;
+    if (!name || !fty) return;
+    FreeFuncSig cur;
+    memset(&cur, 0, sizeof(cur));
+    ffsig_fill(&cur, name, fty);
+    /* Look for another decl with same name, and check whether any
+     * of those has a DIFFERENT signature — then this name is
+     * overloaded. A match of (name, same signature) just means
+     * forward-decl + definition for the same function. */
+    for (int i = 0; i < *nseen; i++) {
+        if (!ffsig_matches_name(&seen[i], name)) continue;
+        if (!ffsig_same_sig(&seen[i], &cur)) {
+            free_ovld_register(name);
+            free_ovld_register(seen[i].name);
+        }
+    }
+    if (*nseen < cap) seen[(*nseen)++] = cur;
+}
+
+static void free_ovld_populate(Node *tu) {
+    g_n_free_ovld_names = 0;
+    if (!tu || tu->kind != ND_TRANSLATION_UNIT) return;
+    enum { SEEN_CAP = 16384 };
+    static FreeFuncSig seen[SEEN_CAP];
+    int nseen = 0;
+    for (int i = 0; i < tu->tu.ndecls; i++)
+        free_ovld_walk(tu->tu.decls[i], seen, &nseen, SEEN_CAP);
+}
+
+static bool free_func_name_is_overloaded(Token *name) {
+    if (!name) return false;
+    for (int i = 0; i < g_n_free_ovld_names; i++) {
+        Token *e = g_free_ovld_names[i];
+        if (e->len == name->len &&
+            memcmp(e->loc, name->loc, name->len) == 0)
+            return true;
+    }
+    return false;
+}
+
+/* Emit '<name>_p_<param_suffix>_pe_' directly to stdout. */
+static void emit_free_func_mangled_name(Token *name, Type **param_types,
+                                         int nparams) {
+    if (!name) return;
+    fprintf(stdout, "%.*s", name->len, name->loc);
+    mangle_param_suffix(param_types, nparams);
+}
+
+/* Emit the function signature part AFTER storage-class keywords —
+ * handles the overload-mangling decision. */
+static void emit_free_func_header(Type *ret_ty, Token *name,
+                                   Node **params, int nparams,
+                                   bool variadic) {
+    bool mangle = free_func_name_is_overloaded(name);
+    if (!mangle) {
+        emit_func_header(ret_ty, name, params, nparams, variadic);
+        return;
+    }
+    /* Build param-type array for the mangled suffix. */
+    Type *ptypes[32];
+    int np = nparams < 32 ? nparams : 32;
+    for (int i = 0; i < np; i++)
+        ptypes[i] = params[i] ? params[i]->param.ty : NULL;
+    emit_type(ret_ty);
+    fputc(' ', stdout);
+    emit_free_func_mangled_name(name, ptypes, np);
+    fputc('(', stdout);
+    if (nparams == 0 && !variadic) {
+        fputs("void", stdout);
+    } else {
+        for (int i = 0; i < nparams; i++) {
+            if (i > 0) fputs(", ", stdout);
+            Node *p = params[i];
+            emit_param_declarator(p->param.ty, p->param.name, i);
+        }
+        if (variadic) {
+            if (nparams > 0) fputs(", ", stdout);
+            fputs("...", stdout);
+        }
+    }
+    fputc(')', stdout);
+}
+
 static void emit_func_def(Node *n) {
     emit_source_comment(n->tok);
     cf_begin_function(n);
     Type *saved_ret = g_current_func_ret_ty;
     g_current_func_ret_ty = n->func.ret_ty;
     emit_storage_flags_for_def(n->func.storage_flags);
-    emit_func_header(n->func.ret_ty, n->func.name,
-                     n->func.params, n->func.nparams, n->func.is_variadic);
+    emit_free_func_header(n->func.ret_ty, n->func.name,
+                          n->func.params, n->func.nparams, n->func.is_variadic);
     fputc(' ', stdout);
     emit_func_body(n);
     g_current_func_ret_ty = saved_ret;
@@ -5302,8 +5565,19 @@ static void emit_top_level(Node *n) {
                 return;
             }
             emit_type(fty->ret);
-            fprintf(stdout, " %.*s(",
-                    n->var_decl.name->len, n->var_decl.name->loc);
+            fputc(' ', stdout);
+            /* Overloaded free-function names get signature-mangled C
+             * symbols. Singleton names (malloc, printf, user code that
+             * isn't overloaded) stay unmangled so interop is preserved
+             * without per-Declaration 'extern "C"' tracking. */
+            if (free_func_name_is_overloaded(n->var_decl.name)) {
+                emit_free_func_mangled_name(n->var_decl.name,
+                                             fty->params, fty->nparams);
+            } else {
+                fprintf(stdout, "%.*s", n->var_decl.name->len,
+                        n->var_decl.name->loc);
+            }
+            fputc('(', stdout);
             if (fty->nparams == 0) {
                 fputs("void", stdout);
             } else {
@@ -5588,9 +5862,9 @@ static void emit_fwd_decl_methods_only(Node *n) {
             }
             if (looks_instantiated) {
                 emit_storage_flags_for_def(n->func.storage_flags);
-                emit_func_header(n->func.ret_ty, n->func.name,
-                                 n->func.params, n->func.nparams,
-                                 n->func.is_variadic);
+                emit_free_func_header(n->func.ret_ty, n->func.name,
+                                      n->func.params, n->func.nparams,
+                                      n->func.is_variadic);
                 fputs(";\n", stdout);
             }
         }
@@ -5613,6 +5887,10 @@ static void emit_forward_decl_funcs(Node *tu) {
 void emit_c(Node *tu) {
     if (!tu || tu->kind != ND_TRANSLATION_UNIT) return;
     g_tu = tu;
+    /* Pre-scan: names with 2+ free-function declarations get
+     * signature-mangled C symbols so each overload has a unique
+     * symbol at link time. */
+    free_ovld_populate(tu);
     emit_prelude();
 
     /* Forward-declare ALL struct types so pointer references
