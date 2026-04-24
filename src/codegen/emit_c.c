@@ -2552,6 +2552,11 @@ static void emit_expr(Node *n) {
             /* '*x' where x is a class value → operator*() dispatch.
              * Pattern: gcc 4.8 expr.h insn_gen_fn, expr.c '(*genfun)(args)'. */
             case TK_STAR:  usuf = "__deref"; break;
+            /* Prefix '++x' / '--x' on a class value → operator++/--().
+             * Pattern: gcc 4.8 predict.c '++compare_count' where
+             * compare_count is double_int. */
+            case TK_INC:   usuf = "__incr"; break;
+            case TK_DEC:   usuf = "__decr"; break;
             default: break;
             }
         }
@@ -2730,6 +2735,19 @@ static void emit_expr(Node *n) {
                     emit_expr(n->call.args[0]);
                     fputs("))", stdout);
                 }
+                return;
+            }
+            /* Struct/union T() → '(struct sf__T){0}' compound literal.
+             * Happens when T is a TYPEDEF to a class template instance
+             * (e.g. 'typedef vec<T> name;' in gcc 4.8 value-prof.h),
+             * called as 'name()' in a function-call expression.
+             * Pattern: gcc 4.8 profile.c 'histogram_values values =
+             * histogram_values();'. */
+            if (conc && (conc->kind == TY_STRUCT || conc->kind == TY_UNION) &&
+                n->call.nargs == 0 && conc->tag) {
+                fputc('(', stdout);
+                emit_type(conc);
+                fputs("){0}", stdout);
                 return;
             }
         }
