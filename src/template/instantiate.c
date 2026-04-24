@@ -447,6 +447,26 @@ static void collect_from_node(InstCollector *col, Node *n) {
     switch (n->kind) {
     case ND_VAR_DECL:
         collect_from_type(col, n->var_decl.ty);
+        /* Inline anonymous struct in a var-decl:
+         *   static struct { vec<T> m; } foo;
+         * The parser produces ONE ND_VAR_DECL and hangs the struct
+         * body off var_decl.ty->class_def — no separate top-level
+         * ND_CLASS_DEF. Same shape as the ND_TYPEDEF case below;
+         * without descent, template-ids inside the anon body are
+         * missed. Pattern from gcc 4.8 calls.c internal_arg_pointer_
+         * exp_state.
+         *
+         * Limit to *anonymous* structs: named types already have a
+         * top-level ND_CLASS_DEF (walked elsewhere) and descending
+         * into them causes infinite recursion when their methods
+         * contain var-decls of their own type ('T r;' inside a
+         * T::operator-()). N4659 §9.5.3 [dcl.type.elab] — anonymous
+         * types can't name themselves, so they can't recurse. */
+        if (n->var_decl.ty &&
+            (n->var_decl.ty->kind == TY_STRUCT || n->var_decl.ty->kind == TY_UNION) &&
+            n->var_decl.ty->class_def &&
+            !n->var_decl.ty->tag)
+            collect_from_node(col, n->var_decl.ty->class_def);
         if (n->var_decl.init)
             collect_from_node(col, n->var_decl.init);
         break;
