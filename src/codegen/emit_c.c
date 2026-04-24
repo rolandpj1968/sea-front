@@ -2357,16 +2357,33 @@ static void emit_expr(Node *n) {
                     lhs_wants_value = true;
             }
             if (rhs_is_ref && lhs_wants_value && n->binary.op == TK_ASSIGN) {
-                /* Suppress the ident-ref-param deref: we add our own
-                 * '(*' here, so emit_expr should not additionally
-                 * wrap an ND_IDENT ref-param. Otherwise we get
-                 * '(*(*obj))' on a '*slot = obj' pattern. */
-                fputs("(*", stdout);
-                bool saved = g_suppress_ref_deref;
-                g_suppress_ref_deref = true;
-                emit_expr(n->binary.rhs);
-                g_suppress_ref_deref = saved;
-                fputc(')', stdout);
+                /* Method call returning ref: the call-emit path already
+                 * wraps with '(*...)' to convert T* → T (unless the
+                 * current function also returns a ref). Don't double-
+                 * wrap here. Pattern: gcc 4.8 lto-cgraph.c
+                 *   last_node = encoder->nodes.pop();
+                 * where vec::pop() returns T&. */
+                bool is_ref_method_call = false;
+                if (n->binary.rhs && n->binary.rhs->kind == ND_CALL &&
+                    n->binary.rhs->call.callee &&
+                    n->binary.rhs->call.callee->kind == ND_MEMBER) {
+                    bool cur_returns_ref = ty_is_ref(g_current_func_ret_ty);
+                    if (!cur_returns_ref) is_ref_method_call = true;
+                }
+                if (is_ref_method_call) {
+                    emit_expr(n->binary.rhs);
+                } else {
+                    /* Suppress the ident-ref-param deref: we add our own
+                     * '(*' here, so emit_expr should not additionally
+                     * wrap an ND_IDENT ref-param. Otherwise we get
+                     * '(*(*obj))' on a '*slot = obj' pattern. */
+                    fputs("(*", stdout);
+                    bool saved = g_suppress_ref_deref;
+                    g_suppress_ref_deref = true;
+                    emit_expr(n->binary.rhs);
+                    g_suppress_ref_deref = saved;
+                    fputc(')', stdout);
+                }
             } else if (lhs_wants_value && n->binary.op == TK_ASSIGN &&
                        n->binary.rhs && n->binary.rhs->kind == ND_NUM &&
                        n->binary.rhs->num.lo == 0) {
