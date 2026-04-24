@@ -1130,7 +1130,19 @@ static void visit(Sema *s, Node *n) {
     case ND_SIZEOF:
         visit(s, n->sizeof_.expr);
         break;
-    case ND_COMMA:     visit_binary(s, n);    break;
+    case ND_COMMA:
+        /* ND_COMMA's struct layout differs from ND_BINARY's (no 'op'
+         * field), so the union aliasing with visit_binary read the
+         * wrong offsets and skipped the LHS. Walk both sides directly.
+         * N4659 §8.19 [expr.comma] — value category is the RHS's. */
+        visit(s, n->comma.lhs);
+        visit(s, n->comma.rhs);
+        if (n->comma.rhs)
+            n->resolved_type = n->comma.rhs->resolved_type;
+        if ((n->comma.lhs && n->comma.lhs->is_type_dependent) ||
+            (n->comma.rhs && n->comma.rhs->is_type_dependent))
+            n->is_type_dependent = true;
+        break;
 
     case ND_QUALIFIED:
         /* N4659 §6.4.3 [basic.lookup.qual]: qualified name lookup.

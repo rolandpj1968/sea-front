@@ -2310,6 +2310,22 @@ static void emit_expr(Node *n) {
                 fputc('(', stdout);
                 emit_type(lhs_t);
                 fputs("){0}", stdout);
+            } else if (lhs_wants_value && n->binary.op == TK_ASSIGN &&
+                       n->binary.rhs && n->binary.rhs->kind == ND_IDENT &&
+                       n->binary.rhs->ident.name &&
+                       n->binary.rhs->ident.name->len == 5 &&
+                       memcmp(n->binary.rhs->ident.name->loc, "vNULL", 5) == 0) {
+                /* gcc vec.h defines 'extern vnull vNULL;' with a
+                 * template conversion operator to vec<T,A,L>. The
+                 * ident emit path lowers vNULL to '{0}', valid in
+                 * an init-declarator but NOT in an assignment RHS
+                 * (C: initializer lists appear only in declarators).
+                 * Emit the equivalent compound literal here, mirroring
+                 * the 'struct = 0' branch above. Pattern: gcc 4.8
+                 * cfgexpand.c 'data.asan_vec = vNULL;'. */
+                fputc('(', stdout);
+                emit_type(lhs_t);
+                fputs("){0}", stdout);
             } else {
                 emit_expr(n->binary.rhs);
             }
