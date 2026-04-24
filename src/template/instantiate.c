@@ -846,10 +846,19 @@ static bool deduce_from_pair(Type *P, Type *A, SubstMap *map) {
     /* Class-template specialization on both sides: recurse through
      * template arguments. N4659 §17.8.2.5/9 [temp.deduct.type]: for
      * a TT<T1, T2, ...> vs TT<A1, A2, ...> pattern, deduce each Ti
-     * from the corresponding Ai. We use the template_id_node on the
-     * pattern side (carries the TT<T1,...> template-id with possibly
-     * dependent args) and template_args on the arg side (the
-     * instantiated TT's concrete args).
+     * from the corresponding Ai.
+     *
+     * The template-id info can sit in two places on a Type:
+     *   - template_id_node: the ND_TEMPLATE_ID produced by parsing
+     *     'vec<int,va_gc,vl_embed>', with args as Node** (each ND_
+     *     VAR_DECL carrying a Type).
+     *   - template_args / n_template_args: Type** flattened, set by
+     *     the instantiation pass when a concrete class is produced.
+     *
+     * Pre-instantiation (when this runs in sema pass 1), A has only
+     * its template_id_node populated — n_template_args is 0. Post-
+     * instantiation, template_args is set too. Handle both shapes so
+     * deduction works at both stages.
      *
      * Handles the gcc 4.8 pattern 'template<T,A> gt_pch_nx(
      * vec<T,A,vl_embed>*)' called with vec<ipa_set, va_gc, vl_embed>*
@@ -858,35 +867,43 @@ static bool deduce_from_pair(Type *P, Type *A, SubstMap *map) {
     if ((P->kind == TY_STRUCT || P->kind == TY_UNION) &&
         (A->kind == TY_STRUCT || A->kind == TY_UNION)) {
         /* Tag-spelling match — if the template is 'vec' we only
-         * deduce when the arg is also 'vec'. Without this guard the
-         * walk would bind dependent args against unrelated struct
-         * args on deduction failure elsewhere in the pair. */
+         * deduce when the arg is also 'vec'. */
         if (!P->tag || !A->tag) return true;
         if (P->tag->len != A->tag->len) return true;
         if (memcmp(P->tag->loc, A->tag->loc, P->tag->len) != 0)
             return true;
-        /* Prefer the pattern's template_id_node (it carries the
-         * DEPENDENT args from the parse site). Fall back to
-         * P->template_args when the template_id_node isn't stitched. */
-        Node *tid = P->template_id_node;
-        if (tid && tid->kind == ND_TEMPLATE_ID) {
-            int n = tid->template_id.nargs;
-            if (n != A->n_template_args) return true;
-            for (int i = 0; i < n; i++) {
-                Node *pa = tid->template_id.args[i];
-                Type *pt = (pa && pa->kind == ND_VAR_DECL)
-                    ? pa->var_decl.ty : NULL;
-                Type *at = A->template_args[i];
-                if (!deduce_from_pair(pt, at, map)) return false;
+        /* Pattern args: prefer template_id_node (has dependent
+         * bindings pre-instantiation). */
+        Node  *ptid = P->template_id_node;
+        int    np_args = 0;
+        if (ptid && ptid->kind == ND_TEMPLATE_ID)
+            np_args = ptid->template_id.nargs;
+        else
+            np_args = P->n_template_args;
+        /* Arg args: either template_id_node (unresolved, pre-inst)
+         * or template_args (resolved, post-inst). */
+        Node  *atid = A->template_id_node;
+        int    na_args = (atid && atid->kind == ND_TEMPLATE_ID)
+                            ? atid->template_id.nargs
+                            : A->n_template_args;
+        if (np_args == 0 || na_args == 0) return true;
+        if (np_args != na_args) return true;
+        for (int i = 0; i < np_args; i++) {
+            Type *pt = NULL;
+            if (ptid && ptid->kind == ND_TEMPLATE_ID) {
+                Node *pa = ptid->template_id.args[i];
+                pt = (pa && pa->kind == ND_VAR_DECL) ? pa->var_decl.ty : NULL;
+            } else {
+                pt = P->template_args[i];
             }
-            return true;
-        }
-        if (P->n_template_args > 0 && P->n_template_args == A->n_template_args) {
-            for (int i = 0; i < P->n_template_args; i++)
-                if (!deduce_from_pair(P->template_args[i],
-                                       A->template_args[i], map))
-                    return false;
-            return true;
+            Type *at = NULL;
+            if (atid && atid->kind == ND_TEMPLATE_ID) {
+                Node *aa = atid->template_id.args[i];
+                at = (aa && aa->kind == ND_VAR_DECL) ? aa->var_decl.ty : NULL;
+            } else {
+                at = A->template_args[i];
+            }
+            if (!deduce_from_pair(pt, at, map)) return false;
         }
         return true;
     }
