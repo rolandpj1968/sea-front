@@ -3048,6 +3048,31 @@ static void emit_stmt(Node *n);
 
 static void emit_var_decl_inner(Node *n) {
     Type *ty = n->var_decl.ty;
+    /* Bare enum definition without a variable:
+     *   enum bb_state { NOT_IN_BB, IN_ONE_BB, IN_MULTIPLE_BB };
+     * Parses as ND_VAR_DECL with TY_ENUM and no name. emit_top_level
+     * has an explicit branch for this at file scope; block-scope hits
+     * us via emit_stmt's ND_VAR_DECL case. Without this pre-check,
+     * emit_type would print only 'enum bb_state' and the body would
+     * be silently dropped, leaving the enumerators undeclared.
+     * Pattern: gcc 4.8 cfgrtl.c print_rtl_with_bb local enum. */
+    if (ty && ty->kind == TY_ENUM && ty->enum_tokens &&
+        ty->enum_ntokens > 0 && !n->var_decl.name) {
+        if (enum_body_already_emitted(ty->enum_tokens)) return;
+        mark_enum_body_emitted(ty->enum_tokens);
+        ty->codegen_emitted = true;
+        fputs("enum ", stdout);
+        if (ty->tag)
+            fprintf(stdout, "%.*s ", ty->tag->len, ty->tag->loc);
+        fputs("{ ", stdout);
+        for (int i = 0; i < ty->enum_ntokens; i++) {
+            Token *t = &ty->enum_tokens[i];
+            if (t->has_space && i > 0) fputc(' ', stdout);
+            fprintf(stdout, "%.*s", t->len, t->loc);
+        }
+        fputs(" }", stdout);
+        return;
+    }
     /* Inline enum-type var-decl: 'enum { A=0, B } x;' carries the
      * enumerator list on Type.enum_tokens. Emit the enum definition
      * in the declarator so NOT_FLOAT / AFTER_POINT etc. are visible
