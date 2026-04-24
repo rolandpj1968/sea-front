@@ -380,8 +380,12 @@ static void visit_unary(Sema *s, Node *n) {
     case TK_STAR: {
         /* Indirection: operand should be a pointer; result is the
          * pointed-to type. Conservative — if operand isn't a pointer,
-         * leave NULL and let codegen fall back. */
-        if (ot && (ot->kind == TY_PTR || ot->kind == TY_ARRAY))
+         * leave NULL and let codegen fall back. For references (lowered
+         * to T* in our C but TY_REF in the AST): a source-level '*ref'
+         * reads the refferee, so the resolved_type is the referent type
+         * with the ref stripped. N4659 §11.3.2/1 [dcl.ref]. */
+        if (ot && (ot->kind == TY_PTR || ot->kind == TY_ARRAY ||
+                   ot->kind == TY_REF || ot->kind == TY_RVALREF))
             n->resolved_type = ot->base;
         break;
     }

@@ -3292,6 +3292,15 @@ static void emit_expr(Node *n) {
          * trust that a struct/union value with a subscript was written
          * expecting operator[] and emit the method call. */
         Type *base_ty = n->subscript.base ? n->subscript.base->resolved_type : NULL;
+        /* Peel TY_REF/TY_RVALREF: a source-level 'ref[i]' uses the
+         * referent's operator[] — refs have value semantics in C++.
+         * In our C lowering the ref is a T*, and ND_IDENT emit adds
+         * the '(*...)' wrap, so the emitted base IS a value of the
+         * referent class. N4659 §11.3.2 [dcl.ref]. Pattern: gcc 4.8
+         * ipa-prop.c 'descriptors[i]' where descriptors is vec<T>&. */
+        if (base_ty && (base_ty->kind == TY_REF || base_ty->kind == TY_RVALREF) &&
+            base_ty->base)
+            base_ty = base_ty->base;
         bool base_is_class_value =
             base_ty &&
             (base_ty->kind == TY_STRUCT || base_ty->kind == TY_UNION) &&
@@ -3732,15 +3741,35 @@ static bool expr_has_class_temp(Node *e) {
                expr_has_class_temp(e->ternary.then_) ||
                expr_has_class_temp(e->ternary.else_);
     case ND_MEMBER:
-        /* Also true when the member access is on a struct-returning
-         * call result — the ND_MEMBER emit will take '&call()' which
-         * needs the call hoisted into a named temp first. Mirrors the
-         * force-hoist branch in hoist_temps_in_expr's ND_MEMBER case. */
-        if (e->member.obj && e->member.obj->kind == ND_CALL &&
-            e->member.obj->resolved_type &&
-            (e->member.obj->resolved_type->kind == TY_STRUCT ||
-             e->member.obj->resolved_type->kind == TY_UNION))
-            return true;
+        /* Also true when the member access is on a struct-valued
+         * RVALUE (call result, operator overload result, ternary) —
+         * the ND_MEMBER emit will take '&expr' which needs the value
+         * hoisted into a named temp first. Pattern: gcc 4.8
+         * gimple-fold.c '(a - b).sext(p)' — the operator- overload
+         * returns struct, then .sext() needs an addressable receiver. */
+        if (e->member.obj) {
+            Node *obj = e->member.obj;
+            NodeKind k = obj->kind;
+            bool is_rvalue_shape = (k == ND_CALL || k == ND_BINARY ||
+                                     k == ND_ASSIGN || k == ND_UNARY ||
+                                     k == ND_POSTFIX || k == ND_TERNARY);
+            if (is_rvalue_shape && obj->resolved_type &&
+                (obj->resolved_type->kind == TY_STRUCT ||
+                 obj->resolved_type->kind == TY_UNION))
+                return true;
+            /* For ND_BINARY whose own resolved_type is NULL but whose
+             * operands are struct-valued — likely an operator-overload
+             * between structs, whose return is also a struct. sema's
+             * common_arith_type returns NULL for struct operands, so
+             * we can't read the return type directly — infer from the
+             * operand. */
+            if (k == ND_BINARY && !obj->resolved_type) {
+                Type *lt = obj->binary.lhs ?
+                    obj->binary.lhs->resolved_type : NULL;
+                if (lt && (lt->kind == TY_STRUCT || lt->kind == TY_UNION))
+                    return true;
+            }
+        }
         return expr_has_class_temp(e->member.obj);
     case ND_SUBSCRIPT:
         return expr_has_class_temp(e->subscript.base) ||
