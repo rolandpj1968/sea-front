@@ -3546,6 +3546,8 @@ static void emit_block(Node *n) {
     fputs("}\n", stdout);
 }
 
+static void emit_class_def(Node *n);
+
 static void emit_stmt(Node *n) {
     if (!n) { fputs(";\n", stdout); return; }
     switch (n->kind) {
@@ -3622,6 +3624,21 @@ static void emit_stmt(Node *n) {
         return;
     case ND_NULL_STMT:
         fputs(";\n", stdout);
+        return;
+    case ND_CLASS_DEF:
+        /* Block-scope struct — gcc 4.8 calls.c emit_library_call_value_1
+         * defines 'struct arg' inside the function body. In C this is a
+         * valid block-scope declaration, but the two-phase emit only
+         * walks top-level decls for PHASE_STRUCTS, so the body was never
+         * emitted and downstream uses hit 'incomplete type'. Flip phase
+         * to 0 (single-pass) so emit_class_def writes the full body
+         * in-place, same as the inline-struct recovery on var_decl below. */
+        {
+            int saved_phase = g_emit_phase;
+            g_emit_phase = 0;
+            emit_class_def(n);
+            g_emit_phase = saved_phase;
+        }
         return;
     case ND_VAR_DECL:
         emit_var_decl_inner(n);
