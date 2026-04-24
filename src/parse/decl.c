@@ -694,11 +694,15 @@ parse_suffixes:
                         parser_skip_gnu_attributes(p);
 
                         /* Default argument — N4659 §11.3.6 [dcl.fct.default]
-                         *   parameter-declaration = assignment-expression */
+                         *   parameter-declaration = assignment-expression
+                         * Capture the expr so call sites that pass fewer
+                         * args than params can inject it at emit time. */
+                        Node *def_val = NULL;
                         if (parser_consume(p, TK_ASSIGN))
-                            parse_assign_expr(p);  /* consume and discard */
+                            def_val = parse_assign_expr(p);
 
                         if (param_decl) {
+                            param_decl->param.default_value = def_val;
                             vec_push(&params, param_decl);
                             vec_push(&param_types, param_decl->var_decl.ty);
                         }
@@ -738,6 +742,26 @@ parse_suffixes:
 
             ty = new_func_type(p, ty, (Type **)param_types.data,
                                param_types.len, variadic);
+            /* Extract per-param default values so call-site
+             * default-arg injection can find them via callee's
+             * TY_FUNC. Only allocate when at least one param has a
+             * default. N4659 §11.3.6 [dcl.fct.default]. */
+            {
+                bool any_default = false;
+                for (int i = 0; i < param_types.len; i++) {
+                    Node *pn = ((Node **)params.data)[i];
+                    if (pn && pn->param.default_value) { any_default = true; break; }
+                }
+                if (any_default) {
+                    Node **defs = arena_alloc(p->arena,
+                        param_types.len * sizeof(Node *));
+                    for (int i = 0; i < param_types.len; i++) {
+                        Node *pn = ((Node **)params.data)[i];
+                        defs[i] = pn ? pn->param.default_value : NULL;
+                    }
+                    ty->param_defaults = defs;
+                }
+            }
             /* N4659 §10.1.7.1 [dcl.type.cv]: const/volatile
              * after the parameter list qualifies the implicit
              * object parameter (§16.3.1/4). Store on the function

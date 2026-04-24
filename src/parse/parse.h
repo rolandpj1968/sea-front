@@ -600,6 +600,12 @@ struct Node {
             Type *ty;
             Token *name;    /* may be NULL for unnamed params */
             Type *default_type;  /* template param default, or NULL */
+            /* Default argument for an ordinary function parameter:
+             *   void f(int x, int y = 42);
+             * Captured at parse time; injected at call sites that
+             * pass fewer args than the function has params.
+             * N4659 §11.3.6 [dcl.fct.default]. */
+            Node *default_value;
         } param;
 
         /* ND_TEMPLATE_DECL — N4659 §17.1 [temp] (Annex A.12)
@@ -790,6 +796,12 @@ struct Type {
     Type **params;
     int nparams;
     bool is_variadic;   /* true if param list ends with ... */
+    /* Per-parameter default values for default-argument injection.
+     * NULL if the function has no defaults at all; otherwise, a
+     * nparams-sized array where entry i is the ND_EXPR for param i's
+     * default value (or NULL if that param has none). N4659 §11.3.6
+     * [dcl.fct.default]. */
+    Node **param_defaults;
 
     /* TY_STRUCT, TY_UNION, TY_ENUM: tag name (for 'struct Foo' usage)
      * TY_DEPENDENT: the template parameter name (e.g. 'T') or, for a

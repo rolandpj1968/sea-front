@@ -360,6 +360,21 @@ static void emit_arg_for_param(Node *arg, Type *param_ty) {
  *   - otherwise → take the address: '&(E)'. Works for any lvalue. */
 static void emit_return_expr(Node *e) {
     Type *rt = g_current_func_ret_ty;
+    /* 'return vNULL;' where the function returns a struct (vec<T,A,L>).
+     * vNULL lowers to '{0}', valid in init-declarators only. For a
+     * return expression we need a compound literal '(struct T){0}'.
+     * Mirrors the ND_ASSIGN branch that does the same for 'x = vNULL'.
+     * Pattern: gcc 4.8 dominance.c get_dominated_by '  return vNULL;' */
+    if (e && e->kind == ND_IDENT && e->ident.name &&
+        e->ident.name->len == 5 &&
+        memcmp(e->ident.name->loc, "vNULL", 5) == 0 &&
+        rt && (rt->kind == TY_STRUCT || rt->kind == TY_UNION) &&
+        rt->tag) {
+        fputc('(', stdout);
+        emit_type(rt);
+        fputs("){0}", stdout);
+        return;
+    }
     if (!ty_is_ref(rt)) { emit_expr(e); return; }
     Type *et = e ? e->resolved_type : NULL;
     if (ty_is_ref(et)) {
@@ -2937,13 +2952,35 @@ static void emit_expr(Node *n) {
              * so no spurious adaptation happens.
              * TODO(seafront#free-func-overload): proper overload
              * resolution per N4659 §16.3 [over.match]. */
+            /* Default-argument injection — N4659 §11.3.6 [dcl.fct.default]:
+             * if fewer args than params AND the callee has captured
+             * default values for the missing tail, arity matches AFTER
+             * injection. Emit the user's args then the default exprs. */
             bool arity_ok = callee_ft &&
                             callee_ft->nparams == n->call.nargs;
-            for (int i = 0; i < n->call.nargs; i++) {
+            int inject_from = -1;
+            if (!arity_ok && callee_ft && callee_ft->param_defaults &&
+                n->call.nargs < callee_ft->nparams) {
+                bool all_tail_have_defaults = true;
+                for (int i = n->call.nargs; i < callee_ft->nparams; i++) {
+                    if (!callee_ft->param_defaults[i]) {
+                        all_tail_have_defaults = false; break;
+                    }
+                }
+                if (all_tail_have_defaults) {
+                    arity_ok = true;
+                    inject_from = n->call.nargs;
+                }
+            }
+            int total = (inject_from >= 0) ? callee_ft->nparams : n->call.nargs;
+            for (int i = 0; i < total; i++) {
                 if (i > 0) fputs(", ", stdout);
-                Type *pt = (arity_ok && i < callee_ft->nparams)
+                Type *pt = (arity_ok && callee_ft && i < callee_ft->nparams)
                     ? callee_ft->params[i] : NULL;
-                emit_arg_for_param(n->call.args[i], pt);
+                Node *arg = (i < n->call.nargs)
+                    ? n->call.args[i]
+                    : callee_ft->param_defaults[i];
+                emit_arg_for_param(arg, pt);
             }
         }
         fputc(')', stdout);
@@ -3826,6 +3863,25 @@ static void emit_stmt(Node *n) {
         }
         return;
     case ND_VAR_DECL:
+        /* Block-scope inline-struct dependency, same shape as the
+         * top-level emit path: 'static const struct T { ... } arr[];'
+         * in a function body hangs T's body off var_decl.ty's class_def
+         * with no separate ND_CLASS_DEF. Emit the struct body in-place
+         * so the var-decl that references it has a complete type.
+         * Pattern: gcc 4.8 builtins.c expand_builtin_nonlocal_goto
+         *   static const struct elims {const int from, to;} elim_regs[] = ...; */
+        {
+            Type *dep = n->var_decl.ty;
+            while (dep && dep->kind == TY_ARRAY) dep = dep->base;
+            if (dep && (dep->kind == TY_STRUCT || dep->kind == TY_UNION) &&
+                dep->class_def && !dep->codegen_emitted) {
+                int saved_phase = g_emit_phase;
+                g_emit_phase = 0;
+                emit_class_def(dep->class_def);
+                g_emit_phase = saved_phase;
+                emit_indent();
+            }
+        }
         emit_var_decl_inner(n);
         fputs(";\n", stdout);
         /* Direct-init 'T x(args)' lowers to a ctor call right

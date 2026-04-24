@@ -56,14 +56,14 @@ Stages B and C extend upward to modern compilers. See
 | Sema | First slice — type propagation, member resolution, implicit `this` |
 | **Template Instantiation** | **Working** — class templates, function templates, defaults, dedup, transitive deps |
 | C Codegen | Working — structs, vtables, ctors/dtors, scope cleanup, name mangling |
-| Standard Library | 72/80 libstdc++ headers parse and emit through `--emit-c` |
+| Standard Library | 80/80 libstdc++ headers parse and emit through `--emit-c` |
 
 ### Test Suite
 
 - 144 unit tests (lexer)
 - 42 parser integration tests
-- 178 emit-c end-to-end tests (C++ in → C out → compile → execute → verify)
-- 24/28 gated + 48/52 stretch libstdc++ header smoke tests
+- 184 emit-c end-to-end tests (C++ in → C out → compile → execute → verify)
+- 28/28 gated + 52/52 stretch libstdc++ header smoke tests
 - 1 multi-TU test
 
 ### Template Instantiation

@@ -1126,6 +1126,13 @@ static void visit(Sema *s, Node *n) {
     case ND_TERNARY:   visit_ternary(s, n);   break;
     case ND_CAST:
         visit(s, n->cast.operand);
+        /* The cast expression's type is its target — set it so
+         * downstream consumers (e.g. emit_arg_for_param's
+         * compound-literal trick for '&(rvalue)' passed to T&)
+         * can read it. N4659 §8.4 [expr.cast]. */
+        if (n->cast.ty) n->resolved_type = n->cast.ty;
+        if (n->cast.operand && n->cast.operand->is_type_dependent)
+            n->is_type_dependent = true;
         break;
     case ND_SIZEOF:
         visit(s, n->sizeof_.expr);
