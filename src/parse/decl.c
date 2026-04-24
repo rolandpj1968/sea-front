@@ -397,12 +397,20 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
             }
         }
         /* Stash the resolved class scope for parse_declaration's
-         * function-def branch to push. */
-        if (qscope)
+         * function-def branch to push. Gate on name_was_qualified:
+         * without '::', qscope came only from the leading ident's
+         * own type lookup, which triggers when a free function shares
+         * its name with a struct ('inline_edge_summary' in gcc) or a
+         * parameter name shadows a class type ('bitmap_obstack *obstack').
+         * In those cases the declarator is NOT an OOL member — stashing
+         * would cause the function-def branch to mis-tag it as a method.
+         * N4659 §6.4.3 [basic.lookup.qual] — only qualified-ids name
+         * out-of-class members. */
+        if (name_was_qualified && qscope)
             p->qualified_decl_scope = qscope;
         /* Preserve the qualifier template-id, if any, so the
          * function-def branch can copy it onto func.qual_tid. */
-        if (leading_tid)
+        if (name_was_qualified && leading_tid)
             p->qualified_decl_tid = leading_tid;
         /* Out-of-class constructor definition: 'Foo::Foo(...)'.
          * If the qualified-id ends in a name that matches the
