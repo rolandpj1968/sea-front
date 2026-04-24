@@ -3407,7 +3407,17 @@ static void emit_expr(Node *n) {
         if (ty_is_ref(raw_obj_ty) && n->member.obj &&
             n->member.obj->kind == ND_CALL) {
             bool cur_returns_ref = ty_is_ref(g_current_func_ret_ty);
-            if (!cur_returns_ref) obj_is_ref_call_unwrapped = true;
+            /* Only treat as 'unwrapped to value' when the referent is
+             * itself a struct/union (then '.' works on the unwrapped
+             * value). If the ref is to a pointer (vec<T>::last() with
+             * T = tree = tree_node*, returning tree&), unwrapping gives
+             * a pointer and we still need '->'. Pattern: gcc 4.8 stmt.c
+             * 'dispatch_table.last().exp' where T=tree is a pointer. */
+            Type *referent = raw_obj_ty ? raw_obj_ty->base : NULL;
+            bool referent_is_struct_value = referent &&
+                (referent->kind == TY_STRUCT || referent->kind == TY_UNION);
+            if (!cur_returns_ref && referent_is_struct_value)
+                obj_is_ref_call_unwrapped = true;
         }
         const char *access_op =
             (!obj_is_ref_call_unwrapped &&
