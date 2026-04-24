@@ -1633,8 +1633,18 @@ void template_instantiate(Node *tu, Arena *arena) {
             /* For function template duplicates: rewrite the call-site
              * ND_TEMPLATE_ID to ND_IDENT with the mangled name, so
              * codegen emits the correct function name. */
+            /* Only rewrite FUNCTION template calls to mangled idents.
+             * For a class template's constructor-call form 'vec<T>()',
+             * the collect path at line ~590 creates a request with
+             * usage_type=NULL, but the rewrite below would mangle
+             * the callee as if it were a function template — a name
+             * that doesn't match the class's actual ctor mangling.
+             * Skip the rewrite when the template's inner decl is a
+             * class. Pattern: gcc 4.8 ipa-cp.c 'return vec<T,A,L>();'. */
+            Node *tmpl_inner = req->tmpl_def ? req->tmpl_def->template_decl.decl : NULL;
+            bool is_class_tmpl = tmpl_inner && tmpl_inner->kind == ND_CLASS_DEF;
             if (req->template_id->kind == ND_TEMPLATE_ID &&
-                !req->usage_type) {
+                !req->usage_type && !is_class_tmpl) {
                 Token *fname = req->template_id->template_id.name;
                 int na = req->template_id->template_id.nargs;
                 int bufsize = 256;
@@ -1757,17 +1767,28 @@ void template_instantiate(Node *tu, Arena *arena) {
                 all_instantiated[total_inst++] = inst;
             ninst_this_round++;
             /* (trace removed) */
-            /* Patch the usage-site type so codegen mangles it
-             * with template args (e.g. sf__Box_t_int_te_). */
-            if (inst->kind == ND_CLASS_DEF && inst->class_def.ty &&
-                req->usage_type) {
+            /* For class instantiations: dedup_add unconditionally so
+             * a subsequent request for the same (name, args) finds
+             * the existing entry and short-circuits. Previously the
+             * dedup_add was nested inside the usage_type != NULL
+             * guard, so class-template instantiations requested via
+             * a constructor call (ND_CALL callee=ND_TEMPLATE_ID, which
+             * sets usage_type=NULL) didn't register — and a later
+             * type-position request for the same class instantiated
+             * AGAIN, producing duplicate ND_CLASS_DEFs and ultimately
+             * duplicate method definitions at link time. Pattern:
+             * gcc 4.8 ipa-cp.c with vec<ipa_agg_jf_item> constructed
+             * functionally AND used in type position. */
+            if (inst->kind == ND_CLASS_DEF && inst->class_def.ty) {
                 Type *inst_ty = inst->class_def.ty;
-                req->usage_type->template_args    = inst_ty->template_args;
-                req->usage_type->n_template_args   = inst_ty->n_template_args;
-                req->usage_type->class_region      = inst_ty->class_region;
-                req->usage_type->class_def         = inst_ty->class_def;
-                req->usage_type->has_dtor          = inst_ty->has_dtor;
-                req->usage_type->has_default_ctor  = inst_ty->has_default_ctor;
+                if (req->usage_type) {
+                    req->usage_type->template_args    = inst_ty->template_args;
+                    req->usage_type->n_template_args   = inst_ty->n_template_args;
+                    req->usage_type->class_region      = inst_ty->class_region;
+                    req->usage_type->class_def         = inst_ty->class_def;
+                    req->usage_type->has_dtor          = inst_ty->has_dtor;
+                    req->usage_type->has_default_ctor  = inst_ty->has_default_ctor;
+                }
                 /* Register in dedup set — both the resolved key (for
                  * dedup across explicit+defaulted args) and the raw
                  * template-id key (for post-instantiation patching

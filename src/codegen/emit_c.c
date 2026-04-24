@@ -1756,6 +1756,30 @@ static Node *find_class_def_by_tag_args(Type *class_type) {
     return NULL;
 }
 
+/* For plain (non-template) classes: walk the TU looking for the
+ * ND_CLASS_DEF whose tag matches. Used as a fallback when a Type
+ * copy lacks class_region/class_def (field-decl / typedef paths).
+ * Returns NULL if there's no match or multiple ambiguous matches. */
+static Node *find_class_def_by_tag_only(Type *class_type) {
+    if (!g_tu || !class_type || !class_type->tag) return NULL;
+    Node *found = NULL;
+    for (int i = 0; i < g_tu->tu.ndecls; i++) {
+        Node *d = g_tu->tu.decls[i];
+        if (!d || d->kind != ND_CLASS_DEF) continue;
+        Type *t = d->class_def.ty;
+        if (!t || !t->tag || t->kind != class_type->kind) continue;
+        if (t->tag->len != class_type->tag->len) continue;
+        if (memcmp(t->tag->loc, class_type->tag->loc, t->tag->len) != 0) continue;
+        /* Skip template-instantiated variants: prefer a plain-class
+         * match. Callers with templates should use
+         * find_class_def_by_tag_args instead. */
+        if (t->n_template_args > 0) continue;
+        if (found) return NULL;  /* ambiguous */
+        found = d;
+    }
+    return found;
+}
+
 /* Check if a method on class_type is const-qualified. Scans class_def
  * members for the first match. */
 static bool method_is_const(Type *class_type, Token *name) {
@@ -2447,6 +2471,45 @@ static void emit_expr(Node *n) {
         if (n->codegen_temp_name) {
             fputs(n->codegen_temp_name, stdout);
             return;
+        }
+        /* Class-template functional cast 'vec<T,A,L>()' (value-init).
+         * The callee is ND_TEMPLATE_ID naming a class template, with
+         * no args. Emit a compound literal of the instantiated struct:
+         *   (struct sf__vec_t_..._te_){0}
+         * Only handle the 0-arg form — ctor-with-args would need
+         * hoisting to a temp + ctor call. Pattern: gcc 4.8 ipa-cp.c
+         *   return vec<ipa_agg_jf_item, va_heap, vl_ptr>();
+         * N4659 §8.2.3/2 [expr.type.conv]. */
+        if (n->call.callee && n->call.callee->kind == ND_TEMPLATE_ID &&
+            n->call.nargs == 0) {
+            Node *tid = n->call.callee;
+            /* Build a Type from (tag=tid.name, template_args=tid.args)
+             * and look up the instantiated class in the TU. */
+            Token *tname = tid->template_id.name;
+            if (tname) {
+                Type probe = {0};
+                probe.kind = TY_STRUCT;
+                probe.tag = tname;
+                int n_args = tid->template_id.nargs;
+                probe.n_template_args = n_args;
+                static Type *probe_args[16];
+                if (n_args > 0 && n_args <= 16) {
+                    for (int i = 0; i < n_args; i++) {
+                        Node *a = tid->template_id.args[i];
+                        probe_args[i] = (a && a->kind == ND_VAR_DECL)
+                            ? a->var_decl.ty : NULL;
+                    }
+                    probe.template_args = probe_args;
+                }
+                Node *d = find_class_def_by_tag_args(&probe);
+                if (!d) d = find_class_def_by_tag_only(&probe);
+                if (d && d->class_def.ty) {
+                    fputc('(', stdout);
+                    emit_type(d->class_def.ty);
+                    fputs("){0}", stdout);
+                    return;
+                }
+            }
         }
         /* Function-style cast / value-init: 'T()' or 'T(v)' where T
          * names a non-class type. This arises after template
@@ -3153,6 +3216,27 @@ static void emit_expr(Node *n) {
             (!obj_is_ref_call_unwrapped &&
              (n->member.op == TK_ARROW || obj_is_ptr_in_c)) ? "->" : ".";
         bool did_base_rewrite = false;
+        /* obj_ty might be a Type copy without class_region — commonly
+         * for types coming through typedef or field-decl paths.
+         * Look the tag up in the TU to recover the canonical class
+         * def (and thus its class_region + bases) so base-member
+         * rewriting works. Without this, 'agg->contains_variable'
+         * on an 'ipcp_agg_lattice' (which inherits contains_variable
+         * from ipcp_lattice) emits as the raw member access and
+         * fails at the C compiler. Pattern: gcc 4.8 ipa-cp.c. */
+        Type *resolved_obj_ty = obj_ty;
+        if (obj_ty && (obj_ty->kind == TY_STRUCT || obj_ty->kind == TY_UNION) &&
+            !obj_ty->class_region && obj_ty->tag) {
+            Node *d = find_class_def_by_tag_args(obj_ty);
+            if (!d) d = find_class_def_by_tag_only(obj_ty);
+            if (d && d->class_def.ty && d->class_def.ty->class_region)
+                resolved_obj_ty = d->class_def.ty;
+        }
+        if (resolved_obj_ty && (resolved_obj_ty->kind == TY_STRUCT ||
+                                 resolved_obj_ty->kind == TY_UNION) &&
+            resolved_obj_ty->class_region && mem) {
+            obj_ty = resolved_obj_ty;
+        }
         if (obj_ty && (obj_ty->kind == TY_STRUCT || obj_ty->kind == TY_UNION) &&
             obj_ty->class_region && mem) {
             /* Check: is this member NOT in the class itself but in a base? */
