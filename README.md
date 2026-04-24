@@ -62,9 +62,11 @@ Stages B and C extend upward to modern compilers. See
 
 - 144 unit tests (lexer)
 - 42 parser integration tests
-- 184 emit-c end-to-end tests (C++ in → C out → compile → execute → verify)
+- 186 emit-c end-to-end tests (C++ in → C out → compile → execute → verify)
 - 28/28 gated + 52/52 stretch libstdc++ header smoke tests
 - 1 multi-TU test
+- 70+ of ~50 gcc 4.8 source files tested end-to-end via sea-front-cc
+  (transpile → compile) compile cleanly
 
 ### Template Instantiation
 
