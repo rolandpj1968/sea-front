@@ -51,6 +51,26 @@
  * because parse_declarator calls it from within its body. */
 static bool consume_trailing_qualifiers(Parser *p);
 
+/* Stash a class scope for an OOL declarator. Wraps the class scope
+ * with enclosing=p->region (the OOL's enclosing template scope when
+ * one applies) so consumers — both the parameter-list parse below
+ * and the function-body parse — get template params AND class
+ * members visible in one push.
+ *
+ * Without the wrap, parsing
+ *   template<typename T, typename A>
+ *   void vec<T, A, vl_ptr>::splice(vec<T, A, vl_ptr> &)
+ * loses A from the param-type lookup chain (the matched class's
+ * own scope chain doesn't include the OOL's template params), A
+ * falls back to TY_STRUCT(tag=A), and cloning never substitutes it.
+ * N4659 §17.5.4 [temp.mem] / §17.7/4 [temp.res]. */
+static DeclarativeRegion *wrap_qscope(Parser *p, DeclarativeRegion *qscope) {
+    DeclarativeRegion *wrapper = arena_alloc(p->arena, sizeof(DeclarativeRegion));
+    *wrapper = *qscope;
+    wrapper->enclosing = p->region;
+    return wrapper;
+}
+
 /*
  * parse_declarator — N4659 §11.3 [dcl.meaning]
  *
@@ -419,14 +439,7 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
                  * Without this, OOL operator definitions like
                  * 'DI::operator++()' lose their class_type and codegen
                  * emits them as free functions (no 'this' param). */
-                if (qscope) {
-                    /* See main qualified-id wrap below for rationale. */
-                    DeclarativeRegion *wrapper = arena_alloc(p->arena,
-                        sizeof(DeclarativeRegion));
-                    *wrapper = *qscope;
-                    wrapper->enclosing = p->region;
-                    p->qualified_decl_scope = wrapper;
-                }
+                if (qscope) p->qualified_decl_scope = wrap_qscope(p, qscope);
                 if (leading_tid) p->qualified_decl_tid = leading_tid;
                 goto parse_operator_id;
             } else {
@@ -443,20 +456,8 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
          * would cause the function-def branch to mis-tag it as a method.
          * N4659 §6.4.3 [basic.lookup.qual] — only qualified-ids name
          * out-of-class members. */
-        if (name_was_qualified && qscope) {
-            /* Wrap qscope so its enclosing chains through the current
-             * region (which is the OOL's template scope when we're
-             * inside `template<...> ret-type Class::method`). Both
-             * the param-list parse and the body parse below consume
-             * qualified_decl_scope and need T,A in scope. Wrapping
-             * once here means neither consumer has to re-wrap.
-             * N4659 §17.5.4 [temp.mem]. */
-            DeclarativeRegion *wrapper = arena_alloc(p->arena,
-                sizeof(DeclarativeRegion));
-            *wrapper = *qscope;
-            wrapper->enclosing = p->region;
-            p->qualified_decl_scope = wrapper;
-        }
+        if (name_was_qualified && qscope)
+            p->qualified_decl_scope = wrap_qscope(p, qscope);
         /* Preserve the qualifier template-id, if any, so the
          * function-def branch can copy it onto func.qual_tid. */
         if (name_was_qualified && leading_tid)
