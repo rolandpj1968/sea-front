@@ -134,10 +134,20 @@ done
 # build-sf/{gmp,mpfr,mpc}/), the inline wrappers in those headers
 # pull __gmpz_*, __gmpn_*, __gmpq_*, __mpfr_* etc. into every .o
 # that includes them. Link-time those symbols need to resolve, so
-# unconditionally append -lgmp -lmpfr -lmpc -lm at link time.
-# Harmless when the libs aren't referenced (linker discards). The
-# gcc 4.8 Makefile doesn't pass these to gengtype/gcov/etc.
-SEA_AUTO_LIBS="-lgmp -lmpfr -lmpc -lm"
+# append -lgmp -lmpfr -lmpc -lm at link time. Use exact .so.N names
+# to dodge missing -dev symlinks on minimal hosts.
+SEA_AUTO_LIBS=""
+for spec in "-l:libgmp.so.10:-lgmp" "-l:libmpfr.so.6:-lmpfr" \
+            "-l:libmpc.so.3:-lmpc" "-lm:-lm"; do
+    versioned="${spec%:*}"
+    fallback="${spec##*:}"
+    base=$(echo "$versioned" | sed 's/^-l://')
+    if [ -e "/lib/x86_64-linux-gnu/$base" ] || [ -e "/usr/lib/$base" ]; then
+        SEA_AUTO_LIBS="$SEA_AUTO_LIBS $versioned"
+    elif [ "$versioned" = "-lm" ]; then
+        SEA_AUTO_LIBS="$SEA_AUTO_LIBS -lm"
+    fi
+done
 
 # If no C++ source files, this is a pure link or C compile — pass through
 if [ -z "$INPUTS" ]; then

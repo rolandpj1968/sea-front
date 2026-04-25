@@ -1554,9 +1554,16 @@ static void emit_storage_flags_impl(int flags, bool for_definition) {
     bool is_inline = (flags & DECL_INLINE) != 0;
     bool is_static = (flags & DECL_STATIC) != 0;
     bool is_extern = (flags & DECL_EXTERN) != 0;
-    if (for_definition && is_inline && !is_static && !is_extern) {
+    /* Any inline DEFINITION (with or without extern) gets weak symbol
+     * treatment so multiple TUs that include the same header (gmp.h
+     * inline wrappers, libstdc++ inline-everything templates, etc.)
+     * link as a single resolved def instead of a multiple-definition
+     * error. N4659 §10.1.6 [dcl.inline] / GNU 'extern inline' both
+     * have the same multi-TU shape. Static stays static (no risk of
+     * multi-def — symbol is TU-local). */
+    if (for_definition && is_inline && !is_static) {
         fputs("__attribute__((weak)) ", stdout);
-        return;  /* skip the 'inline' keyword — conflicts with weak */
+        return;  /* skip 'inline'/'extern' — conflicts with weak */
     }
     if (is_extern)  fputs("extern ", stdout);
     if (is_static)  fputs("static ", stdout);
