@@ -1190,6 +1190,11 @@ static Node *build_template_id_from_deduced(Sema *s, Token *tname,
     tid->template_id.name = tname;
     tid->template_id.args = tid_args;
     tid->template_id.nargs = ntp;
+    /* Carry the specific template the overload resolver picked, so
+     * the instantiation pass uses it instead of doing a name-only
+     * registry lookup that may return a different overload (e.g.
+     * gcc 4.8 vec.h's two `vec_alloc` templates). */
+    tid->template_id.resolved_tmpl = tmpl;
     return tid;
 }
 

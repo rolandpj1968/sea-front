@@ -688,6 +688,14 @@ struct Node {
             Token *name;        /* the template-name */
             Node **args;        /* template-argument-list */
             int nargs;
+            /* The specific ND_TEMPLATE_DECL this id resolves to. When
+             * set (typically by sema's overload resolution for an
+             * overloaded function-template name), the instantiation
+             * pass uses it directly instead of doing a name-only
+             * registry lookup that may return the wrong overload.
+             * NULL when no resolution happened — registry_find is
+             * the fallback. */
+            Node *resolved_tmpl;
         } template_id;
 
         /* ND_TRANSLATION_UNIT — N4659 §A.5 (grammar) / §5.2/2

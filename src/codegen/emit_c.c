@@ -2708,6 +2708,17 @@ static void emit_expr(Node *n) {
         /* For &(ref_param): the ref is already a pointer, so &(*x)
          * cancels out to just x. Suppress the deref. */
         if (n->unary.op == TK_AMP) g_suppress_ref_deref = true;
+        /* `delete v` — N4659 §8.3.5 [expr.delete]. Stub: emit
+         * `((void)(v))` (discard, no-op). Same TODO as ND_CAST's
+         * `new` stub; a proper fix would emit __builtin_free + dtor.
+         * The caller-side void context is preserved by the explicit
+         * (void) cast. */
+        if (n->unary.op == TK_KW_DELETE) {
+            fputs("((void)(", stdout);
+            emit_expr(n->unary.operand);
+            fputs("))", stdout);
+            return;
+        }
         /* For *(ref_param): deref the pointer, then deref again —
          * the user explicitly asked for indirection on a ref. */
         fputc('(', stdout);
@@ -3574,6 +3585,20 @@ static void emit_expr(Node *n) {
         return;
     }
     case ND_CAST:
+        /* `new T` parses as ND_CAST with cast.ty=T and operand=NULL
+         * (parser reuses the CAST node — see expr.c new-expression
+         * handling). Emit as `((T*)0)` — typed null. Stub: doesn't
+         * actually allocate; suitable when the call site never runs
+         * (most gcc 4.8 vec_alloc<T> single-template-param invocations
+         * are unreachable in cc1plus). A proper fix would emit
+         * `((T*)__builtin_malloc(sizeof(T)))` plus a ctor call.
+         * TODO(seafront#new-expr): real allocation. */
+        if (!n->cast.operand) {
+            fputs("((", stdout);
+            emit_type(n->cast.ty);
+            fputs("*)0)", stdout);
+            return;
+        }
         fputc('(', stdout);
         emit_type(n->cast.ty);
         fputc(')', stdout);

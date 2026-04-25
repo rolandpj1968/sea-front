@@ -592,7 +592,14 @@ static void collect_from_node(InstCollector *col, Node *n) {
                 if (aty && aty->kind == TY_DEPENDENT) has_dep = true;
             }
             if (!has_dep && tname) {
-                Node *tmpl = registry_find(col->reg, tname->loc, tname->len);
+                /* Use sema's resolved template if it set one — for
+                 * overloaded function templates the name alone isn't
+                 * enough to pick the right entry. Falls back to
+                 * registry_find for class-template ids and other
+                 * paths that don't tag the resolved template. */
+                Node *tmpl = tid->template_id.resolved_tmpl;
+                if (!tmpl)
+                    tmpl = registry_find(col->reg, tname->loc, tname->len);
                 if (tmpl) {
                     InstRequest *req = arena_alloc(col->arena, sizeof(InstRequest));
                     req->name = tname;
