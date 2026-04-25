@@ -335,7 +335,7 @@ Declaration *lookup_kind_from(DeclarativeRegion *start, const char *name,
 /* Disambiguation oracles                                             */
 /*                                                                    */
 /* These are the "two semantic oracles" identified in                 */
-/* doc/disambiguation-rules.md. They are convenience wrappers around  */
+/* docs/disambiguation-rules.md. They are convenience wrappers around */
 /* unqualified name lookup that inspect the EntityKind of the result. */
 /* ------------------------------------------------------------------ */
 

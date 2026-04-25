@@ -32,60 +32,42 @@ hex0 → ... → mescc → tcc → gcc 4.7.4
 
 ## Status
 
-**Active development.** The lexer, parser, semantic analysis, template
-instantiation, and C code generator are all working.
+**Active development.** Lexer, parser, sema, template instantiation, and C
+codegen are all working end-to-end. Plumbed into the gcc 4.8 build via a
+`sea-front-cc` wrapper script that intercepts CXX compilation
+(preprocess → sea-front → cc).
 
 ### Bootstrap Targets
 
 | Stage | Target | C++ Standard | Status |
 |-------|--------|-------------|--------|
-| **A** | gcc 4.8 (bootstrap bridge) | C++03 | In progress — core templates working |
+| **A** | gcc 4.8 (bootstrap bridge) | C++03 | ~98% of objects build via real Makefile + sea-front-cc |
 | **B** | Modern gcc | C++14 | Grammar ready, features incremental |
 | **C** | LLVM/Clang | C++17 | Grammar ready, features incremental |
 
-Stage A is the immediate goal: transpile gcc 4.8's C++ source to C,
-producing the first C++ compiler in the trusted bootstrap chain.
-Stages B and C extend upward to modern compilers. See
-[Trusted Bootstrap Design](doc/trusted-bootstrap-design.md) for details.
+Stage A is the immediate goal: transpile gcc 4.8's C++ source to C, producing
+the first C++ compiler in the trusted bootstrap chain. Stages B and C extend
+upward to modern compilers. See
+[Trusted Bootstrap Design](docs/trusted-bootstrap-design.md).
 
 | Component | Status |
 |-----------|--------|
 | Lexer | Complete — handles all C++17 tokens, string prefixes, raw strings, digraphs |
 | Parser | Complete — full C++17 grammar, recursive descent, tentative parsing |
-| Name Lookup | Complete — declarative regions, unqualified/qualified lookup, using-directives |
-| Sema | First slice — type propagation, member resolution, implicit `this` |
-| **Template Instantiation** | **Working** — class templates, function templates, defaults, dedup, transitive deps |
-| C Codegen | Working — structs, vtables, ctors/dtors, scope cleanup, name mangling |
+| Name Lookup | Complete — declarative regions, unqualified/qualified, using-directives |
+| Sema | First slice — type propagation, member resolution, implicit `this`, operator overload return types |
+| Template Instantiation | Working — class + function templates, member templates, deduction, dedup, transitive deps |
+| C Codegen | Working — structs, vtables, ctors/dtors, scope cleanup, name mangling, temp materialization |
 | Standard Library | 80/80 libstdc++ headers parse and emit through `--emit-c` |
 
 ### Test Suite
 
-- 144 unit tests (lexer)
+- 144 lexer unit tests
 - 42 parser integration tests
-- 186 emit-c end-to-end tests (C++ in → C out → compile → execute → verify)
+- 187 emit-c end-to-end tests (C++ in → C out → compile → execute → verify)
 - 28/28 gated + 52/52 stretch libstdc++ header smoke tests
-- 1 multi-TU test
-- 70+ of ~50 gcc 4.8 source files tested end-to-end via sea-front-cc
-  (transpile → compile) compile cleanly
-
-### Template Instantiation
-
-The template engine uses AST-level cloning with type substitution:
-
-```
-template<typename T>               /* C++: struct holder */
-struct holder {          ──────>   struct sf__holder_t_int_te_ {
-    T value;                           int value;
-    T get() { return value; }      };
-};                                 __SF_INLINE int sf__holder_t_int_te___get(
-                                       struct sf__holder_t_int_te_ *this) {
-holder<int> h;                         return this->value;
-h.set(42);                         }
-```
-
-Supports: multiple type parameters, default arguments (including template-id
-defaults like `Alloc = allocator<T>`), namespace-scoped templates, nested/transitive
-instantiation, out-of-class method definitions, deduplication, topological ordering.
+- gcc 4.8 source: 384/391 source files (~98%) compile via real Makefile +
+  `sea-front-cc`
 
 ## Building
 
@@ -94,8 +76,8 @@ make            # build sea-front + mcpp preprocessor
 make test       # run full test suite
 ```
 
-Requires: a C11 compiler (gcc or clang), and gcc 13 libstdc++ headers for
-the header smoke tests.
+Requires: a C11 compiler (gcc or clang), and gcc 13 libstdc++ headers for the
+header smoke tests.
 
 ### Bootstrap Build
 
@@ -116,21 +98,39 @@ bash bootstrap.sh   # single-command build with no make dependency
 # With preprocessor (for real headers)
 ./build/mcpp-bin -+ -W0 -V201103L -I/usr/include/c++/13 ... input.cpp > input.i
 ./build/sea-front --emit-c input.i > output.c
+
+# As a CXX wrapper for a real build system
+make CXX=./scripts/sea-front-cc CXX_FOR_BUILD=g++ ...
 ```
 
 ## Documentation
 
+### Bootstrap context
+
 | Document | Description |
 |----------|-------------|
-| [Trusted Bootstrap Design](doc/trusted-bootstrap-design.md) | Architecture, design decisions, the concrete bootstrap chain |
-| [C++ Feature Survey](doc/cxx-feature-survey.md) | What C++ features GCC and Clang require, implementation stages |
-| [Grammar Evolution](doc/grammar-evolution.md) | C++17 → C++20 → C++23 grammar changes and impact assessment |
-| [Disambiguation Rules](doc/disambiguation-rules.md) | Complete audit of C++ parsing ambiguities |
-| [Lexer Design](doc/lexer-design.md) | Lexer architecture and token representation |
-| [Coding Standards](doc/coding-standards.md) | Project coding conventions |
-| [Mangling Design](docs/mangling.md) | Name mangling framework (human-readable + Itanium) |
+| [Trusted Bootstrap Design](docs/trusted-bootstrap-design.md) | Architecture, design decisions, the concrete bootstrap chain |
+| [C++ Feature Survey](docs/cxx-feature-survey.md) | What features GCC and Clang require, implementation stages |
+
+### Design
+
+| Document | Description |
+|----------|-------------|
+| [Grammar Evolution](docs/grammar-evolution.md) | C++17 → C++20 → C++23 grammar changes |
+| [Disambiguation Rules](docs/disambiguation-rules.md) | Audit of C++ parsing ambiguities |
+| [Mangling](docs/mangling.md) | Name mangling framework (human-readable + Itanium) |
 | [Inline & Dedup](docs/inline_and_dedup.md) | Multi-TU deduplication strategy |
-| [Two-Phase Lookup](docs/two-phase-lookup.md) | Template name lookup — current state and remaining shortcuts |
+| [Coding Standards](docs/coding-standards.md) | Project coding conventions |
+
+### Implementation pipeline (in execution order)
+
+| Document | Description |
+|----------|-------------|
+| [Lexer](docs/lexer-design.md) | Lexer architecture and token representation |
+| [AST](docs/ast.md) | AST + Type representation, slot-by-slot, including interim "ambiguous" forms |
+| [Parser](docs/parser.md) | Recursive descent strategy, ambiguity resolution, two semantic oracles |
+| [Template Instantiation](docs/template-instantiation.md) | Cloning + substitution, deduction, dedup, lookup phases |
+| [Emit](docs/emit.md) | C++ → C translation: classes, methods, templates, references, cleanup |
 
 ### Generated Output Examples
 
@@ -150,13 +150,15 @@ the transpiler's output quality. Each emitted C definition includes a
 
 ## Known Gaps
 
-- Partial template specialization — not yet implemented (full specialization works)
+- Partial template specialization — full specialization works
 - SFINAE / `enable_if` — not yet supported
-- Lambda lowering — parsed but not transpiled
-- `auto` / `decltype` type deduction — parsed but not resolved
-- Standard library instantiation — headers parse and emit, but some
-  library internals use advanced patterns (partial specialization,
-  SFINAE) not yet supported
+- Lambdas — parsed but not transpiled
+- `auto` / `decltype` deduction — parsed but not resolved
+- ADL in dependent contexts (template instantiation lookup is a partial
+  Phase-1/Phase-2 implementation)
+- Variadic templates (out of scope for the C++03 bootstrap target)
+- A handful of `SHORTCUT`-tagged narrow lowerings (vNULL, arg-type mangling
+  fallback for unresolved qualified calls) — greppable, each cited
 
 ## License
 

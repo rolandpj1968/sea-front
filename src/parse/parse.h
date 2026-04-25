@@ -1432,7 +1432,7 @@ Declaration *lookup_kind_from(DeclarativeRegion *start, const char *name,
  * §10.1.7.1: type-name = class-name | enum-name | typedef-name
  * §17.1:     template-name = name of a template
  *
- * These are the "two semantic oracles" from doc/disambiguation-rules.md.
+ * These are the "two semantic oracles" from docs/disambiguation-rules.md.
  */
 bool lookup_is_type_name(Parser *p, Token *tok);
 bool lookup_is_template_name(Parser *p, Token *tok);
