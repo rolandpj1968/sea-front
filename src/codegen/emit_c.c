@@ -7173,27 +7173,50 @@ void emit_c(Node *tu) {
         Type *ty = n->var_decl.ty;
         if (!ty || ty->kind != TY_ARRAY) continue;
         if (!n->var_decl.name) continue;
+        /* Skip 'extern' decls — they reference definitions in another
+         * TU, so a tentative decl here would conflict with the real
+         * extern's qualifiers (const, etc.). The cpp-ed source already
+         * has the extern declaration verbatim. */
+        if (n->var_decl.storage_flags & DECL_EXTERN) continue;
         Type *elem = ty->base;
         if (!elem) continue;
         /* Restrict to scalar / pointer element types. Struct/union
          * elements would require the element type to already be
          * complete, which is the very ordering problem we can't
-         * pre-solve here. */
+         * pre-solve here. Pointer-to-function elements need the
+         * grouped-declarator '(*name[N])(args)' shape that
+         * emit_var_decl_inner handles — not the plain emit_type
+         * path used here. */
         if (elem->kind == TY_STRUCT || elem->kind == TY_UNION ||
             elem->kind == TY_ARRAY  || elem->kind == TY_FUNC)
             continue;
-        /* Determine the size: either the explicit array length, or
-         * count the initializer's elements when the source used '[]'.
-         * Without a known size we can't help — skip. */
-        int len = ty->array_len;
-        if (len < 0 && n->var_decl.init &&
-            n->var_decl.init->kind == ND_INIT_LIST)
-            len = n->var_decl.init->init_list.nelems;
-        if (len < 0) continue;
+        if (elem->kind == TY_PTR && elem->base &&
+            elem->base->kind == TY_FUNC)
+            continue;
+        /* Determine the size. The tentative decl MUST agree with the
+         * full definition, so prefer the source-given size expression
+         * (e.g. '[NOTE_INSN_MAX + 1]' — possibly larger than the
+         * initializer) over the initializer's element count. Without
+         * any usable size, skip — emitting 'T name;' would declare a
+         * scalar rather than an array, conflicting with the eventual
+         * 'T name[N] = {...};' definition. */
+        bool have_size = ty->array_len >= 0 || ty->array_size_expr ||
+            (n->var_decl.init && n->var_decl.init->kind == ND_INIT_LIST);
+        if (!have_size) continue;
         if (n->var_decl.storage_flags & DECL_STATIC) fputs("static ", stdout);
         emit_type(elem);
-        fprintf(stdout, " %.*s[%d];\n",
-                n->var_decl.name->len, n->var_decl.name->loc, len);
+        fprintf(stdout, " %.*s",
+                n->var_decl.name->len, n->var_decl.name->loc);
+        if (ty->array_len >= 0) {
+            fprintf(stdout, "[%d];\n", ty->array_len);
+        } else if (ty->array_size_expr) {
+            fputc('[', stdout);
+            emit_expr(ty->array_size_expr);
+            fputs("];\n", stdout);
+        } else {
+            fprintf(stdout, "[%d];\n",
+                    n->var_decl.init->init_list.nelems);
+        }
     }
 
     /* Pass 1: struct bodies only */

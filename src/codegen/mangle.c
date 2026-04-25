@@ -153,6 +153,12 @@ static void emit_type_for_mangle(Type *ty) {
     case TY_PTR:     emit_type_for_mangle(ty->base); fputs("_ptr", stdout); return;
     case TY_REF:     emit_type_for_mangle(ty->base); fputs("_ref", stdout); return;
     case TY_RVALREF: emit_type_for_mangle(ty->base); fputs("_rref", stdout); return;
+    /* Array-as-parameter decays to pointer — N4659 §11.3.4/5
+     * [dcl.array]. Mangling must use the decayed form so a
+     * forward-decl 'f(T*)' and a definition 'f(T arr[N])' produce
+     * the same symbol. Without this, gengtype.c's set_gc_used_type
+     * had distinct mangled names for fwd-decl vs def. */
+    case TY_ARRAY:   emit_type_for_mangle(ty->base); fputs("_ptr", stdout); return;
     case TY_STRUCT: case TY_UNION:
         if (ty->tag) fprintf(stdout, "%.*s", ty->tag->len, ty->tag->loc);
         else fputs("anon", stdout);
