@@ -115,6 +115,8 @@ void mangle_class_vtable_instance(Type *class_type);
  * Exposed so emit_c.c call-site rewrites can stay in sync with the
  * canonical mangling path. */
 void mangle_param_suffix(Type **param_types, int nparams);
+int  mangle_param_suffix_to_buf(Type **param_types, int nparams,
+                                 char *buf, int pos, int max);
 
 /* Encode a type into a buffer using the same scheme as
  * emit_type_for_mangle (the C-symbol-safe encoding used in mangled

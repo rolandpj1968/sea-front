@@ -1132,151 +1132,92 @@ static int g_anon_counter = 0;
  *     name. Mismatched signatures (abs(int) decl vs abs(long) def)
  *     are a C conflicting-types error — we can't detect that without
  *     signature tracking, so rely on the header-include order. */
+/* Canonical free-function signature key.
+ *
+ * Replaces a previous patchwork of partial-signature predicates
+ * (nparams + first_param_kind + first_param_tag + first_param_is_
+ * unsigned + ...) that had to grow every time a new C++ distinction
+ * surfaced (signed vs unsigned, enum tags, ref vs ptr). The mangler
+ * already encodes every distinction the language considers
+ * meaningful; using its output as the equality key turns "are these
+ * two decls the same function?" into a string compare and removes
+ * the need for per-feature predicates entirely.
+ *
+ * Key form:  <name>_p_<param1>_<param2>..._pe_  — name plus the
+ * standard '_p_..._pe_' param suffix (mangle_param_suffix encoding).
+ * Used both for dedup (same key → same function) and overload
+ * detection (multiple keys for one name → overloaded). */
+#define FUNC_SIG_KEY_MAX 512
 typedef struct {
-    const char *loc;
-    int len;
-    bool is_def;
-    /* Coarse signature fingerprint: (nparams, first_param_kind,
-     * first_param_tag). Used to detect same-name-different-type
-     * overloads at the decl↔def boundary.
-     *
-     * nparams + first_param_kind alone was insufficient when both
-     * overloads took a TY_PTR (e.g. gcc 4.8's
-     *   extern bool bitmap_bit_p(bitmap_head_def*, int)   [bitmap.h]
-     *   static inline ulong bitmap_bit_p(simple_bitmap_def*, int)  [sbitmap.h]
-     * ). Record the first param's struct/union TAG too for TY_PTR,
-     * so the two overloads stay distinct and we skip the conflicting
-     * definition. */
-    int nparams;
-    int first_param_kind;
-    const char *first_param_tag;  /* NULL when not TY_PTR to a tagged struct/union */
-    int first_param_tag_len;
-} FuncSeen;
-static FuncSeen g_func_seen[8192];
-static int g_func_nseen = 0;
+    char  key[FUNC_SIG_KEY_MAX];
+    int   key_len;
+    Token *name;       /* original source token, for emit + lookup */
+    bool  is_def;
+} FuncSig;
+static FuncSig g_func_sigs[8192];
+static int g_n_func_sigs = 0;
 
-static int func_first_param_kind(Type *fty) {
-    if (!fty || fty->kind != TY_FUNC || fty->nparams < 1) return -1;
-    Type *p = fty->params[0];
-    return p ? (int)p->kind : -1;
+/* Build the canonical key for (name, params). Returns key length
+ * written into buf (which must be at least FUNC_SIG_KEY_MAX). */
+static int func_sig_key(Token *name, Type **params, int nparams,
+                          char *buf) {
+    int pos = 0;
+    if (name && name->len > 0 && pos + name->len < FUNC_SIG_KEY_MAX) {
+        memcpy(buf + pos, name->loc, name->len);
+        pos += name->len;
+    }
+    pos = mangle_param_suffix_to_buf(params, nparams, buf, pos,
+                                       FUNC_SIG_KEY_MAX);
+    return pos;
 }
 
-/* First param's struct/union tag (for disambiguating TY_PTR overloads
- * like bitmap_bit_p(bitmap_head_def*,int) vs bitmap_bit_p(simple_bitmap_def*,int)).
- * Returns NULL when not a pointer to a tagged struct/union. */
-static Token *func_first_param_ptr_tag(Type *fty) {
-    if (!fty || fty->kind != TY_FUNC || fty->nparams < 1) return NULL;
-    Type *p = fty->params[0];
-    if (!p || p->kind != TY_PTR || !p->base) return NULL;
-    Type *pointee = p->base;
-    if ((pointee->kind == TY_STRUCT || pointee->kind == TY_UNION))
-        return pointee->tag;
-    return NULL;
-}
-
-/* Compare two (tag-pointer, len) fingerprints. NULL matches NULL. */
-static bool func_tag_match(const char *a, int a_len,
-                            const char *b, int b_len) {
-    if (!a && !b) return true;
-    if (!a || !b) return false;
-    if (a_len != b_len) return false;
-    return memcmp(a, b, a_len) == 0;
-}
-
-static FuncSeen *func_seen_find(Token *name) {
-    if (!name) return NULL;
-    for (int i = 0; i < g_func_nseen; i++) {
-        if (g_func_seen[i].len == name->len &&
-            memcmp(g_func_seen[i].loc, name->loc, name->len) == 0)
-            return &g_func_seen[i];
+/* Find a previously-registered sig matching this key. */
+static FuncSig *func_sig_find_key(const char *key, int key_len) {
+    for (int i = 0; i < g_n_func_sigs; i++) {
+        if (g_func_sigs[i].key_len == key_len &&
+            memcmp(g_func_sigs[i].key, key, key_len) == 0)
+            return &g_func_sigs[i];
     }
     return NULL;
 }
 
-/* Signature-aware variant: find by name + nparams + first_param_kind.
- * Returns NULL if no exact match exists, so overloaded free functions
- * (like union_or_struct_p(enum) vs union_or_struct_p(type_p)) aren't
- * incorrectly deduped. */
-static FuncSeen *func_seen_find_sig(Token *name, int nparams,
-                                      int first_param_kind,
-                                      Token *first_param_tag) {
-    if (!name) return NULL;
-    const char *tag_loc = first_param_tag ? first_param_tag->loc : NULL;
-    int tag_len = first_param_tag ? first_param_tag->len : 0;
-    for (int i = 0; i < g_func_nseen; i++) {
-        if (g_func_seen[i].len != name->len) continue;
-        if (memcmp(g_func_seen[i].loc, name->loc, name->len) != 0) continue;
-        if (g_func_seen[i].nparams == nparams &&
-            g_func_seen[i].first_param_kind == first_param_kind &&
-            func_tag_match(g_func_seen[i].first_param_tag,
-                           g_func_seen[i].first_param_tag_len,
-                           tag_loc, tag_len))
-            return &g_func_seen[i];
-    }
-    return NULL;
+/* Add a new sig entry; returns it. Caller pre-checked it's new. */
+static FuncSig *func_sig_add(Token *name, const char *key, int key_len,
+                              bool is_def) {
+    if (g_n_func_sigs >= 8192) return NULL;
+    FuncSig *e = &g_func_sigs[g_n_func_sigs++];
+    memcpy(e->key, key, key_len);
+    e->key_len = key_len;
+    e->name = name;
+    e->is_def = is_def;
+    return e;
 }
 
-/* Both kinds' dedup take (nparams, first_param_kind, first_param_tag)
- * to compare signatures. Callers pass -1/NULL when info is unavailable;
- * that matches any recorded signature (conservative — preserves pre-
- * signature behavior for older call sites). */
-static bool func_decl_dedup_check_sig(Token *name, int nparams,
-                                       int first_param_kind,
-                                       Token *first_param_tag) {
+/* DECL dedup: a forward declaration we've seen before (any kind —
+ * decl or def) gets skipped. Returns true if dup. */
+static bool func_decl_dedup_check_sig(Token *name, Type **params, int nparams) {
     if (!name) return false;
-    /* Look up by FULL signature, not just name. Two overloads of the
-     * same name (different nparams or different first-param type) need
-     * to BOTH have their forward declarations emitted, otherwise the
-     * call site that mangles to the second overload's name has no
-     * declaration in scope. Pattern: gcc 4.8 cp/parser.c
-     *   static tree cp_parser_expression(cp_parser*, bool, cp_id_kind*);
-     *   static tree cp_parser_expression(cp_parser*, bool, bool, cp_id_kind*);
-     */
-    if (func_seen_find_sig(name, nparams, first_param_kind, first_param_tag))
-        return true;
-    if (g_func_nseen < 8192) {
-        g_func_seen[g_func_nseen].loc = name->loc;
-        g_func_seen[g_func_nseen].len = name->len;
-        g_func_seen[g_func_nseen].is_def = false;
-        g_func_seen[g_func_nseen].nparams = nparams;
-        g_func_seen[g_func_nseen].first_param_kind = first_param_kind;
-        g_func_seen[g_func_nseen].first_param_tag =
-            first_param_tag ? first_param_tag->loc : NULL;
-        g_func_seen[g_func_nseen].first_param_tag_len =
-            first_param_tag ? first_param_tag->len : 0;
-        g_func_nseen++;
-    }
+    char key[FUNC_SIG_KEY_MAX];
+    int key_len = func_sig_key(name, params, nparams, key);
+    if (func_sig_find_key(key, key_len)) return true;
+    func_sig_add(name, key, key_len, /*is_def=*/false);
     return false;
 }
 
-static bool func_def_dedup_check_sig(Token *name, int nparams,
-                                      int first_param_kind,
-                                      Token *first_param_tag) {
+/* DEF dedup: seeing a def for a sig that was already a def → skip
+ * (header-include duplicate). A def for a sig previously seen as a
+ * decl → upgrade to def, emit. New sig → register, emit. */
+static bool func_def_dedup_check_sig(Token *name, Type **params, int nparams) {
     if (!name) return false;
-    const char *tag_loc = first_param_tag ? first_param_tag->loc : NULL;
-    int tag_len = first_param_tag ? first_param_tag->len : 0;
-    /* Look up the entry with matching FULL signature (not just name).
-     * Two overloads of 'f' with different param shapes each have
-     * their own decl→def upgrade — without sig-aware lookup, the
-     * second overload's def would find the first overload's decl
-     * entry and skip itself. */
-    FuncSeen *fs = func_seen_find_sig(name, nparams, first_param_kind,
-                                       first_param_tag);
+    char key[FUNC_SIG_KEY_MAX];
+    int key_len = func_sig_key(name, params, nparams, key);
+    FuncSig *fs = func_sig_find_key(key, key_len);
     if (fs) {
         if (fs->is_def) return true;
         fs->is_def = true;
         return false;
     }
-    if (g_func_nseen < 8192) {
-        g_func_seen[g_func_nseen].loc = name->loc;
-        g_func_seen[g_func_nseen].len = name->len;
-        g_func_seen[g_func_nseen].is_def = true;
-        g_func_seen[g_func_nseen].nparams = nparams;
-        g_func_seen[g_func_nseen].first_param_kind = first_param_kind;
-        g_func_seen[g_func_nseen].first_param_tag = tag_loc;
-        g_func_seen[g_func_nseen].first_param_tag_len = tag_len;
-        g_func_nseen++;
-    }
+    func_sig_add(name, key, key_len, /*is_def=*/true);
     return false;
 }
 
@@ -3443,46 +3384,19 @@ static void emit_expr(Node *n) {
                         }
                     }
                 }
-                /* Arg substitution from resolved_decl's params:
-                 *   - null pointer constant → param's pointer type
-                 *     (N4659 §4.10/1 [conv.ptr])
-                 *   - pointer with different cv-qualifiers but
-                 *     same pointee tag → param's qualified pointer
-                 *     (N4659 §7.3 [conv]/qualification conversion)
-                 * Without these, the call mangles with the literal
-                 * arg type (void*, non-const T*) while the def
-                 * mangles with the param type (T*, const T*) — symbol
-                 * mismatch at link time.
-                 *
-                 * Only substitute when the post-injection nargs (na)
-                 * matches the resolved_decl's nparams, so we know
-                 * the param/arg slots line up. */
+                /* When sema resolved the overload, the def's param
+                 * types ARE the canonical mangling source. Use them
+                 * directly instead of arg types — handles every
+                 * adaptation (null-ptr, cv qualifiers, ref vs value,
+                 * enum tag promotion, integer conversions) in one
+                 * sweep. Falls back to arg types only when sema
+                 * couldn't resolve (rd_fty NULL or arity mismatch).
+                 * N4659 §16.5 [over.oper] — the symbol identifies
+                 * the function, which is determined by its declared
+                 * signature, not the call's arg types. */
                 if (rd_fty && rd_fty->nparams == na) {
-                    for (int i = 0; i < n->call.nargs && i < na; i++) {
-                        Type *t = at[i];
-                        Type *pt = rd_fty->params[i];
-                        if (!t || !pt) continue;
-                        /* Null pointer → any pointer (or array param,
-                         * which decays to pointer). */
-                        if (t->kind == TY_PTR && t->base &&
-                            t->base->kind == TY_VOID &&
-                            (pt->kind == TY_PTR || pt->kind == TY_ARRAY)) {
-                            at[i] = pt;
-                            continue;
-                        }
-                        /* Same-tag pointer with cv difference. Also
-                         * handles param-as-array (decays to ptr). */
-                        bool pt_ptrlike = pt->kind == TY_PTR ||
-                                          pt->kind == TY_ARRAY;
-                        if (t->kind == TY_PTR && pt_ptrlike &&
-                            t->base && pt->base &&
-                            t->base->tag && pt->base->tag &&
-                            t->base->tag->len == pt->base->tag->len &&
-                            memcmp(t->base->tag->loc, pt->base->tag->loc,
-                                   t->base->tag->len) == 0) {
-                            at[i] = pt;
-                        }
-                    }
+                    for (int i = 0; i < na; i++)
+                        at[i] = rd_fty->params[i];
                 }
                 if (getenv("SF_DBG_CALL")) {
                     Token *nm = n->call.callee->ident.name;
@@ -5803,156 +5717,85 @@ static void emit_func_body(Node *func) {
  * call sites produce the same bytes. N4659 §16.5 [over.oper] on
  * overloaded names; the C-level encoding is our own. */
 
-/* Which free-function names at TU scope have >1 declaration?
- * Populated once at emit_c entry; consulted by every free-func
- * emission site. We store pointers to Token.loc (owned by the
- * source buffer) so no copies; equality is length+memcmp. */
-#define FREE_OVLD_NAMES_CAP 4096
-static Token *g_free_ovld_names[FREE_OVLD_NAMES_CAP];
-static int    g_n_free_ovld_names = 0;
-
-/* Called by emit_c at entry. Walks tu->tu.decls[] (plus flat blocks
- * like 'extern "C"' or namespace contents) counting free-function
- * declarations per name; every name with count >= 2 gets its Token
- * added to g_free_ovld_names. Quadratic scan is fine for one-shot
- * emission. Block-scope externs aren't seen here — those get
- * handled opportunistically at their call site. */
-static void free_ovld_register(Token *name) {
-    if (!name) return;
-    for (int i = 0; i < g_n_free_ovld_names; i++) {
-        Token *e = g_free_ovld_names[i];
-        if (e->len == name->len &&
-            memcmp(e->loc, name->loc, name->len) == 0)
-            return;  /* already registered */
-    }
-    if (g_n_free_ovld_names < FREE_OVLD_NAMES_CAP)
-        g_free_ovld_names[g_n_free_ovld_names++] = name;
-}
-
-/* (name-ptr, per-param signature key) used to detect OVERLOADING:
- * multiple declarations with the same name AND DIFFERENT signatures.
- * A forward decl + matching definition is NOT overloading — same
- * signature → same function. Per-param tag matters for cases like
- * 'dump_bitmap(FILE*, bitmap_head_def*)' vs
- * 'dump_bitmap(FILE*, simple_bitmap_def*)' — first param matches
- * but second diverges. */
+/* Overload detection uses the same canonical signature key that
+ * the dedup tables use (func_sig_key). See the FreeFuncSig
+ * comment block below for the full rationale. */
+/* Overload-detection scratch table.
+ *
+ * Pre-pass walks the TU collecting (name, sig_key) pairs for every
+ * free function decl/def. After the walk, a name is "overloaded"
+ * iff the table contains 2+ DISTINCT sig keys for that name.
+ *
+ * The sig key uses func_sig_key (the same canonical mangler-output
+ * encoding used for emit-time dedup), so the equality check is a
+ * single string compare — no per-feature predicates to forget. */
 #define FFSIG_MAX_PARAMS 16
 typedef struct {
     Token *name;
-    int    nparams;
-    int    kind[FFSIG_MAX_PARAMS];      /* TypeKind or -1 */
-    const char *tag[FFSIG_MAX_PARAMS];  /* struct/union tag for TY_PTR->TY_STRUCT, or NULL */
-    int    tag_len[FFSIG_MAX_PARAMS];
+    char   key[FUNC_SIG_KEY_MAX];
+    int    key_len;
 } FreeFuncSig;
 
-static bool ffsig_matches_name(const FreeFuncSig *a, Token *name) {
-    return a->name && name && a->name->len == name->len &&
-           memcmp(a->name->loc, name->loc, name->len) == 0;
-}
+static FreeFuncSig g_ffsig_seen[16384];
+static int         g_n_ffsig_seen = 0;
 
-static bool ffsig_same_sig(const FreeFuncSig *a, const FreeFuncSig *b) {
-    if (a->nparams != b->nparams) return false;
-    int n = a->nparams < FFSIG_MAX_PARAMS ? a->nparams : FFSIG_MAX_PARAMS;
-    for (int i = 0; i < n; i++) {
-        if (a->kind[i] != b->kind[i]) return false;
-        if (!!a->tag[i] != !!b->tag[i]) return false;
-        if (a->tag[i]) {
-            if (a->tag_len[i] != b->tag_len[i]) return false;
-            if (memcmp(a->tag[i], b->tag[i], a->tag_len[i]) != 0) return false;
-        }
-    }
-    return true;
-}
-
-/* Fill a FreeFuncSig from a TY_FUNC Type. */
-static void ffsig_fill(FreeFuncSig *out, Token *name, Type *fty) {
-    out->name = name;
-    out->nparams = fty->nparams;
-    int n = fty->nparams < FFSIG_MAX_PARAMS ? fty->nparams : FFSIG_MAX_PARAMS;
-    for (int i = 0; i < n; i++) {
-        Type *p = fty->params[i];
-        out->kind[i] = p ? (int)p->kind : -1;
-        out->tag[i] = NULL;
-        out->tag_len[i] = 0;
-        if (p && p->kind == TY_PTR && p->base &&
-            (p->base->kind == TY_STRUCT || p->base->kind == TY_UNION) &&
-            p->base->tag) {
-            out->tag[i] = p->base->tag->loc;
-            out->tag_len[i] = p->base->tag->len;
-        } else if (p && p->kind == TY_ENUM && p->tag) {
-            /* Distinguish enum types by tag — without this, two
-             * overloads `f(enum A)` and `f(enum B)` look identical
-             * and overload-mangling is skipped. Pattern: gcc 4.8
-             * gimple.h gimple_call_builtin_p has one overload for
-             * `enum built_in_class` and one for `enum built_in_function`. */
-            out->tag[i] = p->tag->loc;
-            out->tag_len[i] = p->tag->len;
-        }
-    }
-}
-
-static void free_ovld_walk(Node *n, FreeFuncSig *seen, int *nseen, int cap) {
+static void free_ovld_walk(Node *n) {
     if (!n) return;
     if (n->kind == ND_BLOCK && n->block.is_flat) {
         for (int i = 0; i < n->block.nstmts; i++)
-            free_ovld_walk(n->block.stmts[i], seen, nseen, cap);
+            free_ovld_walk(n->block.stmts[i]);
         return;
     }
     Token *name = NULL;
-    Type  *fty  = NULL;
+    Type **params = NULL;
+    int    nparams = 0;
+    static Type *tmp_params[FFSIG_MAX_PARAMS];
     if (n->kind == ND_FUNC_DEF || n->kind == ND_FUNC_DECL) {
         name = n->func.name;
-        /* Synthesize a signature view from func.params. */
-        static Type tmp;
-        static Type *tmp_params[32];
-        tmp.kind = TY_FUNC;
-        int np = n->func.nparams < 32 ? n->func.nparams : 32;
-        for (int i = 0; i < np; i++)
+        if (name && n->kind == ND_FUNC_DEF && n->func.class_type)
+            name = NULL;  /* class methods mangle via their own path */
+        nparams = n->func.nparams < FFSIG_MAX_PARAMS
+                    ? n->func.nparams : FFSIG_MAX_PARAMS;
+        for (int i = 0; i < nparams; i++)
             tmp_params[i] = n->func.params[i] ? n->func.params[i]->param.ty : NULL;
-        tmp.params = tmp_params;
-        tmp.nparams = np;
-        fty = &tmp;
+        params = tmp_params;
     } else if (n->kind == ND_VAR_DECL && n->var_decl.ty &&
                n->var_decl.ty->kind == TY_FUNC) {
         name = n->var_decl.name;
-        fty = n->var_decl.ty;
+        nparams = n->var_decl.ty->nparams;
+        params = n->var_decl.ty->params;
     }
-    /* Skip class methods — they mangle via their own path. */
-    if (name && n->kind == ND_FUNC_DEF && n->func.class_type) name = NULL;
-    if (!name || !fty) return;
-    FreeFuncSig cur;
-    memset(&cur, 0, sizeof(cur));
-    ffsig_fill(&cur, name, fty);
-    /* Look for another decl with same name, and check whether any
-     * of those has a DIFFERENT signature — then this name is
-     * overloaded. A match of (name, same signature) just means
-     * forward-decl + definition for the same function. */
-    for (int i = 0; i < *nseen; i++) {
-        if (!ffsig_matches_name(&seen[i], name)) continue;
-        if (!ffsig_same_sig(&seen[i], &cur)) {
-            free_ovld_register(name);
-            free_ovld_register(seen[i].name);
-        }
-    }
-    if (*nseen < cap) seen[(*nseen)++] = cur;
+    if (!name || g_n_ffsig_seen >= 16384) return;
+    FreeFuncSig *e = &g_ffsig_seen[g_n_ffsig_seen++];
+    e->name = name;
+    e->key_len = func_sig_key(name, params, nparams, e->key);
 }
 
 static void free_ovld_populate(Node *tu) {
-    g_n_free_ovld_names = 0;
+    g_n_ffsig_seen = 0;
     if (!tu || tu->kind != ND_TRANSLATION_UNIT) return;
-    enum { SEEN_CAP = 16384 };
-    static FreeFuncSig seen[SEEN_CAP];
-    int nseen = 0;
     for (int i = 0; i < tu->tu.ndecls; i++)
-        free_ovld_walk(tu->tu.decls[i], seen, &nseen, SEEN_CAP);
+        free_ovld_walk(tu->tu.decls[i]);
 }
 
 static bool free_func_name_is_overloaded(Token *name) {
     if (!name) return false;
-    for (int i = 0; i < g_n_free_ovld_names; i++) {
-        Token *e = g_free_ovld_names[i];
-        if (e->len == name->len &&
-            memcmp(e->loc, name->loc, name->len) == 0)
+    /* Find the first entry for this name; remember its sig key.
+     * If any subsequent entry shares the name but has a different
+     * key, the name is overloaded. */
+    const char *first_key = NULL;
+    int first_key_len = 0;
+    for (int i = 0; i < g_n_ffsig_seen; i++) {
+        FreeFuncSig *e = &g_ffsig_seen[i];
+        if (e->name->len != name->len) continue;
+        if (memcmp(e->name->loc, name->loc, name->len) != 0) continue;
+        if (!first_key) {
+            first_key = e->key;
+            first_key_len = e->key_len;
+            continue;
+        }
+        if (e->key_len != first_key_len ||
+            memcmp(e->key, first_key, e->key_len) != 0)
             return true;
     }
     return false;
@@ -6817,25 +6660,19 @@ static void emit_top_level(Node *n) {
             emit_method_as_free_fn(n, n->func.class_type);
             g_current_class_def = saved;
         } else {
-            /* Dedup: inline functions from headers may be included multiple
-             * times in the preprocessed output. Skip redefinitions. */
-            {
-                Type *p0 = (n->func.nparams > 0 &&
-                            n->func.params[0] &&
-                            n->func.params[0]->param.ty)
-                    ? n->func.params[0]->param.ty : NULL;
-                Token *p0_tag = NULL;
-                if (p0 && p0->kind == TY_PTR && p0->base &&
-                    (p0->base->kind == TY_STRUCT || p0->base->kind == TY_UNION))
-                    p0_tag = p0->base->tag;
-                else if (p0 && p0->kind == TY_ENUM)
-                    p0_tag = p0->tag;
-                if (func_def_dedup_check_sig(n->func.name,
-                                              n->func.nparams,
-                                              p0 ? (int)p0->kind : -1,
-                                              p0_tag))
-                    return;
-            }
+            /* Dedup: inline functions from headers may be included
+             * multiple times in the preprocessed output. The dedup
+             * key is the full mangled signature (name + canonical
+             * param suffix) — same key = same function. */
+            Type *params[FFSIG_MAX_PARAMS];
+            int np = n->func.nparams < FFSIG_MAX_PARAMS
+                       ? n->func.nparams : FFSIG_MAX_PARAMS;
+            for (int i = 0; i < np; i++)
+                params[i] = (n->func.params[i] &&
+                             n->func.params[i]->kind == ND_PARAM)
+                              ? n->func.params[i]->param.ty : NULL;
+            if (func_def_dedup_check_sig(n->func.name, params, np))
+                return;
             emit_func_def(n);
         }
         return;
@@ -6877,14 +6714,10 @@ static void emit_top_level(Node *n) {
          * so we synthesize the C declaration shape directly here. */
         if (n->var_decl.ty && n->var_decl.ty->kind == TY_FUNC &&
             n->var_decl.name) {
-            {
-                Type *fty = n->var_decl.ty;
-                int np = fty ? fty->nparams : -1;
-                int k  = func_first_param_kind(fty);
-                Token *tag = func_first_param_ptr_tag(fty);
-                if (func_decl_dedup_check_sig(n->var_decl.name, np, k, tag))
-                    return;
-            }
+            if (func_decl_dedup_check_sig(n->var_decl.name,
+                                            n->var_decl.ty->params,
+                                            n->var_decl.ty->nparams))
+                return;
             emit_source_comment(n->tok);
             emit_storage_flags(n->var_decl.storage_flags);
             Type *fty = n->var_decl.ty;

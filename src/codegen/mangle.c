@@ -305,6 +305,29 @@ void mangle_param_suffix(Type **param_types, int nparams) {
     fputs("_pe_", stdout);
 }
 
+/* Buffered version of mangle_param_suffix. Used by the canonical
+ * function-signature key builder so two decls' equivalence can be
+ * decided by string comparison on the mangler's own output —
+ * eliminating the need for partial-signature predicates that have
+ * to be patched every time a new C++ distinction appears. */
+int mangle_param_suffix_to_buf(Type **param_types, int nparams,
+                                char *buf, int pos, int max) {
+    int n = snprintf(buf + pos, (size_t)(max - pos), "_p_");
+    if (n > 0) pos += n;
+    if (nparams == 0) {
+        n = snprintf(buf + pos, (size_t)(max - pos), "void");
+        if (n > 0) pos += n;
+    } else {
+        for (int i = 0; i < nparams; i++) {
+            if (i > 0 && pos < max - 1) buf[pos++] = '_';
+            pos = mangle_type_to_buf(param_types[i], buf, pos, max);
+        }
+    }
+    n = snprintf(buf + pos, (size_t)(max - pos), "_pe_");
+    if (n > 0) pos += n;
+    return pos;
+}
+
 void mangle_class_method(Type *class_type, Token *method_name,
                           Type **param_types, int nparams) {
     emit_class_open(class_type);
