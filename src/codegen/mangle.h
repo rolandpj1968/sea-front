@@ -116,4 +116,13 @@ void mangle_class_vtable_instance(Type *class_type);
  * canonical mangling path. */
 void mangle_param_suffix(Type **param_types, int nparams);
 
+/* Encode a type into a buffer using the same scheme as
+ * emit_type_for_mangle (the C-symbol-safe encoding used in mangled
+ * names). Returns the new buffer position. Used by the function-
+ * template instantiation pass to build a mangled name where each
+ * arg's encoding must agree with what the codegen mangler emits
+ * elsewhere. C-safe: no '<', '>', or other illegal-in-identifier
+ * characters. */
+int mangle_type_to_buf(Type *ty, char *buf, int pos, int max);
+
 #endif /* SF_CODEGEN_MANGLE_H */

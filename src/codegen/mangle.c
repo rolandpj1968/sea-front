@@ -183,6 +183,77 @@ static void emit_type_for_mangle(Type *ty) {
     }
 }
 
+/* Buffer-output version of emit_type_for_mangle. Same encoding,
+ * different sink. Used by template instantiation to build a
+ * function-symbol mangled name in an arena buffer. Keep in lock-
+ * step with emit_type_for_mangle — adding a TypeKind here means
+ * adding it there too. */
+static int append_str(char *buf, int pos, int max, const char *s) {
+    while (*s && pos < max - 1) buf[pos++] = *s++;
+    return pos;
+}
+int mangle_type_to_buf(Type *ty, char *buf, int pos, int max) {
+    if (!ty) return append_str(buf, pos, max, "unknown");
+    if (ty->is_const)    pos = append_str(buf, pos, max, "const_");
+    if (ty->is_volatile) pos = append_str(buf, pos, max, "volatile_");
+    switch (ty->kind) {
+    case TY_VOID:    return append_str(buf, pos, max, "void");
+    case TY_BOOL:    return append_str(buf, pos, max, "bool");
+    case TY_CHAR:    return append_str(buf, pos, max, ty->is_unsigned ? "uchar" : "char");
+    case TY_CHAR16:  return append_str(buf, pos, max, "char16");
+    case TY_CHAR32:  return append_str(buf, pos, max, "char32");
+    case TY_WCHAR:   return append_str(buf, pos, max, "wchar");
+    case TY_SHORT:   return append_str(buf, pos, max, ty->is_unsigned ? "ushort" : "short");
+    case TY_INT:     return append_str(buf, pos, max, ty->is_unsigned ? "uint" : "int");
+    case TY_LONG:    return append_str(buf, pos, max, ty->is_unsigned ? "ulong" : "long");
+    case TY_LLONG:   return append_str(buf, pos, max, ty->is_unsigned ? "ullong" : "llong");
+    case TY_FLOAT:   return append_str(buf, pos, max, "float");
+    case TY_DOUBLE:  return append_str(buf, pos, max, "double");
+    case TY_LDOUBLE: return append_str(buf, pos, max, "ldouble");
+    case TY_PTR:
+        pos = mangle_type_to_buf(ty->base, buf, pos, max);
+        return append_str(buf, pos, max, "_ptr");
+    case TY_REF:
+        pos = mangle_type_to_buf(ty->base, buf, pos, max);
+        return append_str(buf, pos, max, "_ref");
+    case TY_RVALREF:
+        pos = mangle_type_to_buf(ty->base, buf, pos, max);
+        return append_str(buf, pos, max, "_rref");
+    case TY_ARRAY:
+        pos = mangle_type_to_buf(ty->base, buf, pos, max);
+        return append_str(buf, pos, max, "_ptr");
+    case TY_STRUCT: case TY_UNION:
+        if (ty->tag) {
+            int n = ty->tag->len;
+            if (pos + n > max - 1) n = max - 1 - pos;
+            if (n > 0) memcpy(buf + pos, ty->tag->loc, n);
+            pos += n;
+        } else {
+            pos = append_str(buf, pos, max, "anon");
+        }
+        if (ty->n_template_args > 0) {
+            pos = append_str(buf, pos, max, "_t_");
+            for (int i = 0; i < ty->n_template_args; i++) {
+                if (i > 0 && pos < max - 1) buf[pos++] = '_';
+                pos = mangle_type_to_buf(ty->template_args[i], buf, pos, max);
+            }
+            pos = append_str(buf, pos, max, "_te_");
+        }
+        return pos;
+    case TY_ENUM:
+        if (ty->tag) {
+            int n = ty->tag->len;
+            if (pos + n > max - 1) n = max - 1 - pos;
+            if (n > 0) memcpy(buf + pos, ty->tag->loc, n);
+            pos += n;
+            return pos;
+        }
+        return append_str(buf, pos, max, "anon_enum");
+    default:
+        return append_str(buf, pos, max, "unknown");
+    }
+}
+
 /* Open the class scope and emit its name. If the class type has
  * template arguments, emit them after the class name using the
  * _t_..._te_ encoding. The caller is responsible for any

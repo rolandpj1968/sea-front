@@ -14,6 +14,7 @@
 
 #include "instantiate.h"
 #include "clone.h"
+#include "../codegen/mangle.h"
 
 /* region_add_base_raw, region_declare_raw, region_build_class,
  * region_build_prototype, region_lookup_own, hash_name are all
@@ -1356,11 +1357,13 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
      * with a mangled name encoding the template args. */
     if (cloned->kind == ND_FUNC_DEF || cloned->kind == ND_FUNC_DECL) {
         /* Build a synthetic mangled name for the function.
-         * For now we build it by snprintf'ing into an arena buffer.
+         * Uses mangle_type_to_buf — the C-symbol-safe encoding —
+         * NOT type_to_key (which embeds '<', '>', 'P', 'S' for
+         * dedup hashing and would produce invalid C identifiers).
          * E.g. max_of<int> → max_of_t_int_te_ */
         Token *fname = cloned->func.name;
         int n = template_id->template_id.nargs;
-        int bufsize = 256;
+        int bufsize = 512;
         char *buf = arena_alloc(arena, bufsize);
         int pos = 0;
         if (fname)
@@ -1368,9 +1371,9 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
                             fname->len, fname->loc);
         pos += snprintf(buf + pos, bufsize - pos, "_t_");
         for (int i = 0; i < n; i++) {
-            if (i > 0) buf[pos++] = '_';
+            if (i > 0 && pos < bufsize - 1) buf[pos++] = '_';
             Type *at = type_arg_from_node(template_id->template_id.args[i]);
-            pos = type_to_key(at, buf, pos, bufsize);
+            pos = mangle_type_to_buf(at, buf, pos, bufsize);
         }
         pos += snprintf(buf + pos, bufsize - pos, "_te_");
 
@@ -1655,7 +1658,7 @@ void template_instantiate(Node *tu, Arena *arena) {
                 !req->usage_type && !is_class_tmpl) {
                 Token *fname = req->template_id->template_id.name;
                 int na = req->template_id->template_id.nargs;
-                int bufsize = 256;
+                int bufsize = 512;
                 char *buf = arena_alloc(arena, bufsize);
                 int pos = 0;
                 if (fname)
@@ -1663,10 +1666,10 @@ void template_instantiate(Node *tu, Arena *arena) {
                                     fname->len, fname->loc);
                 pos += snprintf(buf + pos, bufsize - pos, "_t_");
                 for (int i = 0; i < na; i++) {
-                    if (i > 0) buf[pos++] = '_';
+                    if (i > 0 && pos < bufsize - 1) buf[pos++] = '_';
                     Type *at = type_arg_from_node(
                         req->template_id->template_id.args[i]);
-                    pos = type_to_key(at, buf, pos, bufsize);
+                    pos = mangle_type_to_buf(at, buf, pos, bufsize);
                 }
                 pos += snprintf(buf + pos, bufsize - pos, "_te_");
                 Token *mangled = arena_alloc(arena, sizeof(Token));
