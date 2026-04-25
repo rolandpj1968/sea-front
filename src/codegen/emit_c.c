@@ -1224,7 +1224,16 @@ static bool func_decl_dedup_check_sig(Token *name, int nparams,
                                        int first_param_kind,
                                        Token *first_param_tag) {
     if (!name) return false;
-    if (func_seen_find(name)) return true;
+    /* Look up by FULL signature, not just name. Two overloads of the
+     * same name (different nparams or different first-param type) need
+     * to BOTH have their forward declarations emitted, otherwise the
+     * call site that mangles to the second overload's name has no
+     * declaration in scope. Pattern: gcc 4.8 cp/parser.c
+     *   static tree cp_parser_expression(cp_parser*, bool, cp_id_kind*);
+     *   static tree cp_parser_expression(cp_parser*, bool, bool, cp_id_kind*);
+     */
+    if (func_seen_find_sig(name, nparams, first_param_kind, first_param_tag))
+        return true;
     if (g_func_nseen < 8192) {
         g_func_seen[g_func_nseen].loc = name->loc;
         g_func_seen[g_func_nseen].len = name->len;
@@ -1246,15 +1255,15 @@ static bool func_def_dedup_check_sig(Token *name, int nparams,
     if (!name) return false;
     const char *tag_loc = first_param_tag ? first_param_tag->loc : NULL;
     int tag_len = first_param_tag ? first_param_tag->len : 0;
-    FuncSeen *fs = func_seen_find(name);
+    /* Look up the entry with matching FULL signature (not just name).
+     * Two overloads of 'f' with different param shapes each have
+     * their own decl→def upgrade — without sig-aware lookup, the
+     * second overload's def would find the first overload's decl
+     * entry and skip itself. */
+    FuncSeen *fs = func_seen_find_sig(name, nparams, first_param_kind,
+                                       first_param_tag);
     if (fs) {
         if (fs->is_def) return true;
-        /* Decl→def upgrade only when signatures match. */
-        if (fs->nparams != nparams ||
-            fs->first_param_kind != first_param_kind ||
-            !func_tag_match(fs->first_param_tag, fs->first_param_tag_len,
-                            tag_loc, tag_len))
-            return true;
         fs->is_def = true;
         return false;
     }
