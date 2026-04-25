@@ -4969,6 +4969,48 @@ static void emit_stmt(Node *n) {
                     emit_var_decl_inner(init);
                 } else if (init->kind == ND_EXPR_STMT) {
                     emit_expr(init->expr_stmt.expr);
+                } else if (init->kind == ND_BLOCK) {
+                    /* Multi-declarator for-init:
+                     *   for (T *a = ..., **b = ...; ...; ...)
+                     * The parser packs comma-separated declarators
+                     * into ND_BLOCK. C supports multiple declarators
+                     * with the SAME base type but different declarator
+                     * suffixes; emit them as a comma-separated list.
+                     * Pattern: gcc 4.8 valtrack.c
+                     *   for (struct dead_debug_use *head = debug->head,
+                     *        **headp = &debug->head; head; head = *headp) */
+                    bool first = true;
+                    for (int i = 0; i < init->block.nstmts; i++) {
+                        Node *s = init->block.stmts[i];
+                        if (!s || s->kind != ND_VAR_DECL) continue;
+                        if (!first) fputs(", ", stdout);
+                        if (first) {
+                            emit_var_decl_inner(s);
+                        } else {
+                            /* For comma-separated declarators C only
+                             * accepts the new declarator (no base type
+                             * repetition). emit_var_decl_inner emits
+                             * the full type — we'd duplicate the base.
+                             * For simple ptr/array suffixes, emit just
+                             * the declarator portion: '*name = init'
+                             * with the right number of '*'s. */
+                            Type *ty = s->var_decl.ty;
+                            int stars = 0;
+                            while (ty && ty->kind == TY_PTR && ty->base) {
+                                stars++; ty = ty->base;
+                            }
+                            for (int j = 0; j < stars; j++) fputc('*', stdout);
+                            if (s->var_decl.name)
+                                fprintf(stdout, "%.*s",
+                                        s->var_decl.name->len,
+                                        s->var_decl.name->loc);
+                            if (s->var_decl.init) {
+                                fputs(" = ", stdout);
+                                emit_expr(s->var_decl.init);
+                            }
+                        }
+                        first = false;
+                    }
                 }
             }
             fputs("; ", stdout);
