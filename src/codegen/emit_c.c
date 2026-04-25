@@ -6928,14 +6928,21 @@ static void emit_top_level(Node *n) {
                    && dep->base) dep = dep->base;
             if (dep && (dep->kind == TY_STRUCT || dep->kind == TY_UNION) &&
                 dep->class_def && !dep->codegen_emitted) {
-                /* Pass 2 (PHASE_METHODS) skips the struct body, so we
-                 * have to flip the phase to emit the definition. This
-                 * preserves the two-phase guarantee for user-declared
-                 * classes (whose bodies are emitted in pass 1) while
-                 * catching anonymous/inline structs that only appear
-                 * as the element type of a var-decl's array. */
+                /* Force PHASE_STRUCTS for the eager emit even if the
+                 * caller is in PHASE_METHODS — we want the struct body
+                 * (so the var-decl can reference its members) but NOT
+                 * the method bodies. Method bodies will emit when the
+                 * driver's PHASE_METHODS pass visits the class def. If
+                 * the class is inline (no separate ND_CLASS_DEF), it
+                 * has no methods anyway, so skipping them is harmless.
+                 *
+                 * Critically: do NOT use single-pass (phase=0) here.
+                 * That would emit method bodies referencing OTHER
+                 * still-incomplete instantiations, producing
+                 * 'invalid use of undefined type' chains across the
+                 * gcc 4.8 vec.h instantiations. */
                 int saved_phase = g_emit_phase;
-                g_emit_phase = 0;  /* single-pass: emit everything */
+                g_emit_phase = PHASE_STRUCTS;
                 emit_class_def(dep->class_def);
                 g_emit_phase = saved_phase;
             }
