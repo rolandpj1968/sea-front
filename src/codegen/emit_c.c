@@ -3852,6 +3852,47 @@ static void emit_var_decl_inner(Node *n) {
         fputc(')', stdout);
         return;
     }
+    /* Array of function pointers: 'ret (*name[N])(args)'.
+     * C requires the array suffix and the '*' to live inside the
+     * grouped declarator, otherwise we'd emit
+     *   ret (*)(args) name[N]
+     * which is a syntax error. N4659 §11.3.4 [dcl.array] +
+     * §11.3.5 [dcl.fct]. Pattern: gcc 4.8 tree-vect-patterns.c
+     *   static vect_recog_func_ptr vect_vect_recog_func_ptrs[10] */
+    if (ty && ty->kind == TY_ARRAY && ty->base &&
+        ty->base->kind == TY_PTR && ty->base->base &&
+        ty->base->base->kind == TY_FUNC && n->var_decl.name) {
+        Type *fty = ty->base->base;
+        emit_type(fty->ret);
+        fprintf(stdout, " (*%.*s",
+                n->var_decl.name->len, n->var_decl.name->loc);
+        if (ty->array_len >= 0) {
+            fprintf(stdout, "[%d]", ty->array_len);
+        } else if (ty->array_size_expr) {
+            fputc('[', stdout);
+            emit_expr(ty->array_size_expr);
+            fputc(']', stdout);
+        } else {
+            fputs("[]", stdout);
+        }
+        fputs(")(", stdout);
+        for (int i = 0; i < fty->nparams; i++) {
+            if (i > 0) fputs(", ", stdout);
+            emit_type(fty->params[i]);
+        }
+        if (fty->is_variadic) {
+            if (fty->nparams > 0) fputs(", ", stdout);
+            fputs("...", stdout);
+        } else if (fty->nparams == 0) {
+            fputs("void", stdout);
+        }
+        fputc(')', stdout);
+        if (n->var_decl.init) {
+            fputs(" = ", stdout);
+            emit_expr(n->var_decl.init);
+        }
+        return;
+    }
     if (ty && ty->kind == TY_ARRAY) {
         /* Inline enum-with-enumerators as the element type:
          *   'enum X { A, B, C } arr[N];'
