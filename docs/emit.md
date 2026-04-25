@@ -73,6 +73,76 @@ A `B*` is layout-compatible with an `A*` because `__sf_base` is at
 offset zero. Member access through the base walks the chain:
 `b.a_member` in C++ becomes `b.__sf_base.a_member` in C.
 
+#### Multiple inheritance — TODO, currently unsupported
+
+Single inheritance is straightforward: `__sf_base` at offset 0 makes
+`B*` reinterpretable as `A*`. Multiple inheritance breaks this —
+exactly one base can sit at offset 0; the others have non-zero
+offsets, and `D*` cast to `A2*` (where `A2` is the second base)
+requires *adjusting the pointer* by the offset of `__sf_base_A2` in
+`D`.
+
+The full design (not yet implemented):
+
+- Class layout: each base becomes its own `__sf_base_<TagN>` member,
+  in declaration order.
+- Upcast `D* → A2*` emits `((struct A2 *)((char *)d + offsetof(D,
+  __sf_base_A2)))`. The `((char *)d + ...)` form survives even when
+  the offset isn't a compile-time constant after struct-layout
+  decisions (it always is in C, but gcc tolerates the form anyway).
+- Downcast `A2* → D*` is symmetric: subtract the offset.
+- Member access through a non-first base walks
+  `d.__sf_base_A2.member` (no pointer arithmetic needed at the AST
+  level; the field name carries the path).
+- Implicit conversions in argument-passing: `void f(A2*); D d; f(&d);`
+  emits `f(&d.__sf_base_A2)` rather than `f(&d)`.
+
+#### Virtual + multiple inheritance — vtable interaction
+
+The interesting case: each base subobject with a vtable has its own
+vptr at the start of its base subobject. A class with two virtual
+bases has two vptrs.
+
+- Layout: `struct D { struct A1 __sf_base_A1; /* with its vptr */
+  struct A2 __sf_base_A2; /* with its own vptr */ /* own members */ };`
+- Each base's vtable is initialised in `D__ctor` (vptr installation
+  in the base subobjects, after they themselves run).
+- A virtual call through an `A2*` dispatches via the
+  `__sf_base_A2.__sf_vptr`. The first arg passed to the slot must be
+  the `A2*` (NOT the original `D*`) — the slot signature expects
+  `A2 *this`. So the call site emits `(a2)->__sf_vptr->m(a2, ...)`
+  where `a2 = &d.__sf_base_A2`.
+- **Thunk requirement** (deferred): when overriding `A2::m` in `D`,
+  the slot in `A2`'s vtable points at a *thunk* that adjusts `this`
+  from `A2*` back to `D*` before calling `D::m`. C cannot directly
+  express "subtract a constant from this", so each thunk is a
+  generated function:
+  `static void D__A2__m_thunk(A2 *self, ...) { D__m((D *)((char *)self - offsetof(D, __sf_base_A2)), ...); }`
+
+Virtual inheritance (the `virtual` keyword on a base class, for
+diamond resolution) adds a further indirection: the virtual base
+subobject lives at a runtime-determined offset, accessed via a
+*virtual base offset table* read from the vtable. Out of scope for
+gcc 4.8 / Clang for now — neither uses it heavily, and the bootstrap
+target doesn't need it.
+
+#### Casting
+
+C-style cast `(T)expr` and `static_cast<T>(expr)` emit as a C cast in
+most cases. The exceptions are:
+
+- **Upcast / downcast in a single-inheritance hierarchy** —
+  `(B*)d_ptr` where D inherits from B: emits `&(d_ptr->__sf_base)`
+  for the upcast (or recursively, walking the base chain). The C
+  cast alone would work for layout reasons but the explicit member
+  access keeps the type system honest and survives multiple-
+  inheritance pointer adjustments when those land.
+- **Reinterpret cast** — emit as a plain C cast.
+- **`dynamic_cast`** — not supported (requires RTTI; both targets
+  build with `-fno-rtti`).
+- **`const_cast`** — emit as a plain C cast (cv-qualifier-only
+  conversion, well-defined in C).
+
 ### Constructors and destructors
 
 If the class has a non-trivial constructor or any class-typed members

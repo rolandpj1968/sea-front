@@ -258,35 +258,3 @@ deferrable until the test surface forces them):
    definition. Same weak-merge story, but at variable level rather
    than function level.
 
-## Implementation rollout
-
-Single small commit when we trigger it:
-
-1. Add the `__SF_INLINE` macro to the prelude (with the OS detection
-   above).
-2. Tag the relevant emit sites:
-   - `emit_method_signature` (already used for in-class methods,
-     dtor bodies, etc.)
-   - The synthesized `Class_ctor` wrapper in `emit_class_def`
-   - The synthesized `Class_dtor` wrapper in `emit_class_def`
-3. **Don't** tag `emit_func_def` for now (it's used for free
-   functions and `int main`).
-4. Add a small test: two TUs that both `#include` a header with a
-   class, both compile through sea-front, both link cleanly into
-   one binary. Verify a static local inside an inline function
-   survives once across TUs.
-
-The free-function `inline` and `extern "C"` cases need a parser
-change first (to propagate the linkage flag onto the AST) and are
-deferred to a follow-up commit.
-
-## Strategic question
-
-The single-TU → single-TU output model (preferred) means weak
-symbols are doing all the work. If we ever shift to a multi-TU model
-(option C or D), the dedup story changes — possibly for the better
-— and `__SF_INLINE` becomes a no-op or opt-out.
-
-For sea-front's bootstrap goal, single-TU + weak symbols is
-sufficient and preferred. Revisit only if it stops working for some
-specific reason.
