@@ -128,15 +128,26 @@ for arg in "$@"; do
     esac
 done
 
+# Auto-link libs: sea-front emits ALL inline functions from
+# included headers (g++ would drop unused ones). When the host has
+# GMP/MPFR/MPC headers reachable via -I (gcc 4.8 ships them in
+# build-sf/{gmp,mpfr,mpc}/), the inline wrappers in those headers
+# pull __gmpz_*, __gmpn_*, __gmpq_*, __mpfr_* etc. into every .o
+# that includes them. Link-time those symbols need to resolve, so
+# unconditionally append -lgmp -lmpfr -lmpc -lm at link time.
+# Harmless when the libs aren't referenced (linker discards). The
+# gcc 4.8 Makefile doesn't pass these to gengtype/gcov/etc.
+SEA_AUTO_LIBS="-lgmp -lmpfr -lmpc -lm"
+
 # If no C++ source files, this is a pure link or C compile — pass through
 if [ -z "$INPUTS" ]; then
     log "No source files — passthrough to $SEA_CC"
-    exec $SEA_CC "$@"
+    exec $SEA_CC "$@" $SEA_AUTO_LIBS
 fi
 
 if [ "$MODE" = "link" ]; then
     log "Link mode — passthrough to $SEA_CC"
-    exec $SEA_CC "$@"
+    exec $SEA_CC "$@" $SEA_AUTO_LIBS
 fi
 
 # Unpack INPUTS (space-separated shell-quoted) into positional params
