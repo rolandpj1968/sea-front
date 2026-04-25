@@ -419,7 +419,14 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
                  * Without this, OOL operator definitions like
                  * 'DI::operator++()' lose their class_type and codegen
                  * emits them as free functions (no 'this' param). */
-                if (qscope) p->qualified_decl_scope = qscope;
+                if (qscope) {
+                    /* See main qualified-id wrap below for rationale. */
+                    DeclarativeRegion *wrapper = arena_alloc(p->arena,
+                        sizeof(DeclarativeRegion));
+                    *wrapper = *qscope;
+                    wrapper->enclosing = p->region;
+                    p->qualified_decl_scope = wrapper;
+                }
                 if (leading_tid) p->qualified_decl_tid = leading_tid;
                 goto parse_operator_id;
             } else {
@@ -436,8 +443,20 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
          * would cause the function-def branch to mis-tag it as a method.
          * N4659 §6.4.3 [basic.lookup.qual] — only qualified-ids name
          * out-of-class members. */
-        if (name_was_qualified && qscope)
-            p->qualified_decl_scope = qscope;
+        if (name_was_qualified && qscope) {
+            /* Wrap qscope so its enclosing chains through the current
+             * region (which is the OOL's template scope when we're
+             * inside `template<...> ret-type Class::method`). Both
+             * the param-list parse and the body parse below consume
+             * qualified_decl_scope and need T,A in scope. Wrapping
+             * once here means neither consumer has to re-wrap.
+             * N4659 §17.5.4 [temp.mem]. */
+            DeclarativeRegion *wrapper = arena_alloc(p->arena,
+                sizeof(DeclarativeRegion));
+            *wrapper = *qscope;
+            wrapper->enclosing = p->region;
+            p->qualified_decl_scope = wrapper;
+        }
         /* Preserve the qualifier template-id, if any, so the
          * function-def branch can copy it onto func.qual_tid. */
         if (name_was_qualified && leading_tid)
@@ -577,8 +596,11 @@ parse_suffixes:
      * TODO(seafront#decl-ambig-gate): drop the gate and run a true
      * §11.2/1 tentative parse once perf allows. */
     /* For qualified declarator-ids (Foo<T>::method), temporarily push
-     * the class scope so member typedefs (value_type, etc.) are
-     * visible during parameter list parsing. */
+     * the class scope so member typedefs (value_type, etc.) AND any
+     * enclosing-template params are visible during parameter list
+     * parsing. p->qualified_decl_scope was wrapped at assignment
+     * time to chain through the OOL's template scope (N4659 §17.5.4
+     * [temp.mem]); just push it directly here. */
     DeclarativeRegion *saved_region_for_params = NULL;
     if (name_was_qualified && p->qualified_decl_scope && !p->tentative) {
         saved_region_for_params = p->region;
@@ -1495,21 +1517,11 @@ Node *parse_declaration(Parser *p) {
         p->qualified_decl_tid = NULL;
         DeclarativeRegion *saved_region = p->region;
         if (qscope && !p->tentative) {
-            /* N4659 §17.7/4 [temp.res]: in a template OOL definition
-             * like 'template<T,A> void vec<T,A,vl_ptr>::release()',
-             * the body must see BOTH the class members (via qscope)
-             * AND the template parameters (via the enclosing template
-             * scope). Create a shallow copy of the class scope with
-             * its enclosing chain re-pointed through the current
-             * template scope. We don't modify the original class
-             * scope (it's persistent and shared across parse sites). */
-            {
-                DeclarativeRegion *wrapper = arena_alloc(p->arena,
-                    sizeof(DeclarativeRegion));
-                *wrapper = *qscope;
-                wrapper->enclosing = p->region;
-                qscope = wrapper;
-            }
+            /* qscope was wrapped at qualified_decl_scope assignment
+             * time so its enclosing chains through the OOL's template
+             * scope — both class members and enclosing template
+             * params are visible. N4659 §17.7/4 [temp.res] +
+             * §17.5.4 [temp.mem]. */
             p->region = qscope;
             /* Tag this function definition as a method of the class
              * the qualifier resolved to, so codegen can mangle the
