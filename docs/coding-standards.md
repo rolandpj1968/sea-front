@@ -9,6 +9,14 @@ performance. This is a bootstrap tool — clarity is the priority.
   lines are better than a clever one-liner. The code will be read far
   more often than it is written.
 
+- **Don't duplicate code.** Before writing a block that resembles
+  something already in the file (or in a sibling parse/codegen file),
+  search for it and extract a helper instead. Two copies is a smell;
+  three copies is a bug. Common offenders: balanced-paren skipping,
+  param-list emit, type-recursion boilerplate. Run
+  `scripts/find_repeats.py` periodically to surface accumulated
+  duplication — every block it reports is a missing helper.
+
 - **No magic constants.** Annotate non-obvious arguments with inline
   comments: `region_push(p, REGION_BLOCK, /*name=*/NULL)`. Any numeric
   literal other than 0 or 1 in a function call should have a comment or
