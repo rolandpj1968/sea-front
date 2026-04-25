@@ -7209,6 +7209,56 @@ void emit_c(Node *tu) {
      * resolve regardless of definition order. */
     emit_forward_decl_structs(tu);
 
+    /* Pass 0a: tentative definitions for top-level fixed-size array
+     * variables emitted BEFORE the enum bodies. C99 §6.9.2 — an
+     * enum's initializer can reference an earlier file-scope array
+     * via sizeof(arr); without the tentative decl in scope ahead of
+     * the enum, the C compiler reports the array undeclared.
+     * Skip arrays whose element type is an enum/struct/union — those
+     * tags aren't defined yet at this point in the emit, so a forward
+     * decl using them would itself fail.
+     * Pattern: gcc 4.8 c-family/c-pch.c sizeof(pch_matching) inside an
+     * enum init. */
+    for (int i = 0; i < tu->tu.ndecls; i++) {
+        Node *n = tu->tu.decls[i];
+        if (!n || n->kind != ND_VAR_DECL) continue;
+        Type *ty = n->var_decl.ty;
+        if (!ty || ty->kind != TY_ARRAY) continue;
+        if (!n->var_decl.name) continue;
+        if (n->var_decl.storage_flags & DECL_EXTERN) continue;
+        Type *elem = ty->base;
+        if (!elem) continue;
+        /* Restrict to scalar / pointer element types whose tag is
+         * unambiguously already complete (enums, structs, unions,
+         * arrays, function types are all 'will be defined later'
+         * shapes that can't be forward-emitted here). */
+        if (elem->kind == TY_STRUCT || elem->kind == TY_UNION ||
+            elem->kind == TY_ENUM   || elem->kind == TY_ARRAY ||
+            elem->kind == TY_FUNC)
+            continue;
+        if (elem->kind == TY_PTR && elem->base &&
+            elem->base->kind == TY_FUNC)
+            continue;
+        bool have_size = ty->array_len >= 0 || ty->array_size_expr ||
+            (n->var_decl.init && n->var_decl.init->kind == ND_INIT_LIST);
+        if (!have_size) continue;
+        if (n->var_decl.storage_flags & DECL_STATIC) fputs("static ", stdout);
+        if (ty->is_const) fputs("const ", stdout);
+        emit_type(elem);
+        fprintf(stdout, " %.*s",
+                n->var_decl.name->len, n->var_decl.name->loc);
+        if (ty->array_len >= 0) {
+            fprintf(stdout, "[%d];\n", ty->array_len);
+        } else if (ty->array_size_expr) {
+            fputc('[', stdout);
+            emit_expr(ty->array_size_expr);
+            fputs("];\n", stdout);
+        } else {
+            fprintf(stdout, "[%d];\n",
+                    n->var_decl.init->init_list.nelems);
+        }
+    }
+
     /* Emit all enum definitions before any struct bodies, so enum
      * members used as struct fields have complete types. Enums
      * appear as ND_VAR_DECL with TY_ENUM (bare enum definition)
