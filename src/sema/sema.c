@@ -312,6 +312,9 @@ static void visit_ident(Sema *s, Node *n) {
         n->is_type_dependent = true;
 }
 
+static Type *find_class_operator_return_type(Sema *s, Type *class_ty,
+                                              const char *op, int op_len);
+static const char *binop_token_to_op_str(TokenKind op, int *out_len);
 static void visit_binary(Sema *s, Node *n) {
     visit(s, n->binary.lhs);
     visit(s, n->binary.rhs);
@@ -357,6 +360,25 @@ static void visit_binary(Sema *s, Node *n) {
     }
     /* Arithmetic ops use the usual arithmetic conversions. */
     n->resolved_type = common_arith_type(s, lt, rt);
+    /* Class operator overload — N4659 §16.5 [over.oper]. When LHS is
+     * a struct/union, look up the operator method on the class and
+     * use its return type. Without this, '(a - b).method()' on a
+     * value-type struct loses its type at the binary node, breaking
+     * downstream member resolution. Pattern: gcc 4.8 tree-vrp.c
+     *   (maxv - minv).zext (nprec) != double_int::mask (nprec) */
+    if (!n->resolved_type && lt &&
+        (lt->kind == TY_STRUCT || lt->kind == TY_UNION) && lt->tag) {
+        int op_len = 0;
+        const char *op_str = binop_token_to_op_str(n->binary.op, &op_len);
+        if (op_str) {
+            Type *ret = find_class_operator_return_type(s, lt, op_str, op_len);
+            if (ret) {
+                if (ret->kind == TY_REF || ret->kind == TY_RVALREF)
+                    ret = ret->base;
+                n->resolved_type = ret;
+            }
+        }
+    }
 }
 
 static void visit_unary(Sema *s, Node *n) {
@@ -699,6 +721,64 @@ static Node *find_class_def_node_by_tag_args(Node *tu, Type *class_ty) {
         if (types_equivalent(t, class_ty)) return d;
     }
     return NULL;
+}
+
+/* Look up a class operator method by token-suffix string (e.g. "+",
+ * "-", "==", "!=") and return its declared return type. Used by
+ * visit_binary so that 'a op b' on struct-typed operands gets a
+ * usable resolved_type — needed for chained expressions like
+ *   (a - b).method()
+ * where the inner '.method()' lookup needs the LHS resolved. The
+ * matcher requires the suffix to terminate at the next non-operator
+ * character (paren/space/null) so that "+" doesn't match "+=". */
+static Type *find_class_operator_return_type(Sema *s, Type *class_ty,
+                                              const char *op, int op_len) {
+    if (!class_ty || !op) return NULL;
+    Node *cd = class_ty->class_def;
+    if (!cd && s && s->tu) {
+        Node *d = find_class_def_node_by_tag_args(s->tu, class_ty);
+        if (d) cd = d;
+    }
+    if (!cd) return NULL;
+    for (int i = 0; i < cd->class_def.nmembers; i++) {
+        Node *m = cd->class_def.members[i];
+        if (!m) continue;
+        Token *mn = NULL; Type *ret = NULL;
+        if (m->kind == ND_FUNC_DEF) {
+            mn = m->func.name; ret = m->func.ret_ty;
+        } else if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
+                   m->var_decl.ty->kind == TY_FUNC) {
+            mn = m->var_decl.name; ret = m->var_decl.ty->ret;
+        }
+        if (!mn || mn->kind != TK_KW_OPERATOR) continue;
+        const char *after = mn->loc + mn->len;
+        while (*after == ' ' || *after == '\t') after++;
+        if (memcmp(after, op, op_len) != 0) continue;
+        char nc = after[op_len];
+        if (nc == '(' || nc == ' ' || nc == '\t' || nc == '\0')
+            return ret;
+    }
+    return NULL;
+}
+
+/* Map a binary-operator TokenKind to its operator-name suffix
+ * (e.g. TK_PLUS → "+"). Mirrors the codegen-side
+ * binop_to_operator_suffix mapping but produces the source-form
+ * string used in operator-method names. */
+static const char *binop_token_to_op_str(TokenKind op, int *out_len) {
+    switch (op) {
+    case TK_PLUS:  *out_len = 1; return "+";
+    case TK_MINUS: *out_len = 1; return "-";
+    case TK_STAR:  *out_len = 1; return "*";
+    case TK_SLASH: *out_len = 1; return "/";
+    case TK_PERCENT: *out_len = 1; return "%";
+    case TK_AMP:   *out_len = 1; return "&";
+    case TK_PIPE:  *out_len = 1; return "|";
+    case TK_CARET: *out_len = 1; return "^";
+    case TK_SHL:   *out_len = 2; return "<<";
+    case TK_SHR:   *out_len = 2; return ">>";
+    default:       *out_len = 0; return NULL;
+    }
 }
 
 /* Find a class member whose name is 'operator' and whose operator-
