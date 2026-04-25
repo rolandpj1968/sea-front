@@ -4050,6 +4050,22 @@ static void emit_var_decl_inner(Node *n) {
                             base_ty->kind == TY_UNION))
                 init_is_ref = false;  /* subscript handles its own deref */
         }
+        /* Method call returning T&: emit_call already wraps the call
+         * in '(*...)' to deref the lowered T* — see the ND_CALL case
+         * around 'method_returns_ref'. Don't double-wrap here.
+         * Pattern: gcc 4.8 gimple-low.c
+         *   return_statements_t t = data.return_statements.pop ();
+         * where vec::pop returns T&. */
+        if (init_is_ref && init_e && init_e->kind == ND_CALL &&
+            init_e->call.callee && init_e->call.callee->kind == ND_MEMBER) {
+            Node *cm = init_e->call.callee;
+            Type *ot = cm->member.obj ? cm->member.obj->resolved_type : NULL;
+            if (ot && ot->kind == TY_PTR && ot->base) ot = ot->base;
+            if (ty_is_ref(ot)) ot = ot->base;
+            if (ot && (ot->kind == TY_STRUCT || ot->kind == TY_UNION) &&
+                method_returns_ref(ot, cm->member.member))
+                init_is_ref = false;
+        }
         bool var_is_struct = ty &&
             (ty->kind == TY_STRUCT || ty->kind == TY_UNION);
         /* Reference variable initialized from an lvalue: the C

@@ -90,6 +90,27 @@ static bool consume_trailing_qualifiers(Parser *p);
  * pair) are defined below this function in the file, immediately
  * below the general parsers they support.
  */
+/* Re-apply a single deferred wrapper from a grouped declarator.
+ * Preserves cv-qualifiers (for ptrs) and array length / size-expr
+ * (for arrays) — the existing code dropped these, which silently
+ * lost 'const' on '(*const NAME)(args)' and the size on
+ * '(*NAME[N])(args)'. */
+static Type *apply_pending_wrap(Parser *p, Type *ty, Type *w) {
+    Type *nt;
+    if (w->kind == TY_PTR)        nt = new_ptr_type(p, ty);
+    else if (w->kind == TY_REF)   nt = new_ref_type(p, ty);
+    else if (w->kind == TY_RVALREF) nt = new_rvalref_type(p, ty);
+    else if (w->kind == TY_ARRAY) {
+        nt = new_array_type(p, ty, w->array_len);
+        nt->array_size_expr = w->array_size_expr;
+    } else {
+        return ty;
+    }
+    nt->is_const = w->is_const;
+    nt->is_volatile = w->is_volatile;
+    return nt;
+}
+
 Node *parse_declarator(Parser *p, Type *base_ty) {
     /* ptr-operator — N4659 §11.3 [dcl.meaning]
      *   ptr-operator:
@@ -241,9 +262,18 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
              * its *, &, && operators. Unwrap them into pending_wrap[]
              * and re-apply after the outer suffix has mutated ty. */
             ty = inner->var_decl.ty;
+            /* TY_ARRAY also peels: '(*const NAME[])(args)' has the
+             * inner '[]' as a suffix on NAME but the outer '(args)'
+             * applies to the array element. Without peeling the
+             * array, the function-suffix wraps the array as the
+             * return type — wrong shape (function returning array,
+             * which is invalid). N4659 §11.3 [dcl.meaning] precedence
+             * is what this re-stack restores. Pattern: gcc 4.8
+             * internal-fn.c
+             *   static void (*const internal_fn_expanders[])(gimple) */
             while (pending_nwrap < 16 && ty != base_ty &&
                    (ty->kind == TY_PTR || ty->kind == TY_REF ||
-                    ty->kind == TY_RVALREF)) {
+                    ty->kind == TY_RVALREF || ty->kind == TY_ARRAY)) {
                 pending_wrap[pending_nwrap++] = ty;
                 ty = ty->base;
             }
@@ -773,9 +803,7 @@ parse_suffixes:
              * suffix). Example: int (*fp)(int). */
             for (int i = pending_nwrap - 1; i >= 0; i--) {
                 Type *w = pending_wrap[i];
-                if (w->kind == TY_PTR)          ty = new_ptr_type(p, ty);
-                else if (w->kind == TY_REF)     ty = new_ref_type(p, ty);
-                else if (w->kind == TY_RVALREF) ty = new_rvalref_type(p, ty);
+                ty = apply_pending_wrap(p, ty, w);
             }
 
             Node *node = new_var_decl_node(p, ty, name,
@@ -879,9 +907,7 @@ parse_suffixes:
              * suffix (direct-init lookalike) still gets the ptr. */
             for (int i = pending_nwrap - 1; i >= 0; i--) {
                 Type *w = pending_wrap[i];
-                if (w->kind == TY_PTR)          ty = new_ptr_type(p, ty);
-                else if (w->kind == TY_REF)     ty = new_ref_type(p, ty);
-                else if (w->kind == TY_RVALREF) ty = new_rvalref_type(p, ty);
+                ty = apply_pending_wrap(p, ty, w);
             }
             return new_var_decl_node(p, ty, name, parser_peek(p));
         }
@@ -917,9 +943,7 @@ parse_suffixes:
          * order — innermost modifier wraps first). */
         for (int i = pending_nwrap - 1; i >= 0; i--) {
             Type *w = pending_wrap[i];
-            if (w->kind == TY_PTR)          ty = new_ptr_type(p, ty);
-            else if (w->kind == TY_REF)     ty = new_ref_type(p, ty);
-            else if (w->kind == TY_RVALREF) ty = new_rvalref_type(p, ty);
+            ty = apply_pending_wrap(p, ty, w);
         }
 
         Node *node = new_var_decl_node(p, ty, name,
@@ -964,9 +988,7 @@ parse_suffixes:
      * grouped-declarator branch for the rationale. */
     for (int i = pending_nwrap - 1; i >= 0; i--) {
         Type *w = pending_wrap[i];
-        if (w->kind == TY_PTR)          ty = new_ptr_type(p, ty);
-        else if (w->kind == TY_REF)     ty = new_ref_type(p, ty);
-        else if (w->kind == TY_RVALREF) ty = new_rvalref_type(p, ty);
+        ty = apply_pending_wrap(p, ty, w);
     }
 
     return new_var_decl_node(p, ty, name, name ? name : parser_peek(p));
