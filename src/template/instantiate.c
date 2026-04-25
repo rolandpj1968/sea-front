@@ -15,6 +15,7 @@
 #include "instantiate.h"
 #include "clone.h"
 #include "../codegen/mangle.h"
+#include "../sema/sema.h"
 
 /* region_add_base_raw, region_declare_raw, region_build_class,
  * region_build_prototype, region_lookup_own, hash_name are all
@@ -1412,6 +1413,21 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
             pos = mangle_type_to_buf(at, buf, pos, bufsize);
         }
         pos += snprintf(buf + pos, bufsize - pos, "_te_");
+        /* Param suffix — distinguishes overloaded function templates
+         * whose template-arg substitution alone produces the same
+         * key. Pattern: gcc 4.8 vec.h has two `vec_alloc` templates,
+         *   template<T,A> vec_alloc(vec<T,A,vl_embed>*&, unsigned)
+         *   template<T>   vec_alloc(vec<T>*&, unsigned)
+         * which both mangle to `vec_alloc_t_<T>_te_` without a param
+         * suffix → C-symbol collision. */
+        pos += snprintf(buf + pos, bufsize - pos, "_p_");
+        for (int i = 0; i < cloned->func.nparams; i++) {
+            if (i > 0 && pos < bufsize - 1) buf[pos++] = '_';
+            Node *p = cloned->func.params[i];
+            Type *pt = (p && p->kind == ND_PARAM) ? p->param.ty : NULL;
+            pos = mangle_type_to_buf(pt, buf, pos, bufsize);
+        }
+        pos += snprintf(buf + pos, bufsize - pos, "_pe_");
 
         /* Create a synthetic token pointing at the mangled name.
          * We reuse the original token but override loc/len. */
@@ -1717,6 +1733,19 @@ void template_instantiate(Node *tu, Arena *arena) {
                     pos = mangle_type_to_buf(at, buf, pos, bufsize);
                 }
                 pos += snprintf(buf + pos, bufsize - pos, "_te_");
+                /* Param suffix — must match the first-instantiation
+                 * site's mangling (see comment there). The dedup
+                 * `existing` Type is the cloned function's TY_FUNC
+                 * with proper params. */
+                pos += snprintf(buf + pos, bufsize - pos, "_p_");
+                if (existing && existing->kind == TY_FUNC && existing->params) {
+                    for (int i = 0; i < existing->nparams; i++) {
+                        if (i > 0 && pos < bufsize - 1) buf[pos++] = '_';
+                        pos = mangle_type_to_buf(existing->params[i],
+                                                  buf, pos, bufsize);
+                    }
+                }
+                pos += snprintf(buf + pos, bufsize - pos, "_pe_");
                 Token *mangled = arena_alloc(arena, sizeof(Token));
                 if (fname) *mangled = *fname;
                 else memset(mangled, 0, sizeof(Token));
@@ -1823,6 +1852,29 @@ void template_instantiate(Node *tu, Arena *arena) {
                                       arena, tu, &extra_methods, &nextra);
         }
         if (inst) {
+            /* Phase-2 sema on the freshly-cloned subtree.
+             * N4659 §17.7 [temp.res] — names that became non-dependent
+             * after substitution need re-resolution. The visitor does
+             * the same work as the initial TU pass; in particular,
+             * visit_call's bare-ident-template rewrite (sema/sema.c
+             * ~1167) fires on calls inside the cloned body that now
+             * see concrete arg types, producing ND_TEMPLATE_ID
+             * callees that the next collect_from_node round will
+             * pick up as new instantiation requests.
+             *
+             * For class-template instantiations, walk the class's
+             * methods and visit each func body. For function-template
+             * instantiations, visit the func directly. For OOL methods
+             * (extra_methods below), visit them too. */
+            if (inst->kind == ND_FUNC_DEF || inst->kind == ND_FUNC_DECL) {
+                sema_visit_node(inst, arena);
+            } else if (inst->kind == ND_CLASS_DEF) {
+                for (int mi = 0; mi < inst->class_def.nmembers; mi++) {
+                    Node *m = inst->class_def.members[mi];
+                    if (m && (m->kind == ND_FUNC_DEF || m->kind == ND_FUNC_DECL))
+                        sema_visit_node(m, arena);
+                }
+            }
             if (total_inst < MAX_INST)
                 all_instantiated[total_inst++] = inst;
             ninst_this_round++;
@@ -1873,10 +1925,13 @@ void template_instantiate(Node *tu, Arena *arena) {
                     dedup_add(&ds, raw_key, rpos, inst_ty);
                 }
             }
-            /* Add out-of-class method instantiations */
+            /* Add out-of-class method instantiations + phase-2 sema. */
             for (int e = 0; e < nextra; e++) {
+                Node *em = extra_methods[e];
+                if (em && (em->kind == ND_FUNC_DEF || em->kind == ND_FUNC_DECL))
+                    sema_visit_node(em, arena);
                 if (total_inst < MAX_INST)
-                    all_instantiated[total_inst++] = extra_methods[e];
+                    all_instantiated[total_inst++] = em;
                 ninst_this_round++;
             }
         }

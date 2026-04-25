@@ -892,11 +892,25 @@ static void visit_subscript(Sema *s, Node *n) {
 enum {
     ICS_EXACT        = 0,
     ICS_PTR_SAME_TAG = 1,  /* T* ↔ T* where T's tag matches (same classes) */
+    ICS_INTEGER_CONV = 2,  /* int↔long, signed↔unsigned, etc. — N4659
+                              §7.8 [conv.integral] standard conversion */
     ICS_INCOMPATIBLE = 100,
 };
 
 static int ics_rank(Type *param, Type *arg) {
     if (!param || !arg) return ICS_INCOMPATIBLE;
+    /* Reference binding — N4659 §16.3.3.1.4 [over.ics.ref]: the ICS of
+     * an arg to a reference parameter is the conversion sequence to
+     * the referent type. Strip TY_REF/TY_RVALREF and re-rank.
+     * Without this, function-template overloads like
+     *   template<T,A> vec_alloc(vec<T,A,vl_embed> *&v, unsigned)
+     * never resolve when called as `vec_alloc(p, n)` with p of type
+     * vec<...>* — the ref param's ICS comes back ICS_INCOMPATIBLE
+     * and the overload is dropped from the viable set. */
+    if (param->kind == TY_REF || param->kind == TY_RVALREF) {
+        if (!param->base) return ICS_INCOMPATIBLE;
+        return ics_rank(param->base, arg);
+    }
     if (types_equivalent(param, arg)) return ICS_EXACT;
     /* Null pointer constant — N4659 §4.10/1 [conv.ptr]: a null
      * pointer constant converts to ANY pointer type. We model nullptr
@@ -928,6 +942,23 @@ static int ics_rank(Type *param, Type *arg) {
             pb->tag->len == ab->tag->len &&
             memcmp(pb->tag->loc, ab->tag->loc, pb->tag->len) == 0)
             return ICS_PTR_SAME_TAG;
+    }
+    /* Integer conversion — N4659 §7.8 [conv.integral]. Any integral
+     * type converts to any other (signedness / width adjustments).
+     * Without this, calls like `f(unsigned)` invoked with a signed
+     * literal `5` fail viability. */
+    {
+        bool p_int = param->kind == TY_BOOL || param->kind == TY_CHAR ||
+            param->kind == TY_CHAR16 || param->kind == TY_CHAR32 ||
+            param->kind == TY_WCHAR || param->kind == TY_SHORT ||
+            param->kind == TY_INT || param->kind == TY_LONG ||
+            param->kind == TY_LLONG || param->kind == TY_ENUM;
+        bool a_int = arg->kind == TY_BOOL || arg->kind == TY_CHAR ||
+            arg->kind == TY_CHAR16 || arg->kind == TY_CHAR32 ||
+            arg->kind == TY_WCHAR || arg->kind == TY_SHORT ||
+            arg->kind == TY_INT || arg->kind == TY_LONG ||
+            arg->kind == TY_LLONG || arg->kind == TY_ENUM;
+        if (p_int && a_int) return ICS_INTEGER_CONV;
     }
     return ICS_INCOMPATIBLE;
 }
@@ -1442,4 +1473,13 @@ static void visit(Sema *s, Node *n) {
 void sema_run(Node *tu, Arena *arena) {
     Sema s = { .arena = arena, .tu = tu, .cur_scope = NULL };
     visit(&s, tu);
+}
+
+void sema_visit_node(Node *n, Arena *arena) {
+    if (!n) return;
+    /* No tu reference — phase 2 doesn't need TU-wide context.
+     * cur_scope starts NULL; the visitor pushes function/block
+     * scopes as it descends. */
+    Sema s = { .arena = arena, .tu = NULL, .cur_scope = NULL };
+    visit(&s, n);
 }

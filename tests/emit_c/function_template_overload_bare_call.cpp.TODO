@@ -1,0 +1,23 @@
+// EXPECT: 11
+// Two same-NAME overloaded function templates, called bare-ident.
+// Picks differ on the parameter SHAPE (T* vs T**). N4659 §16.3
+// [over.match] selects the best viable. Sea-front must (a) build
+// the overload set, (b) run deduction per candidate, (c) ICS-rank,
+// (d) rewrite the winning call to ND_TEMPLATE_ID.
+//
+// Pattern: gcc 4.8 vec.h `vec_alloc` has two templates with
+// different first-param shapes (vec<T,A,vl_embed>*& vs vec<T>*&).
+
+template<typename T>
+T grab(T *p) { return *p + 1; }
+
+template<typename T>
+T grab(T **pp) { return **pp + 7; }
+
+int main() {
+    int x = 3;
+    int *xp = &x;
+    int a = grab(&x);    // T=int via overload 1 → 3 + 1 = 4
+    int b = grab(&xp);   // T=int via overload 2 → 3 + 7 = 10
+    return a + (b - 3);  // 4 + 7 = 11
+}

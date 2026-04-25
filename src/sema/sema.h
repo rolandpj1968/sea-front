@@ -31,4 +31,20 @@
  * Uses the parser's arena for any new types it constructs. */
 void sema_run(Node *tu, Arena *arena);
 
+/* Run sema on a single subtree (typically an ND_FUNC_DEF cloned by
+ * the template instantiation pass). The subtree is visited with the
+ * standard visitor — function bodies push their param_scope, blocks
+ * push their scope, etc. — so per-node identifier resolution and
+ * post-substitution overload resolution work the same as during the
+ * initial TU pass.
+ *
+ * Standard-mapping: this is N4659 §17.7.2 [temp.dep] / §17.7.3
+ * [temp.nondep] phase-2 lookup applied to the substituted body.
+ * Without this, calls inside a cloned template body that became
+ * non-dependent after substitution (e.g. 'vec_alloc(new_vec, len)'
+ * where new_vec gained a concrete type) never get their bare-ident
+ * → ND_TEMPLATE_ID rewrite, and the instantiation pass doesn't pick
+ * up the now-required nested instantiation. */
+void sema_visit_node(Node *n, Arena *arena);
+
 #endif
