@@ -852,10 +852,18 @@ static uint32_t hash_key(const char *key, int len) {
 static bool deduce_from_pair(Type *P, Type *A, SubstMap *map) {
     if (!P || !A) return true;  /* nothing to deduce */
 
-    /* §17.8.2.1/2: strip references from P */
+    /* §17.8.2.1/2: strip references from P. Also strip from A — sea-
+     * front represents `T&` parameter idents with TY_REF on their
+     * resolved_type, but the argument-type for deduction is the
+     * non-reference type. Without stripping A, deduction fails when
+     * a cloned template body passes its own `T&` parameter to another
+     * function template (gcc 4.8 vec.h `vec_alloc` body calling
+     * `vec_safe_reserve(v, n, false)` with v of type `vec<T,A>*&`). */
     if (P->kind == TY_REF || P->kind == TY_RVALREF)
         P = P->base;
-    if (!P) return true;
+    if (A && (A->kind == TY_REF || A->kind == TY_RVALREF))
+        A = A->base;
+    if (!P || !A) return true;
 
     /* TY_DEPENDENT: this IS the template parameter — bind it */
     if (P->kind == TY_DEPENDENT && P->tag) {
@@ -1466,10 +1474,15 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
          * the `vec<...> *&v` param needs `&vec` at the call site. */
         template_id->resolved_type = build_func_type_from_node(cloned, arena);
 
-        /* Set up param scope for sema */
+        /* Set up param scope for sema. The enclosing must be the
+         * TU's global scope so phase-2 sema can resolve free-function
+         * names referenced from the cloned body (e.g.
+         * vec_safe_reserve called from vec_alloc's body). Without it,
+         * lookup stops at the param scope and the bare-call rewrite
+         * never fires for nested template instantiations. */
         if (cloned->func.body && cloned->func.nparams > 0)
             cloned->func.param_scope = region_build_prototype(
-                cloned, /*enclosing=*/NULL, arena);
+                cloned, tu ? tu->tu.global_scope : NULL, arena);
     }
 
     return cloned;

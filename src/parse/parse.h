@@ -705,6 +705,13 @@ struct Node {
         struct {
             Node **decls;
             int ndecls;
+            /* The TU's global namespace region (N4659 §6.3.6). The
+             * parser pushes a REGION_NAMESPACE before parsing top-
+             * level decls; this is that region. Used by post-parse
+             * passes (template instantiation in particular) to wire
+             * the enclosing scope of cloned-function param scopes
+             * so name lookup from cloned bodies sees TU-level decls. */
+            DeclarativeRegion *global_scope;
         } tu;
     };
 };

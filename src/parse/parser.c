@@ -485,6 +485,7 @@ Node *parse(TokenArray tokens, Arena *arena, CppStandard std) {
      * "The outermost declarative region of a translation unit is also
      *  a namespace, called the global namespace." */
     region_push(&p, REGION_NAMESPACE, /*name=*/NULL);
+    DeclarativeRegion *global_scope = p.region;
 
     Vec decls = vec_new(arena);
 
@@ -504,5 +505,6 @@ Node *parse(TokenArray tokens, Arena *arena, CppStandard std) {
     Node *tu = new_node(&p, ND_TRANSLATION_UNIT, &tokens.tokens[0]);
     tu->tu.decls = (Node **)decls.data;
     tu->tu.ndecls = decls.len;
+    tu->tu.global_scope = global_scope;
     return tu;
 }
