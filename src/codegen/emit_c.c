@@ -4045,13 +4045,21 @@ static void emit_var_decl_inner(Node *n) {
         }
     }
     if (ty && ty->kind == TY_ARRAY) {
+        /* Multi-dim arrays: 'T name[N1][N2]'. Walk the TY_ARRAY chain
+         * to the INNERMOST element type, emit that, then emit name
+         * followed by all dimensions in source order. emit_type would
+         * decay TY_ARRAY to pointer (used in expression contexts) and
+         * give us 'T* name[N1]' — wrong layout, breaks &arr[0][0] as
+         * a constant initializer. Pattern: gcc 4.8 emit-rtl.c
+         *   rtx const_tiny_rtx[4][(int) MAX_MACHINE_MODE]; */
+        Type *elem = ty;
+        while (elem->kind == TY_ARRAY && elem->base) elem = elem->base;
         /* Inline enum-with-enumerators as the element type:
          *   'enum X { A, B, C } arr[N];'
          * Emit the full enum body instead of just the type name, so
          * the enumerators are declared alongside the array. Pattern:
          * gcc 4.8 reload.c 'enum reload_usage { RELOAD_READ, ... }
          * modified[MAX_RECOG_OPERANDS];' — a block-scope local. */
-        Type *elem = ty->base;
         if (elem && elem->kind == TY_ENUM && elem->enum_tokens &&
             elem->enum_ntokens > 0 &&
             !enum_body_already_emitted(elem->enum_tokens)) {
@@ -4064,20 +4072,23 @@ static void emit_var_decl_inner(Node *n) {
             emit_enum_body(elem);
             fputs(" }", stdout);
         } else {
-            emit_type(ty->base);
+            emit_type(elem);
         }
         fputc(' ', stdout);
         if (n->var_decl.name)
             fprintf(stdout, "%.*s", n->var_decl.name->len,
                     n->var_decl.name->loc);
-        if (ty->array_len >= 0) {
-            fprintf(stdout, "[%d]", ty->array_len);
-        } else if (ty->array_size_expr) {
-            fputc('[', stdout);
-            emit_expr(ty->array_size_expr);
-            fputc(']', stdout);
-        } else {
-            fputs("[]", stdout);
+        /* Emit each dimension. Outermost first — matches source order. */
+        for (Type *d = ty; d && d->kind == TY_ARRAY; d = d->base) {
+            if (d->array_len >= 0) {
+                fprintf(stdout, "[%d]", d->array_len);
+            } else if (d->array_size_expr) {
+                fputc('[', stdout);
+                emit_expr(d->array_size_expr);
+                fputc(']', stdout);
+            } else {
+                fputs("[]", stdout);
+            }
         }
         /* Array init (if any) */
         if (n->var_decl.init) {
