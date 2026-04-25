@@ -3376,7 +3376,14 @@ static void emit_expr(Node *n) {
                  * written arg count. Pattern: gcc 4.8 gengtype.c
                  *   set_gc_used_type(o->info.type, GC_POINTED_TO, NULL)
                  * (3 args, decl has 4 with bool default → emit 4
-                 * args; mangled name needs the 4th param's type). */
+                 * args; mangled name needs the 4th param's type).
+                 *
+                 * Also: when an arg is a null pointer constant
+                 * (resolved_type = TY_PTR(TY_VOID) per visit_nullptr),
+                 * substitute the resolved param type. The null
+                 * pointer converts to any pointer type at the call
+                 * site (N4659 §4.10/1), and the def's mangling uses
+                 * the param's actual pointee type. */
                 Declaration *rd = n->call.callee->ident.resolved_decl;
                 Type *rd_fty = rd && rd->type && rd->type->kind == TY_FUNC
                                 ? rd->type : NULL;
@@ -3392,6 +3399,43 @@ static void emit_expr(Node *n) {
                         for (int i = n->call.nargs;
                              i < rd_fty->nparams && na < 32; i++) {
                             at[na++] = rd_fty->params[i];
+                        }
+                    }
+                }
+                /* Arg substitution from resolved_decl's params:
+                 *   - null pointer constant → param's pointer type
+                 *     (N4659 §4.10/1 [conv.ptr])
+                 *   - pointer with different cv-qualifiers but
+                 *     same pointee tag → param's qualified pointer
+                 *     (N4659 §7.3 [conv]/qualification conversion)
+                 * Without these, the call mangles with the literal
+                 * arg type (void*, non-const T*) while the def
+                 * mangles with the param type (T*, const T*) — symbol
+                 * mismatch at link time.
+                 *
+                 * Only substitute when the post-injection nargs (na)
+                 * matches the resolved_decl's nparams, so we know
+                 * the param/arg slots line up. */
+                if (rd_fty && rd_fty->nparams == na) {
+                    for (int i = 0; i < n->call.nargs && i < na; i++) {
+                        Type *t = at[i];
+                        Type *pt = rd_fty->params[i];
+                        if (!t || !pt) continue;
+                        /* Null pointer → any pointer */
+                        if (t->kind == TY_PTR && t->base &&
+                            t->base->kind == TY_VOID &&
+                            pt->kind == TY_PTR) {
+                            at[i] = pt;
+                            continue;
+                        }
+                        /* Same-tag pointer with cv difference */
+                        if (t->kind == TY_PTR && pt->kind == TY_PTR &&
+                            t->base && pt->base &&
+                            t->base->tag && pt->base->tag &&
+                            t->base->tag->len == pt->base->tag->len &&
+                            memcmp(t->base->tag->loc, pt->base->tag->loc,
+                                   t->base->tag->len) == 0) {
+                            at[i] = pt;
                         }
                     }
                 }
