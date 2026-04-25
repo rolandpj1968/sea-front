@@ -3384,58 +3384,23 @@ static void emit_expr(Node *n) {
                         }
                     }
                 }
-                /* Arg substitution from resolved_decl's params:
-                 *   - null pointer constant → param's pointer type
-                 *     (N4659 §4.10/1 [conv.ptr])
-                 *   - pointer with different cv-qualifiers but
-                 *     same pointee tag → param's qualified pointer
-                 *     (N4659 §7.3 [conv]/qualification conversion)
-                 *   - non-ref arg → ref param: substitute (so the
-                 *     mangled call name matches the def's signature
-                 *     for ref-vs-value-overloaded functions).
-                 * Without these, the call mangles with the literal
-                 * arg type while the def mangles with the param type
-                 * — symbol mismatch at link time.
+                /* N4659 §16.5 [over.oper] — the symbol identifies the
+                 * specific function chosen by overload resolution.
+                 * Mangle from rd_fty->params (the resolved decl's
+                 * declared parameter types), not from arg types.
+                 * Argument types are an approximation that breaks for
+                 * every implicit conversion (char→int, T→T&, T*→const
+                 * T*, null→any-ptr, etc.); the resolved decl IS the
+                 * canonical signature.
                  *
-                 * Note: we substitute SELECTIVELY, not unconditionally.
-                 * Trusting rd_fty->params blindly would propagate
-                 * sema's wrong-overload picks (e.g. gcc 4.8 reginfo.c's
-                 * bitmap_set_bit picked the wrong sbitmap-vs-bitmap
-                 * overload before this fix; using arg types preserved
-                 * the pre-existing call-site behavior). */
+                 * Falls back to arg types when sema couldn't resolve
+                 * (rd_fty NULL) or the arity doesn't match — both are
+                 * sema bugs that should be fixed at sema rather than
+                 * masked here, but the arg-type fallback keeps emit
+                 * working until then. */
                 if (rd_fty && rd_fty->nparams == na) {
-                    for (int i = 0; i < n->call.nargs && i < na; i++) {
-                        Type *t = at[i];
-                        Type *pt = rd_fty->params[i];
-                        if (!t || !pt) continue;
-                        /* Null pointer → any pointer (or array param). */
-                        if (t->kind == TY_PTR && t->base &&
-                            t->base->kind == TY_VOID &&
-                            (pt->kind == TY_PTR || pt->kind == TY_ARRAY)) {
-                            at[i] = pt;
-                            continue;
-                        }
-                        /* Same-tag pointer with cv difference. */
-                        bool pt_ptrlike = pt->kind == TY_PTR ||
-                                          pt->kind == TY_ARRAY;
-                        if (t->kind == TY_PTR && pt_ptrlike &&
-                            t->base && pt->base &&
-                            t->base->tag && pt->base->tag &&
-                            t->base->tag->len == pt->base->tag->len &&
-                            memcmp(t->base->tag->loc, pt->base->tag->loc,
-                                   t->base->tag->len) == 0) {
-                            at[i] = pt;
-                            continue;
-                        }
-                        /* Non-ref → ref param: substitute the param
-                         * type so the mangled call name carries _ref.
-                         * Required for f(int&) vs f(int*) overloads
-                         * where the call passes a plain lvalue. */
-                        if ((pt->kind == TY_REF || pt->kind == TY_RVALREF) &&
-                            t->kind != TY_REF && t->kind != TY_RVALREF) {
-                            at[i] = pt;
-                        }
-                    }
+                    for (int i = 0; i < na; i++)
+                        at[i] = rd_fty->params[i];
                 }
                 if (getenv("SF_DBG_CALL")) {
                     Token *nm = n->call.callee->ident.name;
