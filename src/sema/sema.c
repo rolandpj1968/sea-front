@@ -1101,7 +1101,13 @@ static Declaration *resolve_free_function_overload(
             return viable[i].decl;
         }
     }
-    return NULL;  /* ambiguous */
+    /* Tied — but in C/C++ multiple declarations of the SAME function
+     * (forward decl + definition + re-declaration) coexist in scope
+     * and produce identical viable candidates. Don't return NULL
+     * (which leaves the call site mangling against an arbitrary
+     * other overload via the historical first-found resolved_decl).
+     * Pick the first viable: any of them is a valid resolution. */
+    return viable[0].decl;
 }
 
 static void visit_call(Sema *s, Node *n) {
