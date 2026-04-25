@@ -62,7 +62,18 @@ for arg in "$@"; do
     esac
 done
 
-# Re-parse to extract structured info (output, inputs, flags)
+# Shell-quote a single argument so it survives `eval`.
+# Wraps in single quotes and escapes any embedded single quotes.
+# Required because args like  -DPKGVERSION="(GCC) "  contain spaces
+# that would word-split if we accumulated bare strings and re-expanded.
+shell_quote() {
+    printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+# Re-parse to extract structured info (output, inputs, flags).
+# Each category is a string of shell-quoted args, expanded via `eval`
+# at the cpp / cc invocation. Storing bare $arg and re-expanding via
+# unquoted "$CPP_FLAGS" word-splits on embedded spaces in -D values.
 OUTPUT=""
 INPUTS=""
 CPP_FLAGS=""
@@ -75,37 +86,38 @@ for arg in "$@"; do
         continue
     fi
     PREV=""
+    qarg=$(shell_quote "$arg")
     case "$arg" in
         -c) MODE="compile" ;;
         -o) PREV="-o" ;;
         -I*|-D*|-U*)
-            CPP_FLAGS="$CPP_FLAGS $arg"
+            CPP_FLAGS="$CPP_FLAGS $qarg"
             ;;
         -include|-isystem|-iquote)
-            CPP_FLAGS="$CPP_FLAGS $arg"
+            CPP_FLAGS="$CPP_FLAGS $qarg"
             PREV="$arg"
             ;;
         -std=*)
             STD_FLAG="$arg"
-            CPP_FLAGS="$CPP_FLAGS $arg"
+            CPP_FLAGS="$CPP_FLAGS $qarg"
             ;;
         -W*|-f*|-g*|-O*|-m*|-pipe|-pthread)
-            CC_FLAGS="$CC_FLAGS $arg"
+            CC_FLAGS="$CC_FLAGS $qarg"
             ;;
         -l*|-L*)
-            CC_FLAGS="$CC_FLAGS $arg"
+            CC_FLAGS="$CC_FLAGS $qarg"
             ;;
         *.cpp|*.cc|*.cxx|*.C|*.c|*.ii|*.i)
-            INPUTS="$INPUTS $arg"
+            INPUTS="$INPUTS $qarg"
             ;;
         *.o|*.a|*.so)
             # Object/library files — pass through for linking
-            CC_FLAGS="$CC_FLAGS $arg"
+            CC_FLAGS="$CC_FLAGS $qarg"
             ;;
         *)
             # Unknown — pass to both
-            CPP_FLAGS="$CPP_FLAGS $arg"
-            CC_FLAGS="$CC_FLAGS $arg"
+            CPP_FLAGS="$CPP_FLAGS $qarg"
+            CC_FLAGS="$CC_FLAGS $qarg"
             ;;
     esac
     # Handle -include / -isystem with separate value arg
@@ -127,16 +139,17 @@ if [ "$MODE" = "link" ]; then
     exec $SEA_CC "$@"
 fi
 
+# Unpack INPUTS (space-separated shell-quoted) into positional params
+# so we can iterate without losing args that contain spaces.
+eval "set -- $INPUTS"
+
 # Default output: derive from input (foo.cpp → foo.o)
 if [ -z "$OUTPUT" ] && [ "$MODE" = "compile" ]; then
-    for src in $INPUTS; do
-        OUTPUT=$(echo "$src" | sed 's/\.[^.]*$/.o/')
-        break
-    done
+    OUTPUT=$(echo "$1" | sed 's/\.[^.]*$/.o/')
 fi
 
 # Compile mode: preprocess → sea-front → cc -c
-for src in $INPUTS; do
+for src in "$@"; do
     log "Processing: $src"
 
     TMPDIR="${TMPDIR:-/tmp}"
@@ -169,17 +182,26 @@ for src in $INPUTS; do
     if [ -n "$SEA_LIBSTDCXX_SRC" ] && [ -n "$SEA_LIBSTDCXX_BUILD" ]; then
         STDCXX_FLAGS="-nostdinc++ -I${SEA_LIBSTDCXX_BUILD}/x86_64-unknown-linux-gnu -I${SEA_LIBSTDCXX_BUILD} -I${SEA_LIBSTDCXX_SRC} -I${SEA_LIBSTDCXX_SRC}/c_global"
     fi
+
+    # Use eval so CPP_FLAGS / CC_FLAGS preserve args containing spaces
+    # (e.g. -DPKGVERSION="(GCC) "). $src and $pp_file are quoted
+    # explicitly inside the eval string.
+    qsrc=$(shell_quote "$src")
+    qpp=$(shell_quote "$pp_file")
+    qcfile=$(shell_quote "$c_file")
+    qout=$(shell_quote "$OUTPUT")
+
     log "  Preprocess: $SEA_CPP -E $SF_DEFINES $STD_FLAG $STDCXX_FLAGS $CPP_FLAGS $src"
-    $SEA_CPP -E $SF_DEFINES $STD_FLAG $STDCXX_FLAGS $CPP_FLAGS "$src" -o "$pp_file" 2>/dev/null
+    eval "$SEA_CPP -E $SF_DEFINES $STD_FLAG $STDCXX_FLAGS $CPP_FLAGS $qsrc -o $qpp" 2>/dev/null
 
     # Step 2: Transpile C++ → C
     log "  Transpile: $SEA_FRONT --emit-c $pp_file"
-    $SEA_FRONT --emit-c "$pp_file" > "$c_file" 2>/dev/null
+    eval "$SEA_FRONT --emit-c $qpp > $qcfile" 2>/dev/null
 
     # Step 3: Compile C → .o
     # Use -std=c99 for gcc 4.7 compatibility (for-init declarations)
     log "  Compile: $SEA_CC -std=c99 -c $CC_FLAGS -o $OUTPUT $c_file"
-    $SEA_CC -std=c99 -c $CC_FLAGS -o "$OUTPUT" "$c_file"
+    eval "$SEA_CC -std=c99 -c $CC_FLAGS -o $qout $qcfile"
 
     # Cleanup
     rm -f "$pp_file" "$c_file"

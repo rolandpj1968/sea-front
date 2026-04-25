@@ -214,6 +214,15 @@ struct Node {
      * re-emitting the expression. NULL when no hoisting happened. */
     const char *codegen_temp_name;
 
+    /* Codegen-only: set true once this node has been emitted at
+     * top level. Used to dedup top-level ND_VAR_DECLs that get
+     * walked twice — once in PHASE_STRUCTS via the ND_BLOCK
+     * (multi-declarator / extern "C" / namespace) recursion, and
+     * again in PHASE_METHODS. Per-node bool replaces a fixed-size
+     * static dedup array that overflowed on large TUs (gcc 4.8
+     * i386.c has > 1024 file-scope vars). */
+    bool codegen_emitted;
+
     union {
         /* ND_NUM — N4659 §5.13.2 [lex.icon]
          * 128-bit binary representation with sign flag.

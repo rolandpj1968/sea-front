@@ -3872,46 +3872,58 @@ static void emit_var_decl_inner(Node *n) {
         fputc(')', stdout);
         return;
     }
-    /* Array of function pointers: 'ret (*name[N])(args)'.
-     * C requires the array suffix and the '*' to live inside the
-     * grouped declarator, otherwise we'd emit
-     *   ret (*)(args) name[N]
-     * which is a syntax error. N4659 §11.3.4 [dcl.array] +
-     * §11.3.5 [dcl.fct]. Pattern: gcc 4.8 tree-vect-patterns.c
-     *   static vect_recog_func_ptr vect_vect_recog_func_ptrs[10] */
-    if (ty && ty->kind == TY_ARRAY && ty->base &&
-        ty->base->kind == TY_PTR && ty->base->base &&
-        ty->base->base->kind == TY_FUNC && n->var_decl.name) {
-        Type *fty = ty->base->base;
-        emit_type(fty->ret);
-        fprintf(stdout, " (*%.*s",
-                n->var_decl.name->len, n->var_decl.name->loc);
-        if (ty->array_len >= 0) {
-            fprintf(stdout, "[%d]", ty->array_len);
-        } else if (ty->array_size_expr) {
-            fputc('[', stdout);
-            emit_expr(ty->array_size_expr);
-            fputc(']', stdout);
-        } else {
-            fputs("[]", stdout);
+    /* Array (any dim) of function pointers:
+     *   ret (*name[N])(args)         — 1D
+     *   ret (*name[M][N])(args)      — 2D
+     * C requires the dimensions and the '*' to live inside the
+     * grouped declarator. Walking the TY_ARRAY chain handles
+     * arbitrary rank. N4659 §11.3.4 [dcl.array] + §11.3.5 [dcl.fct].
+     * Patterns:
+     *   gcc 4.8 tree-vect-patterns.c — 1D
+     *     static vect_recog_func_ptr vect_vect_recog_func_ptrs[10]
+     *   gcc 4.8 i386.c — 2D
+     *     static rtx (*gen_extract[6][2])(rtx, rtx) = ... */
+    {
+        Type *t = ty;
+        int dims = 0;
+        while (t && t->kind == TY_ARRAY) { dims++; t = t->base; }
+        if (dims > 0 && t && t->kind == TY_PTR && t->base &&
+            t->base->kind == TY_FUNC && n->var_decl.name) {
+            Type *fty = t->base;
+            emit_type(fty->ret);
+            fprintf(stdout, " (*%.*s",
+                    n->var_decl.name->len, n->var_decl.name->loc);
+            Type *dt = ty;
+            for (int i = 0; i < dims; i++) {
+                if (dt->array_len >= 0) {
+                    fprintf(stdout, "[%d]", dt->array_len);
+                } else if (dt->array_size_expr) {
+                    fputc('[', stdout);
+                    emit_expr(dt->array_size_expr);
+                    fputc(']', stdout);
+                } else {
+                    fputs("[]", stdout);
+                }
+                dt = dt->base;
+            }
+            fputs(")(", stdout);
+            for (int i = 0; i < fty->nparams; i++) {
+                if (i > 0) fputs(", ", stdout);
+                emit_type(fty->params[i]);
+            }
+            if (fty->is_variadic) {
+                if (fty->nparams > 0) fputs(", ", stdout);
+                fputs("...", stdout);
+            } else if (fty->nparams == 0) {
+                fputs("void", stdout);
+            }
+            fputc(')', stdout);
+            if (n->var_decl.init) {
+                fputs(" = ", stdout);
+                emit_expr(n->var_decl.init);
+            }
+            return;
         }
-        fputs(")(", stdout);
-        for (int i = 0; i < fty->nparams; i++) {
-            if (i > 0) fputs(", ", stdout);
-            emit_type(fty->params[i]);
-        }
-        if (fty->is_variadic) {
-            if (fty->nparams > 0) fputs(", ", stdout);
-            fputs("...", stdout);
-        } else if (fty->nparams == 0) {
-            fputs("void", stdout);
-        }
-        fputc(')', stdout);
-        if (n->var_decl.init) {
-            fputs(" = ", stdout);
-            emit_expr(n->var_decl.init);
-        }
-        return;
     }
     if (ty && ty->kind == TY_ARRAY) {
         /* Inline enum-with-enumerators as the element type:
@@ -4766,10 +4778,22 @@ static void emit_stmt(Node *n) {
             char cond_name[24];
             snprintf(cond_name, sizeof(cond_name), "__SF_cond_%d", cond_id);
 
-            /* Synth decl at the current indent (emit_block already
-             * emitted indent for us). Type is int — cond is
+            /* Wrap the entire decl + mini-block + if sequence in an
+             * outer block so the caller sees a single statement. This
+             * matters when the if-stmt is the body of an unbraced
+             * for/while/else (gcc 4.8 c-ada-spec.c collect_ada_nodes:
+             *   for (n = t; n; n = TREE_CHAIN (n))
+             *     if (LOCATION_LINE (...) > 0 && expand_location(...).file == s)
+             * — the for-body must be one statement; without the wrap
+             * we emit 'for (...) int __SF_cond_0;' and the mini-block
+             * + if leak outside the for). */
+            fputs("{\n", stdout);
+            g_indent++;
+
+            /* Synth decl at the current indent. Type is int — cond is
              * implicitly converted to bool/int for the test, and
              * int is always assignable from any scalar cond. */
+            emit_indent();
             fprintf(stdout, "int %s;\n", cond_name);
 
             /* Open mini-block */
@@ -4808,6 +4832,10 @@ static void emit_stmt(Node *n) {
                 fputs("else ", stdout);
                 emit_if_body_with_hoist(n->if_.else_);
             }
+
+            g_indent--;
+            emit_indent();
+            fputs("}\n", stdout);
             return;
         }
         /* C++ init-declaration as condition:
@@ -6623,17 +6651,15 @@ static void emit_top_level(Node *n) {
     case ND_CLASS_DEF: emit_class_def(n); return;
     case ND_VAR_DECL:
         /* Dedup top-level var-decls: the two-phase emit walks ND_BLOCK
-         * nodes in both passes, so vars inside extern "C" blocks get
-         * emitted twice. Track by Node pointer to skip duplicates. */
-        {
-            enum { VAR_DEDUP_CAP = 1024 };
-            static Node *var_seen[VAR_DEDUP_CAP];
-            static int var_nseen = 0;
-            if (n->var_decl.name) {
-                for (int i = 0; i < var_nseen; i++)
-                    if (var_seen[i] == n) return;
-                if (var_nseen < VAR_DEDUP_CAP) var_seen[var_nseen++] = n;
-            }
+         * nodes in both passes, so vars inside extern "C" blocks /
+         * multi-declarator groups get visited twice. Per-node bool
+         * flag — replaces a fixed-size static array that overflowed on
+         * large TUs (gcc 4.8 i386.c has > 1024 file-scope vars,
+         * causing duplicate emissions of ix86_first_cycle_multipass_data
+         * et al). */
+        if (n->var_decl.name) {
+            if (n->codegen_emitted) return;
+            n->codegen_emitted = true;
         }
         /* Bare enum definition: 'enum Color { RED, GREEN };' becomes
          * ND_VAR_DECL with type TY_ENUM and no name. Emit the enum
@@ -7032,6 +7058,7 @@ static void emit_forward_decl_funcs(Node *tu) {
         emit_fwd_decl_methods_only(tu->tu.decls[i]);
 }
 
+
 void emit_c(Node *tu) {
     if (!tu || tu->kind != ND_TRANSLATION_UNIT) return;
     g_tu = tu;
@@ -7124,6 +7151,50 @@ void emit_c(Node *tu) {
      * C11 §6.7.2.3 — the enum type must be complete in the
      * translation-unit scope before its name can be used. */
     emit_forward_decl_funcs(tu);
+
+    /* Pass 0: tentative definitions for top-level fixed-size array
+     * variables. C99 §6.9.2 allows multiple tentative definitions of
+     * a file-scope variable as long as they're type-consistent; the
+     * later definition with an initializer "completes" them. Emitting
+     * a size-only forward decl makes 'sizeof(arr)' usable in struct
+     * member array dimensions that are emitted in PHASE_STRUCTS, even
+     * though the variable's full definition lands in PHASE_METHODS.
+     * Pattern: gcc 4.8 ggc-page.c
+     *   static const size_t extra_order_size_table[] = { ... };
+     *   struct ggc_pch_ondisk {
+     *     unsigned int totals[NUM_ORDERS + sizeof(extra_order_size_table)/...];
+     *   };
+     * Only POD-element arrays with a known length qualify — anything
+     * else (struct elements, runtime-sized) is left for PHASE_METHODS
+     * to emit normally. */
+    for (int i = 0; i < tu->tu.ndecls; i++) {
+        Node *n = tu->tu.decls[i];
+        if (!n || n->kind != ND_VAR_DECL) continue;
+        Type *ty = n->var_decl.ty;
+        if (!ty || ty->kind != TY_ARRAY) continue;
+        if (!n->var_decl.name) continue;
+        Type *elem = ty->base;
+        if (!elem) continue;
+        /* Restrict to scalar / pointer element types. Struct/union
+         * elements would require the element type to already be
+         * complete, which is the very ordering problem we can't
+         * pre-solve here. */
+        if (elem->kind == TY_STRUCT || elem->kind == TY_UNION ||
+            elem->kind == TY_ARRAY  || elem->kind == TY_FUNC)
+            continue;
+        /* Determine the size: either the explicit array length, or
+         * count the initializer's elements when the source used '[]'.
+         * Without a known size we can't help — skip. */
+        int len = ty->array_len;
+        if (len < 0 && n->var_decl.init &&
+            n->var_decl.init->kind == ND_INIT_LIST)
+            len = n->var_decl.init->init_list.nelems;
+        if (len < 0) continue;
+        if (n->var_decl.storage_flags & DECL_STATIC) fputs("static ", stdout);
+        emit_type(elem);
+        fprintf(stdout, " %.*s[%d];\n",
+                n->var_decl.name->len, n->var_decl.name->loc, len);
+    }
 
     /* Pass 1: struct bodies only */
     g_emit_phase = PHASE_STRUCTS;
