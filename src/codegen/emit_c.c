@@ -2327,6 +2327,38 @@ static void emit_token_text(Token *t) {
     fprintf(stdout, "%.*s", t->len, t->loc);
 }
 
+/* Emit an enum-body token with C-friendly literal substitution.
+ * Enum bodies are captured as raw token ranges and re-emitted
+ * verbatim, so C++ keywords 'true' / 'false' would land in the
+ * C output unresolved. Substitute them with their numeric values.
+ * Pattern: gcc 4.8 cp/semantics.c
+ *   enum { any = false, rval = true }; */
+static void emit_enum_body_token(Token *t) {
+    if (!t) { fputs("?", stdout); return; }
+    if (t->len == 4 && memcmp(t->loc, "true", 4) == 0) {
+        fputc('1', stdout);
+        return;
+    }
+    if (t->len == 5 && memcmp(t->loc, "false", 5) == 0) {
+        fputc('0', stdout);
+        return;
+    }
+    fprintf(stdout, "%.*s", t->len, t->loc);
+}
+
+/* Emit the enumerator list of an enum type as C source — the
+ * sequence between '{' and '}'. Used by every site that re-emits
+ * a captured enum body (top-level, inline, member, typedef, etc.).
+ * Caller is responsible for the surrounding 'enum tag { ... };'
+ * shape. */
+static void emit_enum_body(Type *ety) {
+    for (int i = 0; i < ety->enum_ntokens; i++) {
+        Token *t = &ety->enum_tokens[i];
+        if (t->has_space && i > 0) fputc(' ', stdout);
+        emit_enum_body_token(t);
+    }
+}
+
 static void emit_expr(Node *n) {
     if (!n) return;
     /* Universal temp substitution: any hoisted node — ND_CALL, ND_BINARY
@@ -3763,11 +3795,7 @@ static void emit_var_decl_inner(Node *n) {
         if (ty->tag)
             fprintf(stdout, "%.*s ", ty->tag->len, ty->tag->loc);
         fputs("{ ", stdout);
-        for (int i = 0; i < ty->enum_ntokens; i++) {
-            Token *t = &ty->enum_tokens[i];
-            if (t->has_space && i > 0) fputc(' ', stdout);
-            fprintf(stdout, "%.*s", t->len, t->loc);
-        }
+        emit_enum_body(ty);
         fputs(" }", stdout);
         return;
     }
@@ -3799,11 +3827,7 @@ static void emit_var_decl_inner(Node *n) {
         if (ty->tag)
             fprintf(stdout, "%.*s ", ty->tag->len, ty->tag->loc);
         fputs("{ ", stdout);
-        for (int i = 0; i < ty->enum_ntokens; i++) {
-            Token *t = &ty->enum_tokens[i];
-            if (t->has_space && i > 0) fputc(' ', stdout);
-            fprintf(stdout, "%.*s", t->len, t->loc);
-        }
+        emit_enum_body(ty);
         fprintf(stdout, " } %.*s",
                 n->var_decl.name->len, n->var_decl.name->loc);
         if (n->var_decl.init) {
@@ -3942,11 +3966,7 @@ static void emit_var_decl_inner(Node *n) {
             if (elem->tag)
                 fprintf(stdout, "%.*s ", elem->tag->len, elem->tag->loc);
             fputs("{ ", stdout);
-            for (int i = 0; i < elem->enum_ntokens; i++) {
-                Token *t = &elem->enum_tokens[i];
-                if (t->has_space && i > 0) fputc(' ', stdout);
-                fprintf(stdout, "%.*s", t->len, t->loc);
-            }
+            emit_enum_body(elem);
             fputs(" }", stdout);
         } else {
             emit_type(ty->base);
@@ -4632,11 +4652,7 @@ static void emit_stmt(Node *n) {
             if (enum_ty->tag)
                 fprintf(stdout, "%.*s ", enum_ty->tag->len, enum_ty->tag->loc);
             fputs("{ ", stdout);
-            for (int i = 0; i < enum_ty->enum_ntokens; i++) {
-                Token *t = &enum_ty->enum_tokens[i];
-                if (t->has_space && i > 0) fputc(' ', stdout);
-                fprintf(stdout, "%.*s", t->len, t->loc);
-            }
+            emit_enum_body(enum_ty);
             fputs(" };\n", stdout);
             emit_indent();
         }
@@ -6676,11 +6692,7 @@ static void emit_top_level(Node *n) {
                 fprintf(stdout, "%.*s ", n->var_decl.ty->tag->len,
                         n->var_decl.ty->tag->loc);
             fputs("{ ", stdout);
-            for (int i = 0; i < n->var_decl.ty->enum_ntokens; i++) {
-                Token *t = &n->var_decl.ty->enum_tokens[i];
-                if (t->has_space && i > 0) fputc(' ', stdout);
-                fprintf(stdout, "%.*s", t->len, t->loc);
-            }
+            emit_enum_body(n->var_decl.ty);
             fputs(" };\n", stdout);
             return;
         }
@@ -6823,11 +6835,7 @@ static void emit_top_level(Node *n) {
             if (uty->tag)
                 fprintf(stdout, "%.*s ", uty->tag->len, uty->tag->loc);
             fputs("{ ", stdout);
-            for (int i = 0; i < uty->enum_ntokens; i++) {
-                Token *t = &uty->enum_tokens[i];
-                if (t->has_space && i > 0) fputc(' ', stdout);
-                fprintf(stdout, "%.*s", t->len, t->loc);
-            }
+            emit_enum_body(uty);
             fputs(" };\n", stdout);
         }
         return;
@@ -7099,11 +7107,7 @@ void emit_c(Node *tu) {
                     if (ety->tag)
                         fprintf(stdout, "%.*s ", ety->tag->len, ety->tag->loc);
                     fputs("{ ", stdout);
-                    for (int k = 0; k < ety->enum_ntokens; k++) {
-                        Token *t = &ety->enum_tokens[k];
-                        if (t->has_space && k > 0) fputc(' ', stdout);
-                        fprintf(stdout, "%.*s", t->len, t->loc);
-                    }
+                    emit_enum_body(ety);
                     fputs(" };\n", stdout);
                 }
             }
@@ -7125,11 +7129,7 @@ void emit_c(Node *tu) {
             if (ety->tag)
                 fprintf(stdout, "%.*s ", ety->tag->len, ety->tag->loc);
             fputs("{ ", stdout);
-            for (int k = 0; k < ety->enum_ntokens; k++) {
-                Token *t = &ety->enum_tokens[k];
-                if (t->has_space && k > 0) fputc(' ', stdout);
-                fprintf(stdout, "%.*s", t->len, t->loc);
-            }
+            emit_enum_body(ety);
             fputs(" };\n", stdout);
         }
     }
