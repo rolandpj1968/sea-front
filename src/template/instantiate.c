@@ -1134,6 +1134,28 @@ static int find_ool_methods(Node *tu, Type *class_type,
     return count;
 }
 
+/* Build a TY_FUNC from an ND_FUNC_DEF/ND_FUNC_DECL's params + ret_ty.
+ * Used to back-fill the call-site callee's resolved_type so emit_call
+ * can see the param types (for ref-arg adaptation). */
+static Type *build_func_type_from_node(Node *func, Arena *arena) {
+    if (!func || (func->kind != ND_FUNC_DEF && func->kind != ND_FUNC_DECL))
+        return NULL;
+    Type *ft = arena_alloc(arena, sizeof(Type));
+    memset(ft, 0, sizeof(Type));
+    ft->kind = TY_FUNC;
+    ft->ret = func->func.ret_ty;
+    ft->nparams = func->func.nparams;
+    ft->is_variadic = func->func.is_variadic;
+    if (ft->nparams > 0) {
+        ft->params = arena_alloc(arena, ft->nparams * sizeof(Type *));
+        for (int i = 0; i < ft->nparams; i++) {
+            Node *p = func->func.params[i];
+            ft->params[i] = (p && p->kind == ND_PARAM) ? p->param.ty : NULL;
+        }
+    }
+    return ft;
+}
+
 /*
  * Instantiate one template for a given set of arguments.
  * Returns the cloned ND_CLASS_DEF / ND_FUNC_DEF, or NULL on failure.
@@ -1405,24 +1427,7 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
          * to a `T*&` (now `T**` in C) param without taking address.
          * Pattern: gcc 4.8 vec.h `vec_safe_grow_cleared(vec, n)` —
          * the `vec<...> *&v` param needs `&vec` at the call site. */
-        {
-            Type *ft = arena_alloc(arena, sizeof(Type));
-            memset(ft, 0, sizeof(Type));
-            ft->kind = TY_FUNC;
-            ft->ret = cloned->func.ret_ty;
-            ft->nparams = cloned->func.nparams;
-            ft->is_variadic = cloned->func.is_variadic;
-            if (ft->nparams > 0) {
-                ft->params = arena_alloc(arena,
-                    ft->nparams * sizeof(Type *));
-                for (int i = 0; i < ft->nparams; i++) {
-                    Node *p = cloned->func.params[i];
-                    ft->params[i] = (p && p->kind == ND_PARAM)
-                        ? p->param.ty : NULL;
-                }
-            }
-            template_id->resolved_type = ft;
-        }
+        template_id->resolved_type = build_func_type_from_node(cloned, arena);
 
         /* Set up param scope for sema */
         if (cloned->func.body && cloned->func.nparams > 0)
@@ -1710,6 +1715,10 @@ void template_instantiate(Node *tu, Arena *arena) {
                 req->template_id->ident.resolved_decl = NULL;
                 req->template_id->ident.overload_set = NULL;
                 req->template_id->ident.n_overloads = 0;
+                /* Carry the previously-built TY_FUNC across the dedup
+                 * hit — see comment at the first instantiation site. */
+                if (existing && existing->kind == TY_FUNC && existing->params)
+                    req->template_id->resolved_type = existing;
             }
             continue;
         }
@@ -1859,12 +1868,18 @@ void template_instantiate(Node *tu, Arena *arena) {
         }
         /* Register function template instantiations in the dedup set
          * so the same function isn't instantiated multiple times from
-         * different call sites. Use a dummy Type as the value. */
+         * different call sites. Store the instantiation's TY_FUNC as
+         * the dedup value so the dedup-hit path below can wire it
+         * onto the call-site callee's resolved_type for ref-arg
+         * adaptation. */
         if (inst && (inst->kind == ND_FUNC_DEF || inst->kind == ND_FUNC_DECL)) {
-            Type *dummy = arena_alloc(arena, sizeof(Type));
-            memset(dummy, 0, sizeof(Type));
-            dummy->kind = TY_FUNC;
-            dedup_add(&ds, key, key_len, dummy);
+            Type *fty = build_func_type_from_node(inst, arena);
+            if (!fty) {
+                fty = arena_alloc(arena, sizeof(Type));
+                memset(fty, 0, sizeof(Type));
+                fty->kind = TY_FUNC;
+            }
+            dedup_add(&ds, key, key_len, fty);
         }
     }
 
