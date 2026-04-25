@@ -3369,6 +3369,32 @@ static void emit_expr(Node *n) {
                 int na = n->call.nargs < 32 ? n->call.nargs : 32;
                 for (int i = 0; i < na; i++)
                     at[i] = n->call.args[i] ? n->call.args[i]->resolved_type : NULL;
+                /* Default-argument injection extends the call to
+                 * match the resolved overload's nparams. The mangled
+                 * name MUST include the injected param types so it
+                 * matches the def's signature, not just the user-
+                 * written arg count. Pattern: gcc 4.8 gengtype.c
+                 *   set_gc_used_type(o->info.type, GC_POINTED_TO, NULL)
+                 * (3 args, decl has 4 with bool default → emit 4
+                 * args; mangled name needs the 4th param's type). */
+                Declaration *rd = n->call.callee->ident.resolved_decl;
+                Type *rd_fty = rd && rd->type && rd->type->kind == TY_FUNC
+                                ? rd->type : NULL;
+                if (rd_fty && rd_fty->param_defaults &&
+                    n->call.nargs < rd_fty->nparams && na < 32) {
+                    bool all_tail = true;
+                    for (int i = n->call.nargs; i < rd_fty->nparams; i++) {
+                        if (!rd_fty->param_defaults[i]) {
+                            all_tail = false; break;
+                        }
+                    }
+                    if (all_tail) {
+                        for (int i = n->call.nargs;
+                             i < rd_fty->nparams && na < 32; i++) {
+                            at[na++] = rd_fty->params[i];
+                        }
+                    }
+                }
                 if (getenv("SF_DBG_CALL")) {
                     Token *nm = n->call.callee->ident.name;
                     if (nm && nm->len == 9 && memcmp(nm->loc, "gt_pch_nx", 9) == 0 && na == 3) {
