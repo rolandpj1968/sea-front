@@ -3343,57 +3343,32 @@ static void emit_expr(Node *n) {
             bool paren_callee = n->call.callee &&
                                 n->call.callee->kind == ND_CAST;
             if (paren_callee) fputc('(', stdout);
-            /* Overloaded free-function call: emit the mangled name.
-             * Prefer the RESOLVED OVERLOAD's param types — that's the
-             * signature the called function was emitted with. Using
-             * call-site arg types instead diverges when the call has
-             * implicit conversions (e.g. literal '0' passed to a
-             * 'bool' parameter mangles as int_ instead of bool_,
-             * producing an unresolved symbol).
+            /* Overloaded free-function call: emit the mangled name
+             * using the CALL-SITE argument types. This always matches
+             * the actual arity, even when sema's resolved_decl points
+             * at the wrong overload (which happens when overload
+             * resolution can't disambiguate — e.g. arity-mismatched
+             * candidates with NULL resolved arg types from g++ NULL).
              *
-             * Fall back to call-site arg types when the resolved decl
-             * is unavailable or has TY_DEPENDENT params (template
-             * candidate not yet substituted).
+             * Using resolved_decl->params instead is appealing because
+             * the mangle then matches the def's signature exactly,
+             * but it diverges from the call's actual arity when
+             * resolution failed and the historical first-found
+             * resolved_decl has the wrong nparams — emits the wrong
+             * function name AND leaves the actual arg list intact,
+             * producing arity-mismatch link errors.
              *
-             * Pattern that needed the fallback: gengtype-generated
-             * gt_pch_nx<vec<...>> calls where the resolved candidate
-             * is a function template whose param[0] is TY_DEPENDENT;
-             * the call-site arg type is concrete and lets us mangle
-             * something useful. */
+             * NULL resolved_type on an individual arg (e.g. a g++
+             * builtin we don't model) is encoded as 'unknown' by the
+             * mangler — wrong but consistent across calls. */
             bool emitted_mangled = false;
             if (n->call.callee && n->call.callee->kind == ND_IDENT &&
                 !n->call.callee->ident.implicit_this &&
                 free_func_name_is_overloaded(n->call.callee->ident.name)) {
                 Type *at[32];
                 int na = n->call.nargs < 32 ? n->call.nargs : 32;
-
-                Declaration *rd = n->call.callee->ident.resolved_decl;
-                Type *rd_fty = rd && rd->type && rd->type->kind == TY_FUNC
-                                ? rd->type : NULL;
-                bool rd_concrete = rd_fty && rd_fty->nparams == n->call.nargs;
-                if (rd_concrete) {
-                    for (int i = 0; i < rd_fty->nparams; i++) {
-                        Type *pt = rd_fty->params[i];
-                        if (!pt || pt->kind == TY_DEPENDENT) {
-                            rd_concrete = false; break;
-                        }
-                    }
-                }
-                if (rd_concrete) {
-                    /* Use the resolved overload's param types — exact
-                     * match to the def's emitted signature. */
-                    for (int i = 0; i < n->call.nargs; i++)
-                        at[i] = rd_fty->params[i];
-                    na = n->call.nargs;
-                } else {
-                    /* No usable resolved decl: mangle from call-site
-                     * arg types. NULL arg type → keep going (the
-                     * mangler emits 'unknown' for it) so we don't
-                     * fall through to the IDENT path that uses the
-                     * (wrong) resolved_decl's param count. */
-                    for (int i = 0; i < na; i++)
-                        at[i] = n->call.args[i] ? n->call.args[i]->resolved_type : NULL;
-                }
+                for (int i = 0; i < na; i++)
+                    at[i] = n->call.args[i] ? n->call.args[i]->resolved_type : NULL;
                 if (getenv("SF_DBG_CALL")) {
                     Token *nm = n->call.callee->ident.name;
                     if (nm && nm->len == 9 && memcmp(nm->loc, "gt_pch_nx", 9) == 0 && na == 3) {
