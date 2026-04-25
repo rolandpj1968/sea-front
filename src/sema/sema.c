@@ -192,6 +192,25 @@ static void visit_bool_lit(Sema *s, Node *n) {
     n->resolved_type = ty_bool(s);
 }
 
+/* nullptr / NULL / __null — N4659 §5.13.7 [lex.nullptr] / §4.10/1
+ * [conv.ptr]: a null pointer constant has type std::nullptr_t and
+ * converts to any pointer type. We model it as 'void *' so it
+ * passes overload resolution against any pointer parameter (the
+ * ics_rank doesn't distinguish nullptr_t vs void* for pointer
+ * candidates yet; the conversion-rank machinery is a TODO).
+ *
+ * Without this, the overload resolution at a call site like
+ *   f(parser, false, true, NULL)
+ * would see arg3 as having no resolved type, fail to find a viable
+ * candidate, and fall through to the historical 'first found' decl
+ * — which is wrong when the matching overload is later in the
+ * overload set. Pattern: gcc 4.8 cp/parser.c. */
+static void visit_nullptr(Sema *s, Node *n) {
+    Type *p = sema_new_type(s, TY_PTR);
+    p->base = sema_new_type(s, TY_VOID);
+    n->resolved_type = p;
+}
+
 static void visit_fnum(Sema *s, Node *n) {
     /* Floating literal — N4659 §5.13.4 [lex.fcon]. Always 'double'
      * here; suffix 'f' / 'F' would yield float, 'l' / 'L' long double.
@@ -864,6 +883,19 @@ enum {
 static int ics_rank(Type *param, Type *arg) {
     if (!param || !arg) return ICS_INCOMPATIBLE;
     if (types_equivalent(param, arg)) return ICS_EXACT;
+    /* Null pointer constant — N4659 §4.10/1 [conv.ptr]: a null
+     * pointer constant converts to ANY pointer type. We model nullptr
+     * / NULL / __null as TY_PTR(TY_VOID) in visit_nullptr; treat that
+     * as compatible with any TY_PTR parameter so overload resolution
+     * doesn't reject candidates merely because the call passed NULL
+     * instead of a typed pointer. Without this, calls like
+     *   f(parser, false, true, NULL)
+     * would fail to find a viable candidate and fall back to the
+     * historical first-found resolved_decl (which may be the wrong
+     * arity overload). Pattern: gcc 4.8 cp/parser.c. */
+    if (param->kind == TY_PTR && arg->kind == TY_PTR && arg->base &&
+        arg->base->kind == TY_VOID)
+        return ICS_PTR_SAME_TAG;  /* null → any pointer */
     /* Pointer-to-same-tag: T* vs T* where both Ts are class types
      * with matching tag but distinct Type* identity. Catches the
      * common case where two free-function overloads differ only in
@@ -1210,6 +1242,7 @@ static void visit(Sema *s, Node *n) {
     case ND_FNUM:      visit_fnum(s, n);      break;
     case ND_CHAR:      visit_chr(s, n);       break;
     case ND_BOOL_LIT:  visit_bool_lit(s, n);  break;
+    case ND_NULLPTR:   visit_nullptr(s, n);   break;
     case ND_IDENT:     visit_ident(s, n);     break;
 
     /* Operators */

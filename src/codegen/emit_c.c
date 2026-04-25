@@ -3343,24 +3343,56 @@ static void emit_expr(Node *n) {
             bool paren_callee = n->call.callee &&
                                 n->call.callee->kind == ND_CAST;
             if (paren_callee) fputc('(', stdout);
-            /* Overloaded free-function call: emit the mangled name
-             * using the CALL-SITE argument types as the signature.
-             * Using resolved_decl->type->params instead falls over
-             * when sema's resolver points at a template declaration
-             * whose params are still TY_DEPENDENT — the suffix would
-             * come out as 'unknown_ptr_unknown_ptr_...'. Arg types
-             * are always concrete (by the time sema has visited the
-             * args). */
+            /* Overloaded free-function call: emit the mangled name.
+             * Prefer the RESOLVED OVERLOAD's param types — that's the
+             * signature the called function was emitted with. Using
+             * call-site arg types instead diverges when the call has
+             * implicit conversions (e.g. literal '0' passed to a
+             * 'bool' parameter mangles as int_ instead of bool_,
+             * producing an unresolved symbol).
+             *
+             * Fall back to call-site arg types when the resolved decl
+             * is unavailable or has TY_DEPENDENT params (template
+             * candidate not yet substituted).
+             *
+             * Pattern that needed the fallback: gengtype-generated
+             * gt_pch_nx<vec<...>> calls where the resolved candidate
+             * is a function template whose param[0] is TY_DEPENDENT;
+             * the call-site arg type is concrete and lets us mangle
+             * something useful. */
             bool emitted_mangled = false;
             if (n->call.callee && n->call.callee->kind == ND_IDENT &&
                 !n->call.callee->ident.implicit_this &&
                 free_func_name_is_overloaded(n->call.callee->ident.name)) {
                 Type *at[32];
                 int na = n->call.nargs < 32 ? n->call.nargs : 32;
-                bool all_resolved = na == n->call.nargs;
-                for (int i = 0; i < na; i++) {
-                    at[i] = n->call.args[i] ? n->call.args[i]->resolved_type : NULL;
-                    if (!at[i]) { all_resolved = false; break; }
+
+                Declaration *rd = n->call.callee->ident.resolved_decl;
+                Type *rd_fty = rd && rd->type && rd->type->kind == TY_FUNC
+                                ? rd->type : NULL;
+                bool rd_concrete = rd_fty && rd_fty->nparams == n->call.nargs;
+                if (rd_concrete) {
+                    for (int i = 0; i < rd_fty->nparams; i++) {
+                        Type *pt = rd_fty->params[i];
+                        if (!pt || pt->kind == TY_DEPENDENT) {
+                            rd_concrete = false; break;
+                        }
+                    }
+                }
+                if (rd_concrete) {
+                    /* Use the resolved overload's param types — exact
+                     * match to the def's emitted signature. */
+                    for (int i = 0; i < n->call.nargs; i++)
+                        at[i] = rd_fty->params[i];
+                    na = n->call.nargs;
+                } else {
+                    /* No usable resolved decl: mangle from call-site
+                     * arg types. NULL arg type → keep going (the
+                     * mangler emits 'unknown' for it) so we don't
+                     * fall through to the IDENT path that uses the
+                     * (wrong) resolved_decl's param count. */
+                    for (int i = 0; i < na; i++)
+                        at[i] = n->call.args[i] ? n->call.args[i]->resolved_type : NULL;
                 }
                 if (getenv("SF_DBG_CALL")) {
                     Token *nm = n->call.callee->ident.name;
@@ -3384,11 +3416,9 @@ static void emit_expr(Node *n) {
                         fprintf(stderr, "\n");
                     }
                 }
-                if (all_resolved) {
-                    emit_free_func_mangled_name(
-                        n->call.callee->ident.name, at, na);
-                    emitted_mangled = true;
-                }
+                emit_free_func_mangled_name(
+                    n->call.callee->ident.name, at, na);
+                emitted_mangled = true;
             }
             if (!emitted_mangled) emit_expr(n->call.callee);
             if (paren_callee) fputc(')', stdout);

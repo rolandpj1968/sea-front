@@ -631,6 +631,10 @@ parse_suffixes:
             case TK_KW_CONST: case TK_KW_VOLATILE:
             case TK_KW_STRUCT: case TK_KW_UNION: case TK_KW_ENUM:
             case TK_KW_AUTO: case TK_KW_TYPENAME: case TK_KW_DECLTYPE:
+            /* Storage-class specifiers — N4659 §10.1.1 [dcl.stc].
+             * 'register' is the most common in pre-C++17 headers
+             * (legal as a parameter qualifier through C++14). */
+            case TK_KW_REGISTER:
                 looks_like_params = true;
                 break;
             default:
