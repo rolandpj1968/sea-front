@@ -1136,7 +1136,9 @@ static int find_ool_methods(Node *tu, Type *class_type,
 
 /* Build a TY_FUNC from an ND_FUNC_DEF/ND_FUNC_DECL's params + ret_ty.
  * Used to back-fill the call-site callee's resolved_type so emit_call
- * can see the param types (for ref-arg adaptation). */
+ * can see the param types (for ref-arg adaptation) and default-arg
+ * injection (vec_safe_reserve(v, n) — third 'exact' param defaults
+ * to false in vec.h). N4659 §11.3.6 [dcl.fct.default]. */
 static Type *build_func_type_from_node(Node *func, Arena *arena) {
     if (!func || (func->kind != ND_FUNC_DEF && func->kind != ND_FUNC_DECL))
         return NULL;
@@ -1148,9 +1150,21 @@ static Type *build_func_type_from_node(Node *func, Arena *arena) {
     ft->is_variadic = func->func.is_variadic;
     if (ft->nparams > 0) {
         ft->params = arena_alloc(arena, ft->nparams * sizeof(Type *));
+        bool any_default = false;
         for (int i = 0; i < ft->nparams; i++) {
             Node *p = func->func.params[i];
             ft->params[i] = (p && p->kind == ND_PARAM) ? p->param.ty : NULL;
+            if (p && p->kind == ND_PARAM && p->param.default_value)
+                any_default = true;
+        }
+        if (any_default) {
+            ft->param_defaults = arena_alloc(arena,
+                ft->nparams * sizeof(Node *));
+            for (int i = 0; i < ft->nparams; i++) {
+                Node *p = func->func.params[i];
+                ft->param_defaults[i] = (p && p->kind == ND_PARAM)
+                    ? p->param.default_value : NULL;
+            }
         }
     }
     return ft;
