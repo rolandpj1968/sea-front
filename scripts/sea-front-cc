@@ -164,9 +164,14 @@ fi
 # so we can iterate without losing args that contain spaces.
 eval "set -- $INPUTS"
 
-# Default output: derive from input (foo.cpp → foo.o)
+# Default output: derive from input basename in CURRENT directory.
+# C compilers (gcc, g++) put the .o next to the cwd, not next to the
+# source — match that behavior so build systems find the .o where they
+# expect. Pattern: gcc 4.8 host-linux.c is referenced as
+# '../../gcc/config/host-linux.c' but the .o is expected to be just
+# 'host-linux.o' in the build dir.
 if [ -z "$OUTPUT" ] && [ "$MODE" = "compile" ]; then
-    OUTPUT=$(echo "$1" | sed 's/\.[^.]*$/.o/')
+    OUTPUT=$(basename "$1" | sed 's/\.[^.]*$/.o/')
 fi
 
 # Compile mode: preprocess → sea-front → cc -c
