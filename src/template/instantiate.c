@@ -1398,6 +1398,32 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
         template_id->ident.overload_set = NULL;
         template_id->ident.n_overloads = 0;
 
+        /* Synthesize a TY_FUNC carrying the substituted param types
+         * and return type onto the call-site callee's resolved_type.
+         * Without this, the ND_CALL emit path can't see the param
+         * types and skips ref-param adaptation — passing a `T*` arg
+         * to a `T*&` (now `T**` in C) param without taking address.
+         * Pattern: gcc 4.8 vec.h `vec_safe_grow_cleared(vec, n)` —
+         * the `vec<...> *&v` param needs `&vec` at the call site. */
+        {
+            Type *ft = arena_alloc(arena, sizeof(Type));
+            memset(ft, 0, sizeof(Type));
+            ft->kind = TY_FUNC;
+            ft->ret = cloned->func.ret_ty;
+            ft->nparams = cloned->func.nparams;
+            ft->is_variadic = cloned->func.is_variadic;
+            if (ft->nparams > 0) {
+                ft->params = arena_alloc(arena,
+                    ft->nparams * sizeof(Type *));
+                for (int i = 0; i < ft->nparams; i++) {
+                    Node *p = cloned->func.params[i];
+                    ft->params[i] = (p && p->kind == ND_PARAM)
+                        ? p->param.ty : NULL;
+                }
+            }
+            template_id->resolved_type = ft;
+        }
+
         /* Set up param scope for sema */
         if (cloned->func.body && cloned->func.nparams > 0)
             cloned->func.param_scope = region_build_prototype(

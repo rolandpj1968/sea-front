@@ -3049,6 +3049,18 @@ static void emit_expr(Node *n) {
             /* If the ref was TY_REF(TY_PTR(...)) or similar, peel
              * an inner ref/ptr once more so 'ot' lands on the class. */
             if (ty_is_ref(ot)) ot = ot->base;
+            /* For 'h->m()' on a reference-to-pointer (T*&) parameter,
+             * the source ARROW expects a pointer-to-struct, but after
+             * the TY_REF strip we have TY_PTR(TY_STRUCT) — peel one
+             * more level so 'ot' lands on the struct. The ARROW token
+             * tells us the source-level intent: the user wrote `->`
+             * so the receiver is conceptually a pointer-to-class.
+             * Pattern: gcc 4.8 vec.h vec_safe_grow_cleared / vec_safe_
+             * push, free function templates with `vec<T,A,vl_embed>*&`
+             * params. */
+            if (ot && ot->kind == TY_PTR && ot->base &&
+                callee->member.op == TK_ARROW)
+                ot = ot->base;
             /* Method dispatch lowering applies when the member resolves
              * to a method declaration (type TY_FUNC). A function pointer
              * data field has type TY_PTR(TY_FUNC) and falls through to
@@ -3290,9 +3302,20 @@ static void emit_expr(Node *n) {
                     /* Obj is already ptr/ref (lowered to ptr) — pass
                      * as-is. Suppress the ref-param deref in case obj
                      * is an identifier that names a ref-param: we
-                     * need the pointer itself, not its dereference. */
+                     * need the pointer itself, not its dereference.
+                     *
+                     * Exception: T*& (ref to pointer) is lowered to
+                     * T** in C; the receiver `this` should be T*, so
+                     * we DO want the deref here — emitting `(*h)`
+                     * gives T*. Detect by checking the raw obj type:
+                     * TY_REF(TY_PTR(struct)) means we want the deref.
+                     * Pattern: gcc 4.8 vec.h vec_safe_push body —
+                     * 'v->quick_push(obj)' on `vec<T>*&v` param. */
+                    Type *raw_ot = obj ? obj->resolved_type : NULL;
+                    bool ref_to_ptr = ty_is_ref(raw_ot) && raw_ot->base &&
+                                      raw_ot->base->kind == TY_PTR;
                     bool saved_suppress = g_suppress_ref_deref;
-                    g_suppress_ref_deref = true;
+                    g_suppress_ref_deref = !ref_to_ptr;
                     emit_expr(obj);
                     g_suppress_ref_deref = saved_suppress;
                 } else {

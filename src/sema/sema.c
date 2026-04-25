@@ -1110,6 +1110,58 @@ static Declaration *resolve_free_function_overload(
     return viable[0].decl;
 }
 
+/* Build an ND_TEMPLATE_ID node for a function template call whose
+ * template parameters have been deduced into `deduced`. Returns NULL
+ * if any template parameter remains unbound (we don't synthesize a
+ * partial template-id — the instantiation pass would produce broken
+ * mangled names like 'foo_t___te_'). N4659 §17.8.1 [temp.inst].
+ *
+ * Once the callee becomes ND_TEMPLATE_ID, the instantiation pass
+ * scans ND_CALL for ND_TEMPLATE_ID callees, creates an InstRequest,
+ * clones the template with the substitution, and rewrites the callee
+ * again to an ND_IDENT pointing at the mangled instantiation.
+ *
+ * TODO(seafront#over-defaults): once default template args are
+ * threaded through, unbound-then-default would be fine; for now the
+ * caller bails when any param is unbound. */
+static Node *build_template_id_from_deduced(Sema *s, Token *tname,
+                                             Token *call_tok, Node *tmpl,
+                                             SubstMap *deduced) {
+    if (!tmpl || tmpl->kind != ND_TEMPLATE_DECL) return NULL;
+    int ntp = tmpl->template_decl.nparams;
+    if (ntp <= 0) return NULL;
+    Node **tid_args = arena_alloc(s->arena, ntp * sizeof(Node *));
+    for (int k = 0; k < ntp; k++) {
+        Node *tp = tmpl->template_decl.params[k];
+        Token *pname = tp ? tp->param.name : NULL;
+        Type *ct = NULL;
+        if (pname) {
+            for (int e = 0; e < deduced->nentries; e++) {
+                Token *en = deduced->entries[e].param_name;
+                if (en && en->len == pname->len &&
+                    memcmp(en->loc, pname->loc, pname->len) == 0) {
+                    ct = deduced->entries[e].concrete_type;
+                    break;
+                }
+            }
+        }
+        if (!ct) return NULL;
+        Node *arg = arena_alloc(s->arena, sizeof(Node));
+        memset(arg, 0, sizeof(Node));
+        arg->kind = ND_VAR_DECL;
+        arg->var_decl.ty = ct;
+        tid_args[k] = arg;
+    }
+    Node *tid = arena_alloc(s->arena, sizeof(Node));
+    memset(tid, 0, sizeof(Node));
+    tid->kind = ND_TEMPLATE_ID;
+    tid->tok = call_tok;
+    tid->template_id.name = tname;
+    tid->template_id.args = tid_args;
+    tid->template_id.nargs = ntp;
+    return tid;
+}
+
 static void visit_call(Sema *s, Node *n) {
     visit(s, n->call.callee);
     for (int i = 0; i < n->call.nargs; i++)
@@ -1148,66 +1200,49 @@ static void visit_call(Sema *s, Node *n) {
             n->call.callee->ident.resolved_decl = winner;
             if (winner->type)
                 n->call.callee->resolved_type = winner->type;
-            /* If the winner is a function template, rewrite the
-             * callee from ND_IDENT to ND_TEMPLATE_ID with the
-             * deduced arg list. The instantiation pass that runs
-             * after sema scans ND_CALL for ND_TEMPLATE_ID callees,
-             * creates an InstRequest, clones the template with the
-             * substitution, and rewrites the callee again to an
-             * ND_IDENT pointing at the mangled instantiation.
-             * N4659 §17.8.1 [temp.inst]. */
             if (winner_is_template && winner->tmpl_node) {
-                Node *tmpl = winner->tmpl_node;
-                Token *tname = n->call.callee->ident.name;
-                int ntp = tmpl->template_decl.nparams;
-                /* Only rewrite when deduction bound every template
-                 * parameter — a partial binding would produce an
-                 * ND_TEMPLATE_ID with NULL-typed args, which the
-                 * instantiation pass turns into broken mangled names
-                 * like 'foo_t___te_'. If any param is unbound, leave
-                 * the callee as ND_IDENT and fall back to whatever
-                 * the old resolved_decl pointed at.
-                 * TODO(seafront#over-defaults): once explicit
-                 * template args + default template args are threaded
-                 * through, unbound-then-default is fine; for now,
-                 * bail. */
-                Node **tid_args = NULL;
-                bool all_bound = ntp > 0;
-                if (all_bound) {
-                    tid_args = arena_alloc(s->arena,
-                        ntp * sizeof(Node *));
-                    for (int k = 0; k < ntp && all_bound; k++) {
-                        Node *tp = tmpl->template_decl.params[k];
-                        Token *pname = tp ? tp->param.name : NULL;
-                        Type *ct = NULL;
-                        if (pname) {
-                            for (int e = 0; e < deduced.nentries; e++) {
-                                Token *en = deduced.entries[e].param_name;
-                                if (en && en->len == pname->len &&
-                                    memcmp(en->loc, pname->loc, pname->len) == 0) {
-                                    ct = deduced.entries[e].concrete_type;
-                                    break;
-                                }
-                            }
-                        }
-                        if (!ct) { all_bound = false; break; }
-                        Node *arg = arena_alloc(s->arena, sizeof(Node));
-                        memset(arg, 0, sizeof(Node));
-                        arg->kind = ND_VAR_DECL;
-                        arg->var_decl.ty = ct;
-                        tid_args[k] = arg;
-                    }
-                }
-                if (all_bound) {
-                    Node *tid = arena_alloc(s->arena, sizeof(Node));
-                    memset(tid, 0, sizeof(Node));
-                    tid->kind = ND_TEMPLATE_ID;
-                    tid->tok = n->call.callee->tok;
-                    tid->template_id.name = tname;
-                    tid->template_id.args = tid_args;
-                    tid->template_id.nargs = ntp;
-                    n->call.callee = tid;
-                }
+                Node *tid = build_template_id_from_deduced(s,
+                    n->call.callee->ident.name,
+                    n->call.callee->tok,
+                    winner->tmpl_node, &deduced);
+                if (tid) n->call.callee = tid;
+            }
+        }
+    }
+    /* Bare-ident call to a single-overload function template — N4659
+     * §17.8.2.1 [temp.deduct.call]. visit_ident only populates
+     * overload_set when n_overloads > 1, so single-template-candidate
+     * calls (vec_alloc(p), vec_safe_length(p), va_heap::reserve, etc.
+     * in gcc 4.8 vec.h) miss the multi-overload rewrite above. Run
+     * deduction directly against the lone template and synthesize
+     * ND_TEMPLATE_ID so the instantiation pass picks it up.
+     *
+     * The previous skip caused ~770 unique undefined references when
+     * building gcc 4.8 via sea-front-cc — the templates were never
+     * instantiated, so the call sites referenced un-emitted symbols. */
+    if (n->call.callee && n->call.callee->kind == ND_IDENT &&
+        !n->call.callee->ident.implicit_this &&
+        n->call.callee->ident.n_overloads <= 1 &&
+        !n->call.callee->is_type_dependent) {
+        Declaration *d = n->call.callee->ident.resolved_decl;
+        if (d && d->entity == ENTITY_TEMPLATE && d->tmpl_node) {
+            Node *inner = tmpl_inner_func(d->tmpl_node);
+            if (inner) {
+                Type *at[MAX_OVLD_CANDS];
+                int na = n->call.nargs;
+                if (na > MAX_OVLD_CANDS) na = MAX_OVLD_CANDS;
+                for (int i = 0; i < na; i++)
+                    at[i] = n->call.args[i]
+                        ? n->call.args[i]->resolved_type : NULL;
+                int ntp = d->tmpl_node->template_decl.nparams;
+                SubstMap deduced = subst_map_new(s->arena,
+                    ntp > 0 ? ntp : 1);
+                deduce_template_args(inner, at, na, &deduced);
+                Node *tid = build_template_id_from_deduced(s,
+                    n->call.callee->ident.name,
+                    n->call.callee->tok,
+                    d->tmpl_node, &deduced);
+                if (tid) n->call.callee = tid;
             }
         }
     }
