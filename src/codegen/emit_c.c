@@ -4647,6 +4647,7 @@ static void emit_block(Node *n) {
 }
 
 static void emit_class_def(Node *n);
+static void emit_fwd_decl_methods_only(Node *n);
 
 /* If an if/while/for single-statement body needs hoisting (e.g. a
  * method call argument is itself a call whose result must be
@@ -6753,6 +6754,16 @@ methods_phase:;
 
 static void emit_top_level(Node *n) {
     if (!n) return;
+    /* Phase-aware split for function definitions: PHASE_STRUCTS is
+     * the source-order types/vars/enums pass — emit only the
+     * forward declaration here (so later var-decl initializers can
+     * reference it). The body waits for PHASE_METHODS. Caught here
+     * (not just at the driver loop) so recursion through
+     * ND_TEMPLATE_DECL / ND_BLOCK lands in the right phase. */
+    if (n->kind == ND_FUNC_DEF && g_emit_phase == PHASE_STRUCTS) {
+        emit_fwd_decl_methods_only(n);
+        return;
+    }
     switch (n->kind) {
     case ND_FUNC_DEF:
         /* Out-of-class method definition 'int Foo::bar() {}' was
@@ -7136,48 +7147,29 @@ static void emit_fwd_decl_methods_only(Node *n) {
             emit_fwd_decl_methods_only(n->template_decl.decl);
         break;
     case ND_FUNC_DEF:
-        /* Forward-declare instantiated member template functions so they're
-         * visible before any class method body that calls them.
-         * N4659 §17.5.2 [temp.mem]. */
+        /* Forward-declare every function definition so that file-
+         * scope var-decl initializers (e.g. an array of function
+         * pointers) referencing later-defined functions resolve
+         * cleanly. Source-order emission defers function bodies to
+         * pass 2; forward decls upfront make the names visible to
+         * pass 1's var-decl initializers.
+         *
+         * Three shapes:
+         *   - OOL method definition (class_type set): emit the
+         *     mangled method signature.
+         *   - Instantiated function template (mangled '_t_..._te_'
+         *     suffix): emit the free-function header.
+         *   - Plain user-written free function: emit the free-
+         *     function header. */
         if (n->func.class_type && n->func.name) {
             emit_method_signature(n, n->func.class_type);
             fputs(";\n", stdout);
         } else if (n->func.name && n->func.body) {
-            /* Forward-declare instantiated function templates so
-             * call sites in earlier-emitted functions don't hit C's
-             * implicit-int declaration (then 'conflicting types' at
-             * the real definition). Narrow to the mangled shape
-             * '<name>_t_..._te_' produced by the instantiation pass
-             * so user-written free-function overloads (emitted with
-             * their plain source names and sometimes deduped) don't
-             * get false-positive duplicate decls.
-             *
-             * SHORTCUT (ours, not the standard): string-match the
-             * mangled suffix rather than carrying a
-             * came-from-instantiation flag on the Node. The flag
-             * would be cleaner but the string match is free and
-             * hasn't bitten us yet.
-             * TODO(seafront#inst-flag): add Node flag, drop the
-             * string match. */
-            Token *nm = n->func.name;
-            bool looks_instantiated = false;
-            if (nm && nm->len >= 7) {
-                const char *s = nm->loc;
-                int L = nm->len;
-                if (L >= 4 && memcmp(s + L - 4, "_te_", 4) == 0) {
-                    for (int i = 0; i + 3 < L; i++)
-                        if (s[i]=='_' && s[i+1]=='t' && s[i+2]=='_') {
-                            looks_instantiated = true; break;
-                        }
-                }
-            }
-            if (looks_instantiated) {
-                emit_storage_flags_for_def(n->func.storage_flags);
-                emit_free_func_header(n->func.ret_ty, n->func.name,
-                                      n->func.params, n->func.nparams,
-                                      n->func.is_variadic);
-                fputs(";\n", stdout);
-            }
+            emit_storage_flags_for_def(n->func.storage_flags);
+            emit_free_func_header(n->func.ret_ty, n->func.name,
+                                  n->func.params, n->func.nparams,
+                                  n->func.is_variadic);
+            fputs(";\n", stdout);
         }
         break;
     default:
@@ -7206,214 +7198,58 @@ void emit_c(Node *tu) {
     emit_prelude();
 
     /* Forward-declare ALL struct types so pointer references
-     * resolve regardless of definition order. */
+     * resolve regardless of definition order. Function forward
+     * decls happen in source order during pass 1 — they can use
+     * enum-by-tag in their signatures, so they have to come AFTER
+     * the relevant enum body. */
     emit_forward_decl_structs(tu);
 
-    /* Pass 0a: tentative definitions for top-level fixed-size array
-     * variables emitted BEFORE the enum bodies. C99 §6.9.2 — an
-     * enum's initializer can reference an earlier file-scope array
-     * via sizeof(arr); without the tentative decl in scope ahead of
-     * the enum, the C compiler reports the array undeclared.
-     * Skip arrays whose element type is an enum/struct/union — those
-     * tags aren't defined yet at this point in the emit, so a forward
-     * decl using them would itself fail.
-     * Pattern: gcc 4.8 c-family/c-pch.c sizeof(pch_matching) inside an
-     * enum init. */
-    for (int i = 0; i < tu->tu.ndecls; i++) {
-        Node *n = tu->tu.decls[i];
-        if (!n || n->kind != ND_VAR_DECL) continue;
-        Type *ty = n->var_decl.ty;
-        if (!ty || ty->kind != TY_ARRAY) continue;
-        if (!n->var_decl.name) continue;
-        if (n->var_decl.storage_flags & DECL_EXTERN) continue;
-        Type *elem = ty->base;
-        if (!elem) continue;
-        /* Restrict to scalar / pointer element types whose tag is
-         * unambiguously already complete (enums, structs, unions,
-         * arrays, function types are all 'will be defined later'
-         * shapes that can't be forward-emitted here). */
-        if (elem->kind == TY_STRUCT || elem->kind == TY_UNION ||
-            elem->kind == TY_ENUM   || elem->kind == TY_ARRAY ||
-            elem->kind == TY_FUNC)
-            continue;
-        if (elem->kind == TY_PTR && elem->base &&
-            elem->base->kind == TY_FUNC)
-            continue;
-        bool have_size = ty->array_len >= 0 || ty->array_size_expr ||
-            (n->var_decl.init && n->var_decl.init->kind == ND_INIT_LIST);
-        if (!have_size) continue;
-        if (n->var_decl.storage_flags & DECL_STATIC) fputs("static ", stdout);
-        if (ty->is_const) fputs("const ", stdout);
-        emit_type(elem);
-        fprintf(stdout, " %.*s",
-                n->var_decl.name->len, n->var_decl.name->loc);
-        if (ty->array_len >= 0) {
-            fprintf(stdout, "[%d];\n", ty->array_len);
-        } else if (ty->array_size_expr) {
-            fputc('[', stdout);
-            emit_expr(ty->array_size_expr);
-            fputs("];\n", stdout);
-        } else {
-            fprintf(stdout, "[%d];\n",
-                    n->var_decl.init->init_list.nelems);
-        }
-    }
-
-    /* Emit all enum definitions before any struct bodies, so enum
-     * members used as struct fields have complete types. Enums
-     * appear as ND_VAR_DECL with TY_ENUM (bare enum definition)
-     * or as members of typedef/class nodes. */
-    for (int i = 0; i < tu->tu.ndecls; i++) {
-        Node *n = tu->tu.decls[i];
-        if (!n) continue;
-        /* Walk into blocks (namespace/extern "C" contents) */
-        if (n->kind == ND_BLOCK) {
-            for (int j = 0; j < n->block.nstmts; j++) {
-                Node *s = n->block.stmts[j];
-                if (!s) continue;
-                Type *ety = NULL;
-                if (s->kind == ND_VAR_DECL && s->var_decl.ty &&
-                    s->var_decl.ty->kind == TY_ENUM)
-                    ety = s->var_decl.ty;
-                if (s->kind == ND_TYPEDEF && s->var_decl.ty &&
-                    s->var_decl.ty->kind == TY_ENUM)
-                    ety = s->var_decl.ty;
-                if (ety && ety->enum_tokens &&
-                    !enum_body_already_emitted(ety->enum_tokens)) {
-                    mark_enum_body_emitted(ety->enum_tokens);
-                    ety->codegen_emitted = true;
-                    fputs("enum ", stdout);
-                    if (ety->tag)
-                        fprintf(stdout, "%.*s ", ety->tag->len, ety->tag->loc);
-                    fputs("{ ", stdout);
-                    emit_enum_body(ety);
-                    fputs(" };\n", stdout);
-                }
-            }
-            continue;
-        }
-        /* Top-level enum */
-        Type *ety = NULL;
-        if (n->kind == ND_VAR_DECL && n->var_decl.ty &&
-            n->var_decl.ty->kind == TY_ENUM)
-            ety = n->var_decl.ty;
-        if (n->kind == ND_TYPEDEF && n->var_decl.ty &&
-            n->var_decl.ty->kind == TY_ENUM)
-            ety = n->var_decl.ty;
-        if (ety && ety->enum_tokens &&
-            !enum_body_already_emitted(ety->enum_tokens)) {
-            mark_enum_body_emitted(ety->enum_tokens);
-            ety->codegen_emitted = true;
-            fputs("enum ", stdout);
-            if (ety->tag)
-                fprintf(stdout, "%.*s ", ety->tag->len, ety->tag->loc);
-            fputs("{ ", stdout);
-            emit_enum_body(ety);
-            fputs(" };\n", stdout);
-        }
-    }
-
-    /* Two-pass emit: first all struct definitions (with forward
-     * declarations for their methods), then all method bodies,
-     * vtables, synthesized ctors/dtors, and non-class top-level
-     * declarations. This ensures that ALL struct types are fully
-     * defined before any method body dereferences a pointer to
-     * another struct (e.g. vl_ptr methods accessing vl_embed
-     * members through a pointer). */
-
-    /* Forward-declare methods + instantiated function templates
-     * AFTER enums. The method signatures can reference enum types by
-     * pointer (e.g. 'enum ld_plugin_symbol_resolution *'); without
-     * the enum body already visible, '-std=c99' lets gcc accept the
-     * pointer type but implicitly declares the enum, then the real
-     * enum definition emitted by the struct-body pass conflicts.
-     * C11 §6.7.2.3 — the enum type must be complete in the
-     * translation-unit scope before its name can be used. */
-    emit_forward_decl_funcs(tu);
-
-    /* Pass 0: tentative definitions for top-level fixed-size array
-     * variables. C99 §6.9.2 allows multiple tentative definitions of
-     * a file-scope variable as long as they're type-consistent; the
-     * later definition with an initializer "completes" them. Emitting
-     * a size-only forward decl makes 'sizeof(arr)' usable in struct
-     * member array dimensions that are emitted in PHASE_STRUCTS, even
-     * though the variable's full definition lands in PHASE_METHODS.
-     * Pattern: gcc 4.8 ggc-page.c
-     *   static const size_t extra_order_size_table[] = { ... };
-     *   struct ggc_pch_ondisk {
-     *     unsigned int totals[NUM_ORDERS + sizeof(extra_order_size_table)/...];
-     *   };
-     * Only POD-element arrays with a known length qualify — anything
-     * else (struct elements, runtime-sized) is left for PHASE_METHODS
-     * to emit normally. */
-    for (int i = 0; i < tu->tu.ndecls; i++) {
-        Node *n = tu->tu.decls[i];
-        if (!n || n->kind != ND_VAR_DECL) continue;
-        Type *ty = n->var_decl.ty;
-        if (!ty || ty->kind != TY_ARRAY) continue;
-        if (!n->var_decl.name) continue;
-        /* Skip 'extern' decls — they reference definitions in another
-         * TU, so a tentative decl here would conflict with the real
-         * extern's qualifiers (const, etc.). The cpp-ed source already
-         * has the extern declaration verbatim. */
-        if (n->var_decl.storage_flags & DECL_EXTERN) continue;
-        Type *elem = ty->base;
-        if (!elem) continue;
-        /* Restrict to scalar / pointer element types. Struct/union
-         * elements would require the element type to already be
-         * complete, which is the very ordering problem we can't
-         * pre-solve here. Pointer-to-function elements need the
-         * grouped-declarator '(*name[N])(args)' shape that
-         * emit_var_decl_inner handles — not the plain emit_type
-         * path used here. */
-        if (elem->kind == TY_STRUCT || elem->kind == TY_UNION ||
-            elem->kind == TY_ARRAY  || elem->kind == TY_FUNC)
-            continue;
-        if (elem->kind == TY_PTR && elem->base &&
-            elem->base->kind == TY_FUNC)
-            continue;
-        /* Determine the size. The tentative decl MUST agree with the
-         * full definition, so prefer the source-given size expression
-         * (e.g. '[NOTE_INSN_MAX + 1]' — possibly larger than the
-         * initializer) over the initializer's element count. Without
-         * any usable size, skip — emitting 'T name;' would declare a
-         * scalar rather than an array, conflicting with the eventual
-         * 'T name[N] = {...};' definition. */
-        bool have_size = ty->array_len >= 0 || ty->array_size_expr ||
-            (n->var_decl.init && n->var_decl.init->kind == ND_INIT_LIST);
-        if (!have_size) continue;
-        if (n->var_decl.storage_flags & DECL_STATIC) fputs("static ", stdout);
-        emit_type(elem);
-        fprintf(stdout, " %.*s",
-                n->var_decl.name->len, n->var_decl.name->loc);
-        if (ty->array_len >= 0) {
-            fprintf(stdout, "[%d];\n", ty->array_len);
-        } else if (ty->array_size_expr) {
-            fputc('[', stdout);
-            emit_expr(ty->array_size_expr);
-            fputs("];\n", stdout);
-        } else {
-            fprintf(stdout, "[%d];\n",
-                    n->var_decl.init->init_list.nelems);
-        }
-    }
-
-    /* Pass 1: struct bodies only */
+    /* Source-order architecture (replacing the older 'all enums
+     * first' pre-pass + tentative-array forward-decl heuristics):
+     *
+     * Pass 1 (PHASE_STRUCTS): walk tu->tu.decls in source order
+     *   and emit struct bodies, typedefs, enum bodies, and var
+     *   definitions (with their initializers). emit_class_def
+     *   in PHASE_STRUCTS emits the struct body + method forward
+     *   decls but skips method bodies. Free function definitions
+     *   are skipped here — deferred to pass 2.
+     *
+     * Pass 2 (PHASE_METHODS): walk tu->tu.decls in source order
+     *   and emit method bodies + vtables + synthesized ctors/dtors
+     *   (via emit_class_def's PHASE_METHODS branch) + free function
+     *   definitions. Var-decls already emitted in pass 1 are
+     *   skipped via Node.codegen_emitted.
+     *
+     * Why source order works:
+     *   The source is required to be valid C/C++, which mandates
+     *   name-before-use at file scope (with the standard exceptions
+     *   for tag/forward-decl/extern). Preserving that order in
+     *   emission preserves correctness without us needing
+     *   topological-sort heuristics. Enums precede structs that
+     *   use their constants because the source already does so;
+     *   arrays precede the enums that sizeof them for the same
+     *   reason. The c-pch.c shape
+     *     static const struct E ... arr[] = ...;
+     *     enum { N = sizeof(arr)/sizeof(arr[0]) };
+     *   compiles because the source already orders them this way.
+     *
+     * Why bodies-last works:
+     *   Function/method bodies can reference any type by name; if
+     *   we emit ALL bodies after ALL type definitions, every
+     *   referenced type is complete. This subsumes the earlier
+     *   two-phase struct-body / method-body split while letting
+     *   non-body decls (enums, vars) interleave with struct
+     *   bodies in source order. */
     g_emit_phase = PHASE_STRUCTS;
     for (int i = 0; i < tu->tu.ndecls; i++) {
         Node *n = tu->tu.decls[i];
         if (!n) continue;
-        if (n->kind == ND_CLASS_DEF || n->kind == ND_TYPEDEF) {
-            fputc('\n', stdout);
-            emit_top_level(n);
-        } else if (n->kind == ND_BLOCK) {
-            /* Namespace blocks may contain class definitions */
-            fputc('\n', stdout);
-            emit_top_level(n);
-        }
+        /* emit_top_level itself skips ND_FUNC_DEF in PHASE_STRUCTS
+         * (covers nesting through ND_TEMPLATE_DECL / ND_BLOCK). */
+        fputc('\n', stdout);
+        emit_top_level(n);
     }
 
-    /* Pass 2: method bodies + everything else */
     g_emit_phase = PHASE_METHODS;
     for (int i = 0; i < tu->tu.ndecls; i++) {
         fputc('\n', stdout);
