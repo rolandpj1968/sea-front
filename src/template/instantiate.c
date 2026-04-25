@@ -1570,11 +1570,18 @@ void template_instantiate(Node *tu, Arena *arena) {
         if (dedup_find(&ds, key, pos)) continue;
 
         /* N4659 §17.5.2/5 [temp.mem]: if in-class member is a
-         * declaration without body, find the OOL definition. */
+         * declaration without body, find the OOL definition.
+         * The parser represents ALL in-class function declarations as
+         * ND_VAR_DECL with TY_FUNC type (whether template or not),
+         * so that's the dominant declaration shape — must be matched
+         * alongside the rare ND_FUNC_DECL / body-less ND_FUNC_DEF. */
         Node *func_src = inner;
-        if ((inner->kind == ND_FUNC_DECL ||
-             (inner->kind == ND_FUNC_DEF && !inner->func.body)) &&
-            tu) {
+        bool is_decl_only =
+            inner->kind == ND_FUNC_DECL ||
+            (inner->kind == ND_FUNC_DEF && !inner->func.body) ||
+            (inner->kind == ND_VAR_DECL && inner->var_decl.ty &&
+             inner->var_decl.ty->kind == TY_FUNC);
+        if (is_decl_only && tu) {
             for (int i = 0; i < tu->tu.ndecls; i++) {
                 Node *d = tu->tu.decls[i];
                 if (!d || d->kind != ND_TEMPLATE_DECL) continue;
@@ -1591,6 +1598,10 @@ void template_instantiate(Node *tu, Arena *arena) {
                 break;
             }
         }
+        /* If we couldn't find an OOL definition, the body lives in a
+         * different TU. Skip — the call-site mangle still needs to match
+         * the (other-TU) definition, but we have no body to clone here. */
+        if (is_decl_only && func_src == inner) continue;
 
         /* Clone with deduced substitutions */
         Node *cloned = clone_node(func_src, &deduced, arena);
