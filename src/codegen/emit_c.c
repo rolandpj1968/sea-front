@@ -5854,6 +5854,14 @@ static void ffsig_fill(FreeFuncSig *out, Token *name, Type *fty) {
             p->base->tag) {
             out->tag[i] = p->base->tag->loc;
             out->tag_len[i] = p->base->tag->len;
+        } else if (p && p->kind == TY_ENUM && p->tag) {
+            /* Distinguish enum types by tag — without this, two
+             * overloads `f(enum A)` and `f(enum B)` look identical
+             * and overload-mangling is skipped. Pattern: gcc 4.8
+             * gimple.h gimple_call_builtin_p has one overload for
+             * `enum built_in_class` and one for `enum built_in_function`. */
+            out->tag[i] = p->tag->loc;
+            out->tag_len[i] = p->tag->len;
         }
     }
 }
@@ -6795,6 +6803,8 @@ static void emit_top_level(Node *n) {
                 if (p0 && p0->kind == TY_PTR && p0->base &&
                     (p0->base->kind == TY_STRUCT || p0->base->kind == TY_UNION))
                     p0_tag = p0->base->tag;
+                else if (p0 && p0->kind == TY_ENUM)
+                    p0_tag = p0->tag;
                 if (func_def_dedup_check_sig(n->func.name,
                                               n->func.nparams,
                                               p0 ? (int)p0->kind : -1,
