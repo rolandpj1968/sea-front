@@ -3421,15 +3421,19 @@ static void emit_expr(Node *n) {
                         Type *t = at[i];
                         Type *pt = rd_fty->params[i];
                         if (!t || !pt) continue;
-                        /* Null pointer → any pointer */
+                        /* Null pointer → any pointer (or array param,
+                         * which decays to pointer). */
                         if (t->kind == TY_PTR && t->base &&
                             t->base->kind == TY_VOID &&
-                            pt->kind == TY_PTR) {
+                            (pt->kind == TY_PTR || pt->kind == TY_ARRAY)) {
                             at[i] = pt;
                             continue;
                         }
-                        /* Same-tag pointer with cv difference */
-                        if (t->kind == TY_PTR && pt->kind == TY_PTR &&
+                        /* Same-tag pointer with cv difference. Also
+                         * handles param-as-array (decays to ptr). */
+                        bool pt_ptrlike = pt->kind == TY_PTR ||
+                                          pt->kind == TY_ARRAY;
+                        if (t->kind == TY_PTR && pt_ptrlike &&
                             t->base && pt->base &&
                             t->base->tag && pt->base->tag &&
                             t->base->tag->len == pt->base->tag->len &&
