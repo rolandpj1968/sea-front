@@ -410,6 +410,26 @@ static Node *primary_expr(Parser *p) {
         return node;
     }
 
+    /* GCC __builtin_va_arg(ap, type) — variadic-arg extraction.
+     * The second argument is a TYPE, not an expression — non-standard
+     * call syntax that the generic call parser would mis-handle.
+     * Codegen re-emits verbatim for gcc. Pattern: gcc 4.8
+     * tree-data-ref.c conflict_fn's va_arg loop. */
+    if (tok->kind == TK_IDENT && tok->len == 16 &&
+        memcmp(tok->loc, "__builtin_va_arg", 16) == 0 &&
+        parser_peek_ahead(p, 1)->kind == TK_LPAREN) {
+        parser_advance(p);  /* __builtin_va_arg */
+        parser_advance(p);  /* ( */
+        Node *ap = parse_assign_expr(p);
+        parser_expect(p, TK_COMMA);
+        Type *ty = parse_type_name(p);
+        parser_expect(p, TK_RPAREN);
+        Node *node = new_node(p, ND_VA_ARG, tok);
+        node->va_arg_.ap = ap;
+        node->va_arg_.ty = ty;
+        return node;
+    }
+
     /* GCC __builtin_expect(expr, hint) — branch prediction hint.
      * Value is the first argument; the second is a literal hint we
      * can drop. Without this, the generic 'unknown __builtin' path
@@ -472,8 +492,16 @@ static Node *primary_expr(Parser *p) {
      * These are bool-valued built-ins whose arguments are TYPES, not
      * expressions, so we can't let parse_assign_expr try to evaluate
      * 'T&' as bitwise-and. Detect '__name (' for any unknown leading-
-     * underscore identifier and skip the balanced parens. */
-    if (tok->kind == TK_IDENT && tok->len >= 2 &&
+     * underscore identifier and skip the balanced parens.
+     *
+     * Exclude __builtin_va_start / __builtin_va_end — those are
+     * regular calls (expression-typed args) and need to flow through
+     * the normal call path so gcc gets the live ap pointer. */
+    bool is_va_passthrough =
+        (tok->len == 18 && memcmp(tok->loc, "__builtin_va_start", 18) == 0) ||
+        (tok->len == 16 && memcmp(tok->loc, "__builtin_va_end", 16) == 0);
+    if (!is_va_passthrough &&
+        tok->kind == TK_IDENT && tok->len >= 2 &&
         tok->loc[0] == '_' && tok->loc[1] == '_' &&
         parser_peek_ahead(p, 1)->kind == TK_LPAREN &&
         lookup_unqualified(p, tok->loc, tok->len) == NULL) {

@@ -1436,7 +1436,17 @@ static void emit_type(Type *ty) {
     case TY_CHAR32:  fputs("char32_t", stdout); return;
     case TY_WCHAR:   fputs("wchar_t", stdout); return;
     case TY_SHORT:   fputs(ty->is_unsigned ? "unsigned short" : "short", stdout); return;
-    case TY_INT:     fputs(ty->is_unsigned ? "unsigned int" : "int", stdout); return;
+    case TY_INT:
+        /* GCC __builtin_va_list — opaque builtin type. The parser
+         * resolves it to TY_INT (unknown ident fallback) but tags
+         * it; emit the tag verbatim so gcc handles va_arg natively.
+         * Pattern: gcc 4.8 tree-data-ref.c conflict_fn. */
+        if (ty->tag && ty->tag->len == 17 &&
+            memcmp(ty->tag->loc, "__builtin_va_list", 17) == 0) {
+            fputs("__builtin_va_list", stdout);
+            return;
+        }
+        fputs(ty->is_unsigned ? "unsigned int" : "int", stdout); return;
     case TY_LONG:    fputs(ty->is_unsigned ? "unsigned long" : "long", stdout); return;
     case TY_LLONG:   fputs(ty->is_unsigned ? "unsigned long long" : "long long", stdout); return;
     case TY_FLOAT:   fputs("float", stdout); return;
@@ -3474,6 +3484,16 @@ static void emit_expr(Node *n) {
         fputc(')', stdout);
         return;
     }
+    case ND_VA_ARG:
+        /* __builtin_va_arg(ap, type) — gcc handles the actual
+         * extraction; we re-emit verbatim with the sea-front type
+         * spelling. */
+        fputs("__builtin_va_arg(", stdout);
+        emit_expr(n->va_arg_.ap);
+        fputs(", ", stdout);
+        emit_type(n->va_arg_.ty);
+        fputc(')', stdout);
+        return;
     case ND_COMMA:
         fputc('(', stdout);
         emit_expr(n->comma.lhs);

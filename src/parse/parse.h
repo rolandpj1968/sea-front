@@ -84,6 +84,12 @@ typedef enum {
                          * DEFAULT_ALIGNMENT. Not in the C++ standard
                          * (§20.2.5 exposes 'offsetof' via <cstddef>
                          * without specifying the implementation). */
+    ND_VA_ARG,          /* GCC __builtin_va_arg(ap, type)
+                         * Variadic-argument extraction. Second arg is
+                         * a type (not an expression). Parsed into an
+                         * (ap, type) pair; codegen re-emits verbatim
+                         * for gcc. Used by gcc 4.8 tree-data-ref.c
+                         * conflict_fn. Not in standard C++. */
     ND_STMT_EXPR,       /* GCC statement-expression ({ stmts; expr; })
                          * Not in the standard — gcc extension used
                          * heavily in glibc/libiberty macros (obstack,
@@ -367,6 +373,13 @@ struct Node {
             Token *mem_toks;  /* member designator tokens (starting after ',') */
             int    n_mem_toks;
         } offsetof_;
+
+        /* ND_VA_ARG — __builtin_va_arg(ap, type). Codegen re-emits
+         * verbatim for gcc to handle. */
+        struct {
+            Node *ap;
+            Type *ty;
+        } va_arg_;
 
         /* ND_STMT_EXPR — GCC statement-expression.
          * Parsed as a normal compound statement so type-names get
