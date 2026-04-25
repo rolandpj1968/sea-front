@@ -756,6 +756,35 @@ DeclSpec parse_type_specifiers(Parser *p) {
                 region_declare(p, ty->tag->loc, ty->tag->len, ENTITY_TAG, ty);
                 region_declare(p, ty->tag->loc, ty->tag->len, ENTITY_TYPE, ty);
             }
+            /* Register each enumerator name as ENTITY_ENUMERATOR with
+             * the enum's type — N4659 §10.2/3 [dcl.enum]: enumerators
+             * are declared in the enclosing scope (unless the enum is
+             * scoped via 'enum class', which sea-front doesn't yet
+             * model). Without this, sema can't resolve enum constants
+             * at expression sites; their resolved_type stays NULL and
+             * downstream mangling produces 'unknown' which fails to
+             * link. Walk the captured token range, treating any IDENT
+             * that follows a '{' or ',' as an enumerator name. Skip
+             * the '= expr' tail and any ',' that follows. */
+            if (ty->enum_tokens && ty->enum_ntokens > 0) {
+                bool expect_name = true;
+                int depth = 0;
+                for (int i = 0; i < ty->enum_ntokens; i++) {
+                    Token *t = &ty->enum_tokens[i];
+                    if (t->kind == TK_LPAREN || t->kind == TK_LBRACE ||
+                        t->kind == TK_LBRACKET) depth++;
+                    else if (t->kind == TK_RPAREN || t->kind == TK_RBRACE ||
+                             t->kind == TK_RBRACKET) depth--;
+                    if (depth > 0) { expect_name = false; continue; }
+                    if (t->kind == TK_COMMA) { expect_name = true; continue; }
+                    if (t->kind == TK_ASSIGN) { expect_name = false; continue; }
+                    if (expect_name && t->kind == TK_IDENT) {
+                        region_declare(p, t->loc, t->len,
+                                       ENTITY_ENUMERATOR, ty);
+                        expect_name = false;
+                    }
+                }
+            }
             result.type = ty; return result;
         }
 
