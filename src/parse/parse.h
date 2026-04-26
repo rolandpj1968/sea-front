@@ -532,6 +532,22 @@ struct Node {
              * the extern and become TU-local definitions, causing
              * multiple-definition link errors. */
             int    storage_flags;  /* DECL_STATIC | DECL_EXTERN | DECL_INLINE | ... */
+            /* GNU __asm("symbol") declarator-suffix — non-standard extension
+             * (NOT N4659; the standard's asm-declaration §10.4 is for inline
+             * assembly, not symbol renames). Real-world headers use it
+             * heavily — e.g. glibc's <string.h> overloads strchr / memchr /
+             * etc. inside extern "C++" with __asm("strchr") to bind
+             * type-safe C++ overloads to a single C ABI symbol. We honor
+             * the rename: when set, this is the symbol name emitted at the
+             * decl AND at every call site. The token's payload is the
+             * string literal including the surrounding quotes; the
+             * emitter strips them.
+             *
+             * Setting asm_name implies effectively-extern-"C" linkage —
+             * the parser also stamps DECL_C_LINKAGE so the dedup-on-
+             * conflict pass treats multiple asm-renamed decls of the
+             * same target symbol as one. */
+            Token *asm_name;
         } var_decl;
 
         /* ND_FUNC_DEF — N4659 §11.4 [dcl.fct.def]
@@ -1007,6 +1023,11 @@ struct Declaration {
                              * to reach the inner function decl for template
                              * argument deduction (N4659 §17.8.2). NULL on
                              * non-template entries. */
+    /* GNU __asm("name") declarator-suffix — see ND_VAR_DECL.asm_name.
+     * Carried on the Declaration so call sites with only resolved_decl
+     * in hand can find the rename without walking back to the AST node.
+     * NULL when no asm-label was set. */
+    Token       *asm_name;
     Declaration *next;      /* hash chain within the declarative region */
 };
 

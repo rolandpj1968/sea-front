@@ -2203,6 +2203,13 @@ static bool ffsig_is_first_c_linkage(Token *name, Type **params, int nparams);
 static void emit_free_func_mangled_name(Token *name, Type **param_types,
                                          int nparams);
 
+/* The asm-label token's payload includes the surrounding quotes
+ * (e.g. "strchr" with len=8). Strip them when emitting. */
+static void emit_asm_name(Token *asm_tok) {
+    if (!asm_tok || asm_tok->len < 2) return;
+    fwrite(asm_tok->loc + 1, 1, asm_tok->len - 2, stdout);
+}
+
 static const char *binop_str(TokenKind k) {
     switch (k) {
     case TK_PLUS:    return "+";
@@ -2406,9 +2413,14 @@ static void emit_expr(Node *n) {
              * mangled C symbol of the resolved overload. The
              * resolved_decl carries the specific overload (sema set
              * it via free-function overload resolution); without the
-             * mangle, all overloads collide on one C name. */
+             * mangle, all overloads collide on one C name.
+             *
+             * asm-label rename short-circuits both: the user explicitly
+             * named the symbol, so emit that bare. */
             Declaration *rd = n->ident.resolved_decl;
-            if (!n->ident.implicit_this && rd &&
+            if (!n->ident.implicit_this && rd && rd->asm_name) {
+                emit_asm_name(rd->asm_name);
+            } else if (!n->ident.implicit_this && rd &&
                 rd->type && rd->type->kind == TY_FUNC &&
                 free_func_name_is_overloaded(n->ident.name)) {
                 emit_free_func_mangled_name(n->ident.name,
@@ -3401,6 +3413,15 @@ static void emit_expr(Node *n) {
              * builtin we don't model) is encoded as 'unknown' by the
              * mangler — wrong but consistent across calls. */
             bool emitted_mangled = false;
+            /* GNU __asm("name") rename short-circuits all mangling — the
+             * user explicitly named the symbol, so emit it bare. */
+            if (n->call.callee && n->call.callee->kind == ND_IDENT &&
+                !n->call.callee->ident.implicit_this &&
+                n->call.callee->ident.resolved_decl &&
+                n->call.callee->ident.resolved_decl->asm_name) {
+                emit_asm_name(n->call.callee->ident.resolved_decl->asm_name);
+                emitted_mangled = true;
+            } else
             if (n->call.callee && n->call.callee->kind == ND_IDENT &&
                 !n->call.callee->ident.implicit_this &&
                 free_func_name_is_overloaded(n->call.callee->ident.name)) {
@@ -3999,7 +4020,11 @@ static void emit_var_decl_inner(Node *n) {
             return;
         emit_type(ty->ret);
         fputc(' ', stdout);
-        if (free_func_name_is_overloaded(n->var_decl.name)) {
+        /* asm-label rename takes precedence over both bare name and
+         * C++ overload mangling — it's the user's explicit symbol. */
+        if (n->var_decl.asm_name) {
+            emit_asm_name(n->var_decl.asm_name);
+        } else if (free_func_name_is_overloaded(n->var_decl.name)) {
             emit_free_func_mangled_name(n->var_decl.name,
                                          ty->params, ty->nparams);
         } else {
@@ -6890,11 +6915,12 @@ static void emit_top_level(Node *n) {
             }
             emit_type(fty->ret);
             fputc(' ', stdout);
-            /* Overloaded free-function names get signature-mangled C
-             * symbols. Singleton names (malloc, printf, user code that
-             * isn't overloaded) stay unmangled so interop is preserved
-             * without per-Declaration 'extern "C"' tracking. */
-            if (free_func_name_is_overloaded(n->var_decl.name)) {
+            /* asm-label rename takes precedence; otherwise overloaded
+             * free-function names get signature-mangled C symbols and
+             * singleton names stay unmangled. */
+            if (n->var_decl.asm_name) {
+                emit_asm_name(n->var_decl.asm_name);
+            } else if (free_func_name_is_overloaded(n->var_decl.name)) {
                 emit_free_func_mangled_name(n->var_decl.name,
                                              fty->params, fty->nparams);
             } else {

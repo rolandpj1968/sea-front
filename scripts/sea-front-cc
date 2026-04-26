@@ -229,8 +229,10 @@ for src in "$@"; do
     log "  Compile: $SEA_CC -std=c99 -c $CC_FLAGS -o $OUTPUT $c_file"
     eval "$SEA_CC -std=c99 -c $CC_FLAGS -o $qout $qcfile"
 
-    # Cleanup
-    rm -f "$pp_file" "$c_file"
+    # Cleanup (skip when SEA_KEEP_TMP is set, for debugging)
+    if [ -z "$SEA_KEEP_TMP" ]; then
+        rm -f "$pp_file" "$c_file"
+    fi
 done
 
 log "Done"

@@ -1710,11 +1710,23 @@ Node *parse_declaration(Parser *p) {
      * not consumed as a parameter list, it arrives here as init. */
     /* GCC asm-label / symbol rename:
      *   void foo() __asm("foo_v2");
-     * The asm-string gives the function a different external name.
-     * Consume and discard — sea-front doesn't yet honor asm-labels. */
+     * Non-standard (not N4659); §10.4 [dcl.asm] is for inline assembly
+     * declarations, NOT declarator-suffix symbol renames. But glibc's
+     * <string.h> uses this idiom heavily inside 'extern "C++" { ... }'
+     * to bind multiple type-safe C++ overloads to a single C ABI
+     * symbol (see /usr/include/string.h's strchr / strrchr / memchr).
+     * Capture the string-literal token so emit_c emits this name at
+     * the decl and at every call site, and stamp DECL_C_LINKAGE so
+     * the dedup-on-conflict path treats sibling overloads as one. */
     if (parser_at(p, TK_KW_ASM)) {
         parser_advance(p);
         parser_expect(p, TK_LPAREN);
+        if (parser_at(p, TK_STR)) {
+            decl->var_decl.asm_name = parser_peek(p);
+            decl->var_decl.storage_flags |= DECL_C_LINKAGE;
+            parser_advance(p);
+        }
+        /* Tolerate any leftover tokens before the ')' (rare). */
         while (!parser_at_eof(p) && !parser_at(p, TK_RPAREN))
             parser_advance(p);
         parser_expect(p, TK_RPAREN);
@@ -1780,10 +1792,13 @@ Node *parse_declaration(Parser *p) {
     }
 
     /* N4659 §6.3.2/1 [basic.scope.pdecl]: register the variable name */
-    if (decl->var_decl.name)
-        region_declare(p, decl->var_decl.name->loc,
-                      decl->var_decl.name->len, ENTITY_VARIABLE,
-                      decl->var_decl.ty);
+    if (decl->var_decl.name) {
+        Declaration *rd = region_declare(p, decl->var_decl.name->loc,
+                                          decl->var_decl.name->len,
+                                          ENTITY_VARIABLE,
+                                          decl->var_decl.ty);
+        if (rd) rd->asm_name = decl->var_decl.asm_name;
+    }
 
     /* Comma-separated declarators — N4659 §10 [dcl.dcl]
      *   init-declarator-list:
@@ -1863,7 +1878,10 @@ Node *parse_declaration(Parser *p) {
         if ((spec.flags & DECL_VIRTUAL) &&
             decl->var_decl.ty && decl->var_decl.ty->kind == TY_FUNC)
             decl->var_decl.is_virtual = true;
-        decl->var_decl.storage_flags = spec.flags;
+        /* OR-in spec.flags so we don't clobber bits already set
+         * earlier in the parse (notably DECL_C_LINKAGE from the
+         * __asm("name") declarator-suffix above). */
+        decl->var_decl.storage_flags |= spec.flags;
         if (p->extern_c_depth > 0)
             decl->var_decl.storage_flags |= DECL_C_LINKAGE;
     }

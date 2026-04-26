@@ -11,11 +11,10 @@
 // only the first decl, then the C compiler errored on the remaining
 // two (conflicting types for the bare 'iscanonical' name).
 extern "C" {
-    extern int __iscanonicall(long double);
     extern "C++" {
         inline int iscanonical(float v)       { (void)v; return 1; }
         inline int iscanonical(double v)      { (void)v; return 1; }
-        inline int iscanonical(long double v) { return __iscanonicall(v); }
+        inline int iscanonical(long double v) { (void)v; return 1; }
     }
 }
 
