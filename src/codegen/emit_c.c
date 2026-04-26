@@ -278,6 +278,30 @@ static int resolve_operator_overload(Type *class_type,
                                       Type ***out_param_types,
                                       Node **out_best);
 
+/* Emit a C function-prototype parameter-type list (the contents
+ * between the parens — caller emits the '(' and ')'). Handles the
+ * three N4659 §11.3.5 [dcl.fct] cases:
+ *   - empty list:      'void'         (C requires explicit void)
+ *   - non-variadic:    'T1, T2, T3'
+ *   - variadic:        'T1, T2, ...'  (or just '...' when nparams==0)
+ *
+ * Used by emit_var_decl_inner's function-pointer typedef case, the
+ * top-level free-function declarator emit, and the var-decl-as-fn
+ * top-level path. Five sites collapsed; doesn't fit two more sites
+ * that omit the 'void' for empty (function-pointer-return shape). */
+static void emit_func_param_types(Type *fty) {
+    for (int i = 0; i < fty->nparams; i++) {
+        if (i > 0) fputs(", ", stdout);
+        emit_type(fty->params[i]);
+    }
+    if (fty->is_variadic) {
+        if (fty->nparams > 0) fputs(", ", stdout);
+        fputs("...", stdout);
+    } else if (fty->nparams == 0) {
+        fputs("void", stdout);
+    }
+}
+
 /* Type-peeling helpers — consolidate the many
  * 'if (ty->kind == TY_REF || ty->kind == TY_RVALREF)' and similar
  * open-coded patterns. References lower to pointers in C, so these
@@ -1377,16 +1401,7 @@ static void emit_type(Type *ty) {
                 fputs(" (", stdout);
                 for (int d = 0; d < pdepth; d++) fputc('*', stdout);
                 fputs(")(", stdout);
-                for (int i = 0; i < fty->nparams; i++) {
-                    if (i > 0) fputs(", ", stdout);
-                    emit_type(fty->params[i]);
-                }
-                if (fty->is_variadic) {
-                    if (fty->nparams > 0) fputs(", ", stdout);
-                    fputs("...", stdout);
-                } else if (fty->nparams == 0) {
-                    fputs("void", stdout);
-                }
+                emit_func_param_types(fty);
                 fputc(')', stdout);
                 return;
             }
@@ -2054,16 +2069,7 @@ static void emit_func_header(Type *ret_ty, Token *name,
             }
         }
         fputs("))(", stdout);
-        for (int i = 0; i < fty->nparams; i++) {
-            if (i > 0) fputs(", ", stdout);
-            emit_type(fty->params[i]);
-        }
-        if (fty->is_variadic) {
-            if (fty->nparams > 0) fputs(", ", stdout);
-            fputs("...", stdout);
-        } else if (fty->nparams == 0) {
-            fputs("void", stdout);
-        }
+        emit_func_param_types(fty);
         fputc(')', stdout);
         return;
     }
@@ -2129,16 +2135,7 @@ static void emit_param_declarator(Type *ty, Token *name, int idx) {
         else
             fprintf(stdout, "__sf_unused_%d", idx);
         fputs(")(", stdout);
-        for (int i = 0; i < fty->nparams; i++) {
-            if (i > 0) fputs(", ", stdout);
-            emit_type(fty->params[i]);
-        }
-        if (fty->is_variadic) {
-            if (fty->nparams > 0) fputs(", ", stdout);
-            fputs("...", stdout);
-        } else if (fty->nparams == 0) {
-            fputs("void", stdout);
-        }
+        emit_func_param_types(fty);
         fputc(')', stdout);
         return;
     }
@@ -3945,16 +3942,7 @@ static void emit_var_decl_inner(Node *n) {
         Type *fty = ty->base;
         emit_type(fty->ret);
         fprintf(stdout, " (*%.*s)(", n->var_decl.name->len, n->var_decl.name->loc);
-        for (int i = 0; i < fty->nparams; i++) {
-            if (i > 0) fputs(", ", stdout);
-            emit_type(fty->params[i]);
-        }
-        if (fty->is_variadic) {
-            if (fty->nparams > 0) fputs(", ", stdout);
-            fputs("...", stdout);
-        } else if (fty->nparams == 0) {
-            fputs("void", stdout);
-        }
+        emit_func_param_types(fty);
         fputc(')', stdout);
         if (n->var_decl.init && n->var_decl.init->kind > 0 &&
             n->var_decl.init->kind < 200) {
@@ -4036,16 +4024,7 @@ static void emit_var_decl_inner(Node *n) {
                 dt = dt->base;
             }
             fputs(")(", stdout);
-            for (int i = 0; i < fty->nparams; i++) {
-                if (i > 0) fputs(", ", stdout);
-                emit_type(fty->params[i]);
-            }
-            if (fty->is_variadic) {
-                if (fty->nparams > 0) fputs(", ", stdout);
-                fputs("...", stdout);
-            } else if (fty->nparams == 0) {
-                fputs("void", stdout);
-            }
+            emit_func_param_types(fty);
             fputc(')', stdout);
             if (n->var_decl.init) {
                 fputs(" = ", stdout);
