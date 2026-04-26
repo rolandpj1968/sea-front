@@ -509,16 +509,7 @@ Node *parse_stmt(Parser *p) {
                parser_at(p, TK_KW_GOTO))
             parser_advance(p);
         parser_expect(p, TK_LPAREN);
-        int depth = 1;
-        while (depth > 0 && !parser_at_eof(p)) {
-            if (parser_at(p, TK_LPAREN)) depth++;
-            else if (parser_at(p, TK_RPAREN)) {
-                depth--;
-                if (depth == 0) break;
-            }
-            parser_advance(p);
-        }
-        parser_expect(p, TK_RPAREN);
+        parser_skip_to_matching_rparen(p);
         parser_consume(p, TK_SEMI);
         return new_node(p, ND_NULL_STMT, tok);
     }

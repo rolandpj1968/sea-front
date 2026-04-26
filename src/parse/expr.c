@@ -211,16 +211,7 @@ static Node *primary_expr(Parser *p) {
          * opaque BOOL_LIT-shaped node. */
         parser_advance(p);
         parser_expect(p, TK_LPAREN);
-        int depth = 1;
-        while (depth > 0 && !parser_at_eof(p)) {
-            if (parser_at(p, TK_LPAREN)) depth++;
-            else if (parser_at(p, TK_RPAREN)) {
-                depth--;
-                if (depth == 0) break;
-            }
-            parser_advance(p);
-        }
-        parser_expect(p, TK_RPAREN);
+        parser_skip_to_matching_rparen(p);
         return new_node(p, ND_BOOL_LIT, tok);
     }
 
@@ -277,16 +268,7 @@ static Node *primary_expr(Parser *p) {
          *   4. compound-statement { ... }
          */
         parser_advance(p);  /* consume [ */
-        int depth = 1;
-        while (depth > 0 && !parser_at_eof(p)) {
-            if (parser_at(p, TK_LBRACKET)) depth++;
-            else if (parser_at(p, TK_RBRACKET)) {
-                depth--;
-                if (depth == 0) break;
-            }
-            parser_advance(p);
-        }
-        parser_expect(p, TK_RBRACKET);
+        parser_skip_to_matching_rbracket(p);
         /* Optional template parameter list (C++20 generic lambda
          * with explicit template params). */
         if (parser_at(p, TK_LT)) {
@@ -368,16 +350,7 @@ static Node *primary_expr(Parser *p) {
         TokenKind open  = parser_at(p, TK_LBRACE) ? TK_LBRACE : TK_LPAREN;
         TokenKind close = (open == TK_LBRACE)     ? TK_RBRACE : TK_RPAREN;
         parser_expect(p, open);
-        int depth = 1;
-        while (depth > 0 && !parser_at_eof(p)) {
-            if (parser_at(p, open)) depth++;
-            else if (parser_at(p, close)) {
-                depth--;
-                if (depth == 0) break;
-            }
-            parser_advance(p);
-        }
-        parser_expect(p, close);
+        parser_skip_balanced(p, open, close);
         return new_cast_node(p, ty, /*operand=*/NULL, tok);
     }
 
@@ -392,17 +365,8 @@ static Node *primary_expr(Parser *p) {
         Type *ty = parse_type_name(p);
         parser_expect(p, TK_COMMA);
         int mem_start_pos = p->pos;
-        int depth = 1;
-        while (depth > 0 && !parser_at_eof(p)) {
-            if (parser_at(p, TK_LPAREN)) depth++;
-            else if (parser_at(p, TK_RPAREN)) {
-                depth--;
-                if (depth == 0) break;
-            }
-            parser_advance(p);
-        }
-        int mem_end_pos = p->pos;
-        parser_expect(p, TK_RPAREN);
+        parser_skip_to_matching_rparen(p);
+        int mem_end_pos = p->pos - 1;   /* helper consumed the ')' */
         Node *node = new_node(p, ND_OFFSETOF, tok);
         node->offsetof_.ty = ty;
         node->offsetof_.mem_toks = &p->tokens[mem_start_pos];
@@ -507,16 +471,7 @@ static Node *primary_expr(Parser *p) {
         lookup_unqualified(p, tok->loc, tok->len) == NULL) {
         Token *name_tok = parser_advance(p);
         parser_advance(p);  /* ( */
-        int depth = 1;
-        while (depth > 0 && !parser_at_eof(p)) {
-            if (parser_at(p, TK_LPAREN)) depth++;
-            else if (parser_at(p, TK_RPAREN)) {
-                depth--;
-                if (depth == 0) break;
-            }
-            parser_advance(p);
-        }
-        parser_expect(p, TK_RPAREN);
+        parser_skip_to_matching_rparen(p);
         return new_node(p, ND_BOOL_LIT, name_tok);  /* opaque bool */
     }
 
@@ -1025,16 +980,7 @@ static Node *postfix_expr(Parser *p) {
          * init: balance the braces and treat as opaque init expression. */
         if (tok->kind == TK_LBRACE) {
             parser_advance(p);
-            int depth = 1;
-            while (depth > 0 && !parser_at_eof(p)) {
-                if (parser_at(p, TK_LBRACE)) depth++;
-                else if (parser_at(p, TK_RBRACE)) {
-                    depth--;
-                    if (depth == 0) break;
-                }
-                parser_advance(p);
-            }
-            parser_expect(p, TK_RBRACE);
+            parser_skip_to_matching_rbrace(p);
             continue;
         }
 
@@ -1313,19 +1259,9 @@ static Node *unary_expr(Parser *p) {
             }
             parser_expect(p, TK_RPAREN);
         } else if (parser_consume(p, TK_LBRACE)) {
-            /* Braced new-initializer. Skip-and-discard via balanced
-             * brace count — sema doesn't model the initializer
-             * structure, just needs to walk past the tokens. */
-            int depth = 1;
-            while (depth > 0 && !parser_at_eof(p)) {
-                if (parser_at(p, TK_LBRACE)) depth++;
-                else if (parser_at(p, TK_RBRACE)) {
-                    depth--;
-                    if (depth == 0) break;
-                }
-                parser_advance(p);
-            }
-            parser_expect(p, TK_RBRACE);
+            /* Braced new-initializer. Skip-and-discard — sema doesn't
+             * model the initializer structure, just walk past it. */
+            parser_skip_to_matching_rbrace(p);
         }
 
         return new_cast_node(p, ty, /*operand=*/NULL, tok);  /* reuse CAST for now */

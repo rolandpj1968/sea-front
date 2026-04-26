@@ -141,6 +141,24 @@ bool parser_at_eof(Parser *p) {
     return p->tokens[p->pos].kind == TK_EOF;
 }
 
+/* See parse.h for contract. */
+void parser_skip_balanced(Parser *p, TokenKind open, TokenKind close) {
+    int depth = 1;
+    while (depth > 0 && !parser_at_eof(p)) {
+        if (parser_at(p, open)) depth++;
+        else if (parser_at(p, close)) {
+            depth--;
+            if (depth == 0) break;
+        }
+        parser_advance(p);
+    }
+    parser_expect(p, close);
+}
+
+void parser_skip_to_matching_rparen(Parser *p)   { parser_skip_balanced(p, TK_LPAREN,   TK_RPAREN);   }
+void parser_skip_to_matching_rbracket(Parser *p) { parser_skip_balanced(p, TK_LBRACKET, TK_RBRACKET); }
+void parser_skip_to_matching_rbrace(Parser *p)   { parser_skip_balanced(p, TK_LBRACE,   TK_RBRACE);   }
+
 /* ------------------------------------------------------------------ */
 /* Tentative parsing — save/restore                                   */
 /*                                                                    */
@@ -190,16 +208,7 @@ void parser_skip_cxx_attributes(Parser *p) {
            parser_peek_ahead(p, 1)->kind == TK_LBRACKET) {
         parser_advance(p);  /* [ */
         parser_advance(p);  /* [ */
-        int depth = 1;
-        while (depth > 0 && !parser_at_eof(p)) {
-            if (parser_at(p, TK_LBRACKET)) depth++;
-            else if (parser_at(p, TK_RBRACKET)) {
-                depth--;
-                if (depth == 0) break;
-            }
-            parser_advance(p);
-        }
-        parser_expect(p, TK_RBRACKET);
+        parser_skip_to_matching_rbracket(p);
         /* Outer ']' — must be followed by another ']' to close the
          * attribute-specifier. */
         if (parser_at(p, TK_RBRACKET))

@@ -194,17 +194,8 @@ DeclSpec parse_type_specifiers(Parser *p) {
         /* alignas(expr) — N4659 §10.1.2 [dcl.align] */
         if (tok->kind == TK_KW_ALIGNAS) {
             parser_advance(p);
-            if (parser_consume(p, TK_LPAREN)) {
-                /* Consume the alignment expression or type */
-                int depth = 1;
-                /* Terminates: balanced paren counting */
-                while (depth > 0 && !parser_at_eof(p)) {
-                    if (parser_at(p, TK_LPAREN)) depth++;
-                    if (parser_at(p, TK_RPAREN)) depth--;
-                    if (depth > 0) parser_advance(p);
-                }
-                parser_expect(p, TK_RPAREN);
-            }
+            if (parser_consume(p, TK_LPAREN))
+                parser_skip_to_matching_rparen(p);
             continue;
         }
 
@@ -215,16 +206,7 @@ DeclSpec parse_type_specifiers(Parser *p) {
         if (tok->kind == TK_KW_DECLTYPE) {
             parser_advance(p);
             parser_expect(p, TK_LPAREN);
-            int depth = 1;
-            while (depth > 0 && !parser_at_eof(p)) {
-                if (parser_at(p, TK_LPAREN)) depth++;
-                else if (parser_at(p, TK_RPAREN)) {
-                    depth--;
-                    if (depth == 0) break;
-                }
-                parser_advance(p);
-            }
-            parser_expect(p, TK_RPAREN);
+            parser_skip_to_matching_rparen(p);
             Type *ty = new_type(p, TY_INT);  /* opaque placeholder */
             ty->is_const = is_const;
             ty->is_volatile = is_volatile;
@@ -972,16 +954,7 @@ DeclSpec parse_type_specifiers(Parser *p) {
         lookup_unqualified(p, parser_peek(p)->loc, parser_peek(p)->len) == NULL) {
         Token *name_tok = parser_advance(p);
         parser_advance(p);  /* ( */
-        int depth = 1;
-        while (depth > 0 && !parser_at_eof(p)) {
-            if (parser_at(p, TK_LPAREN)) depth++;
-            else if (parser_at(p, TK_RPAREN)) {
-                depth--;
-                if (depth == 0) break;
-            }
-            parser_advance(p);
-        }
-        parser_expect(p, TK_RPAREN);
+        parser_skip_to_matching_rparen(p);
         Type *ty = new_type(p, TY_INT);  /* opaque */
         ty->is_const = is_const;
         ty->is_volatile = is_volatile;
@@ -1694,16 +1667,7 @@ Type *parse_type_name(Parser *p) {
             } else {
                 /* Opaque fallback: skip to matching ')'. */
                 parser_restore(p, saved);
-                int depth = 1;
-                while (depth > 0 && !parser_at_eof(p)) {
-                    if (parser_at(p, TK_LPAREN)) depth++;
-                    else if (parser_at(p, TK_RPAREN)) {
-                        depth--;
-                        if (depth == 0) break;
-                    }
-                    parser_advance(p);
-                }
-                parser_expect(p, TK_RPAREN);
+                parser_skip_to_matching_rparen(p);
             }
         }
         base = new_ptr_type(p, base);
@@ -1728,18 +1692,8 @@ Type *parse_type_name(Parser *p) {
             parser_expect(p, TK_RPAREN);
             base = new_ptr_type(p, base);
             /* Function parameter list (any contents — opaque). */
-            if (parser_consume(p, TK_LPAREN)) {
-                int depth = 1;
-                while (depth > 0 && !parser_at_eof(p)) {
-                    if (parser_at(p, TK_LPAREN)) depth++;
-                    else if (parser_at(p, TK_RPAREN)) {
-                        depth--;
-                        if (depth == 0) break;
-                    }
-                    parser_advance(p);
-                }
-                parser_expect(p, TK_RPAREN);
-            }
+            if (parser_consume(p, TK_LPAREN))
+                parser_skip_to_matching_rparen(p);
             /* Trailing cv / ref / noexcept on the pointed-to function. */
             for (;;) {
                 if (parser_consume(p, TK_KW_CONST))    continue;
@@ -1747,18 +1701,8 @@ Type *parse_type_name(Parser *p) {
                 if (parser_consume(p, TK_AMP))         continue;
                 if (parser_consume(p, TK_LAND))        continue;
                 if (parser_consume(p, TK_KW_NOEXCEPT)) {
-                    if (parser_consume(p, TK_LPAREN)) {
-                        int depth = 1;
-                        while (depth > 0 && !parser_at_eof(p)) {
-                            if (parser_at(p, TK_LPAREN)) depth++;
-                            else if (parser_at(p, TK_RPAREN)) {
-                                depth--;
-                                if (depth == 0) break;
-                            }
-                            parser_advance(p);
-                        }
-                        parser_expect(p, TK_RPAREN);
-                    }
+                    if (parser_consume(p, TK_LPAREN))
+                        parser_skip_to_matching_rparen(p);
                     continue;
                 }
                 break;
@@ -1776,16 +1720,7 @@ no_grouped_abstract:;
      * type. We just balance the parens and call it opaque-func. */
     if (parser_at(p, TK_LPAREN)) {
         parser_advance(p);
-        int depth = 1;
-        while (depth > 0 && !parser_at_eof(p)) {
-            if (parser_at(p, TK_LPAREN)) depth++;
-            else if (parser_at(p, TK_RPAREN)) {
-                depth--;
-                if (depth == 0) break;
-            }
-            parser_advance(p);
-        }
-        parser_expect(p, TK_RPAREN);
+        parser_skip_to_matching_rparen(p);
         /* Trailing cv / ref / noexcept on the function type. */
         for (;;) {
             if (parser_consume(p, TK_KW_CONST))    continue;
@@ -1793,18 +1728,8 @@ no_grouped_abstract:;
             if (parser_consume(p, TK_AMP))         continue;
             if (parser_consume(p, TK_LAND))        continue;
             if (parser_consume(p, TK_KW_NOEXCEPT)) {
-                if (parser_consume(p, TK_LPAREN)) {
-                    int d = 1;
-                    while (d > 0 && !parser_at_eof(p)) {
-                        if (parser_at(p, TK_LPAREN)) d++;
-                        else if (parser_at(p, TK_RPAREN)) {
-                            d--;
-                            if (d == 0) break;
-                        }
-                        parser_advance(p);
-                    }
-                    parser_expect(p, TK_RPAREN);
-                }
+                if (parser_consume(p, TK_LPAREN))
+                    parser_skip_to_matching_rparen(p);
                 continue;
             }
             break;

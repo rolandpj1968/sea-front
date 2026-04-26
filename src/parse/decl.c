@@ -1046,18 +1046,8 @@ static bool consume_trailing_qualifiers(Parser *p) {
             /* noexcept(expr) — N4659 §15.4 [except.spec]. Skip
              * balanced parens; the expression is consumed and
              * discarded. */
-            if (parser_consume(p, TK_LPAREN)) {
-                int depth = 1;
-                while (depth > 0 && !parser_at_eof(p)) {
-                    if (parser_at(p, TK_LPAREN)) depth++;
-                    else if (parser_at(p, TK_RPAREN)) {
-                        depth--;
-                        if (depth == 0) break;
-                    }
-                    parser_advance(p);
-                }
-                parser_expect(p, TK_RPAREN);
-            }
+            if (parser_consume(p, TK_LPAREN))
+                parser_skip_to_matching_rparen(p);
             continue;
         }
         break;
@@ -1066,13 +1056,7 @@ static bool consume_trailing_qualifiers(Parser *p) {
      * in C++17 but still pervasive in libstdc++ headers. */
     if (parser_consume(p, TK_KW_THROW)) {
         parser_expect(p, TK_LPAREN);
-        int depth = 1;
-        while (depth > 0 && !parser_at_eof(p)) {
-            if (parser_at(p, TK_LPAREN)) depth++;
-            else if (parser_at(p, TK_RPAREN)) { depth--; if (depth == 0) break; }
-            parser_advance(p);
-        }
-        parser_expect(p, TK_RPAREN);
+        parser_skip_to_matching_rparen(p);
     }
     parser_skip_gnu_attributes(p);
     /* override / final — N4659 §13.3 [class.virtual]. Contextual
@@ -1194,29 +1178,10 @@ static void parse_func_body(Parser *p, Node *func) {
                     }
                     parser_advance(p);
                 }
-                if (parser_consume(p, TK_LPAREN)) {
-                    int depth = 1;
-                    while (depth > 0 && !parser_at_eof(p)) {
-                        if (parser_at(p, TK_LPAREN)) depth++;
-                        else if (parser_at(p, TK_RPAREN)) {
-                            depth--;
-                            if (depth == 0) break;
-                        }
-                        parser_advance(p);
-                    }
-                    parser_expect(p, TK_RPAREN);
-                } else if (parser_consume(p, TK_LBRACE)) {
-                    int depth = 1;
-                    while (depth > 0 && !parser_at_eof(p)) {
-                        if (parser_at(p, TK_LBRACE)) depth++;
-                        else if (parser_at(p, TK_RBRACE)) {
-                            depth--;
-                            if (depth == 0) break;
-                        }
-                        parser_advance(p);
-                    }
-                    parser_expect(p, TK_RBRACE);
-                }
+                if (parser_consume(p, TK_LPAREN))
+                    parser_skip_to_matching_rparen(p);
+                else if (parser_consume(p, TK_LBRACE))
+                    parser_skip_to_matching_rbrace(p);
             }
             parser_consume(p, TK_ELLIPSIS);
             if (!parser_consume(p, TK_COMMA)) break;
@@ -2096,14 +2061,7 @@ Node *parse_top_level_decl(Parser *p) {
     if (parser_at(p, TK_KW_STATIC_ASSERT)) {
         parser_advance(p);
         parser_expect(p, TK_LPAREN);
-        /* Terminates: advances through balanced parens toward ) */
-        int depth = 1;
-        while (depth > 0 && !parser_at_eof(p)) {
-            if (parser_at(p, TK_LPAREN)) depth++;
-            if (parser_at(p, TK_RPAREN)) depth--;
-            if (depth > 0) parser_advance(p);
-        }
-        parser_expect(p, TK_RPAREN);
+        parser_skip_to_matching_rparen(p);
         parser_expect(p, TK_SEMI);
         return NULL;
     }

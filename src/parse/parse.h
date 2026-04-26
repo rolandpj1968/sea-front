@@ -1191,6 +1191,26 @@ bool   parser_consume(Parser *p, TokenKind k);
 Token *parser_expect(Parser *p, TokenKind k);
 bool   parser_at_eof(Parser *p);
 
+/* Skip past a balanced delimiter pair. The caller must have already
+ * consumed the opening token; on return, the matching closing token
+ * has also been consumed (via parser_expect). Used in many places to
+ * walk past noexcept(expr), alignas(...), C++11 attributes [[...]],
+ * GCC __attribute__((...)), and the like — wherever the parser wants
+ * to discard a parenthesised/bracketed payload without parsing it.
+ *
+ * Tracks depth on the specific delimiter kind only, so an inner `(`
+ * inside `[ ... ]` doesn't fool the bracket scanner. Bails on EOF
+ * (no error; the trailing parser_expect catches truncated input).
+ *
+ * The parameterised form `parser_skip_balanced` covers call sites
+ * that pick the delimiter at runtime (e.g. functional cast `T(args)`
+ * vs `T{args}`); the named wrappers exist as syntactic sugar where
+ * the delimiter is fixed at compile time. */
+void parser_skip_balanced(Parser *p, TokenKind open, TokenKind close);
+void parser_skip_to_matching_rparen(Parser *p);
+void parser_skip_to_matching_rbracket(Parser *p);
+void parser_skip_to_matching_rbrace(Parser *p);
+
 /* Tentative parsing — save/restore parser state (position + region) */
 ParseState parser_save(Parser *p);
 void       parser_restore(Parser *p, ParseState saved);
