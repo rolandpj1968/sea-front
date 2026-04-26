@@ -114,6 +114,32 @@ static void emit_indent(void) {
     for (int i = 0; i < g_indent; i++) fputs("    ", stdout);
 }
 
+/* Symmetric block-brace helpers — paired with each other.
+ *
+ *   emit_open_brace()  emits "{\n" and increments indent.
+ *   emit_close_brace() decrements indent, indents, emits "}\n".
+ *
+ * The asymmetry between the call-site shapes (open is one line, close
+ * is three) is purely K&R style: openers are typically glued to the
+ * line above ('if (x) {', 'do {', 'fn() {'). The operations them-
+ * selves — enter scope / exit scope — are symmetric.
+ *
+ * These helpers cover the bare-{ case. K&R-glued opens still emit the
+ * opener text in one fputs("do {\n", ...) etc. and their matching
+ * close still uses emit_close_brace() — open helper doesn't fit, but
+ * the close helper does, and we accept the visible asymmetry rather
+ * than wrap the K&R-glued openers in a printf-shaped helper. */
+static void emit_open_brace(void) {
+    fputs("{\n", stdout);
+    g_indent++;
+}
+
+static void emit_close_brace(void) {
+    g_indent--;
+    emit_indent();
+    fputs("}\n", stdout);
+}
+
 /* ------------------------------------------------------------------ */
 /* Per-function codegen state for destructor lowering (Slice B)       */
 /*                                                                    */
@@ -4528,8 +4554,7 @@ static void emit_stmt_with_miniblock(Node *s) {
     }
 
     emit_indent();
-    fputs("{\n", stdout);
-    g_indent++;
+    emit_open_brace();
     int saved_nlive = g_cf.nlive;
 
     /* Hoist temps inside the mini-block. They get pushed onto live[]
@@ -4556,9 +4581,7 @@ static void emit_stmt_with_miniblock(Node *s) {
 
     emit_cleanup_chain_for_added(saved_nlive);
     g_cf.nlive = saved_nlive;
-    g_indent--;
-    emit_indent();
-    fputs("}\n", stdout);
+    emit_close_brace();
 }
 
 static void emit_block(Node *n) {
@@ -4573,8 +4596,7 @@ static void emit_block(Node *n) {
         return;
     }
 
-    fputs("{\n", stdout);
-    g_indent++;
+    emit_open_brace();
 
     /* Per-var cleanup label refactor. We walk statements in order
      * and PUSH onto g_cf.live exactly when we see a dtor-bearing
@@ -4602,9 +4624,7 @@ static void emit_block(Node *n) {
     emit_cleanup_chain_for_added(saved_nlive);
     g_cf.nlive = saved_nlive;
 
-    g_indent--;
-    emit_indent();
-    fputs("}\n", stdout);
+    emit_close_brace();
 }
 
 static void emit_class_def(Node *n);
@@ -4622,14 +4642,11 @@ static void emit_fwd_decl_methods_only(Node *n);
 static void emit_if_body_with_hoist(Node *body) {
     if (!body) { fputs(";\n", stdout); return; }
     if (body->kind == ND_BLOCK) { emit_stmt(body); return; }
-    fputs("{\n", stdout);
-    g_indent++;
+    emit_open_brace();
     hoist_stmt_temps(body);
     emit_indent();
     emit_stmt(body);
-    g_indent--;
-    emit_indent();
-    fputs("}\n", stdout);
+    emit_close_brace();
 }
 
 static void emit_stmt(Node *n) {
@@ -4894,8 +4911,7 @@ static void emit_stmt(Node *n) {
              * — the for-body must be one statement; without the wrap
              * we emit 'for (...) int __SF_cond_0;' and the mini-block
              * + if leak outside the for). */
-            fputs("{\n", stdout);
-            g_indent++;
+            emit_open_brace();
 
             /* Synth decl at the current indent. Type is int — cond is
              * implicitly converted to bool/int for the test, and
@@ -4905,8 +4921,7 @@ static void emit_stmt(Node *n) {
 
             /* Open mini-block */
             emit_indent();
-            fputs("{\n", stdout);
-            g_indent++;
+            emit_open_brace();
             int saved_nlive = g_cf.nlive;
 
             /* Hoist temps from the cond (inside the mini-block,
@@ -4926,9 +4941,7 @@ static void emit_stmt(Node *n) {
             emit_cleanup_chain_for_added(saved_nlive);
             g_cf.nlive = saved_nlive;
 
-            g_indent--;
-            emit_indent();
-            fputs("}\n", stdout);
+            emit_close_brace();
 
             /* Now emit the actual if using the synthetic. */
             emit_indent();
@@ -4940,9 +4953,7 @@ static void emit_stmt(Node *n) {
                 emit_if_body_with_hoist(n->if_.else_);
             }
 
-            g_indent--;
-            emit_indent();
-            fputs("}\n", stdout);
+            emit_close_brace();
             return;
         }
         /* C++ init-declaration as condition:
@@ -4957,8 +4968,7 @@ static void emit_stmt(Node *n) {
         if (n->if_.cond && n->if_.cond->kind == ND_VAR_DECL &&
             n->if_.cond->var_decl.name) {
             Token *nm = n->if_.cond->var_decl.name;
-            fputs("{\n", stdout);
-            g_indent++;
+            emit_open_brace();
             emit_indent();
             emit_var_decl_inner(n->if_.cond);
             fputs(";\n", stdout);
@@ -5031,8 +5041,7 @@ static void emit_stmt(Node *n) {
             emit_indent();
             fprintf(stdout, "int %s;\n", cond_name);
             emit_indent();
-            fputs("{\n", stdout);
-            g_indent++;
+            emit_open_brace();
             int saved_nlive = g_cf.nlive;
             hoist_temps_in_expr(n->while_.cond);
             emit_indent();
@@ -5041,9 +5050,7 @@ static void emit_stmt(Node *n) {
             fputs(";\n", stdout);
             emit_cleanup_chain_for_added(saved_nlive);
             g_cf.nlive = saved_nlive;
-            g_indent--;
-            emit_indent();
-            fputs("}\n", stdout);
+            emit_close_brace();
             emit_indent();
             if (body_wrap)
                 fprintf(stdout, "if (!%s) goto __SF_loop_break_%d;\n",
@@ -5056,9 +5063,7 @@ static void emit_stmt(Node *n) {
                 emit_indent();
                 fprintf(stdout, "__SF_loop_cont_%d: ;\n", cnt);
             }
-            g_indent--;
-            emit_indent();
-            fputs("}\n", stdout);
+            emit_close_brace();
         } else {
             /* body_wrap only — natural while preserved (Slice C). */
             fputs("while (", stdout);
@@ -5069,9 +5074,7 @@ static void emit_stmt(Node *n) {
             emit_stmt(body);
             emit_indent();
             fprintf(stdout, "__SF_loop_cont_%d: ;\n", cnt);
-            g_indent--;
-            emit_indent();
-            fputs("}\n", stdout);
+            emit_close_brace();
         }
         if (body_wrap) {
             g_cf.nlive--;  /* pop CL_LOOP marker */
@@ -5132,8 +5135,7 @@ static void emit_stmt(Node *n) {
                 fprintf(stdout, "__SF_loop_cont_%d: ;\n", cnt);
             }
             emit_indent();
-            fputs("{\n", stdout);
-            g_indent++;
+            emit_open_brace();
             int saved_nlive = g_cf.nlive;
             hoist_temps_in_expr(n->do_.cond);
             emit_indent();
@@ -5142,9 +5144,7 @@ static void emit_stmt(Node *n) {
             fputs(";\n", stdout);
             emit_cleanup_chain_for_added(saved_nlive);
             g_cf.nlive = saved_nlive;
-            g_indent--;
-            emit_indent();
-            fputs("}\n", stdout);
+            emit_close_brace();
             g_indent--;
             emit_indent();
             fprintf(stdout, "} while (%s);\n", cond_name);
@@ -5271,8 +5271,7 @@ static void emit_stmt(Node *n) {
             int cond_id = g_cf.next_label_id++;
             char cond_name[24];
             snprintf(cond_name, sizeof(cond_name), "__SF_cond_%d", cond_id);
-            fputs("{\n", stdout);
-            g_indent++;
+            emit_open_brace();
             if (n->for_.init) {
                 emit_indent();
                 Node *init = n->for_.init;
@@ -5290,8 +5289,7 @@ static void emit_stmt(Node *n) {
             emit_indent();
             fprintf(stdout, "int %s;\n", cond_name);
             emit_indent();
-            fputs("{\n", stdout);
-            g_indent++;
+            emit_open_brace();
             int saved_nlive = g_cf.nlive;
             hoist_temps_in_expr(n->for_.cond);
             emit_indent();
@@ -5300,9 +5298,7 @@ static void emit_stmt(Node *n) {
             fputs(";\n", stdout);
             emit_cleanup_chain_for_added(saved_nlive);
             g_cf.nlive = saved_nlive;
-            g_indent--;
-            emit_indent();
-            fputs("}\n", stdout);
+            emit_close_brace();
             emit_indent();
             if (body_wrap)
                 fprintf(stdout, "if (!%s) goto __SF_loop_break_%d;\n",
@@ -5320,16 +5316,12 @@ static void emit_stmt(Node *n) {
                 emit_expr(n->for_.inc);
                 fputs(";\n", stdout);
             }
-            g_indent--;
-            emit_indent();
-            fputs("}\n", stdout);
+            emit_close_brace();
             if (body_wrap) {
                 emit_indent();
                 fprintf(stdout, "__SF_loop_break_%d: ;\n", brk);
             }
-            g_indent--;
-            emit_indent();
-            fputs("}\n", stdout);
+            emit_close_brace();
             if (body_wrap) g_cf.nlive--;
             return;
         }
@@ -5353,9 +5345,7 @@ static void emit_stmt(Node *n) {
         emit_stmt(body);
         emit_indent();
         fprintf(stdout, "__SF_loop_cont_%d: ;\n", cnt);
-        g_indent--;
-        emit_indent();
-        fputs("}\n", stdout);
+        emit_close_brace();
         g_cf.nlive--;
         emit_indent();
         fprintf(stdout, "__SF_loop_break_%d: ;\n", brk);
@@ -5682,8 +5672,7 @@ static void emit_func_body(Node *func) {
      * and __SF_unwind), emit member-init calls if this is a ctor,
      * emit the user body (its own ND_BLOCK prints its { }), then
      * __SF_EPILOGUE (label + return). */
-    fputs("{\n", stdout);
-    g_indent++;
+    emit_open_brace();
     bool void_ret = func->func.ret_ty && func->func.ret_ty->kind == TY_VOID;
     if (g_cf.func_has_cleanups) {
         emit_indent();
@@ -5711,9 +5700,7 @@ static void emit_func_body(Node *func) {
         emit_indent();
         fputs(void_ret ? "__SF_EPILOGUE_VOID;\n" : "__SF_EPILOGUE;\n", stdout);
     }
-    g_indent--;
-    emit_indent();
-    fputs("}\n", stdout);
+    emit_close_brace();
 }
 
 /* ------------------------------------------------------------------ */
@@ -6192,8 +6179,7 @@ static void emit_class_def(Node *n) {
         fprintf(stdout, "%.*s",
                 n->class_def.tag->len, n->class_def.tag->loc);
     fputc(' ', stdout);
-    fputs("{\n", stdout);
-    g_indent++;
+    emit_open_brace();
     /* Base subobjects — N4659 §11 [class.derived] / §6.7 [class.layout].
      * For non-virtual single (or multiple) inheritance we embed each
      * direct base as a struct field at the head of the layout, in
