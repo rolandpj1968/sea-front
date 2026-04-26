@@ -87,9 +87,13 @@ static Type *ty_double(Sema *s) { return sema_new_type(s, TY_DOUBLE); }
 static Type *ty_char  (Sema *s) { return sema_new_type(s, TY_CHAR); }
 
 /* ------------------------------------------------------------------ */
-/* Type predicates                                                    */
+/* Type predicates — N4659 §6.7.1 [basic.fundamental]                 */
 /* ------------------------------------------------------------------ */
 
+/* Integer types — N4659 §6.7.1/4 [basic.fundamental]: the standard
+ * (signed/unsigned) integer types plus bool, char, char16_t,
+ * char32_t, wchar_t. Kept lockstep with the §8 [expr] arithmetic
+ * conversions and §16.3.3.1 [over.best.ics] integer-rank logic. */
 static bool is_integer(const Type *t) {
     if (!t) return false;
     switch (t->kind) {
@@ -101,10 +105,12 @@ static bool is_integer(const Type *t) {
     }
 }
 
+/* Floating-point types — N4659 §6.7.1/8 [basic.fundamental]. */
 static bool is_fp(const Type *t) {
     return t && (t->kind == TY_FLOAT || t->kind == TY_DOUBLE || t->kind == TY_LDOUBLE);
 }
 
+/* Arithmetic types — N4659 §6.7.1/9: integer + floating-point. */
 static bool is_arithmetic(const Type *t) {
     return is_integer(t) || is_fp(t);
 }
@@ -188,6 +194,7 @@ static void visit_num(Sema *s, Node *n) {
         n->resolved_type = ty_int(s);
 }
 
+/* Boolean literal — N4659 §5.13.6 [lex.bool]: 'true' / 'false'. */
 static void visit_bool_lit(Sema *s, Node *n) {
     n->resolved_type = ty_bool(s);
 }
@@ -219,6 +226,9 @@ static void visit_fnum(Sema *s, Node *n) {
     n->resolved_type = ty_double(s);
 }
 
+/* Character literal — N4659 §5.13.3 [lex.ccon]. Currently always
+ * 'char'; the standard prescribes wchar_t / char16_t / char32_t for
+ * L'x' / u'x' / U'x' prefixes (deferred). */
 static void visit_chr(Sema *s, Node *n) {
     n->resolved_type = ty_char(s);
 }
@@ -448,10 +458,15 @@ static void visit_unary(Sema *s, Node *n) {
         n->is_type_dependent = true;
 }
 
+/* Assignment — N4659 §8.18 [expr.ass]. Result type and value
+ * category: "the type of an assignment expression is that of its
+ * left operand; the result is an lvalue referring to the left
+ * operand." Compound assignments (+=, -=, etc.) follow the same
+ * rule via the unfolded `lhs = lhs op rhs` shape; sema doesn't
+ * distinguish them at this level. */
 static void visit_assign(Sema *s, Node *n) {
     visit(s, n->binary.lhs);
     visit(s, n->binary.rhs);
-    /* Result of assignment is the lvalue's type. */
     n->resolved_type = n->binary.lhs->resolved_type;
     if ((n->binary.lhs && n->binary.lhs->is_type_dependent) ||
         (n->binary.rhs && n->binary.rhs->is_type_dependent))
@@ -542,6 +557,11 @@ static void visit_ternary(Sema *s, Node *n) {
 /* Statement / declaration visitors                                   */
 /* ------------------------------------------------------------------ */
 
+/* Variable declaration — N4659 §10 [dcl.dcl] / §11.6 [dcl.init].
+ * The parser has already built the var-decl's type; sema visits the
+ * initializer (if any) and the direct-init ctor-args, then exposes
+ * the declared type on resolved_type so consumers can ask "what's
+ * the type of this declaration?" uniformly. */
 static void visit_var_decl(Sema *s, Node *n) {
     if (n->var_decl.init)
         visit(s, n->var_decl.init);
@@ -551,12 +571,12 @@ static void visit_var_decl(Sema *s, Node *n) {
      * to pick the right ctor (e.g. copy vs converting). */
     for (int i = 0; i < n->var_decl.ctor_nargs; i++)
         visit(s, n->var_decl.ctor_args[i]);
-    /* The declared type is already on var_decl.ty (set by the parser).
-     * We just propagate it onto the node's resolved_type so consumers
-     * can ask 'what's the type of this declaration?' uniformly. */
     n->resolved_type = n->var_decl.ty;
 }
 
+/* Compound statement — N4659 §9.3 [stmt.block]. Pushes the block's
+ * declarative region onto the sema scope chain so identifiers in
+ * nested statements resolve via inner-scope-first lookup. */
 static void visit_block(Sema *s, Node *n) {
     DeclarativeRegion *saved = s->cur_scope;
     if (n->block.scope) s->cur_scope = n->block.scope;
@@ -565,6 +585,12 @@ static void visit_block(Sema *s, Node *n) {
     s->cur_scope = saved;
 }
 
+/* Function definition — N4659 §11.4 [dcl.fct.def]. Establishes the
+ * function's prototype scope (so parameters resolve) and, for member
+ * functions, the enclosing class type (so 'this'-typed lookups
+ * inside the body know which class). Mem-initializers are walked
+ * separately because they live outside the body but inside the
+ * function's lexical scope. */
 static void visit_func_def(Sema *s, Node *n) {
     DeclarativeRegion *saved = s->cur_scope;
     Type *saved_class = s->cur_class_type;
@@ -585,9 +611,10 @@ static void visit_func_def(Sema *s, Node *n) {
     s->cur_class_type = saved_class;
 }
 
+/* Class definition — N4659 §12 [class]. Visits class members so
+ * in-class method bodies get sema'd. */
 static void visit_class_def(Sema *s, Node *n) {
-    /* Visit class members so in-class method bodies get sema'd.
-     * Method bodies need the class scope active so unqualified
+    /* Method bodies need the class scope active so unqualified
      * member references resolve via the chain. The parser already
      * set up the function body's enclosing chain to include the
      * class scope (during in-class parsing), so we don't need to
@@ -609,10 +636,16 @@ static void visit_class_def(Sema *s, Node *n) {
  * already returns on NULL at its entry. We drop the guards below and
  * just call visit() with potentially-NULL children. */
 
+/* Return statement — N4659 §9.6.3 [stmt.return]. The return-value
+ * expression is the only sub-node; conversion to the function's
+ * declared return type is handled at codegen, not here. */
 static void visit_return(Sema *s, Node *n) {
     visit(s, n->ret.expr);
 }
 
+/* Expression statement — N4659 §9.5 [stmt.expr]. The contained
+ * expression is evaluated for its side effects; its value is
+ * discarded. */
 static void visit_expr_stmt(Sema *s, Node *n) {
     visit(s, n->expr_stmt.expr);
 }
@@ -649,16 +682,22 @@ static void visit_if(Sema *s, Node *n) {
         n->if_.scope->enclosing = saved_enclosing;
 }
 
+/* while-statement — N4659 §9.5.2 [stmt.while]. */
 static void visit_while(Sema *s, Node *n) {
     visit(s, n->while_.cond);
     visit(s, n->while_.body);
 }
 
+/* do-while — N4659 §9.5.3 [stmt.do]. */
 static void visit_do(Sema *s, Node *n) {
     visit(s, n->do_.body);
     visit(s, n->do_.cond);
 }
 
+/* for-statement — N4659 §9.5.4 [stmt.for]. The init, cond, and inc
+ * sub-expressions live in for-init scope (§6.3.3 [basic.scope.for]);
+ * the parser already arranged the scope chain so we don't need to
+ * manage it here. */
 static void visit_for(Sema *s, Node *n) {
     visit(s, n->for_.init);
     visit(s, n->for_.cond);
@@ -758,9 +797,10 @@ static Node *find_class_def_node_by_tag_args(Node *tu, Type *class_ty) {
 }
 
 /* Look up a class operator method by token-suffix string (e.g. "+",
- * "-", "==", "!=") and return its declared return type. Used by
- * visit_binary so that 'a op b' on struct-typed operands gets a
- * usable resolved_type — needed for chained expressions like
+ * "-", "==", "!=") and return its declared return type — N4659
+ * §16.5 [over.oper]. Used by visit_binary so that 'a op b' on
+ * struct-typed operands gets a usable resolved_type — needed for
+ * chained expressions like
  *   (a - b).method()
  * where the inner '.method()' lookup needs the LHS resolved. The
  * matcher requires the suffix to terminate at the next non-operator
@@ -816,10 +856,11 @@ static const char *binop_token_to_op_str(TokenKind op, int *out_len) {
 }
 
 /* Find a class member whose name is 'operator' and whose operator-
- * suffix matches '[]' — i.e. the operator[] member. Returns the
- * method node (ND_FUNC_DEF or ND_VAR_DECL with TY_FUNC) or NULL.
- * Linear scan of the class's member list. Falls back through the
- * TU when class_ty->class_def isn't hooked up on this Type* copy. */
+ * suffix matches '[]' — i.e. the operator[] member (N4659 §16.5.5
+ * [over.sub]). Returns the method node (ND_FUNC_DEF or ND_VAR_DECL
+ * with TY_FUNC) or NULL. Linear scan of the class's member list.
+ * Falls back through the TU when class_ty->class_def isn't hooked
+ * up on this Type* copy. */
 static Node *find_class_operator_subscript(Sema *s, Type *class_ty) {
     if (!class_ty) return NULL;
     Node *cd = class_ty->class_def;
@@ -1472,14 +1513,22 @@ static void visit(Sema *s, Node *n) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Public entry point                                                 */
+/* Public entry points                                                */
 /* ------------------------------------------------------------------ */
 
+/* Whole-TU semantic analysis pass — N4659 §6.4 [basic.lookup] +
+ * §16.3 [over.match] + §17.7 [temp.res]. Walks the AST once,
+ * resolving identifiers, picking overloads, and propagating types
+ * onto every expression node's resolved_type field. */
 void sema_run(Node *tu, Arena *arena) {
     Sema s = { .arena = arena, .tu = tu, .cur_scope = NULL };
     visit(&s, tu);
 }
 
+/* Phase-2 sema entry point — N4659 §17.7.2 [temp.dep]: re-visit a
+ * single node (typically a freshly-cloned template instantiation
+ * body) to resolve names that became non-dependent after type
+ * substitution. Equivalent to running sema_run on the subtree. */
 void sema_visit_node(Node *n, Arena *arena) {
     if (!n) return;
     /* No tu reference — phase 2 doesn't need TU-wide context.

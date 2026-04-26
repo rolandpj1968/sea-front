@@ -1202,11 +1202,17 @@ static void parse_func_body(Parser *p, Node *func) {
 
 /*
  * parse_deferred_func_body — replay a captured in-class member
- * function body. The class scope is pushed back onto the lookup
- * chain so that members declared *after* this function in the
- * class body are visible to its body's name lookups (the
- * complete-class context rule). Pre: func->func.body_start_pos
- * captured by the eager pass.
+ * function body. N4659 §12.2.1/2 [class.mem]: "A class is considered
+ * a completely-defined object type at the closing } of the class-
+ * specifier. Within the class member-specification, the class is
+ * regarded as complete within function bodies, default arguments,
+ * noexcept-specifiers, and default member initializers (including
+ * such things in nested classes)."
+ *
+ * The class scope is pushed back onto the lookup chain so that
+ * members declared *after* this function in the class body are
+ * visible to its body's name lookups (the complete-class context
+ * rule). Pre: func->func.body_start_pos captured by the eager pass.
  */
 void parse_deferred_func_body(Parser *p, Node *func) {
     int saved_pos = p->pos;
@@ -1224,7 +1230,11 @@ void parse_deferred_func_body(Parser *p, Node *func) {
     func->func.body_start_pos = -1;
 }
 
-/* Skip GCC __extension__ keyword if present. */
+/* Skip GCC __extension__ keyword if present. Non-standard (NOT in
+ * N4659); the GCC extension precedes a declaration to suppress
+ * pedantic-mode warnings about non-standard constructs in glibc
+ * headers. We discard it here and parse the following declaration
+ * normally. */
 static void skip_extension(Parser *p) {
     while (parser_peek(p)->kind == TK_IDENT &&
            parser_peek(p)->len == 13 &&
