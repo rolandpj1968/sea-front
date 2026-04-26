@@ -2153,6 +2153,9 @@ static void emit_param_declarator(Type *ty, Token *name, int idx) {
 static void emit_expr(Node *n);
 static bool free_func_name_is_overloaded(Token *name);
 static bool ffsig_is_first_c_linkage(Token *name, Type **params, int nparams);
+static void emit_free_func_symbol(Token *name, Token *asm_name,
+                                   bool c_linkage,
+                                   Type **params, int nparams);
 static void emit_free_func_mangled_name(Token *name, Type **param_types,
                                          int nparams);
 
@@ -2169,29 +2172,41 @@ static void emit_asm_name(Token *asm_tok) {
  *
  *   1. asm_name set       → emit asm_name string verbatim. The user
  *                           explicitly named the C symbol via the GNU
- *                           __asm("name") declarator-suffix, so all
- *                           other mangling is suppressed. (Used by
- *                           glibc's <string.h> overload trick — see
- *                           tests/emit_c/asm_label_symbol_rename.cpp.)
+ *                           __asm("name") declarator-suffix.
  *
- *   2. name is overloaded → emit '<name>_p_<params>_pe_'. The
- *                           overload-detection table (g_ffsig_seen,
- *                           populated pre-pass) decides; sites inside
- *                           extern "C" or with c_linkage short-circuit
- *                           it back to the bare path so the C ABI
- *                           name is preserved.
+ *   2. c_linkage          → emit bare '<name>'. N4659 §10.5/6
+ *                           [dcl.link]: a name with C linkage refers
+ *                           to a single C ABI function; we MUST emit
+ *                           the bare name so the linker resolves
+ *                           against libc / other C TUs.
  *
- *   3. otherwise          → emit '<name>' bare.
+ *   3. name is overloaded → emit '<name>_p_<params>_pe_'. There are
+ *                           2+ DISTINCT signatures registered for
+ *                           this name (checked via free_func_name_
+ *                           is_overloaded over the pre-pass table),
+ *                           so the C-level identifier needs the
+ *                           param-suffix to be unique.
+ *
+ *   4. otherwise          → emit '<name>' bare.
+ *
+ * The c_linkage gate is per-DECL, NOT per-name. Real headers mix
+ * linkages — e.g. <cmath> has 'extern "C" double acos(double)' AND
+ * 'extern "C++" inline float acos(float)' for the same name. The C
+ * decl emits as bare 'acos' (libm symbol); the C++ overloads emit
+ * mangled. Decl-emit dedup (ffsig_is_first_c_linkage) prevents the
+ * bare emissions from clashing on the C ABI name when there are
+ * multiple c_linkage decls (e.g. <cstring>'s dual strchr).
  *
  * Each caller still computes `params` (often with default-argument
  * injection or resolved-decl substitution) — this helper only owns
- * the asm/mangle/bare decision. Previously this decision lived
- * verbatim at four call sites, with each new dimension (overload,
- * extern "C", asm-label) requiring a coordinated patch in all four. */
+ * the asm/c-linkage/mangle/bare decision. */
 static void emit_free_func_symbol(Token *name, Token *asm_name,
+                                   bool c_linkage,
                                    Type **params, int nparams) {
     if (asm_name) {
         emit_asm_name(asm_name);
+    } else if (c_linkage) {
+        fprintf(stdout, "%.*s", name->len, name->loc);
     } else if (free_func_name_is_overloaded(name)) {
         emit_free_func_mangled_name(name, params, nparams);
     } else {
@@ -2411,6 +2426,7 @@ static void emit_expr(Node *n) {
                                   ? rd->type->nparams : 0;
                 emit_free_func_symbol(n->ident.name,
                                        rd ? rd->asm_name : NULL,
+                                       rd && rd->c_linkage,
                                        params, np);
             }
         }
@@ -3485,7 +3501,9 @@ static void emit_expr(Node *n) {
                     }
                 }
                 emit_free_func_symbol(n->call.callee->ident.name,
-                                       asm_callee, at, na);
+                                       asm_callee,
+                                       rd_callee && rd_callee->c_linkage,
+                                       at, na);
                 emitted_mangled = true;
             }
             if (!emitted_mangled) emit_expr(n->call.callee);
@@ -3994,6 +4012,7 @@ static void emit_var_decl_inner(Node *n) {
         emit_type(ty->ret);
         fputc(' ', stdout);
         emit_free_func_symbol(n->var_decl.name, n->var_decl.asm_name,
+                               (n->var_decl.storage_flags & DECL_C_LINKAGE) != 0,
                                ty->params, ty->nparams);
         fputc('(', stdout);
         for (int i = 0; i < ty->nparams; i++) {
@@ -5791,52 +5810,28 @@ static void free_ovld_populate(Node *tu) {
         free_ovld_walk(tu->tu.decls[i]);
 }
 
+/* True iff the name has 2+ distinct signatures recorded. Pure name
+ * lookup — does NOT consider linkage. The bare/mangle decision per
+ * call site lives in emit_free_func_symbol, which gates mangling
+ * on the per-decl c_linkage flag (the caller's). */
 static bool free_func_name_is_overloaded(Token *name) {
     if (!name) return false;
-    /* Find the first entry for this name; remember its sig key.
-     * If any subsequent entry shares the name but has a different
-     * key, the name is overloaded.
-     *
-     * N4659 §10.5/6 [dcl.link]: at most one function with a given
-     * name can have C linkage. If ANY declaration of this name was
-     * extern "C", treat the name as un-overloaded for mangling — we
-     * must emit the bare C symbol so the linker resolves against
-     * libc / other C TUs. (Multiple extern "C" decls with mismatched
-     * sigs are technically ill-formed, but appear in real headers
-     * like <cstring> which declares both 'char *strchr(char*, int)'
-     * and 'const char *strchr(const char*, int)'.) */
     const char *first_key = NULL;
     int first_key_len = 0;
-    bool any_c_linkage = false;
     for (int i = 0; i < g_n_ffsig_seen; i++) {
         FreeFuncSig *e = &g_ffsig_seen[i];
         if (e->name->len != name->len) continue;
         if (memcmp(e->name->loc, name->loc, name->len) != 0) continue;
-        if (e->c_linkage) any_c_linkage = true;
         if (!first_key) {
             first_key = e->key;
             first_key_len = e->key_len;
             continue;
         }
         if (e->key_len != first_key_len ||
-            memcmp(e->key, first_key, e->key_len) != 0) {
-            if (any_c_linkage) return false;
-            /* Continue scanning — a later entry may carry c_linkage. */
-        }
-    }
-    /* Re-scan if we returned a candidate-overloaded result without
-     * yet seeing c_linkage in the trailing entries. */
-    if (!first_key) return false;
-    bool overloaded = false;
-    for (int i = 0; i < g_n_ffsig_seen; i++) {
-        FreeFuncSig *e = &g_ffsig_seen[i];
-        if (e->name->len != name->len) continue;
-        if (memcmp(e->name->loc, name->loc, name->len) != 0) continue;
-        if (e->key_len != first_key_len ||
             memcmp(e->key, first_key, e->key_len) != 0)
-            overloaded = true;
+            return true;
     }
-    return overloaded && !any_c_linkage;
+    return false;
 }
 
 /* N4659 §10.5/6 [dcl.link]: a name with C linkage refers to a single
@@ -6795,6 +6790,7 @@ static void emit_top_level(Node *n) {
             emit_type(fty->ret);
             fputc(' ', stdout);
             emit_free_func_symbol(n->var_decl.name, n->var_decl.asm_name,
+                                   (n->var_decl.storage_flags & DECL_C_LINKAGE) != 0,
                                    fty->params, fty->nparams);
             fputc('(', stdout);
             if (fty->nparams == 0) {

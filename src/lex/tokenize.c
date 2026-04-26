@@ -197,6 +197,9 @@ static const Keyword kw_table[] = {
     {"__signed",         TK_KW_SIGNED},  /* GCC alias for signed */
     {"__signed__",       TK_KW_SIGNED},  /* GCC alias for signed */
     {"__thread",         TK_KW_THREAD_LOCAL},  /* GCC TLS storage class */
+    {"__typeof",         TK_KW_TYPEOF},  /* GCC __typeof — used in glibc's
+                                          * iscanonical/etc. macros */
+    {"__typeof__",       TK_KW_TYPEOF},  /* GCC alias */
     {"__volatile",       TK_KW_VOLATILE}, /* GCC alias for volatile */
     {"__volatile__",     TK_KW_VOLATILE}, /* GCC alias for volatile */
     {"alignas",          TK_KW_ALIGNAS},
@@ -273,6 +276,7 @@ static const Keyword kw_table[] = {
     {"typedef",          TK_KW_TYPEDEF},
     {"typeid",           TK_KW_TYPEID},
     {"typename",         TK_KW_TYPENAME},
+    {"typeof",           TK_KW_TYPEOF},  /* GCC extension */
     {"union",            TK_KW_UNION},
     {"unsigned",         TK_KW_UNSIGNED},
     {"using",            TK_KW_USING},
@@ -1165,6 +1169,7 @@ const char *token_kind_name(TokenKind kind) {
     case TK_KW_TYPEDEF:     return "KW_typedef";
     case TK_KW_TYPEID:      return "KW_typeid";
     case TK_KW_TYPENAME:    return "KW_typename";
+    case TK_KW_TYPEOF:      return "KW_typeof";
     case TK_KW_UNION:       return "KW_union";
     case TK_KW_UNSIGNED:    return "KW_unsigned";
     case TK_KW_USING:       return "KW_using";

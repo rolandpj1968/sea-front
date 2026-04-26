@@ -1028,6 +1028,13 @@ struct Declaration {
      * in hand can find the rename without walking back to the AST node.
      * NULL when no asm-label was set. */
     Token       *asm_name;
+    /* True when this declaration was inside extern "C" { ... } or a
+     * single 'extern "C" decl' — N4659 §10.5 [dcl.link]. Determines
+     * whether call sites mangle (C++ linkage) or emit bare (C ABI
+     * symbol). Per-decl rather than per-name because real headers
+     * mix linkages — e.g. <cmath> has 'extern "C" double acos(double)'
+     * and 'extern "C++" inline float acos(float)' for the same name. */
+    bool         c_linkage;
     Declaration *next;      /* hash chain within the declarative region */
 };
 

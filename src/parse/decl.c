@@ -1771,7 +1771,10 @@ Node *parse_declaration(Parser *p) {
                                           decl->var_decl.name->len,
                                           ENTITY_VARIABLE,
                                           decl->var_decl.ty);
-        if (rd) rd->asm_name = decl->var_decl.asm_name;
+        if (rd) {
+            rd->asm_name = decl->var_decl.asm_name;
+            rd->c_linkage = (p->extern_c_depth > 0);
+        }
     }
 
     /* Comma-separated declarators — N4659 §10 [dcl.dcl]

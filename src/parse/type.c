@@ -202,8 +202,16 @@ DeclSpec parse_type_specifiers(Parser *p) {
         /* decltype(expression) — N4659 §10.1.7.2 [dcl.type.simple]
          *   simple-type-specifier: decltype ( expression )
          * Acts as the entire type-specifier; consume balanced parens and
-         * return an opaque type. Sema deduces the actual type. */
-        if (tok->kind == TK_KW_DECLTYPE) {
+         * return an opaque type. Sema deduces the actual type.
+         *
+         * Also __typeof / typeof / __typeof__ — GCC extension with
+         * identical surface syntax. NOT in N4659 but pervasive in
+         * glibc headers (e.g. <bits/iscanonical.h>'s __iscanonical
+         * macro: ((void)(__typeof(x))(x), 1)). Same treatment as
+         * decltype: skip parens, emit opaque TY_INT placeholder. The
+         * cast '(__typeof(x))(x)' becomes '(int)(x)' which is fine
+         * for the common discard-via-void-comma idiom. */
+        if (tok->kind == TK_KW_DECLTYPE || tok->kind == TK_KW_TYPEOF) {
             parser_advance(p);
             parser_expect(p, TK_LPAREN);
             parser_skip_to_matching_rparen(p);
@@ -1402,7 +1410,7 @@ bool parser_at_type_specifier(Parser *p) {
     case TK_KW_INLINE:
     case TK_KW_TYPEDEF:
     case TK_KW_STRUCT: case TK_KW_CLASS: case TK_KW_UNION: case TK_KW_ENUM:
-    case TK_KW_AUTO: case TK_KW_DECLTYPE: case TK_KW_TYPENAME:
+    case TK_KW_AUTO: case TK_KW_DECLTYPE: case TK_KW_TYPEOF: case TK_KW_TYPENAME:
     case TK_KW_CONSTEXPR: case TK_KW_VIRTUAL: case TK_KW_EXPLICIT:
     case TK_KW_MUTABLE:
     case TK_KW_ALIGNAS:        /* C++11 alignment specifier */

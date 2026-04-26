@@ -159,6 +159,9 @@ typedef enum {
     TK_KW_TYPEDEF,
     TK_KW_TYPEID,
     TK_KW_TYPENAME,
+    TK_KW_TYPEOF,        /* GNU __typeof / typeof / __typeof__ extension —
+                          * NOT in N4659; treated like decltype (opaque
+                          * type). Common in glibc headers. */
     TK_KW_UNION,
     TK_KW_UNSIGNED,
     TK_KW_USING,
