@@ -2163,6 +2163,42 @@ static void emit_asm_name(Token *asm_tok) {
     fwrite(asm_tok->loc + 1, 1, asm_tok->len - 2, stdout);
 }
 
+/* Emit the C symbol for a free-function reference / declaration —
+ * the single source of truth for "what name does this become?".
+ * Resolution order (highest-precedence first):
+ *
+ *   1. asm_name set       → emit asm_name string verbatim. The user
+ *                           explicitly named the C symbol via the GNU
+ *                           __asm("name") declarator-suffix, so all
+ *                           other mangling is suppressed. (Used by
+ *                           glibc's <string.h> overload trick — see
+ *                           tests/emit_c/asm_label_symbol_rename.cpp.)
+ *
+ *   2. name is overloaded → emit '<name>_p_<params>_pe_'. The
+ *                           overload-detection table (g_ffsig_seen,
+ *                           populated pre-pass) decides; sites inside
+ *                           extern "C" or with c_linkage short-circuit
+ *                           it back to the bare path so the C ABI
+ *                           name is preserved.
+ *
+ *   3. otherwise          → emit '<name>' bare.
+ *
+ * Each caller still computes `params` (often with default-argument
+ * injection or resolved-decl substitution) — this helper only owns
+ * the asm/mangle/bare decision. Previously this decision lived
+ * verbatim at four call sites, with each new dimension (overload,
+ * extern "C", asm-label) requiring a coordinated patch in all four. */
+static void emit_free_func_symbol(Token *name, Token *asm_name,
+                                   Type **params, int nparams) {
+    if (asm_name) {
+        emit_asm_name(asm_name);
+    } else if (free_func_name_is_overloaded(name)) {
+        emit_free_func_mangled_name(name, params, nparams);
+    } else {
+        fprintf(stdout, "%.*s", name->len, name->loc);
+    }
+}
+
 static const char *binop_str(TokenKind k) {
     switch (k) {
     case TK_PLUS:    return "+";
@@ -2362,25 +2398,20 @@ static void emit_expr(Node *n) {
             fputc(')', stdout);
         } else {
             g_suppress_ref_deref = false;
-            /* Overloaded free-function reference — emit the signature-
-             * mangled C symbol of the resolved overload. The
-             * resolved_decl carries the specific overload (sema set
-             * it via free-function overload resolution); without the
-             * mangle, all overloads collide on one C name.
-             *
-             * asm-label rename short-circuits both: the user explicitly
-             * named the symbol, so emit that bare. */
-            Declaration *rd = n->ident.resolved_decl;
-            if (!n->ident.implicit_this && rd && rd->asm_name) {
-                emit_asm_name(rd->asm_name);
-            } else if (!n->ident.implicit_this && rd &&
-                rd->type && rd->type->kind == TY_FUNC &&
-                free_func_name_is_overloaded(n->ident.name)) {
-                emit_free_func_mangled_name(n->ident.name,
-                                             rd->type->params,
-                                             rd->type->nparams);
-            } else {
+            /* Implicit-this references emit the bare name; the receiver
+             * is supplied by the surrounding member-access. Otherwise
+             * delegate to the asm/mangle/bare resolver. */
+            if (n->ident.implicit_this) {
                 emit_token_text(n->ident.name);
+            } else {
+                Declaration *rd = n->ident.resolved_decl;
+                Type **params = (rd && rd->type && rd->type->kind == TY_FUNC)
+                                  ? rd->type->params : NULL;
+                int     np    = (rd && rd->type && rd->type->kind == TY_FUNC)
+                                  ? rd->type->nparams : 0;
+                emit_free_func_symbol(n->ident.name,
+                                       rd ? rd->asm_name : NULL,
+                                       params, np);
             }
         }
         return;
@@ -3366,18 +3397,16 @@ static void emit_expr(Node *n) {
              * builtin we don't model) is encoded as 'unknown' by the
              * mangler — wrong but consistent across calls. */
             bool emitted_mangled = false;
-            /* GNU __asm("name") rename short-circuits all mangling — the
-             * user explicitly named the symbol, so emit it bare. */
+            Declaration *rd_callee = (n->call.callee &&
+                                       n->call.callee->kind == ND_IDENT &&
+                                       !n->call.callee->ident.implicit_this)
+                                       ? n->call.callee->ident.resolved_decl
+                                       : NULL;
+            Token *asm_callee = rd_callee ? rd_callee->asm_name : NULL;
             if (n->call.callee && n->call.callee->kind == ND_IDENT &&
                 !n->call.callee->ident.implicit_this &&
-                n->call.callee->ident.resolved_decl &&
-                n->call.callee->ident.resolved_decl->asm_name) {
-                emit_asm_name(n->call.callee->ident.resolved_decl->asm_name);
-                emitted_mangled = true;
-            } else
-            if (n->call.callee && n->call.callee->kind == ND_IDENT &&
-                !n->call.callee->ident.implicit_this &&
-                free_func_name_is_overloaded(n->call.callee->ident.name)) {
+                (asm_callee ||
+                 free_func_name_is_overloaded(n->call.callee->ident.name))) {
                 Type *at[32];
                 int na = n->call.nargs < 32 ? n->call.nargs : 32;
                 for (int i = 0; i < na; i++)
@@ -3455,8 +3484,8 @@ static void emit_expr(Node *n) {
                         fprintf(stderr, "\n");
                     }
                 }
-                emit_free_func_mangled_name(
-                    n->call.callee->ident.name, at, na);
+                emit_free_func_symbol(n->call.callee->ident.name,
+                                       asm_callee, at, na);
                 emitted_mangled = true;
             }
             if (!emitted_mangled) emit_expr(n->call.callee);
@@ -3964,17 +3993,8 @@ static void emit_var_decl_inner(Node *n) {
             return;
         emit_type(ty->ret);
         fputc(' ', stdout);
-        /* asm-label rename takes precedence over both bare name and
-         * C++ overload mangling — it's the user's explicit symbol. */
-        if (n->var_decl.asm_name) {
-            emit_asm_name(n->var_decl.asm_name);
-        } else if (free_func_name_is_overloaded(n->var_decl.name)) {
-            emit_free_func_mangled_name(n->var_decl.name,
-                                         ty->params, ty->nparams);
-        } else {
-            fprintf(stdout, "%.*s", n->var_decl.name->len,
-                    n->var_decl.name->loc);
-        }
+        emit_free_func_symbol(n->var_decl.name, n->var_decl.asm_name,
+                               ty->params, ty->nparams);
         fputc('(', stdout);
         for (int i = 0; i < ty->nparams; i++) {
             if (i > 0) fputs(", ", stdout);
@@ -6774,18 +6794,8 @@ static void emit_top_level(Node *n) {
             }
             emit_type(fty->ret);
             fputc(' ', stdout);
-            /* asm-label rename takes precedence; otherwise overloaded
-             * free-function names get signature-mangled C symbols and
-             * singleton names stay unmangled. */
-            if (n->var_decl.asm_name) {
-                emit_asm_name(n->var_decl.asm_name);
-            } else if (free_func_name_is_overloaded(n->var_decl.name)) {
-                emit_free_func_mangled_name(n->var_decl.name,
-                                             fty->params, fty->nparams);
-            } else {
-                fprintf(stdout, "%.*s", n->var_decl.name->len,
-                        n->var_decl.name->loc);
-            }
+            emit_free_func_symbol(n->var_decl.name, n->var_decl.asm_name,
+                                   fty->params, fty->nparams);
             fputc('(', stdout);
             if (fty->nparams == 0) {
                 fputs("void", stdout);
