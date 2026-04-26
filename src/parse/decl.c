@@ -1497,6 +1497,7 @@ Node *parse_declaration(Parser *p) {
         func->func.is_virtual = (spec.flags & DECL_VIRTUAL) != 0;
         func->func.is_const_method = decl->var_decl.ty->is_const;
         func->func.storage_flags = spec.flags;
+        if (p->extern_c_depth > 0) func->func.storage_flags |= DECL_C_LINKAGE;
         func->func.body_start_pos = -1;
         func->func.body_end_pos = -1;
         func->func.deferred_class_region = NULL;
@@ -1863,6 +1864,8 @@ Node *parse_declaration(Parser *p) {
             decl->var_decl.ty && decl->var_decl.ty->kind == TY_FUNC)
             decl->var_decl.is_virtual = true;
         decl->var_decl.storage_flags = spec.flags;
+        if (p->extern_c_depth > 0)
+            decl->var_decl.storage_flags |= DECL_C_LINKAGE;
     }
     return decl;
 }
@@ -2121,15 +2124,18 @@ Node *parse_top_level_decl(Parser *p) {
         if (parser_at(p, TK_LBRACE)) {
             /* extern "C" { ... } — parse as a block of declarations.
              * We reuse ND_BLOCK to hold the inner declarations.
-             * The linkage specifier is ignored for now. */
+             * Track depth so nested decls get DECL_C_LINKAGE for
+             * mangling suppression. N4659 §10.5 [dcl.link]. */
             Token *brace = parser_peek(p);
             parser_advance(p);
+            p->extern_c_depth++;
             Vec decls = vec_new(p->arena);
             while (!parser_at(p, TK_RBRACE) && !parser_at_eof(p)) {
                 Node *decl = parse_top_level_decl(p);
                 if (decl)
                     vec_push(&decls, decl);
             }
+            p->extern_c_depth--;
             parser_expect(p, TK_RBRACE);
             Node *blk = new_block_node(p, (Node **)decls.data, decls.len, brace);
             blk->block.is_flat = true;
@@ -2137,7 +2143,10 @@ Node *parse_top_level_decl(Parser *p) {
         }
 
         /* extern "C" single-declaration */
-        return parse_declaration(p);
+        p->extern_c_depth++;
+        Node *d = parse_declaration(p);
+        p->extern_c_depth--;
+        return d;
     }
 
     return parse_declaration(p);

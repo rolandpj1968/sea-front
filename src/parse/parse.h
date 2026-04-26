@@ -736,6 +736,13 @@ enum {
     DECL_EXPLICIT  = 1 << 5,  /* §10.1.1 [dcl.stc] — constructors */
     DECL_MUTABLE   = 1 << 6,  /* §10.1.1 [dcl.stc] — data members */
     DECL_REGISTER  = 1 << 7,  /* §10.1.1 [dcl.stc] — deprecated in C++17 */
+    DECL_C_LINKAGE = 1 << 8,  /* N4659 §10.5 [dcl.link] — set when the
+                               * declaration is inside extern "C" { ... }
+                               * (or a single 'extern "C" decl'). Codegen
+                               * suppresses C++ name mangling at both the
+                               * declaration and call sites for these,
+                               * so the symbol matches the C ABI name in
+                               * libc / other C TUs. */
 };
 
 /* ================================================================== */
@@ -1121,6 +1128,13 @@ struct Parser {
      * scope (class-name followed by '('). The class name is then
      * consumed as the declarator-id. */
     bool pending_is_constructor;
+    /* N4659 §10.5 [dcl.link]: depth of enclosing extern "C" { ... }
+     * blocks (and single 'extern "C"' decls). When > 0, declarations
+     * parsed here get DECL_C_LINKAGE so codegen suppresses C++ name
+     * mangling at decl + call sites. Tracked as a depth (not a bool)
+     * because nesting is allowed and the inner extern "C++" form would
+     * need a stack to undo it (deferred). */
+    int extern_c_depth;
     DeclarativeRegion *region; /* current innermost declarative region (§6.3) */
     int template_depth;        /* nesting depth of template-argument-lists being parsed.
                                 * When > 0, TK_SHR (>>) is treated as two '>' tokens

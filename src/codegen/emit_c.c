@@ -2199,6 +2199,7 @@ static void emit_param_declarator(Type *ty, Token *name, int idx) {
 
 static void emit_expr(Node *n);
 static bool free_func_name_is_overloaded(Token *name);
+static bool ffsig_is_first_c_linkage(Token *name, Type **params, int nparams);
 static void emit_free_func_mangled_name(Token *name, Type **param_types,
                                          int nparams);
 
@@ -3990,6 +3991,12 @@ static void emit_var_decl_inner(Node *n) {
      *   ret name(params);
      * not 'functype name;'. Emit the full prototype. */
     if (ty && ty->kind == TY_FUNC && n->var_decl.name) {
+        /* For an extern-C function, only emit the FIRST decl with this
+         * name; later mismatched-sig decls would clash on the bare C
+         * symbol. Pattern: <cstring>'s dual strchr overloads. */
+        if ((n->var_decl.storage_flags & DECL_C_LINKAGE) &&
+            !ffsig_is_first_c_linkage(n->var_decl.name, ty->params, ty->nparams))
+            return;
         emit_type(ty->ret);
         fputc(' ', stdout);
         if (free_func_name_is_overloaded(n->var_decl.name)) {
@@ -5794,6 +5801,7 @@ typedef struct {
     Token *name;
     char   key[FUNC_SIG_KEY_MAX];
     int    key_len;
+    bool   c_linkage;   /* N4659 §10.5 — extern "C": never mangle */
 } FreeFuncSig;
 
 static FreeFuncSig g_ffsig_seen[16384];
@@ -5809,6 +5817,7 @@ static void free_ovld_walk(Node *n) {
     Token *name = NULL;
     Type **params = NULL;
     int    nparams = 0;
+    bool   c_linkage = false;
     static Type *tmp_params[FFSIG_MAX_PARAMS];
     if (n->kind == ND_FUNC_DEF || n->kind == ND_FUNC_DECL) {
         name = n->func.name;
@@ -5819,16 +5828,19 @@ static void free_ovld_walk(Node *n) {
         for (int i = 0; i < nparams; i++)
             tmp_params[i] = n->func.params[i] ? n->func.params[i]->param.ty : NULL;
         params = tmp_params;
+        c_linkage = (n->func.storage_flags & DECL_C_LINKAGE) != 0;
     } else if (n->kind == ND_VAR_DECL && n->var_decl.ty &&
                n->var_decl.ty->kind == TY_FUNC) {
         name = n->var_decl.name;
         nparams = n->var_decl.ty->nparams;
         params = n->var_decl.ty->params;
+        c_linkage = (n->var_decl.storage_flags & DECL_C_LINKAGE) != 0;
     }
     if (!name || g_n_ffsig_seen >= 16384) return;
     FreeFuncSig *e = &g_ffsig_seen[g_n_ffsig_seen++];
     e->name = name;
     e->key_len = func_sig_key(name, params, nparams, e->key);
+    e->c_linkage = c_linkage;
 }
 
 static void free_ovld_populate(Node *tu) {
@@ -5842,23 +5854,77 @@ static bool free_func_name_is_overloaded(Token *name) {
     if (!name) return false;
     /* Find the first entry for this name; remember its sig key.
      * If any subsequent entry shares the name but has a different
-     * key, the name is overloaded. */
+     * key, the name is overloaded.
+     *
+     * N4659 §10.5/6 [dcl.link]: at most one function with a given
+     * name can have C linkage. If ANY declaration of this name was
+     * extern "C", treat the name as un-overloaded for mangling — we
+     * must emit the bare C symbol so the linker resolves against
+     * libc / other C TUs. (Multiple extern "C" decls with mismatched
+     * sigs are technically ill-formed, but appear in real headers
+     * like <cstring> which declares both 'char *strchr(char*, int)'
+     * and 'const char *strchr(const char*, int)'.) */
     const char *first_key = NULL;
     int first_key_len = 0;
+    bool any_c_linkage = false;
     for (int i = 0; i < g_n_ffsig_seen; i++) {
         FreeFuncSig *e = &g_ffsig_seen[i];
         if (e->name->len != name->len) continue;
         if (memcmp(e->name->loc, name->loc, name->len) != 0) continue;
+        if (e->c_linkage) any_c_linkage = true;
         if (!first_key) {
             first_key = e->key;
             first_key_len = e->key_len;
             continue;
         }
         if (e->key_len != first_key_len ||
-            memcmp(e->key, first_key, e->key_len) != 0)
-            return true;
+            memcmp(e->key, first_key, e->key_len) != 0) {
+            if (any_c_linkage) return false;
+            /* Continue scanning — a later entry may carry c_linkage. */
+        }
     }
-    return false;
+    /* Re-scan if we returned a candidate-overloaded result without
+     * yet seeing c_linkage in the trailing entries. */
+    if (!first_key) return false;
+    bool overloaded = false;
+    for (int i = 0; i < g_n_ffsig_seen; i++) {
+        FreeFuncSig *e = &g_ffsig_seen[i];
+        if (e->name->len != name->len) continue;
+        if (memcmp(e->name->loc, name->loc, name->len) != 0) continue;
+        if (e->key_len != first_key_len ||
+            memcmp(e->key, first_key, e->key_len) != 0)
+            overloaded = true;
+    }
+    return overloaded && !any_c_linkage;
+}
+
+/* N4659 §10.5/6 [dcl.link]: a name with C linkage refers to a single
+ * C function regardless of how many declarations exist. Real headers
+ * (e.g. <cstring>) declare both 'char *strchr(char*, int)' and
+ * 'const char *strchr(const char*, int)' as extern "C", which is
+ * technically ill-formed but ubiquitous. Emit only the first such
+ * declaration; later ones would clash on the bare C name.
+ *
+ * Returns true when 'this_decl' is the first extern-C entry in
+ * g_ffsig_seen with this name. */
+static bool ffsig_is_first_c_linkage(Token *name, Type **params, int nparams) {
+    if (!name) return true;
+    char this_key[FUNC_SIG_KEY_MAX];
+    int  this_key_len = func_sig_key(name, params, nparams, this_key);
+    bool seen_other_c = false;
+    for (int i = 0; i < g_n_ffsig_seen; i++) {
+        FreeFuncSig *e = &g_ffsig_seen[i];
+        if (!e->c_linkage) continue;
+        if (e->name->len != name->len) continue;
+        if (memcmp(e->name->loc, name->loc, name->len) != 0) continue;
+        /* If THIS exact decl is the entry we're at, return based on
+         * whether we've already seen a different-sig extern-C decl. */
+        if (e->key_len == this_key_len &&
+            memcmp(e->key, this_key, this_key_len) == 0)
+            return !seen_other_c;
+        seen_other_c = true;
+    }
+    return true;
 }
 
 /* Emit '<name>_p_<param_suffix>_pe_' directly to stdout. */
@@ -6777,6 +6843,13 @@ static void emit_top_level(Node *n) {
             if (func_decl_dedup_check_sig(n->var_decl.name,
                                             n->var_decl.ty->params,
                                             n->var_decl.ty->nparams))
+                return;
+            /* Extern-C: only emit the first decl with this name (see
+             * ffsig_is_first_c_linkage rationale). */
+            if ((n->var_decl.storage_flags & DECL_C_LINKAGE) &&
+                !ffsig_is_first_c_linkage(n->var_decl.name,
+                                           n->var_decl.ty->params,
+                                           n->var_decl.ty->nparams))
                 return;
             emit_source_comment(n->tok);
             emit_storage_flags(n->var_decl.storage_flags);
