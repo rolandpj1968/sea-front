@@ -435,44 +435,6 @@ static void emit_return_expr(Node *e) {
     fputc(')', stdout);
 }
 
-/* Emit a mangled parameter-type suffix used for overload
- * disambiguation on operator methods and inline operator-call
- * rewrites. Mirrors mangle.c's emit_type_for_mangle shape but
- * lives in emit_c.c so call-site rewrites that don't go through
- * the mangle_class_method helper can share it. The two encoders
- * MUST stay in sync. */
-static void emit_local_param_suffix(Type **param_types, int nparams) {
-    fputs("_p_", stdout);
-    if (nparams == 0) {
-        fputs("void", stdout);
-    } else {
-        for (int i = 0; i < nparams; i++) {
-            if (i > 0) fputc('_', stdout);
-            Type *pt = param_types[i];
-            if (!pt) { fputs("unknown", stdout); continue; }
-            switch (pt->kind) {
-            case TY_VOID:    fputs("void", stdout); break;
-            case TY_BOOL:    fputs("bool", stdout); break;
-            case TY_CHAR:    fputs(pt->is_unsigned ? "uchar" : "char", stdout); break;
-            case TY_SHORT:   fputs(pt->is_unsigned ? "ushort" : "short", stdout); break;
-            case TY_INT:     fputs(pt->is_unsigned ? "uint" : "int", stdout); break;
-            case TY_LONG:    fputs(pt->is_unsigned ? "ulong" : "long", stdout); break;
-            case TY_LLONG:   fputs(pt->is_unsigned ? "ullong" : "llong", stdout); break;
-            case TY_FLOAT:   fputs("float", stdout); break;
-            case TY_DOUBLE:  fputs("double", stdout); break;
-            case TY_PTR:     fputs("ptr", stdout); break;
-            case TY_REF:     fputs("ref", stdout); break;
-            case TY_STRUCT: case TY_UNION:
-                if (pt->tag) fprintf(stdout, "%.*s", pt->tag->len, pt->tag->loc);
-                else fputs("anon", stdout);
-                break;
-            default: fputs("unknown", stdout); break;
-            }
-        }
-    }
-    fputs("_pe_", stdout);
-}
-
 /* Emit template-arg suffix (_t_<type>_te_) from an ND_TEMPLATE_ID node.
  * Used when a qualified call's leading part has explicit template args
  * (e.g. Box<int>::test → sf__Box_t_int_te___test_p_void_pe_). */
@@ -1221,38 +1183,6 @@ static bool func_def_dedup_check_sig(Token *name, Type **params, int nparams) {
     return false;
 }
 
-/* Does this struct/union (or any of its bases) have member function
- * definitions? A class with at least one ND_FUNC_DEF in its body —
- * or in an ancestor's body — is a C++ class: unqualified TY_FUNC
- * members/inherited names are method declarations. A class with none
- * is a plain C struct from a typedef'd header; TY_FUNC members are
- * function-pointer data fields (the typedef flattened away the
- * pointer level). Both struct emission and call-site method-vs-fptr
- * disambiguation depend on this. */
-static bool class_has_method_bodies(Type *class_type) {
-    if (!class_type) return false;
-    if (class_type->class_def) {
-        Node *cd = class_type->class_def;
-        for (int i = 0; i < cd->class_def.nmembers; i++) {
-            Node *m = cd->class_def.members[i];
-            if (m && m->kind == ND_FUNC_DEF) return true;
-            /* Pure virtual / pure-decl methods also count. */
-            if (m && m->kind == ND_VAR_DECL && m->var_decl.ty &&
-                m->var_decl.ty->kind == TY_FUNC &&
-                (m->var_decl.is_constructor || m->var_decl.is_destructor ||
-                 m->var_decl.is_virtual))
-                return true;
-        }
-    }
-    if (class_type->class_region) {
-        for (int i = 0; i < class_type->class_region->nbases; i++) {
-            DeclarativeRegion *br = class_type->class_region->bases[i];
-            if (br && br->owner_type && class_has_method_bodies(br->owner_type))
-                return true;
-        }
-    }
-    return false;
-}
 
 static void emit_mangled_class_tag(Type *class_type) {
     if (!class_type || !class_type->tag) {
@@ -6457,33 +6387,10 @@ static void emit_class_def(Node *n) {
         }
     }
 
-    /* Forward-declare and (later) emit the sf__Class__dtor wrapper
-     * when the class is non-trivially-destructible. The wrapper
-     * exists whether or not a user dtor was written. */
-    Node *user_dtor = NULL;
-    bool user_dtor_out_of_class = false;
+    /* Forward-declare the sf__Class__dtor wrapper when the class is
+     * non-trivially-destructible. The wrapper exists whether or not a
+     * user dtor was written. */
     if (class_type && class_type->has_dtor) {
-        for (int i = 0; i < n->class_def.nmembers; i++) {
-            Node *m = n->class_def.members[i];
-            if (!m) continue;
-            if (m->kind == ND_FUNC_DEF && m->func.is_destructor) {
-                Node *body = m->func.body;
-                bool empty = body && body->kind == ND_BLOCK &&
-                             body->block.nstmts == 0;
-                if (!empty) user_dtor = m;
-                break;
-            }
-            if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
-                m->var_decl.ty->kind == TY_FUNC && m->var_decl.is_destructor) {
-                /* Out-of-class definition: the body lives at namespace
-                 * scope as Foo::~Foo() {...}. We don't have direct
-                 * access to the body here, so we can't check for
-                 * emptiness — assume it has content (matches the
-                 * has_dtor=true assumption in type.c). */
-                user_dtor_out_of_class = true;
-                break;
-            }
-        }
         fputs("__SF_INLINE void ", stdout);
         mangle_class_dtor(class_type);
         fputs("(struct ", stdout);
@@ -7202,12 +7109,6 @@ static void emit_forward_decl_structs(Node *tu) {
     for (int i = 0; i < tu->tu.ndecls; i++)
         emit_fwd_decl_structs_only(tu->tu.decls[i]);
 }
-
-static void emit_forward_decl_funcs(Node *tu) {
-    for (int i = 0; i < tu->tu.ndecls; i++)
-        emit_fwd_decl_methods_only(tu->tu.decls[i]);
-}
-
 
 void emit_c(Node *tu) {
     if (!tu || tu->kind != ND_TRANSLATION_UNIT) return;
