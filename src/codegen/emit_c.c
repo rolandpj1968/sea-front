@@ -1757,6 +1757,16 @@ static bool candidate_is_const(Node *m) {
     return false;
 }
 
+/* N4659 §11.4.9 [class.static] — static member functions take no
+ * implicit 'this'. The unqualified-call lowering at the implicit-this
+ * site must skip 'this' when the resolved candidate is static. */
+static bool candidate_is_static(Node *m) {
+    if (!m) return false;
+    if (m->kind == ND_FUNC_DEF) return (m->func.storage_flags & DECL_STATIC) != 0;
+    if (m->kind == ND_VAR_DECL)  return (m->var_decl.storage_flags & DECL_STATIC) != 0;
+    return false;
+}
+
 static int resolve_overload(Type *class_type, Token *name, bool is_ctor,
                              Type **arg_types, int nargs,
                              bool receiver_is_const,
@@ -2647,8 +2657,17 @@ static void emit_expr(Node *n) {
             }
         }
         /* For &(ref_param): the ref is already a pointer, so &(*x)
-         * cancels out to just x. Suppress the deref. */
-        if (n->unary.op == TK_AMP) g_suppress_ref_deref = true;
+         * cancels out to just x. Suppress the deref ONLY when the
+         * AMP's operand is a bare ident naming a ref-param. For
+         * compound operands like &v->x or &v[i] the inner ident still
+         * needs deref — without that gate, the suppression leaked
+         * down into nested ident emissions and produced 'v->x' where
+         * '(*v)->x' was needed. */
+        if (n->unary.op == TK_AMP &&
+            n->unary.operand && n->unary.operand->kind == ND_IDENT &&
+            is_ref_param(n->unary.operand->ident.name)) {
+            g_suppress_ref_deref = true;
+        }
         /* `delete v` — N4659 §8.3.5 [expr.delete]. Stub: emit
          * `((void)(v))` (discard, no-op). Same TODO as ND_CAST's
          * `new` stub; a proper fix would emit __builtin_free + dtor.
@@ -2945,7 +2964,13 @@ static void emit_expr(Node *n) {
                     bool mc = candidate_is_const(winner);
                     mangle_class_method_cv(class_type, mname, call_pty, np, mc);
                 }
-                if (base_len > 0) {
+                /* N4659 §11.4.9 [class.static]: static member functions
+                 * have no implicit 'this'. Open the arg list with no
+                 * receiver — the regular arg loop below will fill in
+                 * the rest. */
+                if (candidate_is_static(winner)) {
+                    fputc('(', stdout);
+                } else if (base_len > 0) {
                     /* Inherited method — receiver is the base subobject. */
                     fputs("(&this->", stdout);
                     /* emit_base_chain leaves a trailing '.', so we
@@ -2960,6 +2985,17 @@ static void emit_expr(Node *n) {
                 } else {
                     fputs("(this", stdout);
                 }
+                /* When we opened with just '(' (static fn case), the
+                 * first arg must NOT be preceded by ", ". Track that. */
+                bool wrote_receiver = !candidate_is_static(winner);
+                for (int i = 0; i < n->call.nargs; i++) {
+                    if (i > 0 || wrote_receiver) fputs(", ", stdout);
+                    emit_arg_for_param(n->call.args[i],
+                                        (call_pty && i < call_np)
+                                            ? call_pty[i] : NULL);
+                }
+                fputc(')', stdout);
+                return;
             }
             for (int i = 0; i < n->call.nargs; i++) {
                 fputs(", ", stdout);
@@ -2987,11 +3023,31 @@ static void emit_expr(Node *n) {
             }
             /* Sema-missed fallback: when obj is itself a member access
              * ('outer.inner.method()') and inner's resolved_type wasn't
-             * set (happens for certain anonymous-typedef / field paths),
-             * resolve the member type on-demand by looking up the field
-             * name in the outer's class_region. This keeps method
-             * dispatch working when sema's member-type propagation is
-             * incomplete. N4659 §6.4.5 [class.qual]. */
+             * set (happens for certain anonymous-typedef / field paths,
+             * and for arrow-access through ref-to-pointer params after
+             * the cloning pass), resolve the member type on-demand by
+             * looking up the field name in the outer's class_region.
+             * N4659 §6.4.5 [class.qual]. */
+            if (!ot && obj && obj->kind == ND_MEMBER && obj->member.member) {
+                Node *outer = obj->member.obj;
+                Type *outer_ty = outer ? outer->resolved_type : NULL;
+                /* Strip the same ref/ptr layers that the main resolver
+                 * does below — so 'v->inner.bump()' (v is T*&) reaches
+                 * the inner struct via TY_REF -> TY_PTR -> TY_STRUCT. */
+                if (outer_ty && ty_is_indirect(outer_ty))
+                    outer_ty = outer_ty->base;
+                if (outer_ty && ty_is_ref(outer_ty))
+                    outer_ty = outer_ty->base;
+                if (outer_ty && outer_ty->kind == TY_PTR && outer_ty->base &&
+                    obj->member.op == TK_ARROW)
+                    outer_ty = outer_ty->base;
+                if (outer_ty && outer_ty->class_region) {
+                    Token *fn = obj->member.member;
+                    Declaration *fd = lookup_in_scope(outer_ty->class_region,
+                                                       fn->loc, fn->len);
+                    if (fd && fd->type) ot = fd->type;
+                }
+            }
             /* References (TY_REF / TY_RVALREF) are lowered to C
              * pointers, so 'obj_is_ptr' is true for both — the
              * call-site must pass the ref as-is, not take its
