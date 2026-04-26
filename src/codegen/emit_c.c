@@ -6008,26 +6008,13 @@ static void emit_func_def(Node *n) {
     g_current_func_ret_ty = saved_ret;
 }
 
-/* Emit just the signature of a method as a mangled free function.
- * Used for forward declarations so methods can call each other in
- * any order regardless of source ordering inside the class body.
- *
- * 'class_type' carries class_region for namespace walking; the bare
- * tag alone is not enough because two classes named the same in
- * different namespaces would collide. */
-/*
- * Emit a mangled operator method name. 'operator[]' → '__subscript',
- * 'operator=' → '__assign', 'operator==' → '__eq', etc. The name
- * token for operator functions is the 'operator' keyword; the
- * actual operator is the next token(s) in the source. We look at
- * the token following 'operator' to determine the suffix.
- *
- * Falls back to '__operator' for unrecognised operators.
- */
 /* Compute the mangled suffix for an operator method from its token.
- * Returns a constant string like "__plus", "__subscript", "__assign".
- * Shared between the decl-site emitter and the call-site candidate
- * matcher so both agree on which operator is which. */
+ * 'operator[]' → '__subscript', 'operator=' → '__assign', etc.
+ * The name token for operator functions is the 'operator' keyword;
+ * the actual operator is the next token(s) in the source. Falls back
+ * to '__operator' for unrecognised operators. Shared between the
+ * decl-site emitter and the call-site candidate matcher so both
+ * agree on which operator is which. */
 static const char *operator_suffix_for_name(Token *name) {
     if (!name) return "__operator";
     const char *after = name->loc + name->len;

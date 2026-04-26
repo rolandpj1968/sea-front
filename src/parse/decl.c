@@ -71,6 +71,27 @@ static DeclarativeRegion *wrap_qscope(Parser *p, DeclarativeRegion *qscope) {
     return wrapper;
 }
 
+/* Re-apply a single deferred wrapper from a grouped declarator.
+ * Preserves cv-qualifiers (for ptrs) and array length / size-expr
+ * (for arrays) — the existing code dropped these, which silently
+ * lost 'const' on '(*const NAME)(args)' and the size on
+ * '(*NAME[N])(args)'. */
+static Type *apply_pending_wrap(Parser *p, Type *ty, Type *w) {
+    Type *nt;
+    if (w->kind == TY_PTR)        nt = new_ptr_type(p, ty);
+    else if (w->kind == TY_REF)   nt = new_ref_type(p, ty);
+    else if (w->kind == TY_RVALREF) nt = new_rvalref_type(p, ty);
+    else if (w->kind == TY_ARRAY) {
+        nt = new_array_type(p, ty, w->array_len);
+        nt->array_size_expr = w->array_size_expr;
+    } else {
+        return ty;
+    }
+    nt->is_const = w->is_const;
+    nt->is_volatile = w->is_volatile;
+    return nt;
+}
+
 /*
  * parse_declarator — N4659 §11.3 [dcl.meaning]
  *
@@ -110,27 +131,6 @@ static DeclarativeRegion *wrap_qscope(Parser *p, DeclarativeRegion *qscope) {
  * pair) are defined below this function in the file, immediately
  * below the general parsers they support.
  */
-/* Re-apply a single deferred wrapper from a grouped declarator.
- * Preserves cv-qualifiers (for ptrs) and array length / size-expr
- * (for arrays) — the existing code dropped these, which silently
- * lost 'const' on '(*const NAME)(args)' and the size on
- * '(*NAME[N])(args)'. */
-static Type *apply_pending_wrap(Parser *p, Type *ty, Type *w) {
-    Type *nt;
-    if (w->kind == TY_PTR)        nt = new_ptr_type(p, ty);
-    else if (w->kind == TY_REF)   nt = new_ref_type(p, ty);
-    else if (w->kind == TY_RVALREF) nt = new_rvalref_type(p, ty);
-    else if (w->kind == TY_ARRAY) {
-        nt = new_array_type(p, ty, w->array_len);
-        nt->array_size_expr = w->array_size_expr;
-    } else {
-        return ty;
-    }
-    nt->is_const = w->is_const;
-    nt->is_volatile = w->is_volatile;
-    return nt;
-}
-
 Node *parse_declarator(Parser *p, Type *base_ty) {
     /* ptr-operator — N4659 §11.3 [dcl.meaning]
      *   ptr-operator:
@@ -1022,29 +1022,6 @@ parse_suffixes:
 }
 
 /*
- * parse_declaration — N4659 §10 [dcl.dcl]
- *
- * Parses a simple-declaration or function-definition.
- *
- *   simple-declaration:
- *       decl-specifier-seq init-declarator-list(opt) ;
- *
- *   function-definition:
- *       decl-specifier-seq declarator function-body
- *
- *   init-declarator:
- *       declarator initializer(opt)
- *
- *   initializer:
- *       brace-or-equal-initializer
- *       ( expression-list )             (direct-init — handled)
- *
- *   brace-or-equal-initializer:
- *       = initializer-clause
- *       braced-init-list               (handled)
- */
-
-/*
  * consume_trailing_qualifiers — helper used by parse_declarator's
  * parameter-list path to consume the qualifiers that may follow
  * the closing ')' of a function declarator.
@@ -1290,6 +1267,28 @@ static void skip_extension(Parser *p) {
         parser_advance(p);
 }
 
+/*
+ * parse_declaration — N4659 §10 [dcl.dcl]
+ *
+ * Parses a simple-declaration or function-definition.
+ *
+ *   simple-declaration:
+ *       decl-specifier-seq init-declarator-list(opt) ;
+ *
+ *   function-definition:
+ *       decl-specifier-seq declarator function-body
+ *
+ *   init-declarator:
+ *       declarator initializer(opt)
+ *
+ *   initializer:
+ *       brace-or-equal-initializer
+ *       ( expression-list )             (direct-init — handled)
+ *
+ *   brace-or-equal-initializer:
+ *       = initializer-clause
+ *       braced-init-list               (handled)
+ */
 Node *parse_declaration(Parser *p) {
     /* Leading C++11 attributes and GCC __extension__. */
     parser_skip_cxx_attributes(p);
