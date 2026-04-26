@@ -2119,33 +2119,48 @@ Node *parse_top_level_decl(Parser *p) {
     if (parser_at(p, TK_KW_EXTERN) &&
         parser_peek_ahead(p, 1)->kind == TK_STR) {
         parser_advance(p);  /* consume 'extern' */
+        Token *spec = parser_peek(p);
         parser_advance(p);  /* consume string literal ("C" or "C++") */
+        /* N4659 §10.5 [dcl.link] — the string-literal selects the
+         * linkage. "C" means C linkage; "C++" explicitly selects C++
+         * (used to UNDO an enclosing extern "C"). System headers
+         * routinely nest 'extern "C++" { inline ovrlds }' inside
+         * extern "C" wrappers (e.g. <bits/iscanonical.h>). The string
+         * 'C' followed by '+' '+' is two tokens (the lexer keeps the
+         * "C++" as a single TK_STR with payload C++).
+         *
+         * Compare the literal text directly. "C" length is 1
+         * (between the quotes), "C++" length is 3. Anything else is
+         * implementation-defined; treat as not-C. */
+        bool is_c = (spec && spec->len >= 3 &&
+                     spec->loc[0] == '"' && spec->loc[1] == 'C' &&
+                     spec->loc[2] == '"');
+        bool saved_extern_c = (p->extern_c_depth > 0);
+        if (is_c) p->extern_c_depth++;
+        else if (saved_extern_c) p->extern_c_depth--;
 
         if (parser_at(p, TK_LBRACE)) {
-            /* extern "C" { ... } — parse as a block of declarations.
-             * We reuse ND_BLOCK to hold the inner declarations.
-             * Track depth so nested decls get DECL_C_LINKAGE for
-             * mangling suppression. N4659 §10.5 [dcl.link]. */
             Token *brace = parser_peek(p);
             parser_advance(p);
-            p->extern_c_depth++;
             Vec decls = vec_new(p->arena);
             while (!parser_at(p, TK_RBRACE) && !parser_at_eof(p)) {
                 Node *decl = parse_top_level_decl(p);
                 if (decl)
                     vec_push(&decls, decl);
             }
-            p->extern_c_depth--;
             parser_expect(p, TK_RBRACE);
+            /* Restore. */
+            if (is_c) p->extern_c_depth--;
+            else if (saved_extern_c) p->extern_c_depth++;
             Node *blk = new_block_node(p, (Node **)decls.data, decls.len, brace);
             blk->block.is_flat = true;
             return blk;
         }
 
-        /* extern "C" single-declaration */
-        p->extern_c_depth++;
+        /* extern "C" / "C++" single-declaration */
         Node *d = parse_declaration(p);
-        p->extern_c_depth--;
+        if (is_c) p->extern_c_depth--;
+        else if (saved_extern_c) p->extern_c_depth++;
         return d;
     }
 
