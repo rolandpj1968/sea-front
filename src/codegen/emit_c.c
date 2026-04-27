@@ -1564,10 +1564,52 @@ static int collect_call_arg_types(Node **args, int nargs, Type ***out_types) {
     return nargs;
 }
 
+/* Score how well a single param/arg type pair matches.
+ * Returns 0 for "no match", positive scores for various levels of
+ * compatibility. Recurses through indirection chains (TY_PTR / TY_REF /
+ * TY_RVALREF / TY_ARRAY) so 'int *' vs 'int *' beats 'int *' vs
+ * 'int **' — the previous kind-only check rated both as equal-score
+ * because both arg+param were TY_PTR at the top, picking the first
+ * candidate by table order rather than the better match. Pattern:
+ * gcc 4.8 vec.h has overloaded 'iterate(unsigned, T*)' and
+ * 'iterate(unsigned, T**)'; sea-front was always picking the first
+ * regardless of the actual third-argument's pointer depth. */
+static int score_type_pair(Type *pt, Type *at) {
+    if (!pt || !at) return 0;
+    if (pt->kind == at->kind) {
+        int s = 2;
+        /* Recurse into indirection bases so deeper structural agreement
+         * outranks shallow kind agreement. */
+        if ((pt->kind == TY_PTR || pt->kind == TY_REF ||
+             pt->kind == TY_RVALREF || pt->kind == TY_ARRAY) &&
+            pt->base && at->base) {
+            s += score_type_pair(pt->base, at->base);
+        }
+        if ((pt->kind == TY_STRUCT || pt->kind == TY_UNION) &&
+            pt->tag && at->tag &&
+            pt->tag->len == at->tag->len &&
+            memcmp(pt->tag->loc, at->tag->loc, pt->tag->len) == 0)
+            s++;
+        return s;
+    }
+    /* Reference parameter (lowered to T* in C) accepting an arg of
+     * the underlying type: copy/move-ctor pattern.
+     * N4659 §16.3.3.2.1 [over.ics.rank]. */
+    if (ty_is_ref(pt) && pt->base && pt->base->kind == at->kind) {
+        int s = 2;
+        if ((at->kind == TY_STRUCT || at->kind == TY_UNION) &&
+            pt->base->tag && at->tag &&
+            pt->base->tag->len == at->tag->len &&
+            memcmp(pt->base->tag->loc, at->tag->loc, pt->base->tag->len) == 0)
+            s++;
+        return s;
+    }
+    return 0;
+}
+
 /* Match a single candidate member against a call's arg types.
- * Returns -1 if nparams ≠ nargs (hard reject); otherwise a score in
- * [0 .. nparams] counting position-wise type-kind matches.
- * For methods, name must already have been pre-filtered by the caller. */
+ * Returns -1 if nparams ≠ nargs (hard reject); otherwise a positive
+ * score where higher = better fit. */
 static int overload_match_score(Node *m, Type **arg_types, int nargs) {
     bool is_def = m->kind == ND_FUNC_DEF;
     int nparams = is_def ? m->func.nparams : m->var_decl.ty->nparams;
@@ -1577,34 +1619,7 @@ static int overload_match_score(Node *m, Type **arg_types, int nargs) {
         Type *pt = is_def ? m->func.params[k]->param.ty
                           : m->var_decl.ty->params[k];
         Type *at = arg_types && k < nargs ? arg_types[k] : NULL;
-        if (!pt || !at) continue;
-        /* Identical kind: best score (e.g. int vs int, struct vs struct
-         * with the same tag — the prototypical copy-ctor pattern is
-         * scored separately below). */
-        if (pt->kind == at->kind) {
-            score += 2;
-            /* Same struct/union tag → bonus, so 'fpos vs fpos' beats
-             * 'anyclass vs fpos' when there's overload ambiguity. */
-            if ((pt->kind == TY_STRUCT || pt->kind == TY_UNION) &&
-                pt->tag && at->tag &&
-                pt->tag->len == at->tag->len &&
-                memcmp(pt->tag->loc, at->tag->loc, pt->tag->len) == 0)
-                score++;
-            continue;
-        }
-        /* Reference parameter (lowered to T* in C) accepting an arg of
-         * the underlying type: this is the copy/move-ctor pattern.
-         * 'Box(const Box&)' with arg 'Box' (e.g. '*this') should beat
-         * 'Box(int)' with the same arg. N4659 §16.3.3.2.1 [over.ics.rank]. */
-        if (ty_is_ref(pt) && pt->base &&
-            pt->base->kind == at->kind) {
-            score += 2;
-            if ((at->kind == TY_STRUCT || at->kind == TY_UNION) &&
-                pt->base->tag && at->tag &&
-                pt->base->tag->len == at->tag->len &&
-                memcmp(pt->base->tag->loc, at->tag->loc, pt->base->tag->len) == 0)
-                score++;
-        }
+        score += score_type_pair(pt, at);
     }
     return score;
 }
