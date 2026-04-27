@@ -6105,14 +6105,17 @@ static bool is_operator_name(Token *name) {
     return name && name->kind == TK_KW_OPERATOR;
 }
 
-static void emit_method_signature(Node *func, Type *class_type) {
+static void emit_method_signature(Node *func, Type *class_type, bool emit_inline) {
     if (!func || func->kind != ND_FUNC_DEF) return;
     if (!class_type || !class_type->tag || !func->func.name) return;
 
-    /* Class methods (in-class definitions are implicitly inline)
-     * and dtor body functions get __SF_INLINE so multi-TU compilation
-     * dedupes via weak symbols. See docs/inline_and_dedup.md. */
-    fputs("__SF_INLINE ", stdout);
+    /* In-class definitions are implicitly inline (N4659 §10.1.6/3
+     * [dcl.inline]) — emit __SF_INLINE so multi-TU compilation
+     * dedupes. OOL definitions are NOT implicitly inline: emit a
+     * strong global so other TUs (which only see the in-class
+     * declaration) can resolve the symbol at link. See
+     * docs/inline_and_dedup.md. */
+    if (emit_inline) fputs("__SF_INLINE ", stdout);
     emit_type(func->func.ret_ty);
     fputc(' ', stdout);
     if (func->func.is_destructor) {
@@ -6171,7 +6174,7 @@ static void emit_method_signature(Node *func, Type *class_type) {
  * The 'this->' rewrite happens at the ident level — visit_ident set
  * implicit_this on each member reference, and emit_expr emits the
  * prefix when it sees the flag. */
-static void emit_method_as_free_fn(Node *func, Type *class_type) {
+static void emit_method_as_free_fn(Node *func, Type *class_type, bool emit_inline) {
     if (!func || func->kind != ND_FUNC_DEF) return;
     if (!class_type || !class_type->tag || !func->func.name) return;
 
@@ -6185,7 +6188,7 @@ static void emit_method_as_free_fn(Node *func, Type *class_type) {
     g_current_method_class = class_type;
     g_current_method_is_const = func->func.is_const_method;
     g_current_method_is_static = (func->func.storage_flags & DECL_STATIC) != 0;
-    emit_method_signature(func, class_type);
+    emit_method_signature(func, class_type, emit_inline);
     fputc(' ', stdout);
     emit_func_body(func);
     g_current_method_is_const = saved_mconst;
@@ -6435,7 +6438,8 @@ static void emit_class_def(Node *n) {
          * (via _const suffix) — no dedup needed. N4659 §16.2/3. */
         if (m->kind == ND_FUNC_DEF && class_type) {
             emit_source_comment(m->tok);
-            emit_method_signature(m, class_type);
+            /* In-class method body — implicitly inline. */
+            emit_method_signature(m, class_type, /*emit_inline=*/true);
             fputs(";\n", stdout);
         } else if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
                    m->var_decl.ty->kind == TY_FUNC && m->var_decl.name &&
@@ -6673,8 +6677,9 @@ methods_phase:;
             if (empty || !class_type->has_dtor) continue;
         }
         /* Const/non-const overloads now get distinct mangled names
-         * (via _const suffix) — no dedup needed. N4659 §16.2/3. */
-        emit_method_as_free_fn(m, class_type);
+         * (via _const suffix) — no dedup needed. N4659 §16.2/3.
+         * In-class method bodies are implicitly inline. */
+        emit_method_as_free_fn(m, class_type, /*emit_inline=*/true);
     }
     g_current_class_def = saved_cdef;
 
@@ -6818,7 +6823,12 @@ static void emit_top_level(Node *n) {
             Node *saved = g_current_class_def;
             if (n->func.is_constructor && n->func.class_type->class_def)
                 g_current_class_def = n->func.class_type->class_def;
-            emit_method_as_free_fn(n, n->func.class_type);
+            /* OOL definition: 'inline' here is whatever the user wrote
+             * (DECL_INLINE in storage_flags). Without explicit inline,
+             * an OOL def is a strong global (N4659 §10.1.6/4) — must be
+             * resolvable from other TUs that only saw the declaration. */
+            bool ool_inline = (n->func.storage_flags & DECL_INLINE) != 0;
+            emit_method_as_free_fn(n, n->func.class_type, ool_inline);
             g_current_class_def = saved;
         } else {
             /* Dedup: inline functions from headers may be included
@@ -7205,7 +7215,10 @@ static void emit_fwd_decl_methods_only(Node *n) {
          *   - Plain user-written free function: emit the free-
          *     function header. */
         if (n->func.class_type && n->func.name) {
-            emit_method_signature(n, n->func.class_type);
+            /* Forward decl matches the actual OOL definition's
+             * linkage: inline only if the user marked it 'inline'. */
+            bool ool_inline = (n->func.storage_flags & DECL_INLINE) != 0;
+            emit_method_signature(n, n->func.class_type, ool_inline);
             fputs(";\n", stdout);
         } else if (n->func.name && n->func.body) {
             emit_storage_flags_for_def(n->func.storage_flags);
