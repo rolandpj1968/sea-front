@@ -4909,6 +4909,16 @@ static void emit_stmt(Node *n) {
                 emit_indent();
             }
         }
+        /* Block-scope storage-class qualifiers (static, register, etc.)
+         * are meaningful at function-body scope too — N4659 §10.1.1
+         * [dcl.stc]. Without this, 'static int counter = 0;' inside a
+         * function emits as a plain auto local; gcc 4.8 read-rtl.c
+         * relied on a function-local 'static rtx queue_head;' for
+         * once-only initialization, and dropping the static turned
+         * each call into an uninitialized auto whose stack-garbage
+         * value bypassed the init guard, leaving codes.iterators NULL
+         * → segfault. */
+        emit_storage_flags(n->var_decl.storage_flags);
         emit_var_decl_inner(n);
         fputs(";\n", stdout);
         /* Direct-init 'T x(args)' lowers to a ctor call right
