@@ -477,6 +477,43 @@ static void emit_arg_for_param(Node *arg, Type *param_ty) {
             return;
         }
     }
+    /* Type-mismatched lvalue passed to T& — C++ binds a const T& to a
+     * temporary of T initialized from the converted arg (N4659
+     * §11.6.3 [dcl.init.ref]/5.2). Without materializing the temp
+     * here, we'd just emit &(arg) — yielding S* where the callee
+     * expects T*, which the C compiler warns about and accepts as an
+     * implicit-cast pointer. The runtime read inside the callee then
+     * picks up sizeof(T) bytes from a sizeof(S) storage region:
+     * silent partial-uninitialized read.
+     *
+     * Concrete: gcc 4.8 genautomata's
+     *   static int undefined_vect_el_value;
+     *   ...
+     *   vla_hwint_t vect;       // vec<long>
+     *   vect.safe_push(undefined_vect_el_value);
+     * sea-front emitted &undefined_vect_el_value (int*) into a
+     * safe_push expecting long*. quick_push read 8 bytes from the
+     * 4-byte int — top half garbage. add_vect's gcc_assert(x >= 0)
+     * fired on the garbage half; gen-tool aborted at runtime.
+     *
+     * Materialize a temp of the param's base type when arg's type
+     * kind differs and both are scalar. C99 compound literal is an
+     * lvalue with block-scoped lifetime — exactly what const T&
+     * binding to a converted rvalue calls for. */
+    if (at && param_ty->base && at->kind != param_ty->base->kind &&
+        (param_ty->base->kind == TY_INT || param_ty->base->kind == TY_BOOL ||
+         param_ty->base->kind == TY_CHAR || param_ty->base->kind == TY_SHORT ||
+         param_ty->base->kind == TY_LONG || param_ty->base->kind == TY_LLONG) &&
+        (at->kind == TY_INT || at->kind == TY_BOOL ||
+         at->kind == TY_CHAR || at->kind == TY_SHORT ||
+         at->kind == TY_LONG || at->kind == TY_LLONG)) {
+        fputs("&((", stdout);
+        emit_type(param_ty->base);
+        fputs("){", stdout);
+        emit_expr(arg);
+        fputs("})", stdout);
+        return;
+    }
     fputs("&(", stdout);
     emit_expr(arg);
     fputc(')', stdout);
