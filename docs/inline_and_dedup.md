@@ -1,9 +1,15 @@
 # C++ `inline` Semantics and Multi-TU Deduplication
 
-Status: **design decided, implementation deferred**. The implementation
-is task #84 (`__SF_INLINE`: weak symbols for multi-TU dedup) and is
-small (~30 lines) but explicitly deferred until we have a real
-multi-TU build to test against.
+Status: **implemented**, currently lowered via `static inline` after
+weak symbols hit reality. The original design picked weak symbols
+(option A below); a multi-week run against gcc 4.8 forced a switch
+to option B (`static inline`) because weak's "keep every body in
+every .o" behavior triggered link failures that had nothing to do
+with anyone actually calling the inlines. See *What we implemented,
+what broke, and what we did about it* below. The switch carries
+real downsides — binary bloat and per-TU static-local state — and
+is explicitly tagged as worth revisiting once we have either a
+linker-flag plumbing pass or COMDAT support.
 
 ## What C++ `inline` actually means
 
@@ -73,9 +79,9 @@ The same problem affects:
   class
 - Every template instantiation, when we eventually lower templates
 
-## The option space (and why we picked one)
+## The option space
 
-### Option A: Weak symbols (chosen)
+### Option A: Weak symbols
 
 Emit each inline function with `__attribute__((weak))`. ELF, Mach-O,
 and PE-COFF all handle weak via the linker — one copy wins, the rest
@@ -93,34 +99,62 @@ are dropped silently.
   linker mechanism.
 
 **Cons**:
-- `__attribute__((weak))` is a non-standard extension. It works on
-  GCC, Clang, and MSVC (`__declspec(selectany)`) but not on every
-  weird embedded toolchain. For sea-front's bootstrap goal we're
-  targeting GCC/Clang, so we have the extension.
-- ODR violations (different definitions in different TUs with the
-  same mangled name) become **silent corruption** rather than
-  link errors. Same risk as in C++ proper, where mangling alone
-  doesn't catch all ODR breaks.
+- `__attribute__((weak))` is a non-standard extension.
+- ODR violations become **silent corruption** rather than link errors.
+- **The killer (discovered against gcc 4.8):** weak keeps the body
+  in every .o regardless of whether anyone in *that* TU called the
+  function. The linker therefore has to resolve every symbol the
+  weak body references, even from .o files where the inline is
+  unreachable. gcc 4.8's bitmap.h has
 
-### Option B: Static-per-TU (rejected)
+  ```cpp
+  inline void dump_bitmap (FILE *f, const_bitmap m) {
+      bitmap_print (f, m, "", "\n");
+  }
+  ```
 
-Emit every inline function as `static`. Each TU has its own private
-copy.
+  `bitmap_print` lives in `libbackend.a`, which the small gen-tools
+  (`gencondmd`, `genpreds`, etc.) don't link. Nothing in those
+  tools calls `dump_bitmap`, but with weak emission the body sat
+  in every gen-tool .o anyway, dragging in a `bitmap_print`
+  reference that resolved nowhere → link aborts. Same story for
+  libstdc++'s `__terminate` calling `terminate` (only present in
+  libsupc++/libstdc++).
 
-**Pros**: Standard C, no linker tricks.
+### Option B: `static inline` (currently chosen)
+
+Emit each inline function as `static inline`. Each TU has its own
+private copy; the C compiler drops it via standard DCE if unused.
+
+**Pros**:
+- Standard C. Works on every toolchain, no extensions.
+- **Unused inlines are dropped** before linking, sidestepping the
+  Option A failure mode entirely.
+- Cross-TU dedup is trivial because there's no cross-TU symbol —
+  each TU has its own private copy, no possibility of multiple-
+  definition.
 
 **Cons**:
-- Each TU has its own private copy → binary bloat. The C compiler
-  will inline and DCE most copies, but not always.
-- **Address-equality breaks** — each TU has a different address for
-  what should be "the same" function.
+- **Binary bloat.** Every TU that includes the header carries its
+  own copy of every used inline. The C compiler inlines and DCEs a
+  lot, but anything not inlined at every call site (recursion,
+  address-taken, large body) leaves a per-TU function. For a
+  template-heavy build like gcc 4.8 (~100 vec<T> instantiations × ~20
+  inline methods × ~300 TUs) the bloat is meaningful — eyeballed
+  ballpark 20–40% over a COMDAT-merged build, not yet measured
+  precisely.
+- **Address-equality breaks.** Each TU has a different address for
+  what should be "the same" function. C++ code that compares
+  function pointers across TUs (`&Foo::method == ...`) gives wrong
+  answers.
 - **Function-local statics inside inline functions get per-TU
-  state**, which is observably wrong. (`inline int counter() {
-  static int n = 0; return ++n; }` would count separately in each
-  TU.) This is the deal-breaker — bug class is invisible until it
-  isn't, which is the worst kind.
+  state.** `inline int counter() { static int n = 0; return ++n; }`
+  counts separately in each TU. C++ semantics demands one shared
+  counter program-wide. This is the deal-breaker the original
+  design called out for option B — accepted now because gcc 4.8's
+  build doesn't appear to depend on the cross-TU sharing.
 
-### Option C: `static inline` in shared headers (rejected for now)
+### Option C: `static inline` in shared headers (rejected)
 
 Extract every inline function into a generated header (one per
 source header, mirroring the original include structure), have each
@@ -137,9 +171,7 @@ it correctly. Build pipeline parallels the original.
   corresponding generated `.h`, and have each emitted `.c`
   `#include` the right ones.
 - Output model changes from one-file-per-TU to one-file-per-header
-  + one-file-per-TU, which the user explicitly does NOT want
-  (single TU → TU is preferred for review reasons; see
-  [Mangling design](mangling.md)).
+  + one-file-per-TU, which the user explicitly does NOT want.
 
 ### Option D: Whole-program amalgamation (rejected)
 
@@ -147,70 +179,168 @@ Preprocess + transpile all .cpp files into a single .c "unity build".
 ODR-violation-detection and dedup happen within one TU where C's
 rules apply naturally.
 
-**Pros**: Sidesteps the multi-TU question entirely.
-
-**Cons**: Huge change to pipeline. Doesn't scale to large codebases
-the way separate compilation does. Debugging is harder. Doesn't
-match the user's preferred output model.
+**Cons**: Huge change to pipeline. Doesn't scale. Debugging is
+harder. Doesn't match the preferred output model.
 
 ### Option E: Owner-TU per inline function (rejected)
 
 Pick one TU per inline function to be the "owner" and emit the body
 only there. All other TUs see only a forward declaration.
 
-**Pros**: Standard C, no weak symbols, no header tricks.
-
 **Cons**: Requires global knowledge — sea-front would need a
-multi-TU compilation phase rather than single-TU. Violates the
-preferred pipeline shape.
+multi-TU compilation phase rather than single-TU.
 
-## The chosen plan: weak symbols (`__SF_INLINE`)
+## What we implemented, what broke, and what we did about it
 
-Add a prelude macro:
+### Round 1: weak symbols (commit history)
+
+`__SF_INLINE` macro emitted as `__attribute__((weak))` on:
+
+- All class methods (in-class definitions are implicitly inline).
+- Synthesized helpers per class: `Class_ctor`, `Class_dtor`,
+  `Class_dtor_body`, the ctor wrapper, the dtor wrapper.
+- Template instantiations.
+- Free functions parsed with the `inline` keyword (via
+  `emit_storage_flags_impl`, separate macro path).
+
+This worked for the common case — multi-TU template instantiations
+deduped, in-class method bodies deduped, `_const` mangling kept
+overload distinctions intact. 145 emit-c tests passed; ~336 gcc 4.8
+.o files compiled clean.
+
+### Round 2: link failures from unused weak bodies
+
+Three categories of failure surfaced as the gcc 4.8 build chain
+got further:
+
+1. `bitmap_print` undefined reference in `gencondmd`.
+   `dump_bitmap` (inline in bitmap.h) calls `bitmap_print`. Weak
+   kept the unused `dump_bitmap` body in every .o. `gencondmd`
+   doesn't link `bitmap.o`. Linker fails resolving the reference.
+
+2. `terminate` undefined reference in `genchecksum`. Same shape:
+   libstdc++'s `__terminate` (extern "C++" inline in
+   `bits/c++config.h`) calls `terminate` (mangled in
+   libstdc++/libsupc++ as `_ZSt9terminatev`). Weak `__terminate`
+   bodies live in every TU; the bare `terminate()` call inside
+   them never matches the mangled name; link aborts.
+
+3. Member-template multi-defs (`va_gc::reserve<rtx_def*>`). Weak +
+   our overload-key collisions had silent-merging failure modes;
+   the linker picked the wrong copy or the body was emitted as
+   strong by accident.
+
+### Round 3: switch to `static inline`
+
+Two coordinated changes (commits e519c3d, bb74fd0, 4e06689):
+
+- `__SF_INLINE` redefined as `static inline`.
+- Forward decls reconciled with their definitions' linkage. C99
+  §6.2.2/4 forbids mixing internal/external linkage between fwd
+  decl and def; sea-front now walks the TU to match (in-class
+  fwd decl pulls the OOL ND_FUNC_DEF's storage_flags via
+  `find_ool_method_storage`).
+- In-class methods (implicitly inline) → `static inline`.
+- OOL methods → strong global unless DECL_INLINE explicitly set,
+  with a special case: any cloned function (template instantiation,
+  set in `clone.c` ND_FUNC_DEF) gets DECL_INLINE because template
+  instantiations are conceptually inline (N4659 §17.5.1/4
+  [temp.spec.general]).
+
+This unblocked the build chain end to end: every link error is
+gone, gen-tools build cleanly, and the failures that remain are
+gen-tool runtime asserts — different category.
+
+### What we gave up and accept for now
+
+- **Binary bloat.** Not measured. Tolerable for sea-front's
+  bootstrap target, problematic for production-grade builds.
+- **Address-equality between TUs is gone.** No code in gcc 4.8
+  appears to depend on it; first time we hit a real consumer this
+  will need revisiting.
+- **Per-TU static-local state in inline functions.** Likewise no
+  hit yet. Audit needed before sea-front targets anything beyond
+  gcc 4.8.
+
+## Routes worth revisiting (when bloat or static-state bites)
+
+These all preserve sea-front's "single .cpp → single .c" output
+shape. None require the option C / D / E pipeline rewrites.
+
+### Route 1: weak + linker GC of unused bodies
+
+Re-emit as `__attribute__((weak))` AND require the gcc-driven link
+step to use `-ffunction-sections -fdata-sections -Wl,--gc-sections`.
+Each function lands in its own `.text.NAME` section; the linker
+discards sections nothing reachable references. The weak body in
+each .o is still present, but the linker drops it before symbol
+resolution if no live code reaches it — which is exactly the
+property we wanted from option A's first attempt.
+
+**Status:** mechanically straightforward. Plumb the section flags
+through `scripts/sea-front-cc` (and document them as a build-system
+requirement). Restore weak emission. Keep the C99 §6.2.2/4 fwd-decl
+machinery — weak symbols don't clash with the existing fwd-decl
+logic. Largely undoes commit bb74fd0 with a flag-plumbing pass on
+top.
+
+**Caveats:** users invoking the C compiler directly without those
+flags get the round-1 link failures back. We'd need either:
+- the wrapper script enforcing the flags, or
+- a documented requirement in `docs/coding-standards.md`.
+
+### Route 2: `__attribute__((gnu_inline))`
+
+Emit `__attribute__((gnu_inline)) inline` on inline-eligible
+functions. GNU inline semantics: the inline body in a header is
+discarded if not inlined at the call site; the compiler expects
+to find an extern OOL definition somewhere. Each TU's body is
+inlined-or-discarded — no per-TU symbol, no bloat.
+
+**Status:** fits sea-front's emission shape minimally. The catch
+is the "extern OOL definition somewhere" requirement: sea-front
+would need to designate one canonical TU per inline function as
+the OOL owner. We don't track that today. Requires either
+per-symbol "owner TU" tracking (rejected as option E) or a
+separate one-off OOL-emission pass.
+
+### Route 3: ELF COMDAT groups (most principled)
+
+Emit each inline-eligible function with section directives that
+declare it as part of a COMDAT group keyed by its mangled name:
 
 ```c
-#if defined(__GNUC__) || defined(__clang__)
-#  define __SF_INLINE __attribute__((weak))
-#elif defined(_MSC_VER)
-#  define __SF_INLINE __declspec(selectany)
-#else
-#  define __SF_INLINE   /* fall back: each TU has its own copy */
-#endif
+__attribute__((section(".text.sf__vec_t_int_te___get,\"axG\",@progbits,sf__vec_t_int_te___get,comdat#")))
+void sf__vec_t_int_te___get(...) { ... }
 ```
 
-Tag every emitted function whose source was inline-eligible with
-`__SF_INLINE`:
+The linker drops all-but-one copy of each COMDAT group. This is
+exactly how C++ ABIs handle inline functions — sea-front would
+just be reproducing the standard mechanism in raw section
+directives.
 
-- **All class methods** (in-class definitions are implicitly inline)
-- **Synthesized helpers** sea-front emits per class:
-  - `Class_ctor`
-  - `Class_dtor`
-  - `Class_dtor_body`
-  - The constructor wrapper that runs member-init lists then user
-    body
-  - The destructor wrapper that calls `_dtor_body` then chains
-    member dtors
-- **Free functions explicitly marked `inline`** in the source
-  (requires the parser to tag them; today the `inline` keyword is
-  parsed but the flag isn't propagated to codegen)
-- **Template instantiations**, when we lower them — every
-  instantiated function gets the marker. The deterministic mangling
-  ensures two TUs producing the same instantiation hit the same
-  mangled name and the linker dedupes.
+**Status:** most work. Section attributes are toolchain-specific
+(GCC syntax above; clang accepts but ICC/MSVC differ). Worth
+prototyping if either of (1) the bloat becomes unacceptable or
+(2) we need cross-TU address equality. The output is portable
+across all ELF linkers without any wrapper-script contract.
 
-**Don't tag**:
+### Recommendation
 
-- `int main` (must be unique program-wide)
-- Free functions defined at namespace scope WITHOUT `inline`
-  (these are unique-symbol by C++ semantics)
-- Anything with `extern "C"` linkage (the user explicitly opted
-  into the C global namespace; we shouldn't be emitting weak
-  symbols for them)
+If we hit a real bloat ceiling first → route 1 (cheapest by far).
+
+If we hit a real address-equality or static-state correctness
+issue first → route 3 (semantically right; route 1 doesn't fix
+either).
+
+Route 2 is appealing as a middle-ground but the "designate an OOL
+owner TU" prerequisite is the same global-knowledge prerequisite
+that killed option E originally — track if it ever becomes
+attractive enough to warrant the pipeline change.
 
 ## extern "C" interaction
 
-This is the same gap discussed in [mangling.md](mangling.md). The
-`__SF_INLINE` plan sits on top of the mangling decision: every
+The `__SF_INLINE` plan sits on top of the mangling decision: every
 sea-front-emitted symbol that gets mangled into the `sf__` namespace
 also gets `__SF_INLINE`. Symbols in the global C namespace
 (`extern "C"` and bare `int main`) do not.
@@ -218,43 +348,33 @@ also gets `__SF_INLINE`. Symbols in the global C namespace
 ## Templates: same mechanism, harder mangling
 
 Templates are an extension of the inline problem with one extra
-prerequisite: **deterministic mangling across TUs**.
-
-For weak-symbol dedup to work, two TUs that instantiate the SAME
-template with the SAME args must produce byte-identical mangled
-names. Different instantiations (`vec<int>` vs `vec<float>`) must
-produce different names. This is a hard requirement on the mangling
-scheme — see `docs/mangling.md` for the full design.
-
-Once mangling is deterministic, template instantiations get the
-same `__SF_INLINE` treatment as inline functions. Each TU that
-touches `vec<int>::get()` emits its own copy with the same mangled
-name; the linker picks one survivor. Static locals, address-equality,
-and run-time semantics all match C++.
+prerequisite: **deterministic mangling across TUs**. Even with
+`static inline`'s no-cross-TU-symbol approach, the names still
+need to be byte-identical across TUs so the same instantiation
+produces the same in-TU symbol (matters for forward decls and for
+tooling that reads the .o symbol tables). See `docs/mangling.md`
+for the full design.
 
 **Edge cases that complicate the simple story** (none blocking, all
-deferrable until the test surface forces them):
+deferrable):
 
 1. **Explicit specializations** — if TU A sees `template<> int
    f<int>() { /* different body */ }` and TU B sees the primary
    template instantiated with `int`, both produce the same mangled
-   name with different bodies. Weak dedup picks one arbitrarily —
-   silent miscompile. Fix: mangle specializations distinguishably,
-   or rely on the C++ standard requiring all TUs see the same
-   specializations.
+   name with different bodies. Under `static inline` each TU runs
+   its own copy, so the divergence is silent — same hazard as
+   weak's silent merge.
 
 2. **Explicit instantiation** — `template int f<int>();` requests
-   that THIS TU own the symbol non-inline. Marking it weak undermines
-   the intent. Fix: track explicitly-instantiated templates and
-   emit them non-weak.
+   that THIS TU own the symbol non-inline. With `static inline` we
+   ignore the directive (every TU gets its own copy regardless).
 
 3. **`extern template`** — the inverse: "this TU should NOT
-   instantiate, expect to find it elsewhere." If we ignore the
-   directive and instantiate locally, weak-merge handles it
-   correctly — just defeats the compile-time-savings purpose.
+   instantiate, expect to find it elsewhere." Same: we instantiate
+   anyway. Just defeats the compile-time-savings purpose.
 
 4. **Template static data members** — `template<class T> struct Foo
    { static int counter; };`. Each instantiation needs exactly one
-   definition. Same weak-merge story, but at variable level rather
-   than function level.
-
+   definition program-wide. `static inline` doesn't apply to
+   variables; this stays on the weak-or-COMDAT path no matter
+   what we do for functions.
