@@ -6247,6 +6247,25 @@ static bool free_func_name_is_overloaded(Token *name) {
      *      functions, function pointers, and aggregate-init
      *      function-pointer struct members. N4659 §10.5 [dcl.link]
      *      / Itanium C++ ABI §5.1. */
+    /* Pre-scan: if ANY visible decl with this name has c_linkage,
+     * treat ALL refs as C-linkage (unmangled). N4659 §10.5/6 says
+     * a name with C linkage refers to a single C function regardless
+     * of how many decls exist; intra-TU mixing of extern "C" and
+     * non-extern-C declarations is permissive under the standard
+     * but real headers do it (e.g. libcpp/internal.h declares
+     * '_cpp_lex_token' inside extern "C" while lex.c defines it
+     * at file scope without a wrapper). Sea-front's per-DECL
+     * c_linkage flag would otherwise mangle the def while leaving
+     * callers (which only saw the extern-C decl) unmangled — link
+     * fails on the mismatch. Honoring the c_linkage signal anywhere
+     * in the visible decls keeps every reference and the def in
+     * sync. */
+    for (int i = 0; i < g_n_ffsig_seen; i++) {
+        FreeFuncSig *e = &g_ffsig_seen[i];
+        if (e->name->len != name->len) continue;
+        if (memcmp(e->name->loc, name->loc, name->len) != 0) continue;
+        if (e->c_linkage) return false;
+    }
     const char *first_key = NULL;
     int first_key_len = 0;
     for (int i = 0; i < g_n_ffsig_seen; i++) {
