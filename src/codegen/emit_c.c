@@ -6234,6 +6234,20 @@ static void emit_class_def(Node *n) {
             continue;
         }
         if (m->kind != ND_VAR_DECL) continue;
+        /* Skip anonymous enums inside the struct body. In C++ they are
+         * struct-scoped (e.g. 'struct A { enum { __value = 1 }; };'
+         * produces A::__value), but in C anonymous enum members are
+         * at namespace scope, so multiple structs that all contain
+         * 'enum { __value = ... }' (libstdc++'s __is_X type traits)
+         * produce 'redeclaration of enumerator __value' errors.
+         *
+         * These are pure C++-compile-time constants used by template
+         * metaprogramming; sema has already resolved any references
+         * to literal values, so the C emit doesn't need them at all.
+         * Drop them. */
+        if (m->var_decl.ty && m->var_decl.ty->kind == TY_ENUM &&
+            !m->var_decl.name)
+            continue;
         /* Member functions (ND_VAR_DECL with TY_FUNC) are forward-declared
          * separately — skip them here. Function POINTER data members
          * have type TY_PTR(TY_FUNC) after the parser's grouped-declarator
