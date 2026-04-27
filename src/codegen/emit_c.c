@@ -1580,6 +1580,21 @@ static void emit_storage_flags_impl(int flags, bool for_definition) {
      * no external symbol → no possibility of multi-definition.
      * N4659 §10.1.6 [dcl.inline] / GNU 'extern inline' / C99 inline
      * all permit this lowering for inline functions. */
+    /* 'extern inline' definition: GNU 'gnu_inline' semantics — the
+     * inline body is a hint; an extern OOL strong definition lives
+     * elsewhere (usually in a separate .c file / library). gmp.h's
+     * '__GMP_EXTERN_INLINE' is exactly this pattern; the OOL bodies
+     * live in libgmp.a. Emitting the body as 'static inline' (per
+     * the inline-DEFINITION branch below) would clash with prior
+     * 'extern int __gmpz_abs(...);' declarations — C99 §6.2.2/4
+     * doesn't allow internal-linkage to follow external. Preserve
+     * GNU extern-inline semantics with the explicit attribute so
+     * the C compiler doesn't emit a body symbol from this TU and
+     * the linker resolves to the library's strong definition. */
+    if (for_definition && is_inline && is_extern && !is_static) {
+        fputs("__attribute__((gnu_inline)) extern inline ", stdout);
+        return;
+    }
     if (for_definition && is_inline && !is_static) {
         fputs("static inline ", stdout);
         return;  /* skip 'extern' — internal linkage by design */
