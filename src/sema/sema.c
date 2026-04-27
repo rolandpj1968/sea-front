@@ -939,7 +939,29 @@ enum {
 };
 
 static int ics_rank(Type *param, Type *arg) {
-    if (!param || !arg) return ICS_INCOMPATIBLE;
+    if (!param) return ICS_INCOMPATIBLE;
+    /* Argument with no resolved_type — sema didn't compute it (the
+     * arithmetic-expression typing path has gaps; e.g. a call's
+     * second argument written as 'a * b + (T)c' may come through
+     * with a NULL resolved_type). Treat as a wildcard EXACT for
+     * this slot so the resolver doesn't drop ALL viable candidates
+     * and fall back to whichever overload the parser happened to
+     * register first. The other args' ICS scores still discriminate
+     * between candidates; only the wildcard slot doesn't contribute.
+     *
+     * Concrete: gcc 4.8 reginfo.c record_subregs_of_mode calls
+     *   bitmap_set_bit(subregs_of_mode, regno*NUM_MACHINE_MODES + (unsigned)mode)
+     * The 2nd arg's resolved_type was NULL, ics_rank returned
+     * INCOMPATIBLE for both bitmap_set_bit overloads (sbitmap and
+     * bitmap), the picker returned NULL, and codegen fell back to
+     * the parser's initial resolved_decl — the sbitmap overload —
+     * so the call mangled against the wrong signature: 'void' return
+     * type (sbitmap version) used in 'if (...)' context, "void value
+     * not ignored as it ought to be". The bitmap overload IS the
+     * right pick: arg[0] (subregs_of_mode, bitmap_head_def*) matches
+     * its first param exactly, ruling out the sbitmap overload via
+     * tag mismatch on arg[0]. */
+    if (!arg) return ICS_EXACT;
     /* Reference binding — N4659 §16.3.3.1.4 [over.ics.ref]: the ICS of
      * an arg to a reference parameter is the conversion sequence to
      * the referent type. Strip TY_REF/TY_RVALREF and re-rank.
