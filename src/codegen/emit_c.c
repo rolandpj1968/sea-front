@@ -456,14 +456,17 @@ static void emit_arg_for_param(Node *arg, Type *param_ty) {
      *   data->asan_vec.safe_push(offset + stack_vars[i].size);
      * N4659 §7.2.1 [basic.lval] / C11 §6.5.2.5 compound literals. */
     if (!is_addressable_lvalue(arg)) {
-        /* Fall back to the ref param's base type if arg has no
-         * resolved_type — happens for ND_NULLPTR / ND_NUM literals
-         * whose sema-phase type isn't recorded but the call-site
-         * context tells us exactly what type they'll be converted
-         * to. Using the expected type keeps the compound literal
-         * valid. */
-        Type *lit_ty = at;
-        if (!lit_ty && ty_is_ref(param_ty)) lit_ty = param_ty->base;
+        /* Prefer the ref param's base type as the compound-literal
+         * type. C++ binds 'const T &' to a converted-to-T temporary
+         * (N4659 §11.6.3 [dcl.init.ref]/5.2), so the temp's type IS
+         * T regardless of the arg's source type. Falling back to
+         * arg's resolved_type emits e.g. '(int){'a'+i}' for an int
+         * rvalue passed to 'const char &' — the resulting int* is
+         * incompatible with the expected char*. Use param_ty->base
+         * (== T) when the param is a ref; only fall back to arg's
+         * type for non-ref params (struct-by-value via &(temp), etc.). */
+        Type *lit_ty = ty_is_ref(param_ty) && param_ty->base
+                         ? param_ty->base : at;
         if (lit_ty &&
             (lit_ty->kind == TY_INT || lit_ty->kind == TY_BOOL ||
              lit_ty->kind == TY_CHAR || lit_ty->kind == TY_SHORT ||
