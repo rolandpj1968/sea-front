@@ -1787,6 +1787,14 @@ Node *parse_declaration(Parser *p) {
      * E.g.: int x = 1, *y, z[10]; */
     if (parser_at(p, TK_COMMA)) {
         Vec decls = vec_new(p->arena);
+        /* Apply spec.flags to the first decl too — the trailing
+         * single-decl block at the bottom of parse_declaration does
+         * this OR-in, but the multi-decl path returns early so we
+         * have to do it here. Without it, 'extern int a, b;' loses
+         * the extern on 'a'. */
+        decl->var_decl.storage_flags |= spec.flags;
+        if (p->extern_c_depth > 0)
+            decl->var_decl.storage_flags |= DECL_C_LINKAGE;
         vec_push(&decls, decl);
 
         while (parser_consume(p, TK_COMMA)) {
@@ -1816,6 +1824,19 @@ Node *parse_declaration(Parser *p) {
                 region_declare(p, next_decl->var_decl.name->loc,
                               next_decl->var_decl.name->len, ENTITY_VARIABLE,
                               next_decl->var_decl.ty);
+
+            /* Comma-separated decls share the leading decl-specifier-
+             * seq (N4659 §11/3 [dcl.dcl]). storage_flags propagation
+             * only ran for the FIRST decl; do it for each subsequent
+             * one too. Without this, 'extern int a, b;' emits as
+             * 'int a; int b;' — the missing extern flips both into
+             * tentative definitions, breaking link with 'multiple
+             * definition' errors when several TUs include the
+             * declaration. Pattern: gcc 4.8 rtl.h's
+             * 'extern location_t prologue_location, epilogue_location;'. */
+            next_decl->var_decl.storage_flags |= spec.flags;
+            if (p->extern_c_depth > 0)
+                next_decl->var_decl.storage_flags |= DECL_C_LINKAGE;
 
             vec_push(&decls, next_decl);
         }
