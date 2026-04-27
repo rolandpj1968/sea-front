@@ -2414,20 +2414,26 @@ static void emit_expr(Node *n) {
         } else {
             g_suppress_ref_deref = false;
             /* Implicit-this references emit the bare name; the receiver
-             * is supplied by the surrounding member-access. Otherwise
-             * delegate to the asm/mangle/bare resolver. */
-            if (n->ident.implicit_this) {
+             * is supplied by the surrounding member-access. Locals,
+             * struct fields, and any non-function ident also emit
+             * bare — only resolved-to-a-function references go through
+             * the asm/mangle/bare resolver, since only functions can
+             * be in the free-func overload table.
+             *
+             * Without this gate, a local 'int index;' (shadowing
+             * libc's index() in genautomata.c) gets mangled to
+             * 'index_p_void_pe_' because the libc index is in the
+             * overload table. */
+            Declaration *rd = n->ident.resolved_decl;
+            bool rd_is_fn = rd && rd->type && rd->type->kind == TY_FUNC;
+            if (n->ident.implicit_this || !rd_is_fn) {
                 emit_token_text(n->ident.name);
             } else {
-                Declaration *rd = n->ident.resolved_decl;
-                Type **params = (rd && rd->type && rd->type->kind == TY_FUNC)
-                                  ? rd->type->params : NULL;
-                int     np    = (rd && rd->type && rd->type->kind == TY_FUNC)
-                                  ? rd->type->nparams : 0;
                 emit_free_func_symbol(n->ident.name,
-                                       rd ? rd->asm_name : NULL,
-                                       rd && rd->c_linkage,
-                                       params, np);
+                                       rd->asm_name,
+                                       rd->c_linkage,
+                                       rd->type->params,
+                                       rd->type->nparams);
             }
         }
         return;
