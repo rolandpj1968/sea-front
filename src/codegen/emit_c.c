@@ -321,6 +321,30 @@ static inline bool ty_is_indirect(Type *t) {
     return t && (t->kind == TY_PTR || t->kind == TY_REF || t->kind == TY_RVALREF);
 }
 
+/* Does any type in `params[0..n)` mention TY_DEPENDENT — directly,
+ * via TY_REF/TY_RVALREF/TY_PTR/TY_ARRAY chains, OR nested inside
+ * a TY_STRUCT/TY_UNION's template_args? Used to detect call sites
+ * inside cloned member-template bodies where the candidate's
+ * declared params still carry the template's TY_DEPENDENT
+ * placeholders that need substitution from the call's arg types. */
+static bool ty_has_dependent(Type *t) {
+    if (!t) return false;
+    if (t->kind == TY_DEPENDENT) return true;
+    if (t->kind == TY_PTR || t->kind == TY_REF || t->kind == TY_RVALREF ||
+        t->kind == TY_ARRAY)
+        return ty_has_dependent(t->base);
+    if (t->kind == TY_STRUCT || t->kind == TY_UNION) {
+        for (int i = 0; i < t->n_template_args; i++)
+            if (ty_has_dependent(t->template_args[i])) return true;
+    }
+    return false;
+}
+static bool ty_contains_dependent(Type **params, int n) {
+    for (int i = 0; i < n; i++)
+        if (ty_has_dependent(params[i])) return true;
+    return false;
+}
+
 /* Emit a call-site argument with reference-parameter adaptation.
  *
  * Mirrors emit_return_expr in the opposite direction: when the
@@ -3011,20 +3035,18 @@ static void emit_expr(Node *n) {
                     die_no_overload(class_type, mname, na, "ND_CALL implicit-this");
                 call_np = np;
                 /* Member-template candidates have TY_DEPENDENT
-                 * components (often nested inside TY_REF / TY_PTR /
-                 * TY_ARRAY). At a call from a cloned/instantiated
-                 * body, the call args are concrete; swap them in
-                 * wholesale so the mangled name matches the
-                 * instantiated method. Pattern: gcc 4.8 vec.h
-                 * va_heap::reserve<T> calling release(v). */
-                bool any_dep = false;
-                for (int i = 0; i < np; i++) {
-                    Type *t = call_pty[i];
-                    while (t && (t->kind == TY_REF || t->kind == TY_RVALREF ||
-                                  t->kind == TY_PTR || t->kind == TY_ARRAY))
-                        t = t->base;
-                    if (t && t->kind == TY_DEPENDENT) { any_dep = true; break; }
-                }
+                 * components — at the top level (e.g. T) or nested
+                 * inside TY_REF/TY_PTR/TY_ARRAY chains, OR inside
+                 * the template_args of an instantiated TY_STRUCT
+                 * (e.g. vec<T, va_heap, vl_embed>*& where T is a
+                 * template_arg of vec<...>). At a call from a
+                 * cloned/instantiated body, the call args are
+                 * concrete; swap them in wholesale so the mangled
+                 * name matches the instantiated method. Pattern:
+                 * gcc 4.8 vec.h va_heap::reserve<T> calling
+                 * release(v) where v has type
+                 * 'vec<T, va_heap, vl_embed>*&'. */
+                bool any_dep = ty_contains_dependent(call_pty, np);
                 if (any_dep && np == na) {
                     for (int i = 0; i < np; i++) call_pty[i] = at[i];
                 }
