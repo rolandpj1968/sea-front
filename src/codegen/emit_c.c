@@ -526,26 +526,15 @@ static void emit_template_id_suffix(Node *tid) {
     for (int i = 0; i < tid->template_id.nargs; i++) {
         if (i > 0) fputc('_', stdout);
         Node *arg = tid->template_id.args[i];
-        Type *ty = NULL;
-        if (arg && arg->kind == ND_VAR_DECL) ty = arg->var_decl.ty;
-        if (!ty) { fputs("unknown", stdout); continue; }
-        switch (ty->kind) {
-        case TY_VOID:    fputs("void", stdout); break;
-        case TY_BOOL:    fputs("bool", stdout); break;
-        case TY_CHAR:    fputs(ty->is_unsigned ? "uchar" : "char", stdout); break;
-        case TY_SHORT:   fputs(ty->is_unsigned ? "ushort" : "short", stdout); break;
-        case TY_INT:     fputs(ty->is_unsigned ? "uint" : "int", stdout); break;
-        case TY_LONG:    fputs(ty->is_unsigned ? "ulong" : "long", stdout); break;
-        case TY_LLONG:   fputs(ty->is_unsigned ? "ullong" : "llong", stdout); break;
-        case TY_FLOAT:   fputs("float", stdout); break;
-        case TY_DOUBLE:  fputs("double", stdout); break;
-        case TY_PTR:     fputs("ptr", stdout); break;
-        case TY_STRUCT: case TY_UNION:
-            if (ty->tag) fprintf(stdout, "%.*s", ty->tag->len, ty->tag->loc);
-            else fputs("anon", stdout);
-            break;
-        default: fputs("unknown", stdout); break;
-        }
+        Type *ty = (arg && arg->kind == ND_VAR_DECL) ? arg->var_decl.ty : NULL;
+        /* Defer to mangle.c's canonical encoder so this stays in
+         * lockstep with the class-tag and param-suffix encodings.
+         * Previously this site had its own switch that emitted
+         * TY_PTR as just 'ptr' without recursing into the base —
+         * losing T's type for any pointer template arg, producing
+         * 'sf__vec_t_ptr_..._te_' instead of 'sf__vec_t_rtx_def_ptr_
+         * ..._te_' at qualified template-call sites. */
+        emit_type_for_mangle(ty);
     }
     fputs("_te_", stdout);
 }

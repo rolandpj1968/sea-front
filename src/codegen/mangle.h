@@ -111,6 +111,12 @@ void mangle_class_vtable_type(Type *class_type);
  *   class vec → sf__vec__vtable_instance */
 void mangle_class_vtable_instance(Type *class_type);
 
+/* Emit a single type's mangled encoding to stdout (used inside
+ * template-arg lists, e.g. _t_<this>_<this>_te_). Same encoding
+ * as mangle_param_suffix's per-param output and as
+ * mangle_type_to_buf — keep all three in lockstep. */
+void emit_type_for_mangle(Type *ty);
+
 /* Emit just the parameter-type suffix (_p_<types>_pe_) to stdout.
  * Exposed so emit_c.c call-site rewrites can stay in sync with the
  * canonical mangling path. */

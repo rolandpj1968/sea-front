@@ -127,8 +127,13 @@ static void emit_namespace_chain(Type *class_type) {
 
 /* Emit the mangled encoding for a single type argument in a
  * template argument list. For the human scheme, this produces
- * the type's C-like name (int, double, struct tag, etc.). */
-static void emit_type_for_mangle(Type *ty) {
+ * the type's C-like name (int, double, struct tag, etc.).
+ * Exposed in mangle.h so emit_c.c's template-id-suffix path
+ * (qualified template-call sites) can defer to the same encoder
+ * — previously had its own (incomplete) type-encode switch that
+ * emitted TY_PTR as just 'ptr' without recursing into the base,
+ * losing T's type for any pointer-typed template arg. */
+void emit_type_for_mangle(Type *ty) {
     if (!ty) { fputs("unknown", stdout); return; }
     /* CV-qualifiers — N4659 §10.1.7.1 [dcl.type.cv].
      * Itanium encodes const as 'K', volatile as 'V'; we use
