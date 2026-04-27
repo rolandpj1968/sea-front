@@ -401,11 +401,39 @@ static void emit_arg_for_param(Node *arg, Type *param_ty) {
         fputs("){0}", stdout);
         return;
     }
+    /* Pass-through fast path: the arg is an ND_IDENT naming a
+     * ref-param and we either know the callee takes a ref-param
+     * here, or we don't know the param type at all. In both cases
+     * the right C emission is the bare ident — its C-level value
+     * is already the address (ref-params are lowered to T**).
+     *
+     * Why this comes BEFORE the param_ty == NULL early return:
+     * for member-template qualified calls (e.g. gcc 4.8 vec.h's
+     * 'A::reserve(v, ...)' inside a cloned vec_safe_reserve body),
+     * sema can't resolve the member-template name so callee_ft is
+     * NULL and pty falls through as NULL — emit_arg_for_param
+     * previously fell to emit_expr(arg) which emits '(*v)' (the
+     * usual ref-param deref), passing a dereferenced NULL into a
+     * function expecting vec** → segfault inside va_heap::reserve.
+     * Suppressing the deref keeps the address-of-pointer through.
+     *
+     * The only case this misroutes is a non-ref param taking a
+     * value where we'd want '(*v)'; a -Wincompatible-pointer-types
+     * warning surfaces it. Member-template ref-pass-through is the
+     * far more common gcc/libstdc++ pattern, and keeping the
+     * default safe for known-ref params remains exactly correct. */
+    bool ident_is_ref = arg && arg->kind == ND_IDENT && arg->ident.name &&
+                        is_ref_param(arg->ident.name);
+    if (ident_is_ref && (param_ty == NULL || ty_is_ref(param_ty))) {
+        bool saved = g_suppress_ref_deref;
+        g_suppress_ref_deref = true;
+        emit_expr(arg);
+        g_suppress_ref_deref = saved;
+        return;
+    }
     if (!ty_is_ref(param_ty)) { emit_expr(arg); return; }
     Type *at = arg->resolved_type;
-    /* Already a ref in the AST (lowered to pointer) — pass as-is.
-     * Suppress ref-param deref: if the arg is an ND_IDENT naming a
-     * ref-param, we want the pointer value, not its dereference. */
+    /* Already a ref in the AST (lowered to pointer) — pass as-is. */
     if (ty_is_ref(at)) {
         bool saved = g_suppress_ref_deref;
         g_suppress_ref_deref = true;
