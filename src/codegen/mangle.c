@@ -177,6 +177,29 @@ static void emit_type_for_mangle(Type *ty) {
         if (ty->tag) fprintf(stdout, "%.*s", ty->tag->len, ty->tag->loc);
         else fputs("anon_enum", stdout);
         return;
+    /* Function type — typically appears as TY_PTR(TY_FUNC) for
+     * function-pointer parameters. Encode as 'fn_<ret>_<params>_fne_'
+     * so 'int (*)(const void*, const void*)' has a stable mangled
+     * form rather than collapsing to 'unknown'. Two function-pointer
+     * params with different signatures must produce different
+     * symbols (N4659 §16.2 [over.load]). */
+    case TY_FUNC:
+        fputs("fn_", stdout);
+        emit_type_for_mangle(ty->ret);
+        for (int i = 0; i < ty->nparams; i++) {
+            fputc('_', stdout);
+            emit_type_for_mangle(ty->params[i]);
+        }
+        fputs("_fne_", stdout);
+        return;
+    /* Template type parameter (T, U, ...). Encode by tag name —
+     * unsubstituted dependent types reaching the mangler is usually
+     * a sema/clone gap, but emitting the tag is at least stable
+     * (so two TY_DEPENDENT('T') produce the same encoding). */
+    case TY_DEPENDENT:
+        if (ty->tag) fprintf(stdout, "%.*s", ty->tag->len, ty->tag->loc);
+        else fputs("dep", stdout);
+        return;
     default:
         fputs("unknown", stdout);
         return;
@@ -249,6 +272,24 @@ int mangle_type_to_buf(Type *ty, char *buf, int pos, int max) {
             return pos;
         }
         return append_str(buf, pos, max, "anon_enum");
+    /* See emit_type_for_mangle for the encoding rationale. */
+    case TY_FUNC:
+        pos = append_str(buf, pos, max, "fn_");
+        pos = mangle_type_to_buf(ty->ret, buf, pos, max);
+        for (int i = 0; i < ty->nparams; i++) {
+            if (pos < max - 1) buf[pos++] = '_';
+            pos = mangle_type_to_buf(ty->params[i], buf, pos, max);
+        }
+        return append_str(buf, pos, max, "_fne_");
+    case TY_DEPENDENT:
+        if (ty->tag) {
+            int n = ty->tag->len;
+            if (pos + n > max - 1) n = max - 1 - pos;
+            if (n > 0) memcpy(buf + pos, ty->tag->loc, n);
+            pos += n;
+            return pos;
+        }
+        return append_str(buf, pos, max, "dep");
     default:
         return append_str(buf, pos, max, "unknown");
     }
