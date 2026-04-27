@@ -1486,16 +1486,27 @@ static void emit_storage_flags_impl(int flags, bool for_definition) {
     bool is_inline = (flags & DECL_INLINE) != 0;
     bool is_static = (flags & DECL_STATIC) != 0;
     bool is_extern = (flags & DECL_EXTERN) != 0;
-    /* Any inline DEFINITION (with or without extern) gets weak symbol
-     * treatment so multiple TUs that include the same header (gmp.h
-     * inline wrappers, libstdc++ inline-everything templates, etc.)
-     * link as a single resolved def instead of a multiple-definition
-     * error. N4659 §10.1.6 [dcl.inline] / GNU 'extern inline' both
-     * have the same multi-TU shape. Static stays static (no risk of
-     * multi-def — symbol is TU-local). */
+    /* Any inline DEFINITION (with or without extern) gets emitted
+     * as 'static inline'. Each TU that includes the header gets its
+     * own private copy; the C compiler drops the body if it's not
+     * actually called from this TU (standard dead-code elimination),
+     * which matters when a header-defined inline references a
+     * function that lives in a library not linked into THIS .o
+     * (gcc 4.8's bitmap.h inline 'dump_bitmap' calls bitmap_print —
+     * not linked into the small gen-tools; libstdc++ c++config.h
+     * inline '__terminate' calls 'terminate' — same story).
+     *
+     * Previously this path emitted '__attribute__((weak))' which
+     * kept the body in every .o and forced the linker to resolve
+     * those bodies' external refs even when the function was unused.
+     * 'static inline' relies on per-TU dead-code elimination instead.
+     * Cross-TU dedup is trivial: each TU has its own private copy,
+     * no external symbol → no possibility of multi-definition.
+     * N4659 §10.1.6 [dcl.inline] / GNU 'extern inline' / C99 inline
+     * all permit this lowering for inline functions. */
     if (for_definition && is_inline && !is_static) {
-        fputs("__attribute__((weak)) ", stdout);
-        return;  /* skip 'inline'/'extern' — conflicts with weak */
+        fputs("static inline ", stdout);
+        return;  /* skip 'extern' — internal linkage by design */
     }
     if (is_extern)  fputs("extern ", stdout);
     if (is_static)  fputs("static ", stdout);
@@ -1909,6 +1920,37 @@ static Node *find_class_def_by_tag_only(Type *class_type) {
         found = d;
     }
     return found;
+}
+
+/* Walk the TU for an OOL function definition matching (class_type,
+ * name) and return its storage_flags, or 0 if none found. The
+ * in-class forward decl in PHASE_STRUCTS doesn't see the OOL
+ * definition's storage class (e.g. 'inline double_int from_shwi(...)'
+ * sets DECL_INLINE on the OOL ND_FUNC_DEF but not on the in-class
+ * ND_VAR_DECL declaration), so we look it up here to make the
+ * forward decl's linkage match the body's. C99 §6.2.2/4. */
+static int find_ool_method_storage(Type *class_type, Token *name) {
+    if (!g_tu || !class_type || !class_type->tag || !name) return 0;
+    for (int i = 0; i < g_tu->tu.ndecls; i++) {
+        Node *d = g_tu->tu.decls[i];
+        if (!d) continue;
+        if (d->kind == ND_TEMPLATE_DECL && d->template_decl.decl)
+            d = d->template_decl.decl;
+        if (d->kind != ND_FUNC_DEF) continue;
+        if (d->func.class_type != class_type) {
+            /* Tag-based fallback: instantiation pass can produce
+             * distinct Type* for the same concrete class. */
+            if (!d->func.class_type || !d->func.class_type->tag) continue;
+            if (d->func.class_type->tag->len != class_type->tag->len) continue;
+            if (memcmp(d->func.class_type->tag->loc, class_type->tag->loc,
+                       class_type->tag->len) != 0) continue;
+        }
+        if (!d->func.name) continue;
+        if (d->func.name->len != name->len) continue;
+        if (memcmp(d->func.name->loc, name->loc, name->len) != 0) continue;
+        return d->func.storage_flags;
+    }
+    return 0;
 }
 
 /* Check if a method on class_type is const-qualified. Scans class_def
@@ -6464,7 +6506,33 @@ static void emit_class_def(Node *n) {
                 fputs(" *this);\n", stdout);
                 continue;
             }
-            fputs("__SF_INLINE ", stdout);
+            /* Forward decl for an in-class method declaration whose
+             * body is OOL: match the OOL definition's linkage.
+             *
+             *   - User-marked 'inline' on the in-class decl, OR on
+             *     the OOL definition (e.g. 'inline double_int
+             *     double_int::from_shwi (...)' — the in-class decl
+             *     has no 'inline' but the OOL body does), OR
+             *   - Method of a template instantiation (multi-TU body
+             *     duplicated across every TU using the instantiation,
+             *     same multi-TU dedup model as inline)
+             *           → __SF_INLINE (== static inline).
+             *   - Plain non-template OOL method (e.g. vec_prefix::
+             *     calculate_allocation): strong global, defined once.
+             *           → no storage class on the forward decl.
+             *
+             * Mismatching here yields C99 §6.2.2/4 conflicts:
+             * 'static inline' fwd decl + plain OOL def turns the
+             * symbol file-static (unreachable cross-TU); plain fwd
+             * decl + 'static inline' def is a hard error
+             * ('static declaration follows non-static'). */
+            bool is_template_inst =
+                class_type && class_type->n_template_args > 0;
+            int ool_flags = find_ool_method_storage(class_type, m->var_decl.name);
+            bool is_inline = ((m->var_decl.storage_flags | ool_flags)
+                              & DECL_INLINE) != 0;
+            if (is_inline || is_template_inst)
+                fputs("__SF_INLINE ", stdout);
             emit_type(fty->ret);
             fputc(' ', stdout);
             if (m->var_decl.is_constructor) {
@@ -6823,11 +6891,14 @@ static void emit_top_level(Node *n) {
             Node *saved = g_current_class_def;
             if (n->func.is_constructor && n->func.class_type->class_def)
                 g_current_class_def = n->func.class_type->class_def;
-            /* OOL definition: 'inline' here is whatever the user wrote
-             * (DECL_INLINE in storage_flags). Without explicit inline,
-             * an OOL def is a strong global (N4659 §10.1.6/4) — must be
+            /* OOL definition: emit as static inline iff the user
+             * marked it 'inline' (DECL_INLINE) OR the owner class is
+             * a template instantiation (multi-TU body, same shape as
+             * inline). Otherwise strong global (N4659 §10.1.6/4) —
              * resolvable from other TUs that only saw the declaration. */
-            bool ool_inline = (n->func.storage_flags & DECL_INLINE) != 0;
+            bool ool_inline = (n->func.storage_flags & DECL_INLINE) != 0
+                || (n->func.class_type
+                    && n->func.class_type->n_template_args > 0);
             emit_method_as_free_fn(n, n->func.class_type, ool_inline);
             g_current_class_def = saved;
         } else {
@@ -7216,8 +7287,12 @@ static void emit_fwd_decl_methods_only(Node *n) {
          *     function header. */
         if (n->func.class_type && n->func.name) {
             /* Forward decl matches the actual OOL definition's
-             * linkage: inline only if the user marked it 'inline'. */
-            bool ool_inline = (n->func.storage_flags & DECL_INLINE) != 0;
+             * linkage: inline if the user wrote 'inline' OR the owner
+             * is a template instantiation (multi-TU body needs static
+             * inline for the same dedup story); otherwise strong. */
+            bool ool_inline = (n->func.storage_flags & DECL_INLINE) != 0
+                || (n->func.class_type
+                    && n->func.class_type->n_template_args > 0);
             emit_method_signature(n, n->func.class_type, ool_inline);
             fputs(";\n", stdout);
         } else if (n->func.name && n->func.body) {

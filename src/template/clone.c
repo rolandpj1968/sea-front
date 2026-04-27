@@ -472,6 +472,16 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
         c->func.deferred_class_region = NULL;
         c->func.body_start_pos = -1;  /* not deferred — body is cloned */
         c->func.body_end_pos   = -1;
+        /* Template instantiations are conceptually inline (N4659
+         * §17.5.1/4 [temp.spec.general] — implicit instantiations
+         * have the same linkage as the template they instantiate;
+         * function templates have weak/inline-style multi-TU
+         * semantics). Mark DECL_INLINE so codegen emits as
+         * static-inline (per-TU body), avoiding multi-def link
+         * errors when the same instantiation appears in multiple
+         * TUs (e.g. va_gc::reserve<rtx_def*> instantiated in
+         * every gen-tool TU that #includes vec.h). */
+        c->func.storage_flags |= DECL_INLINE;
         break;
 
     case ND_PARAM:
