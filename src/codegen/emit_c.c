@@ -1261,6 +1261,9 @@ typedef struct {
     int   key_len;
     Token *name;       /* original source token, for emit + lookup */
     bool  is_def;
+    bool  is_gnu_inline_def;  /* the recorded def is gnu_inline (a hint,
+                                  not a strong symbol) — a later strong
+                                  def for the same key should still emit. */
 } FuncSig;
 static FuncSig g_func_sigs[8192];
 static int g_n_func_sigs = 0;
@@ -1298,6 +1301,7 @@ static FuncSig *func_sig_add(Token *name, const char *key, int key_len,
     e->key_len = key_len;
     e->name = name;
     e->is_def = is_def;
+    e->is_gnu_inline_def = false;
     return e;
 }
 
@@ -1315,17 +1319,41 @@ static bool func_decl_dedup_check_sig(Token *name, Type **params, int nparams) {
 /* DEF dedup: seeing a def for a sig that was already a def → skip
  * (header-include duplicate). A def for a sig previously seen as a
  * decl → upgrade to def, emit. New sig → register, emit. */
-static bool func_def_dedup_check_sig(Token *name, Type **params, int nparams) {
+static bool func_def_dedup_check_sig(Token *name, Type **params, int nparams,
+                                       int storage_flags) {
     if (!name) return false;
     char key[FUNC_SIG_KEY_MAX];
     int key_len = func_sig_key(name, params, nparams, key);
     FuncSig *fs = func_sig_find_key(key, key_len);
+    bool is_gnu_inline =
+        (storage_flags & DECL_INLINE) && (storage_flags & DECL_EXTERN);
     if (fs) {
-        if (fs->is_def) return true;
+        /* Already saw a def for this sig. Skip the duplicate UNLESS
+         * the prior def was gnu_inline (a hint, no symbol emitted)
+         * and the current is a strong def — the strong def must be
+         * emitted to provide the actual library symbol. C99 §6.2.2/4
+         * + GNU gnu_inline semantics: 'extern inline gnu_inline'
+         * declares a hint; a later non-extern non-inline definition
+         * is the strong OOL.
+         *
+         * Concrete: gcc 4.8 tree.h declares
+         *   extern inline __attribute__((__gnu_inline__)) HOST_WIDE_INT
+         *   tree_low_cst (const_tree, int) { ... }
+         * tree.c then provides the strong OOL
+         *   HOST_WIDE_INT tree_low_cst (const_tree, int) { ... }
+         * Without distinguishing, the strong def was deduped away
+         * and tree.o had only the gnu_inline hint (no exported
+         * symbol) — 211 cc1plus link errors. */
+        if (fs->is_def && !fs->is_gnu_inline_def) return true;
+        if (fs->is_def && fs->is_gnu_inline_def && is_gnu_inline)
+            return true;  /* both gnu_inline: still a duplicate */
         fs->is_def = true;
+        if (is_gnu_inline) fs->is_gnu_inline_def = true;
+        else               fs->is_gnu_inline_def = false; /* strong def */
         return false;
     }
-    func_sig_add(name, key, key_len, /*is_def=*/true);
+    FuncSig *added = func_sig_add(name, key, key_len, /*is_def=*/true);
+    if (added) added->is_gnu_inline_def = is_gnu_inline;
     return false;
 }
 
@@ -7219,7 +7247,8 @@ static void emit_top_level(Node *n) {
                 params[i] = (n->func.params[i] &&
                              n->func.params[i]->kind == ND_PARAM)
                               ? n->func.params[i]->param.ty : NULL;
-            if (func_def_dedup_check_sig(n->func.name, params, np))
+            if (func_def_dedup_check_sig(n->func.name, params, np,
+                                          n->func.storage_flags))
                 return;
             emit_func_def(n);
         }
