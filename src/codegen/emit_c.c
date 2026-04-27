@@ -2334,6 +2334,7 @@ static void emit_param_declarator(Type *ty, Token *name, int idx) {
 
 static void emit_expr(Node *n);
 static bool free_func_name_is_overloaded(Token *name);
+static bool emit_free_func_ident_via_ffsig(Token *name);
 static bool ffsig_is_first_c_linkage(Token *name, Type **params, int nparams);
 static void emit_free_func_symbol(Token *name, Token *asm_name,
                                    bool c_linkage,
@@ -2616,14 +2617,30 @@ static void emit_expr(Node *n) {
              * overload table. */
             Declaration *rd = n->ident.resolved_decl;
             bool rd_is_fn = rd && rd->type && rd->type->kind == TY_FUNC;
-            if (n->ident.implicit_this || !rd_is_fn) {
+            if (n->ident.implicit_this) {
                 emit_token_text(n->ident.name);
-            } else {
+            } else if (rd_is_fn) {
                 emit_free_func_symbol(n->ident.name,
                                        rd->asm_name,
                                        rd->c_linkage,
                                        rd->type->params,
                                        rd->type->nparams);
+            } else if (!rd && emit_free_func_ident_via_ffsig(n->ident.name)) {
+                /* sema didn't resolve this ident (file-scope aggregate
+                 * initializer fall-through, etc.) — the g_ffsig_seen
+                 * table still knows the function and its params; route
+                 * through emit_free_func_symbol so the call matches
+                 * the def's mangled emit. Critically, this branch
+                 * only fires when rd is NULL: a local variable
+                 * shadowing a same-named function (legal C; gcc 4.8
+                 * genrecog.c's 'static struct decision *new_decision
+                 * (...) { struct decision *new_decision = ...; ... }')
+                 * must keep the local-var bare emit path. */
+            } else {
+                /* Bare emit for locals, parameters, file-scope vars,
+                 * and any function ident the ffsig lookup didn't
+                 * recognise. */
+                emit_token_text(n->ident.name);
             }
         }
         return;
@@ -3661,8 +3678,28 @@ static void emit_expr(Node *n) {
                                        ? n->call.callee->ident.resolved_decl
                                        : NULL;
             Token *asm_callee = rd_callee ? rd_callee->asm_name : NULL;
+            /* Only mangle the callee name when it actually denotes a
+             * function. Function-pointer variables resolve to a
+             * TY_PTR(TY_FUNC) Decl — the call goes through the
+             * pointer value, no name-level mangling involved.
+             *
+             * Two ways the callee is "a function":
+             *   - rd_callee->type is TY_FUNC — the parser/sema
+             *     resolved the ident to a regular free function decl.
+             *   - rd_callee is NULL but the ident's resolved_type is
+             *     TY_FUNC — happens for template-instantiation call
+             *     rewrites (instantiate.c sets resolved_decl=NULL,
+             *     resolved_type=TY_FUNC after substituting the
+             *     synthetic mangled-name ident). */
+            bool callee_is_fn =
+                (rd_callee && rd_callee->type &&
+                 rd_callee->type->kind == TY_FUNC) ||
+                (!rd_callee && n->call.callee &&
+                 n->call.callee->resolved_type &&
+                 n->call.callee->resolved_type->kind == TY_FUNC);
             if (n->call.callee && n->call.callee->kind == ND_IDENT &&
                 !n->call.callee->ident.implicit_this &&
+                callee_is_fn &&
                 (asm_callee ||
                  free_func_name_is_overloaded(n->call.callee->ident.name))) {
                 Type *at[32];
@@ -3742,10 +3779,42 @@ static void emit_expr(Node *n) {
                         fprintf(stderr, "\n");
                     }
                 }
+                /* Prefer the resolved decl's PARAM types over the call's
+                 * ARG types when computing the mangle suffix. This
+                 * keeps the call's mangled name in sync with the def's
+                 * (the def's emit also uses param types) under two
+                 * cases the arg-types path mishandles:
+                 *
+                 *   1. Variadic: '...' has no type, so we want the
+                 *      fixed-param prefix only. Using arg types would
+                 *      include the variadic args (or 'unknown' tags
+                 *      sema sometimes leaves on later args), making
+                 *      every call site mangle differently.
+                 *      N4659 §11.3.5/4 [dcl.fct].
+                 *
+                 *   2. Implicit conversions: derived* → base&,
+                 *      int → const long&, etc. The arg's type is
+                 *      the source type; the param's is the converted
+                 *      type. The def mangles with the param type, so
+                 *      caller must too. (Pre-existing partial fix for
+                 *      this in emit_arg_for_param's compound-literal
+                 *      path; this completes it for the mangling.)
+                 *
+                 * Fall back to arg types when no resolved decl is
+                 * available (shouldn't happen for well-resolved calls,
+                 * but stays safe for the rare unresolved path). */
+                Type **mangle_pty = at;
+                int    mangle_np  = na;
+                if (rd_callee && rd_callee->type &&
+                    rd_callee->type->kind == TY_FUNC &&
+                    rd_callee->type->params) {
+                    mangle_pty = rd_callee->type->params;
+                    mangle_np  = rd_callee->type->nparams;
+                }
                 emit_free_func_symbol(n->call.callee->ident.name,
                                        asm_callee,
                                        rd_callee && rd_callee->c_linkage,
-                                       at, na);
+                                       mangle_pty, mangle_np);
                 emitted_mangled = true;
             }
             if (!emitted_mangled) emit_expr(n->call.callee);
@@ -6027,6 +6096,9 @@ typedef struct {
     char   key[FUNC_SIG_KEY_MAX];
     int    key_len;
     bool   c_linkage;   /* N4659 §10.5 — extern "C": never mangle */
+    bool   has_class_param; /* any param is struct/union (or ptr/ref/array thereof) */
+    Type  *params[FFSIG_MAX_PARAMS];   /* for value-context emit when rd is NULL */
+    int    nparams;
 } FreeFuncSig;
 
 static FreeFuncSig g_ffsig_seen[16384];
@@ -6066,6 +6138,17 @@ static void free_ovld_walk(Node *n) {
     e->name = name;
     e->key_len = func_sig_key(name, params, nparams, e->key);
     e->c_linkage = c_linkage;
+    e->has_class_param = false;
+    e->nparams = nparams < FFSIG_MAX_PARAMS ? nparams : FFSIG_MAX_PARAMS;
+    for (int i = 0; i < e->nparams; i++) {
+        e->params[i] = params ? params[i] : NULL;
+        Type *t = e->params[i];
+        while (t && (t->kind == TY_PTR || t->kind == TY_REF ||
+                     t->kind == TY_RVALREF || t->kind == TY_ARRAY))
+            t = t->base;
+        if (t && (t->kind == TY_STRUCT || t->kind == TY_UNION))
+            e->has_class_param = true;
+    }
 }
 
 static void free_ovld_populate(Node *tu) {
@@ -6081,12 +6164,48 @@ static void free_ovld_populate(Node *tu) {
  * on the per-decl c_linkage flag (the caller's). */
 static bool free_func_name_is_overloaded(Token *name) {
     if (!name) return false;
+    /* 'main' is special — implementations universally treat it as
+     * extern "C" linkage; crt0 calls the unmangled symbol.
+     * N4659 §6.6.1 [basic.start.main]/3 leaves the linkage
+     * implementation-defined, but the de-facto ABI is C linkage. */
+    if (name->len == 4 && memcmp(name->loc, "main", 4) == 0) return false;
+    /* Already-mangled name (template instantiation pre-bakes the full
+     * '_p_..._pe_' suffix into the synthesized ident). Returning true
+     * here would re-mangle, doubling the suffix. The pre-baked name
+     * is the canonical symbol — emit it as-is. */
+    if (name->len >= 4 &&
+        memcmp(name->loc + name->len - 4, "_pe_", 4) == 0)
+        return false;
+    /* Two paths into "yes, mangle":
+     *
+     *   1. Locally-visible overload set has 2+ distinct signatures
+     *      with this name (the original C++-overload signal).
+     *
+     *   2. ANY visible decl with this name takes a class-typed
+     *      parameter (struct/union, or pointer/ref/array thereof).
+     *      C++-linked functions with class parameters are the
+     *      overload-prone shape; the C++ ABI mangles every such
+     *      function by signature. Sea-front's per-TU view of the
+     *      overload set can miss "this function is overloaded
+     *      somewhere else": e.g. bitmap.c only includes bitmap.h
+     *      (sees one bitmap_set_bit overload), but reginfo.c
+     *      includes both bitmap.h AND sbitmap.h (sees the other
+     *      overload too) — mangling per-TU made the link fail with
+     *      thousands of undefined references in cc1plus. Mangling
+     *      preemptively when any class-typed param shows up matches
+     *      what every other TU will do for the same signature.
+     *      Plain int-and-pointer-only helpers stay unmangled —
+     *      preserves sea-front's existing test coverage of free
+     *      functions, function pointers, and aggregate-init
+     *      function-pointer struct members. N4659 §10.5 [dcl.link]
+     *      / Itanium C++ ABI §5.1. */
     const char *first_key = NULL;
     int first_key_len = 0;
     for (int i = 0; i < g_n_ffsig_seen; i++) {
         FreeFuncSig *e = &g_ffsig_seen[i];
         if (e->name->len != name->len) continue;
         if (memcmp(e->name->loc, name->loc, name->len) != 0) continue;
+        if (e->has_class_param) return true;
         if (!first_key) {
             first_key = e->key;
             first_key_len = e->key_len;
@@ -6095,6 +6214,32 @@ static bool free_func_name_is_overloaded(Token *name) {
         if (e->key_len != first_key_len ||
             memcmp(e->key, first_key, e->key_len) != 0)
             return true;
+    }
+    return false;
+}
+
+/* Look up a function name in g_ffsig_seen and emit through
+ * emit_free_func_symbol with the recorded params. Returns true if
+ * a matching entry was found and the symbol was emitted. Used by
+ * the ND_IDENT value-context path when sema didn't resolve the
+ * decl (file-scope aggregate initializers etc.) — lets sea-front
+ * still mangle 'add_one' to match the def even though
+ * resolved_decl is NULL. Pattern: gcc 4.8 gengtype.c
+ *   static const struct file_rule_st files_rules[] = {
+ *     ..., source_dot_c_frul,   // ND_IDENT, rd=NULL after sema
+ *     ..., header_dot_h_frul,
+ *   };
+ * The forward decls were emitted as mangled (class-param heuristic),
+ * but the init-list idents emitted bare → "undeclared" link error. */
+static bool emit_free_func_ident_via_ffsig(Token *name) {
+    if (!name) return false;
+    for (int i = 0; i < g_n_ffsig_seen; i++) {
+        FreeFuncSig *e = &g_ffsig_seen[i];
+        if (e->name->len != name->len) continue;
+        if (memcmp(e->name->loc, name->loc, name->len) != 0) continue;
+        emit_free_func_symbol(name, NULL, e->c_linkage,
+                               e->params, e->nparams);
+        return true;
     }
     return false;
 }
