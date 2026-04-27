@@ -85,6 +85,13 @@ for arg in "$@"; do
         PREV=""
         continue
     fi
+    if [ "$PREV" = "-MT" ] || [ "$PREV" = "-MF" ]; then
+        # Pass the value of -MT/-MF to CPP_FLAGS (the flag itself
+        # was already added above).
+        CPP_FLAGS="$CPP_FLAGS $(shell_quote "$arg")"
+        PREV=""
+        continue
+    fi
     PREV=""
     qarg=$(shell_quote "$arg")
     case "$arg" in
@@ -106,6 +113,21 @@ for arg in "$@"; do
             ;;
         -l*|-L*)
             CC_FLAGS="$CC_FLAGS $qarg"
+            ;;
+        -MD|-MMD|-MP)
+            # Dependency-generation flags — pass to the preprocess
+            # (g++ -E) step only. g++ -E captures all #include
+            # relationships and writes the .d file. cc'ing the
+            # transpiled .c then doesn't need to redo it. Passing
+            # to both would race-and-truncate the same .d file.
+            # libcpp's Makefile expects -MF <name>.Tpo to land
+            # somewhere — POSTCOMPILE later 'mv'-s it into place.
+            CPP_FLAGS="$CPP_FLAGS $qarg"
+            ;;
+        -MT|-MF)
+            # Same as above; pass flag AND its value arg.
+            CPP_FLAGS="$CPP_FLAGS $qarg"
+            PREV="$arg"
             ;;
         *.cpp|*.cc|*.cxx|*.C|*.c|*.ii|*.i)
             INPUTS="$INPUTS $qarg"
