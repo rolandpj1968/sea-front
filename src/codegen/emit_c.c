@@ -1088,19 +1088,27 @@ static void hoist_stmt_temps(Node *s) {
         hoist_temps_in_expr(s->ret.expr);
         return;
     case ND_CASE:
-        /* Recurse into the case body so statement-like children with
-         * hoist-needing expressions still get their rvalues
-         * materialized. The switch-body walker passes each ND_CASE
-         * through hoist_stmt_temps; without this, case bodies were
-         * silently skipped. Pattern: gcc 4.8 tree-ssa-ccp.c switch
-         * with 'r1mask.bitor(r2mask).bitand(...)' in a case body. */
-        hoist_stmt_temps(s->case_.stmt);
-        return;
     case ND_DEFAULT:
-        hoist_stmt_temps(s->default_.stmt);
-        return;
     case ND_LABEL:
-        hoist_stmt_temps(s->label.stmt);
+        /* Don't hoist temps from inside a labeled statement to before
+         * its label. C99 §6.8.6 [stmt.jump] / C11 §6.8.6.4 — control
+         * jumping to a label skips over any intervening statements,
+         * so a temp declaration emitted *before* the label has its
+         * initializer never executed when the switch jumps directly
+         * to that case (the temp's storage exists for the whole
+         * enclosing block, but its value is indeterminate). emit_stmt
+         * for ND_CASE/ND_DEFAULT wraps the case body in a brace-
+         * block instead, and hoist runs *inside* that block — every
+         * jump to the case label flows into the brace block, so the
+         * temp's initializer always executes before any use.
+         *
+         * Was: 'hoist_stmt_temps(s->case_.stmt)' here, which emitted
+         * the temp decl at the OUTER (switch-body) scope, past the
+         * case label. gcc 4.8 genextract.c walk_rtx then read
+         * uninitialised stack memory through the temp — the path
+         * pushed into oplocs/duplocs ended up pointing into the
+         * .text section, gen-tool aborted in print_path on the
+         * machine-code bytes that came back. */
         return;
     /* ND_IF/WHILE/DO/FOR conditions are NOT hoisted at the outer
      * block level — that would put the temp in extended-lifetime
@@ -5664,22 +5672,35 @@ static void emit_stmt(Node *n) {
             fputs(";\n", stdout);
         return;
     case ND_CASE:
-        /* case — N4659 §9.1 [stmt.label]/4 */
+        /* case — N4659 §9.1 [stmt.label]/4. Wrap the case body in a
+         * brace block and hoist temps INSIDE the block so the
+         * initializer runs after the case label is jumped to. See
+         * the ND_CASE comment in hoist_stmt_temps for the rationale. */
         fputs("case ", stdout);
         if (n->case_.expr)
             emit_expr(n->case_.expr);
-        fputs(": ", stdout);
-        if (n->case_.stmt)
+        fputs(": {\n", stdout);
+        g_indent++;
+        if (n->case_.stmt) {
+            hoist_stmt_temps(n->case_.stmt);
+            emit_indent();
             emit_stmt(n->case_.stmt);
-        else
-            fputs(";\n", stdout);
+        }
+        g_indent--;
+        emit_indent();
+        fputs("}\n", stdout);
         return;
     case ND_DEFAULT:
-        fputs("default: ", stdout);
-        if (n->default_.stmt)
+        fputs("default: {\n", stdout);
+        g_indent++;
+        if (n->default_.stmt) {
+            hoist_stmt_temps(n->default_.stmt);
+            emit_indent();
             emit_stmt(n->default_.stmt);
-        else
-            fputs(";\n", stdout);
+        }
+        g_indent--;
+        emit_indent();
+        fputs("}\n", stdout);
         return;
     case ND_BREAK:
         if (break_needs_cleanup()) {
