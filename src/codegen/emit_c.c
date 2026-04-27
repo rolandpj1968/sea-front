@@ -3808,8 +3808,28 @@ static void emit_expr(Node *n) {
                 if (rd_callee && rd_callee->type &&
                     rd_callee->type->kind == TY_FUNC &&
                     rd_callee->type->params) {
-                    mangle_pty = rd_callee->type->params;
-                    mangle_np  = rd_callee->type->nparams;
+                    /* Use param types — but only if the resolved
+                     * decl's arity matches the call's. Sema can pick
+                     * the wrong overload (e.g. cloned vec.h template
+                     * body's gt_pch_nx call resolves to a 1-arg
+                     * 'extern void gt_pch_nx(T &)' from a sibling
+                     * template's body instead of the local 'extern
+                     * void gt_pch_nx (T*, gt_pointer_operator, void*)'.
+                     * Mangling against the 1-arg overload's params
+                     * for a 3-arg call yields a name no def matches
+                     * AND produces a 3-arg call to a 1-arg-declared
+                     * symbol — cc errors 'too many arguments'). When
+                     * arity differs, fall back to arg types so at
+                     * least the call's mangled name matches the
+                     * actual arg-count signature. */
+                    bool arity_matches =
+                        rd_callee->type->is_variadic
+                          ? na >= rd_callee->type->nparams
+                          : na == rd_callee->type->nparams;
+                    if (arity_matches) {
+                        mangle_pty = rd_callee->type->params;
+                        mangle_np  = rd_callee->type->nparams;
+                    }
                 }
                 emit_free_func_symbol(n->call.callee->ident.name,
                                        asm_callee,
