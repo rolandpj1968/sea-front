@@ -77,6 +77,13 @@ static Type *g_current_method_class = NULL;
  * says the implicit 'this' is 'const C*' when the enclosing method
  * is const, which biases overload resolution toward const overloads. */
 static bool g_current_method_is_const = false;
+/* True while emitting the body of a static member function. Static
+ * methods have no 'this' (N4659 §11.4.9 [class.static]), so the
+ * ND_IDENT emit's 'this->' prefix for class-member refs must be
+ * suppressed when this flag is set. The class-method mangle path
+ * still fires (we want sf__C__release_p_..._pe_ for sibling calls),
+ * just without the leading 'this->'. */
+static bool g_current_method_is_static = false;
 
 /* Translation unit root — set by emit_c at entry, consulted by
  * helpers that need to find ND_CLASS_DEF nodes by tag+template_args
@@ -1663,6 +1670,14 @@ static void collect_overload_candidates(Type *class_type, Token *name,
     for (int i = 0; i < cd->class_def.nmembers; i++) {
         Node *m = cd->class_def.members[i];
         if (!m) continue;
+        /* Member templates: peel ND_TEMPLATE_DECL to its inner func/
+         * var-decl. The inner candidate is what we score against arg
+         * types — its params have TY_DEPENDENT for the template-
+         * parameter positions, which the existing match scorer treats
+         * as wildcards. Pattern: gcc 4.8 vec.h va_heap::release<T>
+         * called as bare release(v) inside va_heap::reserve<T>. */
+        if (m->kind == ND_TEMPLATE_DECL && m->template_decl.decl)
+            m = m->template_decl.decl;
         bool is_def   = m->kind == ND_FUNC_DEF;
         bool is_decl  = m->kind == ND_VAR_DECL && m->var_decl.ty &&
                         m->var_decl.ty->kind == TY_FUNC;
@@ -1733,6 +1748,12 @@ static bool candidate_is_const(Node *m) {
  * site must skip 'this' when the resolved candidate is static. */
 static bool candidate_is_static(Node *m) {
     if (!m) return false;
+    /* Member templates: the candidate may be the wrapping
+     * ND_TEMPLATE_DECL (returned by resolve_overload's class-region
+     * lookup). Static-ness lives on the inner var-decl/func-def, so
+     * peel one layer. */
+    if (m->kind == ND_TEMPLATE_DECL && m->template_decl.decl)
+        m = m->template_decl.decl;
     if (m->kind == ND_FUNC_DEF) return (m->func.storage_flags & DECL_STATIC) != 0;
     if (m->kind == ND_VAR_DECL)  return (m->var_decl.storage_flags & DECL_STATIC) != 0;
     return false;
@@ -2388,7 +2409,7 @@ static void emit_expr(Node *n) {
             fputs("{0}", stdout);
             return;
         }
-        if (n->ident.implicit_this) {
+        if (n->ident.implicit_this && !g_current_method_is_static) {
             fputs("this->", stdout);
             /* If the resolved declaration lives in a BASE class of
              * the current class, walk through the __sf_base chain
@@ -2940,11 +2961,13 @@ static void emit_expr(Node *n) {
          * an ND_IDENT marked implicit_this, and we recover the class
          * via the resolved declaration's home region. */
         Node *callee = n->call.callee;
+        /* Don't require rd->type to be TY_FUNC — for member-template
+         * decls, the lookup may find the ENTITY_TEMPLATE entry whose
+         * type is NULL. The class_type + mname pair is enough for
+         * resolve_overload to find the right candidate. */
         if (callee && callee->kind == ND_IDENT &&
             callee->ident.implicit_this &&
             callee->ident.resolved_decl &&
-            callee->ident.resolved_decl->type &&
-            callee->ident.resolved_decl->type->kind == TY_FUNC &&
             callee->ident.resolved_decl->home &&
             callee->ident.resolved_decl->home->owner_type &&
             callee->ident.resolved_decl->home->owner_type->tag) {
@@ -2979,6 +3002,24 @@ static void emit_expr(Node *n) {
                 if (np < 0)
                     die_no_overload(class_type, mname, na, "ND_CALL implicit-this");
                 call_np = np;
+                /* Member-template candidates have TY_DEPENDENT
+                 * components (often nested inside TY_REF / TY_PTR /
+                 * TY_ARRAY). At a call from a cloned/instantiated
+                 * body, the call args are concrete; swap them in
+                 * wholesale so the mangled name matches the
+                 * instantiated method. Pattern: gcc 4.8 vec.h
+                 * va_heap::reserve<T> calling release(v). */
+                bool any_dep = false;
+                for (int i = 0; i < np; i++) {
+                    Type *t = call_pty[i];
+                    while (t && (t->kind == TY_REF || t->kind == TY_RVALREF ||
+                                  t->kind == TY_PTR || t->kind == TY_ARRAY))
+                        t = t->base;
+                    if (t && t->kind == TY_DEPENDENT) { any_dep = true; break; }
+                }
+                if (any_dep && np == na) {
+                    for (int i = 0; i < np; i++) call_pty[i] = at[i];
+                }
                 {
                     bool mc = candidate_is_const(winner);
                     mangle_class_method_cv(class_type, mname, call_pty, np, mc);
@@ -6067,13 +6108,16 @@ static void emit_method_as_free_fn(Node *func, Type *class_type) {
     Type *saved_ret = g_current_func_ret_ty;
     Type *saved_mc = g_current_method_class;
     bool saved_mconst = g_current_method_is_const;
+    bool saved_mstatic = g_current_method_is_static;
     g_current_func_ret_ty = func->func.ret_ty;
     g_current_method_class = class_type;
     g_current_method_is_const = func->func.is_const_method;
+    g_current_method_is_static = (func->func.storage_flags & DECL_STATIC) != 0;
     emit_method_signature(func, class_type);
     fputc(' ', stdout);
     emit_func_body(func);
     g_current_method_is_const = saved_mconst;
+    g_current_method_is_static = saved_mstatic;
     g_current_func_ret_ty = saved_ret;
     g_current_method_class = saved_mc;
 }
