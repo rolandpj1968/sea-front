@@ -7104,19 +7104,27 @@ static void emit_prelude(void) {
           stdout);
     /* __SF_INLINE — multi-TU dedup for inline-eligible functions
      * (in-class methods, synthesized ctor/dtor wrappers, dtor body
-     * functions, eventually template instantiations). Expands to a
-     * weak-symbol attribute so the linker picks one survivor when
-     * the same function is emitted in multiple TUs. See
-     * docs/inline_and_dedup.md for the design rationale and full
-     * trade-off analysis. */
-    fputs("#if defined(__GNUC__) || defined(__clang__)\n", stdout);
-    fputs("#  define __SF_INLINE __attribute__((weak))\n", stdout);
-    fputs("#elif defined(_MSC_VER)\n", stdout);
-    fputs("#  define __SF_INLINE __declspec(selectany)\n", stdout);
-    fputs("#else\n", stdout);
-    fputs("#  define __SF_INLINE   /* fall back: each TU has its own copy */\n",
-          stdout);
-    fputs("#endif\n", stdout);
+     * functions, eventually template instantiations).
+     *
+     * 'static inline' — each TU gets its own private copy. The C
+     * compiler can drop the body if it's not called from this TU,
+     * which matters when a header-defined inline calls a function
+     * that isn't linked into THIS executable (e.g. gcc 4.8's
+     * dump_bitmap inline calls bitmap_print which lives in libbackend
+     * but isn't linked into the small gen-tools).
+     *
+     * Previously this was '__attribute__((weak))', which kept the
+     * body in every .o and made the linker resolve those bodies'
+     * external refs even when the function was unused — failing
+     * the build on undefined symbols that nobody actually reached.
+     * 'static inline' relies on per-TU dead-code elimination instead,
+     * which the C compiler does for free.
+     *
+     * Cross-TU dedup still works: if two TUs both call the same
+     * inline, each has its own static copy — no link-time symbol
+     * collision because there's no external symbol. See
+     * docs/inline_and_dedup.md for the full trade-off analysis. */
+    fputs("#define __SF_INLINE static inline\n", stdout);
     fputs("\n", stdout);
 }
 
