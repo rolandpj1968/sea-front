@@ -6247,25 +6247,48 @@ static bool free_func_name_is_overloaded(Token *name) {
      *      functions, function pointers, and aggregate-init
      *      function-pointer struct members. N4659 §10.5 [dcl.link]
      *      / Itanium C++ ABI §5.1. */
-    /* Pre-scan: if ANY visible decl with this name has c_linkage,
-     * treat ALL refs as C-linkage (unmangled). N4659 §10.5/6 says
-     * a name with C linkage refers to a single C function regardless
-     * of how many decls exist; intra-TU mixing of extern "C" and
-     * non-extern-C declarations is permissive under the standard
-     * but real headers do it (e.g. libcpp/internal.h declares
-     * '_cpp_lex_token' inside extern "C" while lex.c defines it
-     * at file scope without a wrapper). Sea-front's per-DECL
-     * c_linkage flag would otherwise mangle the def while leaving
-     * callers (which only saw the extern-C decl) unmangled — link
-     * fails on the mismatch. Honoring the c_linkage signal anywhere
-     * in the visible decls keeps every reference and the def in
-     * sync. */
+    /* Pre-scan: if ANY visible decl with this name has c_linkage
+     * AND every visible decl shares the same signature (only one
+     * distinct sig key for the name), treat ALL refs as C-linkage
+     * (unmangled). N4659 §10.5/6: a name with C linkage refers to
+     * a single C function regardless of how many decls exist.
+     * Intra-TU mixing of extern "C" and non-extern-C declarations
+     * is permissive under the standard but real headers do it —
+     * libcpp/internal.h declares '_cpp_lex_token' inside extern "C"
+     * while lex.c defines it at file scope without a wrapper. Per-
+     * decl c_linkage made the def mangle (no DECL_C_LINKAGE on it
+     * locally) while every caller that only saw the extern-C decl
+     * emitted bare — link failed.
+     *
+     * The "all decls share the same sig" guard avoids hitting the
+     * dual-overload case: <stdlib.h> has 'abs(int)' as extern "C"
+     * AND <bits/std_abs.h> has C++ overloads abs(long), abs(double),
+     * etc. Forcing c_linkage on the whole name set would emit ALL
+     * the abs decls bare and produce a 'conflicting types for abs'
+     * cascade. Treat that case as overloaded → mangled. */
+    int distinct_sigs = 0;
+    bool any_c_linkage = false;
+    const char *seen_keys[8];
+    int         seen_key_lens[8];
     for (int i = 0; i < g_n_ffsig_seen; i++) {
         FreeFuncSig *e = &g_ffsig_seen[i];
         if (e->name->len != name->len) continue;
         if (memcmp(e->name->loc, name->loc, name->len) != 0) continue;
-        if (e->c_linkage) return false;
+        if (e->c_linkage) any_c_linkage = true;
+        bool dup = false;
+        for (int k = 0; k < distinct_sigs; k++) {
+            if (seen_key_lens[k] == e->key_len &&
+                memcmp(seen_keys[k], e->key, e->key_len) == 0) {
+                dup = true; break;
+            }
+        }
+        if (!dup && distinct_sigs < 8) {
+            seen_keys[distinct_sigs] = e->key;
+            seen_key_lens[distinct_sigs] = e->key_len;
+            distinct_sigs++;
+        }
     }
+    if (any_c_linkage && distinct_sigs <= 1) return false;
     const char *first_key = NULL;
     int first_key_len = 0;
     for (int i = 0; i < g_n_ffsig_seen; i++) {
