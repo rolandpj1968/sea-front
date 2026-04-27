@@ -2396,7 +2396,15 @@ static void emit_expr(Node *n) {
         fputs("((void*)0)", stdout);
         return;
     case ND_STR:
-        if (n->str.tok) fprintf(stdout, "%.*s", n->str.tok->len, n->str.tok->loc);
+        /* Emit the whole adjacent-string run. C also concatenates
+         * adjacent string literals (C99 §6.4.5/4), so emitting them
+         * with whitespace between is fine — and preserves source
+         * shape better than pre-joining. */
+        for (int i = 0; i < n->str.ntoks; i++) {
+            Token *t = n->str.tok + i;
+            if (i > 0) fputc(' ', stdout);
+            fprintf(stdout, "%.*s", t->len, t->loc);
+        }
         return;
     case ND_IDENT:
         /* SHORTCUT (ours, not the standard): gcc vec.h defines

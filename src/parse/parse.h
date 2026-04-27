@@ -243,7 +243,12 @@ struct Node {
          * Adjacent string literals are concatenated in translation phase 6.
          * We store the token directly; the semantic layer handles concat. */
         struct {
-            Token *tok;     /* points to the string token (loc/len/enc/is_raw) */
+            Token *tok;     /* first string token in an adjacent run */
+            int    ntoks;   /* total adjacent string tokens (>= 1) — N4659
+                             * §5.13.5/13 [lex.string]: adjacent string
+                             * literals concatenate in translation phase 6.
+                             * The tokens occupy positions [tok, tok+ntoks).
+                             * Emit walks them all. */
         } str;
 
         /* ND_CHAR — N4659 §5.13.3 [lex.ccon] */

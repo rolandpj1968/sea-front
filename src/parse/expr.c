@@ -165,16 +165,16 @@ static Node *primary_expr(Parser *p) {
         parser_advance(p);
         return new_fnum_node(p, tok);
 
-    case TK_STR: {      /* §5.13.5 [lex.string]
-                         * Adjacent string literals are concatenated in
-                         * translation phase 6 (§5.13.5/13). We consume all
-                         * consecutive string tokens here; the semantic
-                         * layer handles actual concatenation and encoding. */
+    case TK_STR: {      /* §5.13.5/13 [lex.string]: adjacent string
+                         * literals concatenate in translation phase 6.
+                         * Capture the run as (first-token, count) so
+                         * codegen can re-emit the whole sequence. */
         parser_advance(p);
-        while (parser_at(p, TK_STR))
-            parser_advance(p);
+        int ntoks = 1;
+        while (parser_at(p, TK_STR)) { parser_advance(p); ntoks++; }
         Node *node = new_node(p, ND_STR, tok);
         node->str.tok = tok;
+        node->str.ntoks = ntoks;
         return node;
     }
 
