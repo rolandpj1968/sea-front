@@ -3091,6 +3091,19 @@ static void emit_expr(Node *n) {
             if (!ot && obj && obj->kind == ND_MEMBER && obj->member.member) {
                 Node *outer = obj->member.obj;
                 Type *outer_ty = outer ? outer->resolved_type : NULL;
+                /* If the outer's resolved_type is missing (common in
+                 * cloned member-template bodies), compute it from the
+                 * operand of an ND_UNARY('*'): '*v' where v is T*&
+                 * yields T* (deref the ref + ptr). */
+                if (!outer_ty && outer && outer->kind == ND_UNARY &&
+                    outer->unary.op == TK_STAR && outer->unary.operand) {
+                    Type *opt = outer->unary.operand->resolved_type;
+                    /* Peel one ref/rvalref layer first, then one ptr
+                     * layer (the actual unary '*' indirection). */
+                    if (opt && ty_is_ref(opt)) opt = opt->base;
+                    if (opt && opt->kind == TY_PTR) opt = opt->base;
+                    outer_ty = opt;
+                }
                 /* Strip the same ref/ptr layers that the main resolver
                  * does below — so 'v->inner.bump()' (v is T*&) reaches
                  * the inner struct via TY_REF -> TY_PTR -> TY_STRUCT. */
@@ -3101,6 +3114,21 @@ static void emit_expr(Node *n) {
                 if (outer_ty && outer_ty->kind == TY_PTR && outer_ty->base &&
                     obj->member.op == TK_ARROW)
                     outer_ty = outer_ty->base;
+                /* Type copies that come through subst_type may have
+                 * tag set but class_region NULL — only the canonical
+                 * instantiated Type carries class_region. Walk the TU
+                 * by (tag, template_args) to find the canonical
+                 * class_def, then use ITS Type's class_region.
+                 * Pattern: gcc 4.8 vec.h va_heap::release's cloned
+                 * body has 'v->vecpfx_.release_overhead()' where v's
+                 * resolved_type is a substituted Type copy whose
+                 * class_region wasn't patched. */
+                if (outer_ty && !outer_ty->class_region && outer_ty->tag) {
+                    Node *cd = find_class_def_by_tag_args(outer_ty);
+                    if (cd && cd->class_def.ty &&
+                        cd->class_def.ty->class_region)
+                        outer_ty = cd->class_def.ty;
+                }
                 if (outer_ty && outer_ty->class_region) {
                     Token *fn = obj->member.member;
                     Declaration *fd = lookup_in_scope(outer_ty->class_region,
