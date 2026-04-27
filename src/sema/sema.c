@@ -1200,7 +1200,20 @@ static Declaration *resolve_free_function_overload(
      * and produce identical viable candidates. Don't return NULL
      * (which leaves the call site mangling against an arbitrary
      * other overload via the historical first-found resolved_decl).
-     * Pick the first viable: any of them is a valid resolution. */
+     * Pick the first viable: any of them is a valid resolution.
+     *
+     * Critical: also propagate is_template + deduced when picking
+     * via this tiebreak. Without it, vec_free<T,A> calls (where
+     * both vec_free overloads are ENTITY_TEMPLATE and may be tied
+     * after deduction) returned the right Decl but with
+     * out_is_template=false → visit_call skipped the
+     * ND_TEMPLATE_ID rewrite → the instantiation pass never saw
+     * the call → the template was never instantiated → cc1plus
+     * link missed 49 vec_free symbols. */
+    if (viable[0].is_template) {
+        if (out_is_template) *out_is_template = true;
+        if (out_deduced) *out_deduced = viable[0].deduced;
+    }
     return viable[0].decl;
 }
 
