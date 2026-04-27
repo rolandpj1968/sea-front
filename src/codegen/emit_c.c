@@ -6316,6 +6316,43 @@ static void emit_free_func_header(Type *ret_ty, Token *name,
     int np = nparams < 32 ? nparams : 32;
     for (int i = 0; i < np; i++)
         ptypes[i] = params[i] ? params[i]->param.ty : NULL;
+    /* Function-pointer return type: C requires the name to be
+     * interleaved with the pointer, not placed after a standalone
+     * type. Mirror emit_func_header's handling — without this,
+     * 'gimple_predicate rhs_predicate_for(tree)' emits as
+     *   _Bool (*)(union tree_node*) rhs_predicate_for_p_..._pe_(...)
+     * which is invalid C (cc errors "expected identifier or '(' before
+     * ')' token" on the standalone function-pointer type). The
+     * interleaved form
+     *   _Bool (*rhs_predicate_for_p_..._pe_(...))(union tree_node *)
+     * is the standard C declarator. N4659 §11.3 [dcl.meaning]
+     * / C99 §6.7.5.3 [Function declarators]. */
+    bool ret_is_fptr = ret_ty && ret_ty->kind == TY_PTR &&
+                       ret_ty->base && ret_ty->base->kind == TY_FUNC;
+    if (ret_is_fptr) {
+        Type *fty = ret_ty->base;
+        emit_type(fty->ret);
+        fputs(" (*", stdout);
+        emit_free_func_mangled_name(name, ptypes, np);
+        fputc('(', stdout);
+        if (nparams == 0 && !variadic) {
+            fputs("void", stdout);
+        } else {
+            for (int i = 0; i < nparams; i++) {
+                if (i > 0) fputs(", ", stdout);
+                Node *p = params[i];
+                emit_param_declarator(p->param.ty, p->param.name, i);
+            }
+            if (variadic) {
+                if (nparams > 0) fputs(", ", stdout);
+                fputs("...", stdout);
+            }
+        }
+        fputs("))(", stdout);
+        emit_func_param_types(fty);
+        fputc(')', stdout);
+        return;
+    }
     emit_type(ret_ty);
     fputc(' ', stdout);
     emit_free_func_mangled_name(name, ptypes, np);
