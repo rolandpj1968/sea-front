@@ -1720,13 +1720,43 @@ void template_instantiate(Node *tu, Arena *arena) {
     int total_inst = 0;
     Node **all_instantiated = arena_alloc(arena, MAX_INST * sizeof(Node *));
 
-    for (int iteration = 0; iteration < 32; iteration++) {
+    /* Worklist iteration: each pass walks ONLY entries new since
+     * the previous pass. The previous design re-walked all of
+     * tu->tu.decls every iteration (quadratic in the number of
+     * templates) and merged new instantiations into tu->tu.decls
+     * mid-loop (the merge that 2a7fca4 fixed for cap-overflow
+     * corruption). New shape:
+     *
+     *   - Walk only tu->tu.decls[n_walked_decls..ndecls)
+     *   - AND walk all_instantiated[n_walked_inst..total_inst)
+     *   - Bump indices to current sizes
+     *   - If no new requests: terminate
+     *   - Single merge with tu->tu.decls happens once after the
+     *     worklist closes (post-loop, below)
+     *
+     * Each cloned body is walked exactly once. Termination is
+     * natural: the (template, args) memoization in dedup ensures
+     * a finite number of distinct instantiations; the worklist
+     * shrinks to empty.
+     *
+     * This isn't full recursion (the user wanted "concrete work,
+     * not loops"), but it IS the linear worklist algorithm —
+     * equivalent in space/time to recursion, smaller scope of
+     * structural change. See docs/instantiation-policy.md for
+     * the deferred fully-recursive design. */
+    int n_walked_decls = 0;
+    int n_walked_inst = 0;
+    while (1) {
     /* Phase 2: collect instantiation requests from current TU */
     InstCollector col = {0};
     col.arena = arena;
     col.reg = &reg;
-    for (int i = 0; i < tu->tu.ndecls; i++)
+    for (int i = n_walked_decls; i < tu->tu.ndecls; i++)
         collect_from_node(&col, tu->tu.decls[i]);
+    for (int i = n_walked_inst; i < total_inst; i++)
+        collect_from_node(&col, all_instantiated[i]);
+    n_walked_decls = tu->tu.ndecls;
+    n_walked_inst  = total_inst;
     if (col.count == 0 && col.member_count == 0) break;
 
     /* Phase 3a: member template instantiations FIRST — they're
@@ -2276,43 +2306,45 @@ void template_instantiate(Node *tu, Arena *arena) {
         }
     }
 
-    if (ninst_this_round == 0) break;
-
-    /* Insert this round's instantiations into the TU. They go after
-     * all class definitions (so concrete base classes are defined
-     * first) but before function definitions (so function bodies
-     * can reference the instantiated types). Find the last
-     * ND_CLASS_DEF / ND_BLOCK in the source and insert after it. */
-    int insert_pos = 0;
-    for (int i = 0; i < tu->tu.ndecls; i++) {
-        Node *d = tu->tu.decls[i];
-        if (d && (d->kind == ND_CLASS_DEF || d->kind == ND_BLOCK))
-            insert_pos = i + 1;
-        /* Full specializations (template<> struct X<int> { ... }) are
-         * ND_TEMPLATE_DECL wrapping ND_CLASS_DEF — count them too so
-         * instantiations that reference the specialization come after. */
-        if (d && d->kind == ND_TEMPLATE_DECL &&
-            d->template_decl.nparams == 0 && d->template_decl.decl &&
-            d->template_decl.decl->kind == ND_CLASS_DEF)
-            insert_pos = i + 1;
-    }
-    /* If no classes found, insert at front (same as before) */
-    int old_n = tu->tu.ndecls;
-    int new_n = old_n + ninst_this_round;
-    Node **new_decls = arena_alloc(arena, new_n * sizeof(Node *));
-    int idx = 0;
-    /* Source decls before insert point */
-    for (int i = 0; i < insert_pos && i < old_n; i++)
-        new_decls[idx++] = tu->tu.decls[i];
-    /* Instantiations */
-    for (int i = total_inst - ninst_this_round; i < total_inst; i++)
-        new_decls[idx++] = all_instantiated[i];
-    /* Source decls after insert point */
-    for (int i = insert_pos; i < old_n; i++)
-        new_decls[idx++] = tu->tu.decls[i];
-    tu->tu.decls  = new_decls;
-    tu->tu.ndecls = new_n;
+    /* Per-iteration merge with tu->tu.decls is GONE (was the source
+     * of the cap-overflow corruption fixed in 2a7fca4). With the
+     * worklist-style walk, we only walk new entries each pass —
+     * the cloned bodies sit in all_instantiated[] and the next
+     * iteration's collect_from_node walks them directly via
+     * n_walked_inst, no merge needed during the loop. The single
+     * merge happens once after the loop, below. */
     } /* end iteration loop */
+
+    /* Single end-of-loop merge: insert ALL instantiations (across
+     * every iteration) into tu->tu.decls. Same insert-position
+     * logic as before — after the last source class def, before
+     * function defs — but applied once with total_inst entries. */
+    {
+        int insert_pos = 0;
+        for (int i = 0; i < tu->tu.ndecls; i++) {
+            Node *d = tu->tu.decls[i];
+            if (d && (d->kind == ND_CLASS_DEF || d->kind == ND_BLOCK))
+                insert_pos = i + 1;
+            if (d && d->kind == ND_TEMPLATE_DECL &&
+                d->template_decl.nparams == 0 && d->template_decl.decl &&
+                d->template_decl.decl->kind == ND_CLASS_DEF)
+                insert_pos = i + 1;
+        }
+        int old_n = tu->tu.ndecls;
+        int new_n = old_n + total_inst;
+        if (total_inst > 0) {
+            Node **new_decls = arena_alloc(arena, new_n * sizeof(Node *));
+            int idx = 0;
+            for (int i = 0; i < insert_pos && i < old_n; i++)
+                new_decls[idx++] = tu->tu.decls[i];
+            for (int i = 0; i < total_inst; i++)
+                new_decls[idx++] = all_instantiated[i];
+            for (int i = insert_pos; i < old_n; i++)
+                new_decls[idx++] = tu->tu.decls[i];
+            tu->tu.decls  = new_decls;
+            tu->tu.ndecls = new_n;
+        }
+    }
 
     /* Post-loop: resolve template base classes. During instantiation,
      * a derived template's base type (e.g. base_t<int>) may not have
