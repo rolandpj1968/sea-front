@@ -312,6 +312,15 @@ static void build_registry(TmplRegistry *reg, Node *n) {
         Token *name = template_name(n);
         if (name)
             registry_add(reg, name->loc, name->len, n);
+        /* If the template wraps a class def, descend so any member
+         * templates inside the class template are also registered.
+         * N4659 §17.5.2 [temp.mem] permits 'template<class T> struct
+         * Box { template<class U> static T *cast(U *); };' — both
+         * heads need separate registration so a qualified call like
+         * Box<int>::cast<float>(p) can find the member template. */
+        Node *inner = n->template_decl.decl;
+        if (inner && inner->kind == ND_CLASS_DEF)
+            build_registry(reg, inner);
         break;
     }
     case ND_BLOCK:
@@ -371,6 +380,13 @@ struct MemberTmplRequest {
     Type     **arg_types;   /* call-site argument types for deduction */
     int        nargs;
     Node      *call_node;   /* ND_CALL node (to patch resolved_type) */
+    Node      *class_tid;   /* leading template-id for the class qualifier
+                              * (Box<int> in 'Box<int>::convert(...)') —
+                              * NULL when the qualifier is a non-template
+                              * class. Drives the cloned func's class_type
+                              * so the def mangles with the same template
+                              * args as the call site. N4659 §17.5.2 +
+                              * Itanium C++ ABI §5.1. */
     MemberTmplRequest *next;
 };
 
@@ -645,6 +661,7 @@ static void collect_from_node(InstCollector *col, Node *n) {
                     mr->entry = me;
                     mr->nargs = n->call.nargs;
                     mr->call_node = n;
+                    mr->class_tid = n->call.callee->qualified.lead_tid;
                     if (n->call.nargs > 0) {
                         mr->arg_types = arena_alloc(col->arena,
                             n->call.nargs * sizeof(Type *));
@@ -1606,7 +1623,28 @@ void template_instantiate(Node *tu, Arena *arena) {
         /* Clone with deduced substitutions */
         Node *cloned = clone_node(func_src, &deduced, arena);
         if (!cloned) continue;
+        /* If the qualifier is a class-template instantiation
+         * (Box<int>::convert), build a class_type carrying its
+         * template_args so the def mangles as
+         * 'sf__Box_t_int_te___convert_*' — matching the call site
+         * which emits via mangle_class_tag(). Without this the def
+         * would mangle as the bare class name 'sf__Box__convert_*'
+         * and link would fail. N4659 §17.5.2 [temp.mem]. */
         cloned->func.class_type = mr->entry->owner_class;
+        if (mr->class_tid && mr->class_tid->kind == ND_TEMPLATE_ID &&
+            mr->entry->owner_class) {
+            int tna = mr->class_tid->template_id.nargs;
+            if (tna > 0) {
+                Type *ct = arena_alloc(arena, sizeof(Type));
+                *ct = *mr->entry->owner_class;
+                ct->n_template_args = tna;
+                ct->template_args = arena_alloc(arena, tna * sizeof(Type *));
+                for (int i = 0; i < tna; i++)
+                    ct->template_args[i] = type_arg_from_node(
+                        mr->class_tid->template_id.args[i]);
+                cloned->func.class_type = ct;
+            }
+        }
 
         /* N4659 §16.3 [over.match]: build TY_FUNC from cloned params
          * and set as resolved_type on the call-site callee so the
