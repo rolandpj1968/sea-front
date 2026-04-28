@@ -438,6 +438,19 @@ static void collect_from_type(InstCollector *col, Type *ty) {
     if (tid->kind != ND_TEMPLATE_ID || !tid->template_id.name)
         return;
 
+    /* Recurse into nested template-args so e.g. 'user<hasher<int>>'
+     * also triggers instantiation of hasher<int>. Without this
+     * recursion, a class-template instantiation that's only ever
+     * used as a template-argument to another class template never
+     * gets emitted — its methods are then undefined when the outer
+     * class's body calls them via the bound name. N4659 §17.7.1
+     * [temp.inst]. */
+    for (int i = 0; i < tid->template_id.nargs; i++) {
+        Node *arg = tid->template_id.args[i];
+        Type *aty = (arg && arg->kind == ND_VAR_DECL) ? arg->var_decl.ty : NULL;
+        if (aty) collect_from_type(col, aty);
+    }
+
     /* Skip template-ids that still have dependent (unresolved) args.
      * These appear inside cloned template bodies where an outer
      * template parameter hasn't been substituted yet. They'll be

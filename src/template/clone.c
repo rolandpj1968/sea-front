@@ -304,8 +304,19 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
             if (lead) {
                 Type *sub = subst_map_lookup(map, lead->loc, lead->len);
                 if (sub) {
-                    /* Replace the leading token with the concrete type's tag */
+                    /* Replace the leading token with the concrete type's
+                     * tag. ALSO carry the substituted Type as
+                     * resolved_class_type so codegen mangles through
+                     * mangle_class_tag — preserving the template args
+                     * (e.g. Descriptor → pointer_hash<gimple_statement_d>
+                     * keeps the <gimple_statement_d> in the symbol).
+                     * Without this, the call mangles as bare
+                     * 'sf__pointer_hash__hash_*' and the def lives at
+                     * 'sf__pointer_hash_t_gimple_statement_d_te___hash_*'.
+                     * N4659 §17.7.1 [temp.inst]. */
                     if (sub->tag) c->qualified.parts[0] = sub->tag;
+                    if (sub->n_template_args > 0 && !c->qualified.resolved_class_type)
+                        c->qualified.resolved_class_type = sub;
                     /* Phase 2: look up the member in the concrete class.
                      * N4659 §6.4.3 [basic.lookup.qual] — qualified name
                      * lookup in the named class. */
