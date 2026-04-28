@@ -315,7 +315,15 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
                             Declaration *md = lookup_in_scope(
                                 sub->class_region, member->loc, member->len);
                             if (md && md->type) {
-                                c->resolved_type = md->type;
+                                /* Substitute through the lookup result —
+                                 * the Declaration's type may carry
+                                 * TY_DEPENDENT params (the un-instantiated
+                                 * template body's signature). Without
+                                 * subst_type, codegen mangles the call
+                                 * with literal 'Type' tags instead of
+                                 * the deduced concrete arg. N4659
+                                 * §17.7.1 [temp.inst]. */
+                                c->resolved_type = subst_type(md->type, map, arena);
                             }
                         }
                     }

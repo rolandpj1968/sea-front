@@ -3241,7 +3241,34 @@ static void emit_expr(Node *n) {
                      * a fallback for ref-param adaptation. */
                     Type **fb_pty = NULL;
                     int    fb_np  = -1;
-                    if (callee_ft && callee_ft->kind == TY_FUNC &&
+                    /* Detect TY_DEPENDENT in callee_ft's params: that
+                     * means sema/clone resolved the call to a method
+                     * via class_region lookup, but the looked-up
+                     * Declaration's type retained the class template's
+                     * OWN parameter name (e.g. 'pointer_hash<T>::hash'
+                     * lookup returns 'hash(Type*)' — pointer_hash's own
+                     * 'Type', not the outer template's T). The outer
+                     * SubstMap doesn't bind 'Type', so subst_type
+                     * leaves it dependent. Fall through to the TU-walk
+                     * which finds the cloned method def with concrete
+                     * params. N4659 §17.7.1 [temp.inst]. */
+                    bool callee_ft_has_dep = false;
+                    if (callee_ft && callee_ft->kind == TY_FUNC) {
+                        for (int k = 0; k < callee_ft->nparams; k++) {
+                            Type *t = callee_ft->params[k];
+                            while (t && (t->kind == TY_PTR ||
+                                          t->kind == TY_REF ||
+                                          t->kind == TY_RVALREF ||
+                                          t->kind == TY_ARRAY))
+                                t = t->base;
+                            if (t && t->kind == TY_DEPENDENT) {
+                                callee_ft_has_dep = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!callee_ft_has_dep && callee_ft &&
+                        callee_ft->kind == TY_FUNC &&
                         callee_ft->nparams > 0) {
                         mangle_param_suffix(callee_ft->params,
                                              callee_ft->nparams);
@@ -3258,11 +3285,40 @@ static void emit_expr(Node *n) {
                          * vec<...>* signature, link fails on 18+
                          * va_stack::alloc instantiations. */
                         if (g_tu) {
-                            for (int di = 0; di < g_tu->tu.ndecls; di++) {
-                                Node *d = g_tu->tu.decls[di];
+                            /* Build a flat list of candidate ND_FUNC_DEF
+                             * nodes: top-level funcs (peeled from any
+                             * ND_TEMPLATE_DECL wrapper) PLUS members of
+                             * top-level ND_CLASS_DEFs. The class-member
+                             * case covers instantiated class templates
+                             * whose methods live as members rather than
+                             * top-level OOL defs (e.g. pointer_hash<T>
+                             * with in-class static method definitions).
+                             * Without this, the TU-walk falls back to
+                             * arg types and the call mangle uses the
+                             * un-substituted 'Type' instead of 'int'.
+                             * N4659 §17.7.1 [temp.inst]. */
+                            enum { MAX_FB_CAND = 4096 };
+                            Node *cand_list[MAX_FB_CAND];
+                            int n_cand = 0;
+                            for (int di = 0; di < g_tu->tu.ndecls && n_cand < MAX_FB_CAND; di++) {
+                                Node *raw = g_tu->tu.decls[di];
+                                if (!raw) continue;
+                                Node *peeled = raw;
+                                if (peeled->kind == ND_TEMPLATE_DECL && peeled->template_decl.decl)
+                                    peeled = peeled->template_decl.decl;
+                                if (peeled->kind == ND_FUNC_DEF) {
+                                    cand_list[n_cand++] = peeled;
+                                } else if (peeled->kind == ND_CLASS_DEF) {
+                                    for (int mi = 0; mi < peeled->class_def.nmembers && n_cand < MAX_FB_CAND; mi++) {
+                                        Node *m = peeled->class_def.members[mi];
+                                        if (m && m->kind == ND_FUNC_DEF)
+                                            cand_list[n_cand++] = m;
+                                    }
+                                }
+                            }
+                            for (int di = 0; di < n_cand; di++) {
+                                Node *d = cand_list[di];
                                 if (!d) continue;
-                                if (d->kind == ND_TEMPLATE_DECL && d->template_decl.decl)
-                                    d = d->template_decl.decl;
                                 if (d->kind != ND_FUNC_DEF) continue;
                                 if (!d->func.class_type ||
                                     !d->func.class_type->tag) continue;
@@ -3375,6 +3431,22 @@ static void emit_expr(Node *n) {
                                             }
                                         }
                                         if (!args_match) continue;
+                                    } else if ((pp && pp->kind != TY_STRUCT &&
+                                                pp->kind != TY_UNION) ||
+                                               (aa && aa->kind != TY_STRUCT &&
+                                                aa->kind != TY_UNION)) {
+                                        /* Primitive first param/arg (e.g.
+                                         * pointer_hash<int>::hash(int *p)
+                                         * — first arg is int*, not a
+                                         * class type). The class-arg
+                                         * disambiguation rule above
+                                         * doesn't apply; accept this
+                                         * candidate without further
+                                         * tie-breaking. The class+method
+                                         * +arity match is already
+                                         * sufficient when there's only
+                                         * one shape per (class, method,
+                                         * arity). */
                                     } else {
                                         /* Different shapes — give up
                                          * on this candidate. */
