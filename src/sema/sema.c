@@ -576,12 +576,46 @@ static void visit_var_decl(Sema *s, Node *n) {
 
 /* Compound statement — N4659 §9.3 [stmt.block]. Pushes the block's
  * declarative region onto the sema scope chain so identifiers in
- * nested statements resolve via inner-scope-first lookup. */
+ * nested statements resolve via inner-scope-first lookup.
+ *
+ * Cloned blocks (template instantiation) have block.scope = NULL —
+ * clone.c clears it because the parser-built scope's bucket entries
+ * point at the un-substituted Type*. Without re-creating a block
+ * scope here, local variable declarations in the cloned body never
+ * land in any region and references to them fall through to the
+ * enclosing class scope — sema then incorrectly inserts 'this->'
+ * on a 'local'-shadowing class member. gcc 4.8 hash_table::dispose
+ * 'size_t size = htab->size; for (int i = size - 1; ...)' produced
+ * 'this->size' on the second 'size' reference — the struct doesn't
+ * have a 'size' member, link/compile fails downstream. N4659
+ * §6.3.3 [basic.scope.block] + §6.3.10 [basic.scope.hiding]. */
 static void visit_block(Sema *s, Node *n) {
     DeclarativeRegion *saved = s->cur_scope;
-    if (n->block.scope) s->cur_scope = n->block.scope;
-    for (int i = 0; i < n->block.nstmts; i++)
-        visit(s, n->block.stmts[i]);
+    bool created = false;
+    if (!n->block.scope) {
+        DeclarativeRegion *r = arena_alloc(s->arena, sizeof(*r));
+        memset(r, 0, sizeof(*r));
+        r->kind = REGION_BLOCK;
+        r->enclosing = s->cur_scope;
+        n->block.scope = r;
+        created = true;
+    }
+    s->cur_scope = n->block.scope;
+    for (int i = 0; i < n->block.nstmts; i++) {
+        Node *st = n->block.stmts[i];
+        visit(s, st);
+        /* Register local variable declarations into the freshly-
+         * created scope after visiting their initializer. Order
+         * matches N4659 §6.3.3/2: a name's potential scope begins
+         * at its declarator and ends at the block's closing brace,
+         * so the init expression sees the OUTER name when shadowed. */
+        if (created && st && st->kind == ND_VAR_DECL &&
+            st->var_decl.name) {
+            region_declare_raw(n->block.scope, s->arena,
+                st->var_decl.name->loc, st->var_decl.name->len,
+                ENTITY_VARIABLE, st->var_decl.ty);
+        }
+    }
     s->cur_scope = saved;
 }
 
