@@ -1135,6 +1135,16 @@ static bool template_ids_unify(Node *a, Node *b) {
         Node *bb = b->template_id.args[i];
         Type *at = (aa && aa->kind == ND_VAR_DECL) ? aa->var_decl.ty : NULL;
         Type *bt = (bb && bb->kind == ND_VAR_DECL) ? bb->var_decl.ty : NULL;
+        /* NULL on either side = wildcard. Template-template parameters
+         * (gcc 4.8 hash_table's 'template<typename T> class Allocator')
+         * carry no Type — sea-front parses them but doesn't model the
+         * inner template-parameter-list. Treating NULL as a wildcard
+         * lets the OOL of 'hash_table<D,A>::create' bind to the
+         * instantiated 'hash_table<asan_mem_ref_hasher>' (where the
+         * default Allocator was filled in at usage). N4659 §17.2/3
+         * [temp.param]: a template-template parameter accepts any
+         * argument that itself names a class template. */
+        if (!at || !bt) continue;
         if (!types_match(at, bt)) return false;
     }
     return true;
@@ -1189,12 +1199,50 @@ static bool ool_method_matches(Node *method, Type *target_class) {
      * like 'Box<T>::get'). It's a mismatch when any arg is concrete
      * ('vec<T,A,vl_embed>::last' shouldn't bind to the primary). */
     if (m_tid && !t_tid) {
+        /* Build a set of the OOL's enclosing template-parameter
+         * names so we can recognise template-template-parameter
+         * args (which sea-front parses as opaque TY_STRUCT with
+         * tag = the param name, not TY_DEPENDENT). N4659 §17.2/3
+         * [temp.param] — a template-template parameter accepts any
+         * argument that names a class template; from the OOL's
+         * perspective it's a bindable variable, just like a regular
+         * type parameter. gcc 4.8 hash_table:
+         *   template<typename Descriptor,
+         *            template<typename T> class Allocator = xcallocator>
+         *   class hash_table { ... };
+         *   template<typename Descriptor,
+         *            template<typename T> class Allocator>
+         *   void hash_table<Descriptor, Allocator>::create(size_t) { ... }
+         */
         for (int i = 0; i < m_tid->template_id.nargs; i++) {
             Node *a = m_tid->template_id.args[i];
             Type *t = (a && a->kind == ND_VAR_DECL) ? a->var_decl.ty : NULL;
-            if (t && t->kind != TY_DEPENDENT) return false;
+            if (!t || t->kind == TY_DEPENDENT) continue;
+            /* A non-TY_DEPENDENT type whose tag matches one of the
+             * method's enclosing template parameters is also a
+             * dependent-style wildcard. Sea-front parses
+             * template-template parameter names in template-arg
+             * position via the ENTITY_TEMPLATE lookup, which has
+             * type=NULL → falls through to the opaque-type path
+             * (TY_INT or TY_STRUCT with tag = the param name). The
+             * tag comparison recovers the template-template-arg
+             * intent. N4659 §17.2/3 [temp.param] — a template-
+             * template parameter accepts any class-template arg. */
+            bool matches_tparam = false;
+            if (t->tag) {
+                for (int j = 0; j < method->template_decl.nparams; j++) {
+                    Node *tp = method->template_decl.params[j];
+                    Token *tn = tp ? tp->param.name : NULL;
+                    if (tn && tn->len == t->tag->len &&
+                        memcmp(tn->loc, t->tag->loc, tn->len) == 0) {
+                        matches_tparam = true;
+                        break;
+                    }
+                }
+            }
+            if (!matches_tparam) return false;
         }
-        return true;  /* all args dependent — primary-compatible */
+        return true;  /* all args dependent or template-template params */
     }
     /* OOL qualifier had no template-id args: legacy tag-only match.
      * (This is the common case for non-templated classes.) */
