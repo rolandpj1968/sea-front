@@ -1558,8 +1558,18 @@ void template_instantiate(Node *tu, Arena *arena) {
         Node *inner = tmpl->template_decl.decl;
         if (!inner) continue;
 
-        /* N4659 §17.8.2.1 [temp.deduct.call]: deduce template args */
-        SubstMap deduced = subst_map_new(arena, np > 0 ? np : 1);
+        /* N4659 §17.8.2.1 [temp.deduct.call]: deduce template args.
+         * Capacity must accommodate both the inner head's params AND
+         * the outer class-template's params (deduce_from_pair binds
+         * those too via 'Holder<A>*' vs 'Holder<int>*' matching).
+         * Without enough capacity, subst_map_add silently drops the
+         * second binding and clone_node leaves T as TY_DEPENDENT. */
+        int outer_np = (mr->class_tid &&
+                        mr->class_tid->kind == ND_TEMPLATE_ID)
+                       ? mr->class_tid->template_id.nargs : 0;
+        int cap = np + outer_np;
+        if (cap < 1) cap = 1;
+        SubstMap deduced = subst_map_new(arena, cap);
         if (!deduce_template_args(inner, mr->arg_types, mr->nargs, &deduced))
             continue;
 
@@ -1602,7 +1612,18 @@ void template_instantiate(Node *tu, Arena *arena) {
             for (int i = 0; i < tu->tu.ndecls; i++) {
                 Node *d = tu->tu.decls[i];
                 if (!d || d->kind != ND_TEMPLATE_DECL) continue;
+                /* Peel any nested template heads. The OOL definition
+                 * of a member template inside a class template carries
+                 * TWO heads —
+                 *   template<typename A>
+                 *   template<typename T>
+                 *   int Holder<A>::combine(...) { ... }
+                 * — and parses as ND_TEMPLATE_DECL wrapping another
+                 * ND_TEMPLATE_DECL wrapping the FUNC_DEF. N4659
+                 * §17.5.2/3 [temp.mem]. */
                 Node *di = d->template_decl.decl;
+                while (di && di->kind == ND_TEMPLATE_DECL)
+                    di = di->template_decl.decl;
                 if (!di || di->kind != ND_FUNC_DEF || !di->func.body) continue;
                 if (!di->func.class_type || !di->func.name) continue;
                 Token *ct = di->func.class_type->tag;
