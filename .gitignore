@@ -26,3 +26,7 @@ notes-on-docs*
 
 # Claude runtime state
 .claude/
+
+# Build outputs from gen-tools spot checks
+init-opinit.c
+init-opinit.h
