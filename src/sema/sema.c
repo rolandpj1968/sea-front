@@ -1463,6 +1463,22 @@ static void visit(Sema *s, Node *n) {
                         member->loc, member->len);
                     if (md && md->type)
                         n->resolved_type = md->type;
+                    /* Typedef-resolution: when 'lead' is a typedef
+                     * for a class type (e.g. 'stackv' typedef'd to
+                     * 'vec<T,va_stack,vl_embed>' inside the
+                     * vec_stack_alloc macro), rewrite parts[0] to
+                     * the underlying class's tag so codegen mangles
+                     * the qualified call against the canonical
+                     * class symbol — not the typedef alias.
+                     * Without this, 'stackv::embedded_size(N)'
+                     * mangled as 'sf__stackv__embedded_size_*' on
+                     * the call site, while the def lived under
+                     * 'sf__vec_t_<T>_va_stack_vl_embed_te___embedded_size_*'.
+                     * 24+ unresolved refs in cc1plus on df-scan.c. */
+                    if (ld->type->tag &&
+                        (ld->type->tag->len != lead->len ||
+                         memcmp(ld->type->tag->loc, lead->loc, lead->len) != 0))
+                        n->qualified.parts[0] = ld->type->tag;
                 }
             }
         }
