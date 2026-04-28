@@ -32,14 +32,35 @@ void subst_map_add(SubstMap *m, Token *param_name, Type *concrete_type) {
     if (m->nentries >= m->capacity) return;  /* silently drop — shouldn't happen */
     m->entries[m->nentries].param_name = param_name;
     m->entries[m->nentries].concrete_type = concrete_type;
+    m->entries[m->nentries].tt_bound_name = NULL;
+    m->nentries++;
+}
+
+void subst_map_add_tt(SubstMap *m, Token *param_name, Token *bound_name) {
+    if (m->nentries >= m->capacity) return;
+    m->entries[m->nentries].param_name = param_name;
+    m->entries[m->nentries].concrete_type = NULL;
+    m->entries[m->nentries].tt_bound_name = bound_name;
     m->nentries++;
 }
 
 static Type *subst_map_lookup(SubstMap *map, const char *name, int len) {
     for (int i = 0; i < map->nentries; i++) {
         Token *pn = map->entries[i].param_name;
+        /* Skip TT-only entries — concrete_type is NULL by design. */
+        if (!map->entries[i].concrete_type) continue;
         if (pn && pn->len == len && memcmp(pn->loc, name, len) == 0)
             return map->entries[i].concrete_type;
+    }
+    return NULL;
+}
+
+Token *subst_map_lookup_tt(SubstMap *map, const char *name, int len) {
+    for (int i = 0; i < map->nentries; i++) {
+        if (!map->entries[i].tt_bound_name) continue;
+        Token *pn = map->entries[i].param_name;
+        if (pn && pn->len == len && memcmp(pn->loc, name, len) == 0)
+            return map->entries[i].tt_bound_name;
     }
     return NULL;
 }
@@ -298,6 +319,33 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
                             }
                         }
                     }
+                } else {
+                    /* Template-template parameter binding: when the
+                     * cloned class template's body has a call like
+                     * Allocator<value_type>::data_alloc(...), and
+                     * Allocator was bound to xcallocator at instantiation
+                     * time, rewrite parts[0] to the bound name so the
+                     * call mangles as sf__xcallocator_t_..._te___data_alloc_*
+                     * matching the actual definition. Also rewrite the
+                     * lead_tid's template-id name so the collection pass
+                     * picks up the bound class template (xcallocator<X>)
+                     * for instantiation. N4659 §17.2/3 [temp.param] +
+                     * §17.7.1 [temp.inst]. */
+                    Token *bound = subst_map_lookup_tt(map, lead->loc, lead->len);
+                    if (bound) {
+                        c->qualified.parts[0] = bound;
+                        if (n->qualified.lead_tid &&
+                            n->qualified.lead_tid->kind == ND_TEMPLATE_ID &&
+                            n->qualified.lead_tid->template_id.name &&
+                            n->qualified.lead_tid->template_id.name->len ==
+                                lead->len &&
+                            memcmp(n->qualified.lead_tid->template_id.name->loc,
+                                   lead->loc, lead->len) == 0) {
+                            /* lead_tid's name matches the bound TT-param;
+                             * the cloned lead_tid below will pick this up
+                             * via the rewrite hook in ND_TEMPLATE_ID. */
+                        }
+                    }
                 }
             }
         }
@@ -515,6 +563,17 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
         c->template_id = n->template_id;
         c->template_id.args = clone_node_array(
             n->template_id.args, n->template_id.nargs, map, arena);
+        /* Rewrite the template-id's name when it matches a TT-param
+         * binding. This makes the cloned ND_TEMPLATE_ID refer to the
+         * bound class template (e.g. Allocator<int> → xcallocator<int>)
+         * so the collection pass picks up xcallocator<int> for class-
+         * template instantiation. N4659 §17.2/3 [temp.param] +
+         * §17.7.1 [temp.inst]. */
+        if (c->template_id.name) {
+            Token *bound = subst_map_lookup_tt(map,
+                c->template_id.name->loc, c->template_id.name->len);
+            if (bound) c->template_id.name = bound;
+        }
         break;
 
     case ND_FRIEND:

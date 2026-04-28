@@ -1373,6 +1373,39 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
             Token *pname = param->param.name;
             if (!pname) continue;
 
+            /* Template-template parameter detection: parse_template_
+             * parameter passes the leading 'template' keyword as the
+             * param node's tok, which distinguishes TT-params from
+             * regular type-params (whose tok is TK_KW_TYPENAME or
+             * TK_KW_CLASS). Both shape have param.ty == NULL, so
+             * we MUST check tok->kind, not ty.
+             *
+             * Bind the TT-param's name to the actual class-template
+             * name token from the usage arg, or the default if the
+             * user omitted it. gcc 4.8 hash_table<D, A=xcallocator>
+             * with usage hash_table<asan_mem_ref_hasher>: A defaults
+             * to xcallocator. The cloned body's
+             * Allocator<value_type>::data_alloc(...) will be
+             * rewritten to xcallocator<value_type>::data_alloc by
+             * clone.c's ND_QUALIFIED handler, so the call mangles
+             * to sf__xcallocator_t_..._te___data_alloc_* matching
+             * the actual definition. N4659 §17.2/3 [temp.param] +
+             * §17.7.1 [temp.inst]. */
+            if (param->tok && param->tok->kind == TK_KW_TEMPLATE) {
+                Token *bound_name = NULL;
+                if (i < nargs) {
+                    Node *a = template_id->template_id.args[i];
+                    Type *at = (a && a->kind == ND_VAR_DECL) ? a->var_decl.ty : NULL;
+                    if (at && at->tag) bound_name = at->tag;
+                }
+                if (!bound_name && param->param.default_type &&
+                    param->param.default_type->tag) {
+                    bound_name = param->param.default_type->tag;
+                }
+                if (bound_name) subst_map_add_tt(&map, pname, bound_name);
+                continue;
+            }
+
             Type *arg_ty = NULL;
             if (i < nargs)
                 arg_ty = type_arg_from_node(template_id->template_id.args[i]);

@@ -2347,11 +2347,39 @@ static Node *parse_template_parameter(Parser *p) {
             region_declare(p, name->loc, name->len, ENTITY_TEMPLATE, /*type=*/NULL);
         }
 
-        /* Optional default */
-        if (parser_consume(p, TK_ASSIGN))
-            parse_template_value_default(p);
-
-        return new_param_node(p, /*ty=*/NULL, name, tok);
+        /* Optional default. For template-template defaults that are
+         * a simple template-name ('Allocator = xcallocator'), capture
+         * the name in default_type's tag so the instantiator can bind
+         * the TT-param when the user omits the argument. N4659 §17.1/8
+         * [temp.param]. */
+        Token *default_tt_name = NULL;
+        if (parser_consume(p, TK_ASSIGN)) {
+            if (parser_at(p, TK_IDENT)) {
+                /* Peek the default IDENT but DON'T consume it via the
+                 * generic default parser — we want the raw name token. */
+                Token *peek = parser_peek(p);
+                Token *next = parser_peek_ahead(p, 1);
+                if (peek && (next->kind == TK_COMMA || next->kind == TK_GT ||
+                             next->kind == TK_SHR)) {
+                    default_tt_name = parser_advance(p);
+                } else {
+                    parse_template_value_default(p);
+                }
+            } else {
+                parse_template_value_default(p);
+            }
+        }
+        Node *pnode = new_param_node(p, /*ty=*/NULL, name, tok);
+        if (default_tt_name) {
+            /* Stash the bound class-template name in default_type's tag.
+             * Sea-front's TT-param convention: param.ty == NULL identifies
+             * a TT-param; default_type with tag set carries the default
+             * binding. */
+            Type *placeholder = new_type(p, TY_STRUCT);
+            placeholder->tag = default_tt_name;
+            pnode->param.default_type = placeholder;
+        }
+        return pnode;
     }
 
     /* Non-type template parameter: parsed as a parameter-declaration
