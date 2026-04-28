@@ -43,6 +43,42 @@ typedef struct {
 
 /* hash_name is declared in parse.h and defined in lookup.c. */
 
+/* Instantiation array cap — sized so realistic gcc 4.8 / libstdc++
+ * workloads stay well under. opts.c (the heaviest-template TU in
+ * the gcc tree) requires ~4500 across all rounds; the original
+ * 4096 was too low and silently corrupted state via the end-of-
+ * round merge (fixed in 2a7fca4). 32K leaves plenty of headroom
+ * (just 256KB of pointers — negligible).
+ *
+ * If this fires, sea-front aborts loudly. Either bump the cap or
+ * make the array growable. TODO(seafront#inst-cap): grow via a
+ * chunked arena-backed vector so it's never a cap. */
+enum { MAX_INST = 32768 };
+
+/* Push a freshly-instantiated node into all_instantiated[] and
+ * bump ninst_this_round in lockstep. Aborts on cap overflow.
+ *
+ * Both counters MUST move together — the end-of-round merge
+ * computes 'all_instantiated[total_inst - ninst_this_round ..
+ * total_inst]'. If the bumps drift (e.g. ninst_this_round++
+ * outside the cap-check), the start index goes negative and the
+ * merge reads pre-buffer garbage into tu->tu.decls. (Bug fixed in
+ * 2a7fca4.) */
+static void inst_push(Node **arr, int *total_inst,
+                      int *ninst_this_round,
+                      Node *node, const char *what) {
+    if (*total_inst >= MAX_INST) {
+        fprintf(stderr,
+            "sea-front: template instantiation cap (%d) exceeded "
+            "while pushing %s — see MAX_INST in instantiate.c. "
+            "Dropping past the cap is unsafe (would silently lose "
+            "definitions); aborting.\n", MAX_INST, what);
+        abort();
+    }
+    arr[(*total_inst)++] = node;
+    (*ninst_this_round)++;
+}
+
 static void registry_add(TmplRegistry *reg, const char *name, int name_len,
                           Node *tmpl) {
     uint32_t idx = hash_name(name, name_len) % TMPL_REGISTRY_SIZE;
@@ -437,19 +473,6 @@ static void collect_from_type(InstCollector *col, Type *ty) {
     Node *tid = ty->template_id_node;
     if (tid->kind != ND_TEMPLATE_ID || !tid->template_id.name)
         return;
-
-    /* Recurse into nested template-args so e.g. 'user<hasher<int>>'
-     * also triggers instantiation of hasher<int>. Without this
-     * recursion, a class-template instantiation that's only ever
-     * used as a template-argument to another class template never
-     * gets emitted — its methods are then undefined when the outer
-     * class's body calls them via the bound name. N4659 §17.7.1
-     * [temp.inst]. */
-    for (int i = 0; i < tid->template_id.nargs; i++) {
-        Node *arg = tid->template_id.args[i];
-        Type *aty = (arg && arg->kind == ND_VAR_DECL) ? arg->var_decl.ty : NULL;
-        if (aty) collect_from_type(col, aty);
-    }
 
     /* Skip template-ids that still have dependent (unresolved) args.
      * These appear inside cloned template bodies where an outer
@@ -1692,9 +1715,9 @@ void template_instantiate(Node *tu, Arena *arena) {
     DedupSet ds = {0};
     ds.arena = arena;
 
-    /* Total instantiated across all iterations */
+    /* Total instantiated across all iterations. MAX_INST + the
+     * inst_push helper are at file scope; see comments there. */
     int total_inst = 0;
-    enum { MAX_INST = 4096 };
     Node **all_instantiated = arena_alloc(arena, MAX_INST * sizeof(Node *));
 
     for (int iteration = 0; iteration < 32; iteration++) {
@@ -1905,10 +1928,8 @@ void template_instantiate(Node *tu, Arena *arena) {
         dummy->kind = TY_FUNC;
         dedup_add(&ds, key, pos, dummy);
 
-        if (total_inst < MAX_INST) {
-            all_instantiated[total_inst++] = cloned;
-            ninst_this_round++;
-        }
+        inst_push(all_instantiated, &total_inst, &ninst_this_round,
+                  cloned, "member-template instantiation");
     }
 
     /* Phase 3b: class + function template instantiation */
@@ -2180,10 +2201,8 @@ void template_instantiate(Node *tu, Arena *arena) {
                         sema_visit_node(m, arena);
                 }
             }
-            if (total_inst < MAX_INST) {
-                all_instantiated[total_inst++] = inst;
-                ninst_this_round++;
-            }
+            inst_push(all_instantiated, &total_inst, &ninst_this_round,
+                      inst, "class/function template instantiation");
             /* (trace removed) */
             /* For class instantiations: dedup_add unconditionally so
              * a subsequent request for the same (name, args) finds
@@ -2236,10 +2255,8 @@ void template_instantiate(Node *tu, Arena *arena) {
                 Node *em = extra_methods[e];
                 if (em && (em->kind == ND_FUNC_DEF || em->kind == ND_FUNC_DECL))
                     sema_visit_node(em, arena);
-                if (total_inst < MAX_INST) {
-                    all_instantiated[total_inst++] = em;
-                    ninst_this_round++;
-                }
+                inst_push(all_instantiated, &total_inst, &ninst_this_round,
+                          em, "OOL extra method");
             }
         }
         /* Register function template instantiations in the dedup set
