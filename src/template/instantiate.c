@@ -1905,9 +1905,10 @@ void template_instantiate(Node *tu, Arena *arena) {
         dummy->kind = TY_FUNC;
         dedup_add(&ds, key, pos, dummy);
 
-        if (total_inst < MAX_INST)
+        if (total_inst < MAX_INST) {
             all_instantiated[total_inst++] = cloned;
-        ninst_this_round++;
+            ninst_this_round++;
+        }
     }
 
     /* Phase 3b: class + function template instantiation */
@@ -2179,9 +2180,10 @@ void template_instantiate(Node *tu, Arena *arena) {
                         sema_visit_node(m, arena);
                 }
             }
-            if (total_inst < MAX_INST)
+            if (total_inst < MAX_INST) {
                 all_instantiated[total_inst++] = inst;
-            ninst_this_round++;
+                ninst_this_round++;
+            }
             /* (trace removed) */
             /* For class instantiations: dedup_add unconditionally so
              * a subsequent request for the same (name, args) finds
@@ -2234,9 +2236,10 @@ void template_instantiate(Node *tu, Arena *arena) {
                 Node *em = extra_methods[e];
                 if (em && (em->kind == ND_FUNC_DEF || em->kind == ND_FUNC_DECL))
                     sema_visit_node(em, arena);
-                if (total_inst < MAX_INST)
+                if (total_inst < MAX_INST) {
                     all_instantiated[total_inst++] = em;
-                ninst_this_round++;
+                    ninst_this_round++;
+                }
             }
         }
         /* Register function template instantiations in the dedup set
