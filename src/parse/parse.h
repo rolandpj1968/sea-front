@@ -303,6 +303,19 @@ struct Node {
                                     * template-args (e.g. Box<int>::test
                                     * → lead_tid carries <int>). NULL if
                                     * the leading part has no template args. */
+            Type   *resolved_class_type;
+                                    /* Sema-populated: when 'parts[0]' is
+                                     * a typedef alias for a class type
+                                     * (e.g. 'stackv' typedef'd to
+                                     * 'vec<T,va_stack,vl_embed>' inside
+                                     * the vec_stack_alloc macro), this
+                                     * is the underlying class Type so
+                                     * codegen can mangle through
+                                     * mangle_class_tag (preserving
+                                     * template-args), not the bare
+                                     * parts[0] token text. NULL when
+                                     * parts[0] already names the class
+                                     * directly. */
         } qualified;
 
         /* ND_BINARY, ND_ASSIGN — N4659 §8.5-§8.18

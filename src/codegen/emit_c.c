@@ -3172,11 +3172,22 @@ static void emit_expr(Node *n) {
                      * template arg suffix in the class name. */
                     Node *ltid = callee_q->qualified.lead_tid;
                     Type *callee_ft = callee_q->resolved_type;
-                    fputs("sf__", stdout);
-                    fprintf(stdout, "%.*s",
-                            class_tok->len, class_tok->loc);
-                    if (ltid && ltid->kind == ND_TEMPLATE_ID)
-                        emit_template_id_suffix(ltid);
+                    /* If sema resolved the leading qualifier to a
+                     * class Type (typedef alias for a class —
+                     * 'stackv' → vec<T,va_stack,vl_embed>), mangle
+                     * through that Type so template args land in the
+                     * symbol. Otherwise emit the bare class_tok
+                     * text (the common 'Class::method' case). */
+                    if (callee_q->qualified.resolved_class_type) {
+                        /* mangle_class_tag emits its own 'sf__' prefix. */
+                        mangle_class_tag(callee_q->qualified.resolved_class_type);
+                    } else {
+                        fputs("sf__", stdout);
+                        fprintf(stdout, "%.*s",
+                                class_tok->len, class_tok->loc);
+                        if (ltid && ltid->kind == ND_TEMPLATE_ID)
+                            emit_template_id_suffix(ltid);
+                    }
                     fprintf(stdout, "__%.*s",
                             method_tok->len, method_tok->loc);
                     if (callee_ft && callee_ft->kind == TY_FUNC &&
