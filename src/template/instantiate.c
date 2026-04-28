@@ -1638,7 +1638,19 @@ void template_instantiate(Node *tu, Arena *arena) {
         if (!deduce_template_args(inner, mr->arg_types, mr->nargs, &deduced))
             continue;
 
-        /* Dedup key: class + NUL + member + NUL + deduced arg types */
+        /* Dedup key: class + NUL + class-template-args (if any) +
+         * NUL + member + NUL + member-template deduced types.
+         *
+         * Including the class-template args is required for the
+         * gcc 4.8 is_a_helper<T>::cast<U> pattern: with T=cgraph_node
+         * vs T=varpool_node and the same U=symtab_node_def, the
+         * deduced map only carries U (T is the class template's
+         * parameter, not deduced from the in-class member's params).
+         * Without the class args in the key, the second class
+         * instantiation collides with the first → only one def
+         * emitted, the other call goes unresolved at link.
+         * N4659 §17.7.1 [temp.inst]: each distinct argument set
+         * (across BOTH heads) produces a distinct specialization. */
         char key[MAX_DEDUP_KEY];
         Token *class_tag = mr->entry->owner_class ? mr->entry->owner_class->tag : NULL;
         Token *member_name = template_name(tmpl);
@@ -1649,6 +1661,17 @@ void template_instantiate(Node *tu, Arena *arena) {
             pos = class_tag->len;
         }
         key[pos++] = '\0';
+        /* Class-template args from the call-site lead_tid. */
+        if (mr->class_tid && mr->class_tid->kind == ND_TEMPLATE_ID) {
+            int ctna = mr->class_tid->template_id.nargs;
+            for (int i = 0; i < ctna; i++) {
+                Type *cta = type_arg_from_node(
+                    mr->class_tid->template_id.args[i]);
+                pos = type_to_key(cta, key, pos, MAX_DEDUP_KEY);
+                key[pos++] = '\0';
+            }
+        }
+        key[pos++] = '\0';  /* separator after class args */
         if (pos + member_name->len < MAX_DEDUP_KEY) {
             memcpy(key + pos, member_name->loc, member_name->len);
             pos += member_name->len;
@@ -1673,6 +1696,18 @@ void template_instantiate(Node *tu, Arena *arena) {
             (inner->kind == ND_FUNC_DEF && !inner->func.body) ||
             (inner->kind == ND_VAR_DECL && inner->var_decl.ty &&
              inner->var_decl.ty->kind == TY_FUNC);
+        /* Set when the source already provides an explicit
+         * specialization for this (class, member, args) tuple. The
+         * source-level def emits as a regular function from
+         * tu->tu.decls; we must NOT also clone it from the primary
+         * or we get two defs of the same mangled symbol. N4659
+         * §17.8.4 [temp.expl.spec]: an explicit specialization is a
+         * distinct entity — the primary template is not used to
+         * generate it. gcc 4.8 cgraph.h has
+         *   template<> template<>
+         *   inline bool is_a_helper<cgraph_node>::test(symtab_node_def *p);
+         */
+        bool source_has_explicit_spec = false;
         if (is_decl_only && tu) {
             for (int i = 0; i < tu->tu.ndecls; i++) {
                 Node *d = tu->tu.decls[i];
@@ -1685,10 +1720,16 @@ void template_instantiate(Node *tu, Arena *arena) {
                  *   int Holder<A>::combine(...) { ... }
                  * — and parses as ND_TEMPLATE_DECL wrapping another
                  * ND_TEMPLATE_DECL wrapping the FUNC_DEF. N4659
-                 * §17.5.2/3 [temp.mem]. */
+                 * §17.5.2/3 [temp.mem]. An explicit specialization
+                 * has the same shape but EVERY head has nparams == 0
+                 * ('template<> template<>'). */
+                bool all_heads_empty = (d->template_decl.nparams == 0);
                 Node *di = d->template_decl.decl;
-                while (di && di->kind == ND_TEMPLATE_DECL)
+                while (di && di->kind == ND_TEMPLATE_DECL) {
+                    if (di->template_decl.nparams != 0)
+                        all_heads_empty = false;
                     di = di->template_decl.decl;
+                }
                 if (!di || di->kind != ND_FUNC_DEF || !di->func.body) continue;
                 if (!di->func.class_type || !di->func.name) continue;
                 Token *ct = di->func.class_type->tag;
@@ -1697,9 +1738,23 @@ void template_instantiate(Node *tu, Arena *arena) {
                 if (di->func.name->len != member_name->len ||
                     memcmp(di->func.name->loc, member_name->loc,
                            member_name->len) != 0) continue;
+                if (all_heads_empty) {
+                    /* Explicit specialization — let the source-level
+                     * def stand on its own; don't clone. */
+                    source_has_explicit_spec = true;
+                    break;
+                }
                 func_src = di;
                 break;
             }
+        }
+        if (source_has_explicit_spec) {
+            /* Record in dedup so subsequent identical requests also
+             * skip; the source's def covers them. */
+            Type *dummy = arena_alloc(arena, sizeof(Type));
+            dummy->kind = TY_FUNC;
+            dedup_add(&ds, key, pos, dummy);
+            continue;
         }
         /* If we couldn't find an OOL definition, the body lives in a
          * different TU. Skip — the call-site mangle still needs to match
