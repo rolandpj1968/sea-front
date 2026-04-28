@@ -3190,24 +3190,179 @@ static void emit_expr(Node *n) {
                     }
                     fprintf(stdout, "__%.*s",
                             method_tok->len, method_tok->loc);
+                    /* Member-template fallback fb_pty / fb_np set in
+                     * the else branch below; declared at outer scope
+                     * so the args-emit for-loop can also use them as
+                     * a fallback for ref-param adaptation. */
+                    Type **fb_pty = NULL;
+                    int    fb_np  = -1;
                     if (callee_ft && callee_ft->kind == TY_FUNC &&
                         callee_ft->nparams > 0) {
                         mangle_param_suffix(callee_ft->params,
                                              callee_ft->nparams);
                     } else {
-                        Type **at = NULL;
-                        int na = collect_call_arg_types(n->call.args,
-                                                         n->call.nargs, &at);
-                        mangle_param_suffix(at, na);
+                        /* Member-template fallback: sema can't resolve
+                         * a class member-template name to a TY_FUNC
+                         * (the template entity's type is NULL). Walk
+                         * the TU for an ND_FUNC_DEF whose class tag
+                         * + method name + arity match the call, and
+                         * use ITS params. Without this, the call
+                         * mangles using arg types — pass-by-value
+                         * vec arg + literal int + cast pointer don't
+                         * match the def's vec<...>& + unsigned +
+                         * vec<...>* signature, link fails on 18+
+                         * va_stack::alloc instantiations. */
+                        if (g_tu) {
+                            for (int di = 0; di < g_tu->tu.ndecls; di++) {
+                                Node *d = g_tu->tu.decls[di];
+                                if (!d) continue;
+                                if (d->kind == ND_TEMPLATE_DECL && d->template_decl.decl)
+                                    d = d->template_decl.decl;
+                                if (d->kind != ND_FUNC_DEF) continue;
+                                if (!d->func.class_type ||
+                                    !d->func.class_type->tag) continue;
+                                if (d->func.class_type->tag->len != class_tok->len ||
+                                    memcmp(d->func.class_type->tag->loc,
+                                           class_tok->loc, class_tok->len) != 0)
+                                    continue;
+                                if (!d->func.name ||
+                                    d->func.name->len != method_tok->len ||
+                                    memcmp(d->func.name->loc, method_tok->loc,
+                                           method_tok->len) != 0)
+                                    continue;
+                                if (d->func.nparams != n->call.nargs) continue;
+                                /* Build params array from ND_PARAM
+                                 * children of the matched def. Skip
+                                 * any def whose param list still has
+                                 * TY_DEPENDENT (unsubstituted template
+                                 * parameter) — that's the original
+                                 * template body, not an instantiation;
+                                 * mangling against it would produce
+                                 * 'vec_t_T_..._te_' instead of
+                                 * 'vec_t_<concrete>_..._te_'. */
+                                static Type *fb_buf[16];
+                                int np = d->func.nparams < 16
+                                           ? d->func.nparams : 16;
+                                bool has_dep = false;
+                                for (int k = 0; k < np; k++) {
+                                    Node *p = d->func.params[k];
+                                    fb_buf[k] = (p && p->kind == ND_PARAM)
+                                                  ? p->param.ty : NULL;
+                                    Type *t = fb_buf[k];
+                                    while (t && (t->kind == TY_PTR ||
+                                                 t->kind == TY_REF ||
+                                                 t->kind == TY_RVALREF ||
+                                                 t->kind == TY_ARRAY))
+                                        t = t->base;
+                                    if (t && t->kind == TY_DEPENDENT)
+                                        has_dep = true;
+                                    if (t && (t->kind == TY_STRUCT || t->kind == TY_UNION) &&
+                                        t->n_template_args > 0) {
+                                        for (int j = 0; j < t->n_template_args; j++) {
+                                            Type *ta = t->template_args[j];
+                                            if (ta && ta->kind == TY_DEPENDENT) has_dep = true;
+                                        }
+                                    }
+                                }
+                                if (has_dep) continue;
+                                /* Pick the instantiation whose first
+                                 * param's underlying class type
+                                 * (post strip of ref/ptr) matches the
+                                 * call's first arg's underlying class
+                                 * — same tag AND same template_args.
+                                 * Without this we'd pick the FIRST
+                                 * instantiation that matches arity
+                                 * (e.g. va_stack::alloc<df_ref>) for
+                                 * every va_stack::alloc<...> call,
+                                 * regardless of T. */
+                                if (np > 0 && n->call.nargs > 0 &&
+                                    n->call.args[0]) {
+                                    Type *pp = fb_buf[0];
+                                    while (pp && (pp->kind == TY_PTR ||
+                                                  pp->kind == TY_REF ||
+                                                  pp->kind == TY_RVALREF ||
+                                                  pp->kind == TY_ARRAY))
+                                        pp = pp->base;
+                                    Type *aa = n->call.args[0]->resolved_type;
+                                    while (aa && (aa->kind == TY_PTR ||
+                                                  aa->kind == TY_REF ||
+                                                  aa->kind == TY_RVALREF ||
+                                                  aa->kind == TY_ARRAY))
+                                        aa = aa->base;
+                                    if (pp && aa &&
+                                        (pp->kind == TY_STRUCT || pp->kind == TY_UNION) &&
+                                        (aa->kind == TY_STRUCT || aa->kind == TY_UNION) &&
+                                        pp->tag && aa->tag &&
+                                        pp->tag->len == aa->tag->len &&
+                                        memcmp(pp->tag->loc, aa->tag->loc, pp->tag->len) == 0 &&
+                                        pp->n_template_args == aa->n_template_args) {
+                                        bool args_match = true;
+                                        for (int j = 0; j < pp->n_template_args && args_match; j++) {
+                                            Type *pa = pp->template_args[j];
+                                            Type *aaa = aa->template_args[j];
+                                            /* Walk through indirection
+                                             * layers (ptr/ref/array) to
+                                             * compare the underlying
+                                             * struct tag. df_ref vs
+                                             * df_mw_hardreg_ptr are
+                                             * both TY_PTR-of-struct;
+                                             * shallow kind compare
+                                             * would falsely match. */
+                                            while (pa && (pa->kind == TY_PTR ||
+                                                          pa->kind == TY_REF ||
+                                                          pa->kind == TY_RVALREF ||
+                                                          pa->kind == TY_ARRAY))
+                                                pa = pa->base;
+                                            while (aaa && (aaa->kind == TY_PTR ||
+                                                           aaa->kind == TY_REF ||
+                                                           aaa->kind == TY_RVALREF ||
+                                                           aaa->kind == TY_ARRAY))
+                                                aaa = aaa->base;
+                                            if (!pa || !aaa) {
+                                                args_match = (pa == aaa);
+                                            } else if (pa->kind != aaa->kind) {
+                                                args_match = false;
+                                            } else if ((pa->kind == TY_STRUCT || pa->kind == TY_UNION) &&
+                                                       pa->tag && aaa->tag) {
+                                                if (pa->tag->len != aaa->tag->len ||
+                                                    memcmp(pa->tag->loc, aaa->tag->loc, pa->tag->len) != 0)
+                                                    args_match = false;
+                                            }
+                                        }
+                                        if (!args_match) continue;
+                                    } else {
+                                        /* Different shapes — give up
+                                         * on this candidate. */
+                                        continue;
+                                    }
+                                }
+                                fb_pty = fb_buf;
+                                fb_np  = np;
+                                break;
+                            }
+                        }
+                        if (fb_np >= 0) {
+                            mangle_param_suffix(fb_pty, fb_np);
+                        } else {
+                            Type **at = NULL;
+                            int na = collect_call_arg_types(n->call.args,
+                                                             n->call.nargs, &at);
+                            mangle_param_suffix(at, na);
+                        }
                     }
                     fputc('(', stdout);
                     for (int i = 0; i < n->call.nargs; i++) {
                         if (i > 0) fputs(", ", stdout);
                         /* N4659 §11.3.2 [dcl.ref]: adapt args for
-                         * ref-typed params (wrap in &). */
+                         * ref-typed params (wrap in &). Prefer
+                         * callee_ft (sema-resolved); fall back to
+                         * fb_pty (the def found via the member-
+                         * template TU walk above) so the ref
+                         * adaptation matches the def's signature. */
                         Type *pty = (callee_ft && callee_ft->kind == TY_FUNC &&
                                      i < callee_ft->nparams)
-                            ? callee_ft->params[i] : NULL;
+                            ? callee_ft->params[i]
+                            : (fb_pty && i < fb_np ? fb_pty[i] : NULL);
                         emit_arg_for_param(n->call.args[i], pty);
                     }
                     fputc(')', stdout);
