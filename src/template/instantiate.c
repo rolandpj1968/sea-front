@@ -397,6 +397,18 @@ typedef struct {
     int                member_count;
     Arena             *arena;
     TmplRegistry      *reg;
+    /* Class context for the func body currently being walked. When
+     * an unqualified call inside a (cloned or original) class
+     * member function names a sibling member template, this is the
+     * class to look up against. N4659 §6.4.1 [basic.lookup.unqual] +
+     * §17.5.2 [temp.mem]. NULL when not inside a class member. */
+    Type              *cur_class;
+    /* Class-template instantiation args used to mangle the enclosing
+     * func. Reused so a sibling call's instantiation lands on the
+     * SAME class instantiation (e.g. va_heap::release inside
+     * va_heap::reserve<T> stays on va_heap, not 'va_heap<T>'). For
+     * non-template classes this is NULL — we just use cur_class. */
+    Node              *cur_class_tid;
 } InstCollector;
 
 /*
@@ -514,13 +526,28 @@ static void collect_from_node(InstCollector *col, Node *n) {
         break;
 
     case ND_FUNC_DEF:
-    case ND_FUNC_DECL:
+    case ND_FUNC_DECL: {
+        /* Push class context so unqualified sibling calls inside the
+         * body can resolve against this class's member templates.
+         * N4659 §6.4.1 [basic.lookup.unqual]: an unqualified name
+         * inside a member function looks up the class scope. */
+        Type *saved_class = col->cur_class;
+        Node *saved_class_tid = col->cur_class_tid;
+        if (n->func.class_type) {
+            col->cur_class = n->func.class_type;
+            col->cur_class_tid = NULL;  /* OOL clones carry their
+                                          * own concrete class type;
+                                          * no separate tid needed. */
+        }
         collect_from_type(col, n->func.ret_ty);
         for (int i = 0; i < n->func.nparams; i++)
             collect_from_node(col, n->func.params[i]);
         if (n->func.body)
             collect_from_node(col, n->func.body);
+        col->cur_class = saved_class;
+        col->cur_class_tid = saved_class_tid;
         break;
+    }
 
     case ND_CLASS_DEF:
         for (int i = 0; i < n->class_def.nmembers; i++)
@@ -675,6 +702,44 @@ static void collect_from_node(InstCollector *col, Node *n) {
                     col->member_head = mr;
                     col->member_count++;
                 }
+            }
+        }
+        /* Unqualified call inside a class member function — may name a
+         * sibling member template. gcc 4.8 va_heap::reserve<T>'s body
+         * calls release(v); per N4659 §6.4.1 [basic.lookup.unqual]
+         * unqualified lookup finds the sibling member release. The
+         * static-method-this fix (#136) already mangles the call to
+         * 'sf__A__release_*', but without this collection path the
+         * member template was never instantiated → undefined symbol.
+         * Match by current class context + member name. */
+        if (col->cur_class && col->cur_class->tag &&
+            n->call.callee && n->call.callee->kind == ND_IDENT &&
+            n->call.callee->ident.name) {
+            Token *cls = col->cur_class->tag;
+            Token *name = n->call.callee->ident.name;
+            TmplEntry *me = registry_find_member(col->reg,
+                cls->loc, cls->len, name->loc, name->len);
+            if (me) {
+                MemberTmplRequest *mr = arena_alloc(col->arena,
+                    sizeof(MemberTmplRequest));
+                mr->entry = me;
+                mr->nargs = n->call.nargs;
+                mr->call_node = n;
+                /* Reuse the enclosing call's class instantiation —
+                 * a sibling call inherits the same class<args>. */
+                mr->class_tid = col->cur_class_tid;
+                if (n->call.nargs > 0) {
+                    mr->arg_types = arena_alloc(col->arena,
+                        n->call.nargs * sizeof(Type *));
+                    for (int i = 0; i < n->call.nargs; i++)
+                        mr->arg_types[i] = n->call.args[i]
+                            ? n->call.args[i]->resolved_type : NULL;
+                } else {
+                    mr->arg_types = NULL;
+                }
+                mr->next = col->member_head;
+                col->member_head = mr;
+                col->member_count++;
             }
         }
         break;
