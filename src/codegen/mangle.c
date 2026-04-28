@@ -338,6 +338,29 @@ void mangle_class_tag(Type *class_type) {
  *   _p_<t0>_<t1>_..._pe_
  * with 'void' for the empty list. Mirrors the _t_..._te_ shape used
  * for template arguments. N4659 §16.2 [over.load]. */
+/* Strip top-level cv-qualifiers from a parameter type for mangling.
+ * Itanium C++ ABI §5.1.5: top-level cv on parameter types is
+ * dropped (a function declared 'f(int)' and 'f(const int)' is the
+ * SAME function — they overload-resolve identically and link to the
+ * same symbol). Without stripping, gcc 4.8's
+ *   void mangle_decl (const tree decl);
+ * mangled as '_p_const_tree_node_ptr_pe_' on the def, but every
+ * caller that passes a non-const tree mangled as '_p_tree_node_ptr_pe_'
+ * — link failed with 8+ unresolved 'mangle_decl' refs. The const on
+ * the pointer is top-level (the pointer itself is const, not the
+ * pointee); ABI says drop it. */
+static Type g_stripped_param_buf[16];
+static Type *strip_top_cv(Type *ty, int slot) {
+    if (!ty) return ty;
+    if (!ty->is_const && !ty->is_volatile) return ty;
+    if (slot < 0 || slot >= 16) return ty;
+    Type *copy = &g_stripped_param_buf[slot];
+    *copy = *ty;
+    copy->is_const = false;
+    copy->is_volatile = false;
+    return copy;
+}
+
 void mangle_param_suffix(Type **param_types, int nparams) {
     fputs("_p_", stdout);
     if (nparams == 0) {
@@ -345,7 +368,7 @@ void mangle_param_suffix(Type **param_types, int nparams) {
     } else {
         for (int i = 0; i < nparams; i++) {
             if (i > 0) fputc('_', stdout);
-            emit_type_for_mangle(param_types[i]);
+            emit_type_for_mangle(strip_top_cv(param_types[i], i));
         }
     }
     fputs("_pe_", stdout);
@@ -366,7 +389,8 @@ int mangle_param_suffix_to_buf(Type **param_types, int nparams,
     } else {
         for (int i = 0; i < nparams; i++) {
             if (i > 0 && pos < max - 1) buf[pos++] = '_';
-            pos = mangle_type_to_buf(param_types[i], buf, pos, max);
+            pos = mangle_type_to_buf(strip_top_cv(param_types[i], i),
+                                      buf, pos, max);
         }
     }
     n = snprintf(buf + pos, (size_t)(max - pos), "_pe_");
