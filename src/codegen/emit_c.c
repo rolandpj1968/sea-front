@@ -3182,11 +3182,56 @@ static void emit_expr(Node *n) {
                         /* mangle_class_tag emits its own 'sf__' prefix. */
                         mangle_class_tag(callee_q->qualified.resolved_class_type);
                     } else {
-                        fputs("sf__", stdout);
-                        fprintf(stdout, "%.*s",
-                                class_tok->len, class_tok->loc);
-                        if (ltid && ltid->kind == ND_TEMPLATE_ID)
-                            emit_template_id_suffix(ltid);
+                        /* Base-class member lookup: when the named class
+                         * doesn't define the method directly but inherits
+                         * it from a base, the def is mangled with the
+                         * BASE class's tag. Walk the named class's bases
+                         * to find which one owns the method, and mangle
+                         * through that. gcc 4.8 hash_table::dispose
+                         * calls Descriptor::remove where Descriptor
+                         * inherits remove() from typed_noop_remove<T>;
+                         * sea-front emitted sf__<Descriptor>__remove_*
+                         * but the only def is sf__typed_noop_remove_t_..._te___remove_*.
+                         * N4659 §6.4.5 [class.qual] + §13.1 [class.derived].
+                         */
+                        Type *owner_class = NULL;
+                        Node *cdef = NULL;
+                        Type stub_class = {0};
+                        stub_class.kind = TY_STRUCT;
+                        stub_class.tag = class_tok;
+                        cdef = find_class_def_by_tag_only(&stub_class);
+                        if (cdef && cdef->class_def.ty &&
+                            cdef->class_def.ty->class_region) {
+                            DeclarativeRegion *cr = cdef->class_def.ty->class_region;
+                            /* Direct lookup (no base walk) — own buckets only. */
+                            Declaration *direct = NULL;
+                            uint32_t bidx = 0;
+                            (void)bidx;  /* placeholder; we use lookup_own */
+                            direct = region_lookup_own(cr,
+                                method_tok->loc, method_tok->len);
+                            if (!direct) {
+                                /* Not in this class — walk bases. */
+                                for (int bi = 0; bi < cr->nbases; bi++) {
+                                    DeclarativeRegion *br = cr->bases[bi];
+                                    if (!br) continue;
+                                    Declaration *bd = region_lookup_own(br,
+                                        method_tok->loc, method_tok->len);
+                                    if (bd && br->owner_type) {
+                                        owner_class = br->owner_type;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        if (owner_class) {
+                            mangle_class_tag(owner_class);
+                        } else {
+                            fputs("sf__", stdout);
+                            fprintf(stdout, "%.*s",
+                                    class_tok->len, class_tok->loc);
+                            if (ltid && ltid->kind == ND_TEMPLATE_ID)
+                                emit_template_id_suffix(ltid);
+                        }
                     }
                     fprintf(stdout, "__%.*s",
                             method_tok->len, method_tok->loc);

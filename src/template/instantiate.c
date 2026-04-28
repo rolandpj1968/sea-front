@@ -2286,9 +2286,30 @@ void template_instantiate(Node *tu, Arena *arena) {
      * been instantiated yet when the derived class was cloned. Now
      * that all instantiations are done, walk each instantiated class's
      * base_types and link any that now have class_region set. Also
-     * check the dedup set for bases that were instantiated. */
+     * check the dedup set for bases that were instantiated.
+     *
+     * ALSO: plain (non-template) classes that inherit from a template
+     * instantiation (e.g. 'struct asan_hasher : typed_noop_remove<int>'
+     * in gcc 4.8 hash_table users) have the same problem — at parse
+     * time the base's class_region was NULL because the template
+     * hadn't been instantiated. Walk top-level plain ND_CLASS_DEFs
+     * too. N4659 §13.1 [class.derived]. */
+    Node *all_class_defs[1024];
+    int n_all_class_defs = 0;
     for (int i = 0; i < total_inst; i++) {
         Node *inst = all_instantiated[i];
+        if (inst && inst->kind == ND_CLASS_DEF &&
+            n_all_class_defs < (int)(sizeof(all_class_defs)/sizeof(all_class_defs[0])))
+            all_class_defs[n_all_class_defs++] = inst;
+    }
+    for (int i = 0; i < tu->tu.ndecls; i++) {
+        Node *d = tu->tu.decls[i];
+        if (d && d->kind == ND_CLASS_DEF &&
+            n_all_class_defs < (int)(sizeof(all_class_defs)/sizeof(all_class_defs[0])))
+            all_class_defs[n_all_class_defs++] = d;
+    }
+    for (int i = 0; i < n_all_class_defs; i++) {
+        Node *inst = all_class_defs[i];
         if (!inst || inst->kind != ND_CLASS_DEF) continue;
         Type *ity = inst->class_def.ty;
         if (!ity || !ity->class_region) continue;
