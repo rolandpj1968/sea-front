@@ -4,6 +4,10 @@
 // member template body calls a sibling unqualified — needs both
 // the class-template instantiation AND the member-template
 // instantiation to land on the same Holder<int> tag.
+//
+// Standard: N4659 §6.4.1 [basic.lookup.unqual] + §17.5.2 [temp.mem]
+// + §17.7.1 [temp.inst]; combined with §17.7.4.2 [temp.dep.res]
+// since the sibling call lives in a dependent context.
 
 template<typename A>
 struct Holder {

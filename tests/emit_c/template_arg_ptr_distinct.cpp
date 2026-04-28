@@ -7,6 +7,12 @@
 // call site and the third-arg type mismatches the def's
 // signature — gcc 4.8 build/genopinit then stack-smashes on the
 // truncated write. Per task #149.
+//
+// Standard: N4659 §17.6.7 [temp.type] (two template-ids refer to
+// the same class iff their template arguments are identical;
+// pointer types differ in cv/pointer structure) + §17.7.1
+// [temp.inst] (each distinct argument list = distinct
+// specialization).
 
 template<typename T>
 struct Vec {

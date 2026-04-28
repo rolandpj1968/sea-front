@@ -16,6 +16,12 @@
 // resolved_class_type was added to ND_QUALIFIED so codegen
 // dispatches through mangle_class_tag() with the full
 // template-arg encoding.
+//
+// Standard: N4659 §10.1.3 [dcl.typedef]/3 (a typedef-name does not
+// introduce a new type but is a synonym for the type it refers
+// to) — therefore the qualified-call lookup and mangling must
+// resolve through the underlying class. Itanium C++ ABI §5.1
+// (the mangled symbol uses the canonical type, not the typedef).
 
 template<typename T>
 struct Box {

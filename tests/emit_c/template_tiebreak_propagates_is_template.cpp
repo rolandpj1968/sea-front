@@ -10,6 +10,13 @@
 // Pattern reproduces when two function-template overloads have
 // near-identical signatures so neither dominates: gcc 4.8 vec_free
 // hit this with 49 unresolved refs in cc1plus link.
+//
+// Standard: N4659 §16.3.3 [over.match.best] (overload resolution
+// best-viable selection — when no candidate is strictly more
+// viable than every other, the call is ambiguous; sea-front's
+// last-resort tiebreak picks one rather than diagnose). §17.8.3
+// [temp.deduct]: a function-template winner must carry the deduced
+// template arguments through to the use site for instantiation.
 template<typename T>
 struct Box { T data; };
 

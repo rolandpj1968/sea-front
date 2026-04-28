@@ -9,6 +9,11 @@
 // build_registry must descend into ND_TEMPLATE_DECL wrapping a
 // class def to register the member templates with the
 // instantiated class as owner.
+//
+// Standard: N4659 §17.5.2 [temp.mem] (a template can be declared
+// within a class or class template) + §17.8.2.1 [temp.deduct.call]
+// (member-template arg deduction from call args). Mangling:
+// Itanium C++ ABI §5.1 (def and call must agree on encoding).
 
 template<typename T>
 struct Box {

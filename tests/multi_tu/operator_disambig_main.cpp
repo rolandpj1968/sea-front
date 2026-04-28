@@ -10,6 +10,13 @@
 // would leak its DECL_INLINE onto the non-inline operator's
 // fwd-decl emit, narrowing linkage to file-static. This TU's
 // caller of (a+b) couldn't link to the other TU's def.
+//
+// Standard: N4659 §16.5 [over.oper] (operator functions are
+// distinguished by their signature plus the operator token —
+// operator+ vs operator- are different overloads, not the same).
+// §10.1.6 [dcl.inline] (inline-vs-non-inline status is per
+// declaration of a specific function, not shared across operators
+// of the same class).
 
 struct Box {
     int v;

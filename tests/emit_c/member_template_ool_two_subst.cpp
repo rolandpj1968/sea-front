@@ -4,6 +4,11 @@
 // from the class template and T from the member template — for
 // the cloned body to be correct AND mangle uniquely per
 // (Holder<A>, T) pair.
+//
+// Standard: N4659 §17.7.1 [temp.inst] (each distinct set of
+// template arguments produces a distinct specialization) + §17.5.2
+// [temp.mem]. Itanium ABI §5.1: the mangled name encodes both
+// heads' template arguments — different (A, T) → different symbol.
 
 template<typename A>
 struct Holder {

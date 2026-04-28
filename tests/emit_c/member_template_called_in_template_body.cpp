@@ -8,6 +8,10 @@
 // member-template-of-non-template-class registry support, this
 // already works; we add: ensure the call still resolves through
 // the registry when reached during Phase-2 re-collection.
+//
+// Standard: N4659 §17.7.1 [temp.inst] (an instantiation of a
+// function template that calls a member template forces that
+// member template's instantiation transitively) + §17.5.2.
 
 struct Allocator {
     template<typename T>

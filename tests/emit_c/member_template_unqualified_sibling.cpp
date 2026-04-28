@@ -6,6 +6,11 @@
 // sibling call mangles correctly via the static-this suppression
 // fix (#136) but the callee is never instantiated → link fails
 // with "undefined reference to sf__A__release_p_int_ptr_ref_pe_".
+//
+// Standard: N4659 §6.4.1 [basic.lookup.unqual] (an unqualified
+// name inside a member function looks up the class scope) +
+// §17.5.2 [temp.mem] + §17.7.1 [temp.inst] (transitive
+// instantiation of called templates).
 
 struct A {
     template<typename T>

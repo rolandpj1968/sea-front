@@ -9,6 +9,10 @@
 // Parser must accept stacked 'template<...>' heads on the OOL
 // def. Instantiation pass must find this OOL when the in-class
 // member is decl-only.
+//
+// Standard: N4659 §17.5.2/3 [temp.mem] (when explicitly defining
+// a member template outside its class, the syntax requires one
+// template-head per template scope — outer first, inner next).
 
 template<typename A>
 struct Holder {

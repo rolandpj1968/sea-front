@@ -1,9 +1,15 @@
+// EXPECT: 12
 // Two calls of the same Holder<int>::blend with DIFFERENT
 // member-template T (deduced int vs deduced double). The two
 // instantiations must produce distinct symbols — otherwise their
 // dedup keys collide and one is dropped, or worse, the mangled
 // names are identical and the C linker conflates them.
-// EXPECT: 12
+//
+// Standard: N4659 §17.8.2.1 [temp.deduct.call] (deduction binds
+// each member-template parameter from a corresponding call-site
+// arg type) + §17.7.1 [temp.inst] (distinct argument sets → distinct
+// specializations) + Itanium ABI §5.1 (mangled name encodes the
+// deduced types).
 
 template<typename A>
 struct Holder {

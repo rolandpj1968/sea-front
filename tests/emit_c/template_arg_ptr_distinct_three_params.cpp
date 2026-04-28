@@ -7,6 +7,10 @@
 // Each must produce a distinct instantiation with the correct
 // third-arg type for iterate(). If dedup collapses, the vec<int*>
 // call sees the vec<int> def — the third arg type mismatches.
+//
+// Standard: N4659 §17.6.7 [temp.type] + §17.7.1 [temp.inst]; same
+// rule as the two-param variant, with default arguments resolved
+// per §17.6.2 [temp.param]/8.
 
 struct va_heap {};
 struct vl_ptr {};

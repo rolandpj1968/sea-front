@@ -9,6 +9,10 @@
 //       template<typename T>
 //       static T *find_with_hash(hashval_t v);
 //   };
+//
+// Standard: N4659 §17.5.2 [temp.mem] + §17.8.2.5 [temp.deduct.type]
+// (deduction unifies through compound types — Holder<A>* against
+// the call-site Holder<int>* binds A=int).
 
 template<typename A>
 struct Holder {
