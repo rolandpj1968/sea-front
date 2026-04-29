@@ -157,22 +157,42 @@ void template_instantiate(TU *tu) {
 }
 ```
 
-## Termination
+## Termination — and the cap is fundamental, not engineering debt
 
-- **Finite use-graph.** The set of distinct
-  (template-name, concrete-args) tuples is bounded by the source
-  TU. Concrete-args after substitution don't manufacture types
-  the source didn't mention; they only combine them. The memo's
-  domain is finite.
-- **Memoize-before-recurse** breaks cycles. `A<int>` triggering
-  `B<int>` triggering `A<int>` finds `A<int>` already in the memo
-  on the third call and short-circuits.
-- **Self-recursive templates** (factorial-style) terminate when
-  they hit a base specialization the source provides. If the
-  source has no base case, the program is ill-formed C++ and the
-  recursion will overflow the C call stack — which is acceptable
-  behavior for ill-formed input. Real-world templates have base
-  cases by construction.
+C++ template instantiation is **Turing-complete** (Veldhuizen
+2003): you can encode arbitrary Turing machines via recursive
+class templates with non-type parameters and partial-spec case
+analysis. Termination is undecidable in general. **No algorithm,
+recursive or iterative, can guarantee bounded work for arbitrary
+input.** The standard (§17.7.1/9 footnote, Annex B
+"Implementation quantities") recognizes this and recommends a
+depth limit of at least 1024. gcc and clang both ship with a
+configurable cap (`-ftemplate-depth=N`, default ~900); hitting it
+is a clear error, not silent loss.
+
+So `MAX_INST` (and the `inst_push` loud-fail) is **part of
+correctness, not engineering debt**. It exists because the
+underlying problem is undecidable, not because we chose a fixed-
+size data structure. Removing the array's size limit would just
+move the cap to wall-clock time / memory pressure. Every
+conforming C++ implementation has the same tradeoff. The cap
+value can be tuned (we set 32768 to leave headroom over real
+gcc 4.8 workloads); the cap itself is unavoidable.
+
+**What termination guarantees the recursive design DOES make,
+on well-formed input:**
+
+- **Finite use-graph for non-pathological code.** Programs that
+  don't intentionally encode Turing machines have a bounded
+  set of distinct (template, args) tuples reachable through use
+  sites. The memo bounds work to that set.
+- **Memoize-before-recurse** breaks cycles in mutually-recursive
+  templates. `A<int>` triggering `B<int>` triggering `A<int>`
+  finds `A<int>` already in the memo on the third call.
+- **Self-recursive templates with base cases** (factorial-style)
+  terminate at the base specialization. Without a base case, the
+  program is ill-formed C++; the cap fires loud, which is the
+  expected behavior.
 
 ## What's eliminated
 
@@ -180,13 +200,18 @@ void template_instantiate(TU *tu) {
 |---|---|
 | Round loop | Recursion subsumes the iterate-to-fixpoint |
 | 32-iteration cap | No iteration |
-| `MAX_INST = 32768` cap | Memoization bounds the work; arena-grown emit list has no fixed size |
 | `ninst_this_round` tracking | No rounds |
 | End-of-round merge with `tu->tu.decls` | Single merge at end, against a topo-ordered list |
 | Insert-position scan in `tu->tu.decls` | Topo order falls out of post-recursion append |
 | `MemberTmplRequest` / `InstRequest` queues | Direct call to `instantiate_use` at the discovery site |
 | Two-phase collect/process | One phase: discover and process inline |
 | Bug class 2a7fca4 (cap drift) | No counters to drift |
+
+**What stays as a hard cap regardless of structure:**
+`MAX_INST` (or its growable equivalent) and a recursion-depth
+guard. Turing-completeness mandates these. The recursive shape
+is cleaner and matches the standard's wording, but it can't make
+the cap go away.
 
 ## What stays
 
@@ -236,21 +261,68 @@ The walker enforces this distinction. Eager (syntactic) walks
 treat every type-name mention as a use; the use-driven walk does
 not.
 
-## Implementation phases
+## Where sea-front currently stands (after 7a02a8e)
 
-1. **Add the recursive entry point alongside the existing round
-   loop.** New function `instantiate_use_recursive(key)`.
-   Memo-based, no round counter. Driven from a small new
-   top-level walker that finds uses in `tu->tu.decls`.
+The end-of-session refactor in 7a02a8e replaced the quadratic
+round loop with a **linear worklist**: each pass walks only
+entries new since the previous pass (`n_walked_decls`,
+`n_walked_inst`), and the merge into `tu->tu.decls` happens
+once after the worklist closes. This is equivalent in space/time
+to recursion; the code shape is "loop with index advancement"
+rather than "function recurses on itself."
+
+Common-usage workloads (gcc 4.8 source, libstdc++ headers
+through C++03-era usage) terminate quickly under this design and
+don't approach the cap. The exponential-explosion failure mode
+(seen briefly with the eager-syntactic recursion in d41a35e and
+reverted in 9dcc4e3) does not occur because `collect_from_node`
+is **already mostly use-site-driven**: it walks expressions and
+declarations, calling `collect_from_type` on the types it finds
+at use sites. The eager-syntactic recursion was a misstep that
+walked `template_id.args[]` directly — that's the form to avoid.
+
+## Deferred refinement: completeness-required flag
+
+The remaining over-walk in `collect_from_type` is the recursion
+through `TY_PTR` / `TY_REF` / `TY_ARRAY` into the base type. Per
+N4659 §6.7/4, a pointer or reference to a class type does **not**
+require the class to be complete — but sea-front currently
+instantiates anyway when the base happens to be a class-template
+specialization. For gcc 4.8 workloads this is harmless (most
+pointers are eventually dereferenced, requiring completeness
+anyway), but heavier workloads (modern libstdc++, Boost-style
+templates) could see avoidable work.
+
+The clean fix is a `bool complete_required` flag threaded through
+`collect_from_type`, set true at value-typed call sites
+(variable decl, field decl, sizeof, base clause) and false at
+pointer/ref-typed contexts. The recursion through TY_PTR/TY_REF
+would clear the flag for the inner base. A class-template
+specialization seen with `complete_required = false` would not
+trigger instantiation; sea-front's C lowering can use a forward
+struct declaration in that position.
+
+This is **not blocking** any current workload. File as
+follow-up: `TODO(seafront#use-driven-completeness)`.
+
+## Implementation phases (for the full recursive transformation)
+
+1. **Add the recursive entry point alongside the existing
+   worklist.** New function `instantiate_use_recursive(key)`.
+   Memo-based. Driven from a small new top-level walker that
+   finds uses in `tu->tu.decls`.
 2. **Verify equivalence** by running both old and new in
    parallel during a transition window, comparing the resulting
    `emit_order` (modulo permutation; the topo-ordered new should
    be a valid topo-sort that the old happened to produce too).
 3. **Switch the dispatcher** to call the new entry point.
-4. **Delete the old round loop and its support cast** (`InstRequest`,
-   `ninst_this_round`, the merge logic). `MemberTmplRequest`
+4. **Delete the worklist** and its support cast. `MemberTmplRequest`
    stays as a convenience struct but is no longer queued; it's
    invoked synchronously.
+
+The existing worklist is correct and fast; the recursive form
+is a code-shape improvement, not a correctness fix. Lower
+priority than the completeness-required flag above.
 
 ## What tests should cover
 
