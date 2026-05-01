@@ -37,7 +37,7 @@ properties:
 
 ## Implementation strategy: TLS-polling
 
-Three real implementation strategies exist for C++ exceptions:
+Four real implementation strategies exist for C++ exceptions:
 
 **1. setjmp/longjmp ("SJLJ").** Every cleanup scope pushes a frame
 onto a thread-local chain; `throw` calls `longjmp` to walk it back.
@@ -66,14 +66,34 @@ thing the C compiler will do for you. Implementing DWARF EH would
 require sea-front to be a real backend — losing the entire
 "transpile to portable C" value proposition.
 
-**3. TLS polling.** A thread-local "exception state" variable;
+**3. Tagged compound return ("ok-or-throw").** Every potentially-
+throwing function returns a wrapped value `{ tag, value, exception }`
+and the caller branches on the tag after every call. The obvious
+starting point — it's just `Result<T, E>` written by hand — and
+fully portable to any C target. **Killed by ABI cost**: every
+throwing function's signature is rewritten, so the wrappers
+infect every layer the call traverses; `T` becomes a
+sometimes-uninitialized field; small return values that fit in a
+register suddenly fight a struct return; the caller-side branch is
+on a pessimistically-loaded tag. This is also painful to plumb
+across an FFI boundary (the wrapped shape leaks into C consumers).
+TLS-polling is the same idea with the side-channel pulled out of
+the return value: the exception lives in a known TLS slot
+instead of riding on every signature, leaving function ABIs
+identical to the no-exception case. Strategy 4 is the pragmatic
+distillation of this one.
+
+**4. TLS polling.** A thread-local "exception state" variable;
 `throw` sets it; every potentially-throwing call site checks it
 after return; scope-exit destructor chains naturally propagate.
 **Right for sea-front** because (a) it's portable C — no compiler
 magic required, (b) it composes with sea-front's existing
 destructor goto-chain (see below), (c) the no-throw path cost is
 one branch per call site, predictable-not-taken, plus the
-destructor chain runs that's already running for `return` anyway.
+destructor chain runs that's already running for `return` anyway,
+(d) function signatures stay identical to the no-exception case
+(unlike strategy 3), so the C API surface and FFI boundaries are
+unaffected.
 
 Polling is the chosen strategy. The remainder of this document
 specifies it.
