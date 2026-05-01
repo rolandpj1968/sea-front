@@ -1163,10 +1163,24 @@ static Declaration *resolve_free_function_overload(
                 for (int k = 0; k < np; k++)
                     pp[k] = inner->func.params[k]->param.ty;
             }
-            (void)deduce_template_args(inner, arg_types, nargs, &map);
-            /* Substitute the deduced bindings into the param types.
-             * Even if deduction bound nothing, subst_type is a no-op
-             * and the param types stay unchanged. */
+            /* N4659 §17.8.2 [temp.deduct]/4: deduction failure removes
+             * the template from the candidate set. Honour the deduction
+             * return value — when it returns false (no bindings made,
+             * or a per-pair unification failed), drop this candidate
+             * before it can pollute viability via an empty SubstMap.
+             *
+             * Discarding the return previously let candidates whose
+             * template args couldn't bind (e.g. arity mismatch on
+             * inner template-args: 'vec<T,A,vl_embed>*' vs
+             * 'vec<X,Y>*') become "viable" with no bindings, win
+             * resolution by falling through to ICS_PTR_SAME_TAG, then
+             * skip the rewrite-to-template-id (build_template_id_from_
+             * deduced bails on the unbound T). The emitted call
+             * mangled bare and missed the actual instantiation's
+             * symbol. */
+            if (!deduce_template_args(inner, arg_types, nargs, &map))
+                continue;
+            /* Substitute the deduced bindings into the param types. */
             Type **eff = pp;
             if (np > 0 && map.nentries > 0) {
                 eff = arena_alloc(arena, np * sizeof(Type *));
