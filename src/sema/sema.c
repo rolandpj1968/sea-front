@@ -1001,15 +1001,19 @@ static int ics_rank(Type *param, Type *arg) {
     if (!arg) return ICS_EXACT;
     /* Reference binding — N4659 §16.3.3.1.4 [over.ics.ref]: the ICS of
      * an arg to a reference parameter is the conversion sequence to
-     * the referent type. Strip TY_REF/TY_RVALREF and re-rank.
-     * Without this, function-template overloads like
-     *   template<T,A> vec_alloc(vec<T,A,vl_embed> *&v, unsigned)
-     * never resolve when called as `vec_alloc(p, n)` with p of type
-     * vec<...>* — the ref param's ICS comes back ICS_INCOMPATIBLE
-     * and the overload is dropped from the viable set. */
-    if (param->kind == TY_REF || param->kind == TY_RVALREF) {
-        if (!param->base) return ICS_INCOMPATIBLE;
-        return ics_rank(param->base, arg);
+     * the referent type. Strip TY_REF/TY_RVALREF on both sides and
+     * re-rank against the referent types. Stripping only the param
+     * side fails when sema's resolved_type for an lvalue arg also
+     * carries a TY_REF (passing 'T &v' as 'v') — types_equivalent
+     * sees PTR vs REF, returns false, and the cand drops. */
+    if ((param->kind == TY_REF || param->kind == TY_RVALREF) ||
+        (arg->kind == TY_REF || arg->kind == TY_RVALREF)) {
+        Type *p = (param->kind == TY_REF || param->kind == TY_RVALREF)
+                  ? param->base : param;
+        Type *a = (arg->kind == TY_REF || arg->kind == TY_RVALREF)
+                  ? arg->base : arg;
+        if (!p || !a) return ICS_INCOMPATIBLE;
+        return ics_rank(p, a);
     }
     if (types_equivalent(param, arg)) return ICS_EXACT;
     /* Null pointer constant — N4659 §4.10/1 [conv.ptr]: a null
