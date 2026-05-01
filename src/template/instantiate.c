@@ -1067,12 +1067,19 @@ static bool deduce_from_pair(Type *P, Type *A, SubstMap *map) {
      * bind T=ipa_set, A=va_gc. */
     if ((P->kind == TY_STRUCT || P->kind == TY_UNION) &&
         (A->kind == TY_STRUCT || A->kind == TY_UNION)) {
-        /* Tag-spelling match — if the template is 'vec' we only
-         * deduce when the arg is also 'vec'. */
-        if (!P->tag || !A->tag) return true;
-        if (P->tag->len != A->tag->len) return true;
+        /* Tag-spelling match. If P contains a dependent name and A's
+         * tag doesn't match, deduction fails per N4659 §17.8.2.5
+         * [temp.deduct.type], same rule as the dependent-pointer vs
+         * non-pointer case earlier in this function. Without failing,
+         * an incompatible candidate stays viable with a no-op
+         * deduction; e.g. vec<T, va_heap, vl_ptr> against
+         * vec<X, va_heap, vl_embed> silently succeeds because vl_ptr
+         * and vl_embed are both struct types, masking the genuine
+         * kind mismatch. */
+        if (!P->tag || !A->tag) return !type_has_dependent(P);
+        if (P->tag->len != A->tag->len) return !type_has_dependent(P);
         if (memcmp(P->tag->loc, A->tag->loc, P->tag->len) != 0)
-            return true;
+            return !type_has_dependent(P);
         /* Pattern args: prefer template_id_node (has dependent
          * bindings pre-instantiation). */
         Node  *ptid = P->template_id_node;
