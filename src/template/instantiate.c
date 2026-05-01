@@ -1067,19 +1067,17 @@ static bool deduce_from_pair(Type *P, Type *A, SubstMap *map) {
      * bind T=ipa_set, A=va_gc. */
     if ((P->kind == TY_STRUCT || P->kind == TY_UNION) &&
         (A->kind == TY_STRUCT || A->kind == TY_UNION)) {
-        /* Tag-spelling match. If P contains a dependent name and A's
-         * tag doesn't match, deduction fails per N4659 §17.8.2.5
-         * [temp.deduct.type], same rule as the dependent-pointer vs
-         * non-pointer case earlier in this function. Without failing,
-         * an incompatible candidate stays viable with a no-op
-         * deduction; e.g. vec<T, va_heap, vl_ptr> against
-         * vec<X, va_heap, vl_embed> silently succeeds because vl_ptr
-         * and vl_embed are both struct types, masking the genuine
-         * kind mismatch. */
-        if (!P->tag || !A->tag) return !type_has_dependent(P);
-        if (P->tag->len != A->tag->len) return !type_has_dependent(P);
+        /* Tag mismatch is unification failure. Deduction is checking
+         * whether P's pattern can match A; different concrete classes
+         * cannot unify regardless of whether either side carries a
+         * dependent. (Template deduction has its own type rules — ICS
+         * doesn't run inside template_args recursion, so we can't
+         * defer the rejection to ICS the way we do for top-level
+         * arg/param mismatch.) N4659 §17.8.2.5 [temp.deduct.type]. */
+        if (!P->tag || !A->tag) return false;
+        if (P->tag->len != A->tag->len) return false;
         if (memcmp(P->tag->loc, A->tag->loc, P->tag->len) != 0)
-            return !type_has_dependent(P);
+            return false;
         /* Pattern args: prefer template_id_node (has dependent
          * bindings pre-instantiation). */
         Node  *ptid = P->template_id_node;

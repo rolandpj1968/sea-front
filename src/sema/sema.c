@@ -1126,20 +1126,24 @@ static Node *tmpl_inner_func(Node *tmpl) {
  *
  * Returns:
  *   +1 if A's pattern is strictly more specialized than B's
- *   -1 if A and B are incomparable (different shapes, neither subsumes)
+ *   -1 if B is strictly more specialized than A
  *    0 if equal generality (same shape down to dependent leaves)
+ *   -2 if A and B are INCOMPARABLE (concrete shapes that disagree
+ *      and neither contains a dependent) — patterns accept disjoint
+ *      sets of types, so no specialization ordering applies
  *
- * Heuristic: compound (PTR/REF/ARRAY/STRUCT) is more specialized than
- * a bare TY_DEPENDENT at the same position; compound-vs-compound of
- * matching kind recurses; mismatched kinds are incomparable. Doesn't
- * fully implement the standard's transform-and-deduce algorithm but
- * captures the common pattern: 'vec<T*,A,L>' is more specialized
- * than 'vec<T,A,L>' because at args[0] one has TY_PTR(TY_DEP) while
- * the other has TY_DEP.
+ * Heuristic: compound (PTR/REF/ARRAY/STRUCT) is more specialized
+ * than a bare TY_DEPENDENT at the same position; compound-vs-
+ * compound of matching kind recurses; concrete-vs-concrete with
+ * disagreement is INCOMPARABLE. Doesn't fully implement the
+ * standard's transform-and-deduce algorithm but captures the
+ * common patterns.
  *
  * TODO(seafront#partial-order-fully): full §17.5.5.2 algorithm with
  * synthesized fresh types and pairwise deduction.
  */
+enum { SPEC_CMP_INCOMPARABLE = -2 };
+
 static int type_specialization_compare(Type *a, Type *b) {
     if (!a || !b) return 0;
     if (a == b) return 0;
@@ -1149,33 +1153,31 @@ static int type_specialization_compare(Type *a, Type *b) {
     if (b->kind == TY_REF || b->kind == TY_RVALREF) b = b->base;
     if (!a || !b) return 0;
     if (a->kind == TY_DEPENDENT && b->kind == TY_DEPENDENT) return 0;
-    if (a->kind == TY_DEPENDENT) return -1;  /* a is more general → b wins */
-    /* But "b wins" means b is more specialized — so from A's perspective
-     * we return -1 to indicate "A loses the specialization race here."
-     * The caller treats -1 as "A is less specialized than B" in the
-     * comparison, but we need a signed convention. Re-do: return +1
-     * means "A more specialized," 0 means equal/no info, and we'll
-     * use a separate "incomparable" indicator. Use signed int with
-     * +1, -1, 0; let the caller treat saw +1 vs saw -1 separately. */
-    if (b->kind == TY_DEPENDENT) return +1;  /* a is more specialized */
-    if (a->kind != b->kind) return 0;        /* different concrete shapes:
-                                              * neither is more specialized
-                                              * by structural recursion;
-                                              * leave it to ICS. */
+    if (a->kind == TY_DEPENDENT) return -1;
+    if (b->kind == TY_DEPENDENT) return +1;
+    if (a->kind != b->kind) return SPEC_CMP_INCOMPARABLE;
     switch (a->kind) {
     case TY_PTR: case TY_ARRAY:
         return type_specialization_compare(a->base, b->base);
     case TY_STRUCT: case TY_UNION:
+        /* Different tags = different concrete classes = incomparable. */
+        if (a->tag && b->tag) {
+            if (a->tag->len != b->tag->len ||
+                memcmp(a->tag->loc, b->tag->loc, a->tag->len) != 0)
+                return SPEC_CMP_INCOMPARABLE;
+        }
         if (a->n_template_args != b->n_template_args) return 0;
         if (a->n_template_args == 0) return 0;
         {
-            int saw_pos = 0, saw_neg = 0;
+            int saw_pos = 0, saw_neg = 0, saw_inc = 0;
             for (int i = 0; i < a->n_template_args; i++) {
                 int c = type_specialization_compare(
                     a->template_args[i], b->template_args[i]);
-                if (c > 0) saw_pos++;
+                if (c == SPEC_CMP_INCOMPARABLE) saw_inc = 1;
+                else if (c > 0) saw_pos++;
                 else if (c < 0) saw_neg++;
             }
+            if (saw_inc) return SPEC_CMP_INCOMPARABLE;
             if (saw_pos && !saw_neg) return +1;
             if (saw_neg && !saw_pos) return -1;
             return 0;
@@ -1320,6 +1322,7 @@ static Declaration *resolve_free_function_overload(
             if (i == j) continue;
             if (!viable[i].is_template || !viable[j].is_template) continue;
             int saw_strict = 0;
+            int j_better = 0;
             int incomparable = 0;
             /* Compare PRE-substitution patterns; post-substitution
              * both cands collapse to the same concrete type and
@@ -1329,10 +1332,12 @@ static Declaration *resolve_free_function_overload(
             if (!pi || !pj) continue;
             for (int k = 0; k < nargs && !incomparable; k++) {
                 int cmp = type_specialization_compare(pi[k], pj[k]);
-                if (cmp > 0) saw_strict = 1;
-                else if (cmp < 0) { incomparable = 1; saw_strict = 0; }
+                if (cmp == SPEC_CMP_INCOMPARABLE) incomparable = 1;
+                else if (cmp > 0) saw_strict = 1;
+                else if (cmp < 0) j_better = 1;
             }
-            if (!incomparable && saw_strict) spec_order[i][j] = 1;
+            if (!incomparable && saw_strict && !j_better)
+                spec_order[i][j] = 1;
         }
     }
     /* Drop any cand strictly less specialized than another viable.
