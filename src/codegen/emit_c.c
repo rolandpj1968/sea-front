@@ -3504,6 +3504,23 @@ static void emit_expr(Node *n) {
             callee->ident.resolved_decl->home->owner_type &&
             callee->ident.resolved_decl->home->owner_type->tag) {
             Type *class_type = callee->ident.resolved_decl->home->owner_type;
+            /* The resolved decl's home is the SOURCE template class
+             * (no template args). When emitting inside a class-template
+             * member's body — instantiated for some <args> — prefer
+             * the currently-emitting method's class type, which carries
+             * the instantiated args. The mangled call then lands on
+             * the same symbol the cloned def emits.
+             * N4659 §6.4.1/13 [basic.lookup.unqual]: unqualified lookup
+             * in a member function uses the class scope of the
+             * SPECIALIZATION. Itanium C++ ABI §5.1.5: the mangled name
+             * encodes those class-template args. */
+            if (g_current_method_class && g_current_method_class->tag &&
+                class_type->tag &&
+                tokens_equal(g_current_method_class->tag, class_type->tag) &&
+                g_current_method_class->n_template_args >
+                    class_type->n_template_args) {
+                class_type = g_current_method_class;
+            }
             Token *mname = callee->ident.name;
             /* If the method belongs to a base class of the current
              * class, we need to pass &this->__sf_base.<...> instead

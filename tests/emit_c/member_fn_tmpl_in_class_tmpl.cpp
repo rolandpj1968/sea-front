@@ -1,5 +1,4 @@
-// TODO(seafront#member-fn-tmpl-in-class-tmpl): expected exit 42, currently
-// fails. Test runner skips files without a leading 'EXPECT:' marker.
+// EXPECT: 42
 // Member function template inside a class template.
 // Outer template: Outer<T>. Inner template: method template m<U>.
 // Calling outer.m<int>(...) inside another method body of Outer<T>

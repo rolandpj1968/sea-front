@@ -423,6 +423,22 @@ struct MemberTmplRequest {
                               * so the def mangles with the same template
                               * args as the call site. N4659 §17.5.2 +
                               * Itanium C++ ABI §5.1. */
+    Type      *enclosing_class; /* fully-instantiated enclosing class type
+                              * for unqualified calls inside a cloned
+                              * class-template member body. The sibling
+                              * resolves into the same specialization
+                              * (N4659 §6.4.1/13 [basic.lookup.unqual]:
+                              * unqualified lookup in a class template
+                              * member function uses the class scope of
+                              * the specialization), and its definition
+                              * is implicitly instantiated on use
+                              * (§17.7.1/9 [temp.inst]). The cloned
+                              * sibling's def must mangle with the SAME
+                              * outer args as the calling method (Itanium
+                              * C++ ABI §5.1.5), and its body needs the
+                              * fully-defined struct (not a forward decl)
+                              * for member access. NULL for qualified
+                              * calls (use class_tid). */
     MemberTmplRequest *next;
 };
 
@@ -738,6 +754,7 @@ static void collect_from_node(InstCollector *col, Node *n) {
                     mr->nargs = n->call.nargs;
                     mr->call_node = n;
                     mr->class_tid = n->call.callee->qualified.lead_tid;
+                    mr->enclosing_class = NULL; /* qualified path carries class_tid */
                     if (n->call.nargs > 0) {
                         mr->arg_types = arena_alloc(col->arena,
                             n->call.nargs * sizeof(Type *));
@@ -777,6 +794,7 @@ static void collect_from_node(InstCollector *col, Node *n) {
                 /* Reuse the enclosing call's class instantiation —
                  * a sibling call inherits the same class<args>. */
                 mr->class_tid = col->cur_class_tid;
+                mr->enclosing_class = col->cur_class;
                 if (n->call.nargs > 0) {
                     mr->arg_types = arena_alloc(col->arena,
                         n->call.nargs * sizeof(Type *));
@@ -1830,7 +1848,9 @@ void template_instantiate(Node *tu, Arena *arena) {
          * second binding and clone_node leaves T as TY_DEPENDENT. */
         int outer_np = (mr->class_tid &&
                         mr->class_tid->kind == ND_TEMPLATE_ID)
-                       ? mr->class_tid->template_id.nargs : 0;
+                       ? mr->class_tid->template_id.nargs
+                       : (mr->enclosing_class
+                          ? mr->enclosing_class->n_template_args : 0);
         int cap = np + outer_np;
         if (cap < 1) cap = 1;
         SubstMap deduced = subst_map_new_with_registry(arena, cap, &reg);
@@ -1860,13 +1880,27 @@ void template_instantiate(Node *tu, Arena *arena) {
             pos = class_tag->len;
         }
         key[pos++] = '\0';
-        /* Class-template args from the call-site lead_tid. */
+        /* Class-template args from the call-site lead_tid OR (for
+         * unqualified sibling calls) from the enclosing instantiated
+         * class. N4659 §17.7.1/2 [temp.inst]: each distinct
+         * specialization is a distinct entity. Both sources must
+         * enter the dedup key so requests across different outer
+         * instantiations (e.g. Outer<int>::m vs Outer<float>::m via
+         * sibling calls in their respective bodies) don't collide. */
         if (mr->class_tid && mr->class_tid->kind == ND_TEMPLATE_ID) {
             int ctna = mr->class_tid->template_id.nargs;
             for (int i = 0; i < ctna; i++) {
                 Type *cta = type_arg_from_node(
                     mr->class_tid->template_id.args[i]);
                 pos = type_to_key(cta, key, pos, MAX_DEDUP_KEY);
+                key[pos++] = '\0';
+            }
+        } else if (mr->enclosing_class &&
+                   mr->enclosing_class->n_template_args > 0) {
+            int ctna = mr->enclosing_class->n_template_args;
+            for (int i = 0; i < ctna; i++) {
+                pos = type_to_key(mr->enclosing_class->template_args[i],
+                                  key, pos, MAX_DEDUP_KEY);
                 key[pos++] = '\0';
             }
         }
@@ -1984,6 +2018,19 @@ void template_instantiate(Node *tu, Arena *arena) {
                         mr->class_tid->template_id.args[i]);
                 cloned->func.class_type = ct;
             }
+        } else if (mr->enclosing_class &&
+                   mr->enclosing_class->n_template_args > 0) {
+            /* Unqualified sibling call inside a cloned class-template
+             * member body — mangle with the SAME outer args as the
+             * calling method. N4659 §6.4.1/13 [basic.lookup.unqual]
+             * + §17.7.1/2,9 [temp.inst] resolve the sibling into the
+             * enclosing specialization; Itanium C++ ABI §5.1.5
+             * requires those outer args in the mangled name.
+             * Without this, the def mangles with the bare source
+             * class tag, leaves the function with 'struct sf__Outer
+             * *this' (forward-decl only), and any member access
+             * reads garbage. */
+            cloned->func.class_type = mr->enclosing_class;
         }
 
         /* N4659 §16.3 [over.match]: build TY_FUNC from cloned params
