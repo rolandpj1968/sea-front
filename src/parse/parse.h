@@ -1522,6 +1522,13 @@ int lookup_overload_set_from(DeclarativeRegion *start,
                               const char *name, int name_len,
                               Declaration **out, int cap);
 
+/* Same scope-walking rule, but pushes results into an arena-backed
+ * Vec — no fixed cap. Use when the overload set may exceed any
+ * reasonable stack-buffer cap. */
+void lookup_overload_set_into_vec(DeclarativeRegion *start,
+                                   const char *name, int name_len,
+                                   Vec *out);
+
 /* Look up by entity kind — needed for elaborated-type-specifier
  * (§10.1.7.3): 'struct Foo' must find ENTITY_TAG even if a variable
  * 'Foo' hides the class name (§6.3.10/2 [basic.scope.hiding]). */

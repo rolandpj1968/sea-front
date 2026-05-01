@@ -314,16 +314,19 @@ static void visit_ident(Sema *s, Node *n) {
     bool is_fn = d->type && d->type->kind == TY_FUNC;
     bool is_fn_tmpl = d->entity == ENTITY_TEMPLATE && d->tmpl_node;
     if (is_fn || is_fn_tmpl) {
-        Declaration *buf[16];
-        int n_ov = lookup_overload_set_from(s->cur_scope,
-                                             name->loc, name->len,
-                                             buf, 16);
-        if (n_ov > 1) {
-            Declaration **arr = arena_alloc(s->arena,
-                n_ov * sizeof(Declaration *));
-            for (int i = 0; i < n_ov; i++) arr[i] = buf[i];
-            n->ident.overload_set = arr;
-            n->ident.n_overloads = n_ov;
+        /* Unbounded — overload sets in real C++ TUs can be large
+         * (a free function name with a per-type non-template
+         * overload for every GC-traced struct, sitting alongside
+         * a couple of templated overloads). A fixed-cap stack
+         * buffer would silently truncate the LIFO bucket chain
+         * and drop earlier-registered overloads, blinding overload
+         * resolution to candidates that should be viable. */
+        Vec ov = vec_new(s->arena);
+        lookup_overload_set_into_vec(s->cur_scope,
+                                      name->loc, name->len, &ov);
+        if (ov.len > 1) {
+            n->ident.overload_set = (Declaration **)ov.data;
+            n->ident.n_overloads = ov.len;
         }
     }
     /* N4659 §6.4.5 [class.qual]: member lookup resolves through the

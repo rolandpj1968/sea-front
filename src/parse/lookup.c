@@ -222,6 +222,30 @@ static int collect_in_region(DeclarativeRegion *r, const char *name,
     return pos;
 }
 
+static void collect_in_region_vec(DeclarativeRegion *r, const char *name,
+                                   int name_len, Vec *out) {
+    uint32_t idx = hash_name(name, name_len) % REGION_HASH_SIZE;
+    for (Declaration *d = r->buckets[idx]; d; d = d->next) {
+        if (d->name_len == name_len &&
+            memcmp(d->name, name, name_len) == 0)
+            vec_push(out, d);
+    }
+}
+
+/* Vec-collecting variant — no fixed cap. Same scope-walking rule as
+ * lookup_overload_set_from below. Use when the overload set may
+ * exceed any reasonable stack cap. */
+void lookup_overload_set_into_vec(DeclarativeRegion *start,
+                                   const char *name, int name_len,
+                                   Vec *out) {
+    for (DeclarativeRegion *r = start; r; r = r->enclosing) {
+        collect_in_region_vec(r, name, name_len, out);
+        for (int i = 0; i < r->nusing; i++)
+            collect_in_region_vec(r->using_regions[i], name, name_len, out);
+        if (r->kind == REGION_NAMESPACE) break;
+    }
+}
+
 int lookup_overload_set_from(DeclarativeRegion *start,
                               const char *name, int name_len,
                               Declaration **out, int cap) {
