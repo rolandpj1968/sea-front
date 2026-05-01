@@ -1628,7 +1628,284 @@ static void visit(Sema *s, Node *n) {
  * §16.3 [over.match] + §17.7 [temp.res]. Walks the AST once,
  * resolving identifiers, picking overloads, and propagating types
  * onto every expression node's resolved_type field. */
+/* ------------------------------------------------------------------ */
+/* Template-id type canonicalization                                   */
+/* ------------------------------------------------------------------ */
+/*
+ * N4659 §17.3 [temp.names]/3 + §17.6.2.2 [temp.inst]/9: a template-id
+ * that omits trailing args denotes the specialization with those args
+ * substituted from the template parameter list's defaults. The type
+ * `vec<X, va_gc>` IS `vec<X, va_gc, va_gc::default_layout>` —
+ * `vec<X, va_gc, vl_embed>` once the typedef is resolved. There's no
+ * 2-arg specialization of vec; the resulting Type should already
+ * carry 3 template_args by the time sema's overload resolution runs.
+ *
+ * Sea-front's parser doesn't expand defaults — it emits the Type
+ * with whatever args the user wrote. We canonicalize here, before
+ * visit() runs: build a top-level template-name index, then walk
+ * every Type in the AST and pad missing trailing args with the
+ * template's default_type expressions (substituted against the
+ * already-bound earlier params).
+ *
+ * Without this, deduction in visit_call against a parameter pattern
+ * like `vec<T, A, vl_embed>*` arity-mismatches the call's 2-arg
+ * `vec<X, va_gc>*` and silently drops the candidate (as of the
+ * deduce-failure fix), so calls in gengtype-generated code resolve
+ * to nothing and link bare. After canonicalization the arg type IS
+ * the 3-arg form and deduction succeeds.
+ */
+
+#include <stdint.h>
+
+typedef struct TmplIdxEntry {
+    const char *name;
+    int         name_len;
+    Node       *tmpl;            /* ND_TEMPLATE_DECL */
+    struct TmplIdxEntry *next;
+} TmplIdxEntry;
+
+#define TMPL_IDX_SIZE 64
+typedef struct {
+    TmplIdxEntry *buckets[TMPL_IDX_SIZE];
+    Arena        *arena;
+} TmplIdx;
+
+static void tmpl_idx_add(TmplIdx *idx, Node *tmpl) {
+    if (!tmpl || tmpl->kind != ND_TEMPLATE_DECL || !tmpl->template_decl.decl)
+        return;
+    Node *inner = tmpl->template_decl.decl;
+    Token *name = NULL;
+    if (inner->kind == ND_CLASS_DEF) name = inner->class_def.tag;
+    else if (inner->kind == ND_FUNC_DEF || inner->kind == ND_FUNC_DECL)
+        name = inner->func.name;
+    else if (inner->kind == ND_VAR_DECL || inner->kind == ND_TYPEDEF)
+        name = inner->var_decl.name;
+    if (!name) return;
+    uint32_t h = hash_name(name->loc, name->len) % TMPL_IDX_SIZE;
+    TmplIdxEntry *e = arena_alloc(idx->arena, sizeof(TmplIdxEntry));
+    e->name = name->loc;
+    e->name_len = name->len;
+    e->tmpl = tmpl;
+    e->next = idx->buckets[h];
+    idx->buckets[h] = e;
+}
+
+static Node *tmpl_idx_find_class(TmplIdx *idx, Token *name) {
+    if (!name) return NULL;
+    uint32_t h = hash_name(name->loc, name->len) % TMPL_IDX_SIZE;
+    /* Prefer a primary class template (no template_id_node on its
+     * inner Type) — an ad-hoc proxy for "this is the one whose
+     * defaults we should consult." */
+    Node *primary = NULL;
+    Node *fallback = NULL;
+    for (TmplIdxEntry *e = idx->buckets[h]; e; e = e->next) {
+        if (e->name_len != name->len ||
+            memcmp(e->name, name->loc, name->len) != 0) continue;
+        Node *inner = e->tmpl->template_decl.decl;
+        if (!inner || inner->kind != ND_CLASS_DEF) continue;
+        Type *ty = inner->class_def.ty;
+        if (ty && !ty->template_id_node) { primary = e->tmpl; break; }
+        if (!fallback) fallback = e->tmpl;
+    }
+    return primary ? primary : fallback;
+}
+
+/* Build name→ND_TEMPLATE_DECL by walking the TU. Top-level + namespace
+ * + class scope. Skip member templates inside classes — they don't
+ * appear at the call sites we canonicalize. */
+static void tmpl_idx_build_walk(TmplIdx *idx, Node *n) {
+    if (!n) return;
+    if (n->kind == ND_TEMPLATE_DECL) tmpl_idx_add(idx, n);
+    else if (n->kind == ND_BLOCK) {
+        /* Namespace block — recurse into children. */
+        for (int i = 0; i < n->block.nstmts; i++)
+            tmpl_idx_build_walk(idx, n->block.stmts[i]);
+    } else if (n->kind == ND_TRANSLATION_UNIT) {
+        for (int i = 0; i < n->tu.ndecls; i++)
+            tmpl_idx_build_walk(idx, n->tu.decls[i]);
+    }
+}
+
+/* Pad ty's template_args/template_id_node trailing slots with
+ * substituted defaults. Mutates ty in place. */
+static void canonicalize_type(Type *ty, TmplIdx *idx, Arena *arena) {
+    if (!ty || !ty->template_id_node) return;
+    Node *tid = ty->template_id_node;
+    if (tid->kind != ND_TEMPLATE_ID || !tid->template_id.name) return;
+    Node *tmpl = tmpl_idx_find_class(idx, tid->template_id.name);
+    if (!tmpl) return;
+    int nparams = tmpl->template_decl.nparams;
+    int nargs   = tid->template_id.nargs;
+    if (nargs >= nparams) return;
+    /* Verify trailing params have defaults — bail if any don't. */
+    for (int i = nargs; i < nparams; i++) {
+        Node *p = tmpl->template_decl.params[i];
+        if (!p || !p->param.default_type) return;
+    }
+    /* Build a SubstMap from the explicit args so 'A::default_layout'-
+     * style defaults can resolve against earlier bindings. */
+    SubstMap map = subst_map_new(arena, nparams > 0 ? nparams : 1);
+    for (int i = 0; i < nargs; i++) {
+        Node *p = tmpl->template_decl.params[i];
+        Node *a = tid->template_id.args[i];
+        if (!p || !p->param.name) continue;
+        Type *aty = (a && a->kind == ND_VAR_DECL) ? a->var_decl.ty : NULL;
+        if (aty) subst_map_add(&map, p->param.name, aty);
+    }
+    /* Materialize defaults. */
+    Node **new_args = arena_alloc(arena, nparams * sizeof(Node *));
+    Type **new_targs = arena_alloc(arena, nparams * sizeof(Type *));
+    for (int i = 0; i < nargs; i++) {
+        new_args[i] = tid->template_id.args[i];
+        Node *a = tid->template_id.args[i];
+        new_targs[i] = (a && a->kind == ND_VAR_DECL) ? a->var_decl.ty : NULL;
+    }
+    for (int i = nargs; i < nparams; i++) {
+        Node *p = tmpl->template_decl.params[i];
+        Type *defty = subst_type(p->param.default_type, &map, arena);
+        Node *narg = arena_alloc(arena, sizeof(Node));
+        memset(narg, 0, sizeof(Node));
+        narg->kind = ND_VAR_DECL;
+        narg->var_decl.ty = defty;
+        new_args[i] = narg;
+        new_targs[i] = defty;
+        /* Bind for any later default that depends on this position. */
+        if (p->param.name) subst_map_add(&map, p->param.name, defty);
+    }
+    /* Rewrite the existing template-id node in place so other Types
+     * sharing this same Node also see the expanded args. */
+    tid->template_id.args = new_args;
+    tid->template_id.nargs = nparams;
+    /* Update the cached flat array on the Type. */
+    ty->template_args = new_targs;
+    ty->n_template_args = nparams;
+}
+
+/* Walk a Type and recurse into compounds. Visit each TY_STRUCT that
+ * carries a template_id_node. */
+static void canonicalize_walk_type(Type *ty, TmplIdx *idx, Arena *arena) {
+    if (!ty) return;
+    switch (ty->kind) {
+    case TY_PTR: case TY_REF: case TY_RVALREF: case TY_ARRAY:
+        canonicalize_walk_type(ty->base, idx, arena);
+        break;
+    case TY_FUNC:
+        canonicalize_walk_type(ty->ret, idx, arena);
+        for (int i = 0; i < ty->nparams; i++)
+            canonicalize_walk_type(ty->params[i], idx, arena);
+        break;
+    case TY_STRUCT: case TY_UNION:
+        canonicalize_type(ty, idx, arena);
+        /* Recurse into the (possibly newly-padded) template_args. */
+        for (int i = 0; i < ty->n_template_args; i++)
+            canonicalize_walk_type(ty->template_args[i], idx, arena);
+        break;
+    default: break;
+    }
+}
+
+/* Walk every Node and apply canonicalize_walk_type to every Type field
+ * we know about. Mirrors patch_node_types in instantiate.c. */
+static void canonicalize_walk_node(Node *n, TmplIdx *idx, Arena *arena) {
+    if (!n) return;
+    switch (n->kind) {
+    case ND_VAR_DECL: case ND_PARAM:
+        canonicalize_walk_type(n->var_decl.ty, idx, arena);
+        if (n->var_decl.init) canonicalize_walk_node(n->var_decl.init, idx, arena);
+        break;
+    case ND_TYPEDEF:
+        canonicalize_walk_type(n->var_decl.ty, idx, arena);
+        break;
+    case ND_FUNC_DEF: case ND_FUNC_DECL:
+        canonicalize_walk_type(n->func.ret_ty, idx, arena);
+        for (int i = 0; i < n->func.nparams; i++)
+            canonicalize_walk_node(n->func.params[i], idx, arena);
+        if (n->func.body) canonicalize_walk_node(n->func.body, idx, arena);
+        break;
+    case ND_CLASS_DEF:
+        for (int i = 0; i < n->class_def.nbase_types; i++)
+            canonicalize_walk_type(n->class_def.base_types[i], idx, arena);
+        for (int i = 0; i < n->class_def.nmembers; i++)
+            canonicalize_walk_node(n->class_def.members[i], idx, arena);
+        break;
+    case ND_TEMPLATE_DECL:
+        canonicalize_walk_node(n->template_decl.decl, idx, arena);
+        break;
+    case ND_BLOCK:
+        for (int i = 0; i < n->block.nstmts; i++)
+            canonicalize_walk_node(n->block.stmts[i], idx, arena);
+        break;
+    case ND_IF:
+        canonicalize_walk_node(n->if_.cond, idx, arena);
+        canonicalize_walk_node(n->if_.then_, idx, arena);
+        canonicalize_walk_node(n->if_.else_, idx, arena);
+        break;
+    case ND_WHILE: case ND_DO:
+        canonicalize_walk_node(n->while_.cond, idx, arena);
+        canonicalize_walk_node(n->while_.body, idx, arena);
+        break;
+    case ND_FOR:
+        canonicalize_walk_node(n->for_.init, idx, arena);
+        canonicalize_walk_node(n->for_.cond, idx, arena);
+        canonicalize_walk_node(n->for_.inc, idx, arena);
+        canonicalize_walk_node(n->for_.body, idx, arena);
+        break;
+    case ND_RETURN:
+        canonicalize_walk_node(n->ret.expr, idx, arena);
+        break;
+    case ND_EXPR_STMT:
+        canonicalize_walk_node(n->expr_stmt.expr, idx, arena);
+        break;
+    case ND_CAST:
+        canonicalize_walk_type(n->cast.ty, idx, arena);
+        if (n->cast.operand) canonicalize_walk_node(n->cast.operand, idx, arena);
+        break;
+    case ND_SIZEOF:
+        canonicalize_walk_type(n->sizeof_.ty, idx, arena);
+        if (n->sizeof_.expr) canonicalize_walk_node(n->sizeof_.expr, idx, arena);
+        break;
+    case ND_ALIGNOF:
+        canonicalize_walk_type(n->alignof_.ty, idx, arena);
+        break;
+    case ND_OFFSETOF:
+        canonicalize_walk_type(n->offsetof_.ty, idx, arena);
+        break;
+    case ND_CALL:
+        canonicalize_walk_node(n->call.callee, idx, arena);
+        for (int i = 0; i < n->call.nargs; i++)
+            canonicalize_walk_node(n->call.args[i], idx, arena);
+        break;
+    case ND_BINARY: case ND_ASSIGN:
+        canonicalize_walk_node(n->binary.lhs, idx, arena);
+        canonicalize_walk_node(n->binary.rhs, idx, arena);
+        break;
+    case ND_UNARY:
+        canonicalize_walk_node(n->unary.operand, idx, arena);
+        break;
+    case ND_SUBSCRIPT:
+        canonicalize_walk_node(n->subscript.base, idx, arena);
+        canonicalize_walk_node(n->subscript.index, idx, arena);
+        break;
+    case ND_MEMBER:
+        canonicalize_walk_node(n->member.obj, idx, arena);
+        break;
+    case ND_TERNARY:
+        canonicalize_walk_node(n->ternary.cond, idx, arena);
+        canonicalize_walk_node(n->ternary.then_, idx, arena);
+        canonicalize_walk_node(n->ternary.else_, idx, arena);
+        break;
+    default: break;
+    }
+}
+
 void sema_run(Node *tu, Arena *arena) {
+    /* Pre-pass: canonicalize template-id Types by expanding default
+     * trailing args. Per N4659 §17.3 [temp.names]/3, a template-id
+     * with omitted defaults denotes the fully-defaulted spec. */
+    TmplIdx idx = { .arena = arena };
+    tmpl_idx_build_walk(&idx, tu);
+    canonicalize_walk_node(tu, &idx, arena);
+
     Sema s = { .arena = arena, .tu = tu, .cur_scope = NULL };
     visit(&s, tu);
 }
