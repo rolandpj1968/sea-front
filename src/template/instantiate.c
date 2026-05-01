@@ -404,6 +404,16 @@ struct InstRequest {
      * parameters; the remaining ones are deduced from call args. */
     Type **arg_types;
     int    nargs;
+    /* For member class templates of a class template (e.g.
+     * 'Outer<int>::Inner<int>' used inside Outer<int>'s methods —
+     * N4659 §17.5.2 [temp.mem]/2): the fully-instantiated enclosing
+     * class type. The cloned struct's tag is rewritten to a
+     * synthesized 'OuterTag_t_outerargs_te___InnerTag' so the
+     * mangled symbol scopes the inner specialization under the
+     * outer one (Itanium C++ ABI §5.1.5 — substitution encodes
+     * nested class-template specializations). NULL for top-level
+     * class/function templates. */
+    Type  *member_owner;
     InstRequest *next;
 };
 
@@ -499,8 +509,25 @@ static void collect_from_type(InstCollector *col, Type *ty) {
      * 'vec<T>' inside a class template body) never get resolved_tmpl
      * set, and subst_type can't recover the typedef. */
     Token *name = tid->template_id.name;
+    Type  *member_owner = NULL;
     if (!tid->template_id.resolved_tmpl) {
         Node *t = registry_find(col->reg, name->loc, name->len);
+        /* N4659 §17.5.2 [temp.mem]/2 + §6.4.1/13 [basic.lookup.unqual]:
+         * an unqualified template-id inside a class-template member
+         * function looks up the class scope; a member class template
+         * is found there. Fall back to the member-template registry
+         * keyed by enclosing class tag. Pattern: Outer<T>::call_inner
+         * body references Inner<int> where Inner is a member class
+         * template of Outer. */
+        if (!t && col->cur_class && col->cur_class->tag) {
+            TmplEntry *me = registry_find_member(col->reg,
+                col->cur_class->tag->loc, col->cur_class->tag->len,
+                name->loc, name->len);
+            if (me) {
+                t = me->tmpl;
+                member_owner = col->cur_class;
+            }
+        }
         if (t) tid->template_id.resolved_tmpl = t;
     }
 
@@ -526,6 +553,7 @@ static void collect_from_type(InstCollector *col, Type *ty) {
     req->template_id = tid;
     req->tmpl_def = tmpl;
     req->usage_type = ty;  /* patch this type after instantiation */
+    req->member_owner = member_owner;
     req->next = col->head;
     col->head = req;
     col->count++;
@@ -1415,9 +1443,16 @@ static Type *build_func_type_from_node(Node *func, Arena *arena) {
  * Instantiate one template for a given set of arguments.
  * Returns the cloned ND_CLASS_DEF / ND_FUNC_DEF, or NULL on failure.
  * 'tu' is passed for finding out-of-class method templates.
+ *
+ * 'member_owner' is non-NULL for member class/function templates of
+ * a class template (e.g. cloning Outer<int>::Inner<U>): the inner
+ * template's body references both Outer's params (T) and Inner's (U).
+ * The SubstMap is pre-seeded with Outer's param→arg bindings before
+ * the inner head's bindings are added. N4659 §17.5.2 [temp.mem]/2.
  */
 static Node *instantiate_one(Node *tmpl, Node *template_id,
                               Arena *arena, Node *tu, TmplRegistry *reg,
+                              Type *member_owner,
                               Node ***extra_out, int *nextra) {
     if (!tmpl || tmpl->kind != ND_TEMPLATE_DECL) return NULL;
 
@@ -1426,6 +1461,16 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
 
     int nparams = tmpl->template_decl.nparams;
     int nargs   = template_id->template_id.nargs;
+
+    /* Outer template params count, for SubstMap capacity. */
+    Node *outer_tmpl = NULL;
+    int outer_nparams = 0;
+    if (member_owner && member_owner->tag) {
+        outer_tmpl = registry_find(reg,
+            member_owner->tag->loc, member_owner->tag->len);
+        if (outer_tmpl && outer_tmpl->kind == ND_TEMPLATE_DECL)
+            outer_nparams = outer_tmpl->template_decl.nparams;
+    }
 
     /* Build the substitution map.
      *
@@ -1438,9 +1483,26 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
      * positions bind the spec's param to the usage arg; concrete
      * positions must match exactly (already checked by the
      * specialization finder). */
-    /* +1 capacity for the injected-class-name entry */
+    /* +1 capacity for the injected-class-name entry, +outer for the
+     * enclosing class-template's params when this is a member of a
+     * class template (N4659 §17.5.2 [temp.mem]/2). */
     SubstMap map = subst_map_new_with_registry(arena,
-        (nparams > 0 ? nparams : 1) + 1, reg);
+        (nparams > 0 ? nparams : 1) + 1 + outer_nparams, reg);
+
+    /* Seed with outer-template param→arg bindings BEFORE the inner
+     * head's bindings, so a body that references both T (outer) and
+     * U (inner) gets both substituted. */
+    if (outer_tmpl && member_owner->n_template_args > 0) {
+        int n = outer_nparams;
+        if (n > member_owner->n_template_args)
+            n = member_owner->n_template_args;
+        for (int i = 0; i < n; i++) {
+            Node *p = outer_tmpl->template_decl.params[i];
+            if (!p || !p->param.name) continue;
+            subst_map_add(&map, p->param.name,
+                          member_owner->template_args[i]);
+        }
+    }
 
     /* Check if this is a partial specialization */
     Type *inner_ty = NULL;
@@ -1534,12 +1596,26 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
                 inst_ty->template_args[i] =
                     type_arg_from_node(template_id->template_id.args[i]);
         }
-        if (n < map.nentries) {
-            n = map.nentries;
-            inst_ty->template_args = arena_alloc(arena, n * sizeof(Type *));
-            inst_ty->n_template_args = n;
+        /* Default-args expansion: when the usage has fewer args than
+         * the inner template's params, fill the rest from the map.
+         * Skip the outer-seeded entries (they belong to the enclosing
+         * specialization's tag prefix, not this struct's own args).
+         * N4659 §17.6 [temp.arg] — default template args fill missing
+         * positions; outer params are NOT default args of the inner
+         * head. */
+        if (n < nparams) {
+            int new_n = nparams;
+            inst_ty->template_args = arena_alloc(arena,
+                new_n * sizeof(Type *));
+            inst_ty->n_template_args = new_n;
             for (int i = 0; i < n; i++)
-                inst_ty->template_args[i] = map.entries[i].concrete_type;
+                inst_ty->template_args[i] =
+                    type_arg_from_node(template_id->template_id.args[i]);
+            for (int i = n; i < new_n; i++) {
+                int mi = outer_nparams + i;
+                inst_ty->template_args[i] = (mi < map.nentries)
+                    ? map.entries[mi].concrete_type : NULL;
+            }
         }
         /* Add the class name to the SubstMap so the injected-class-name
          * (bare 'Box' inside 'Box<T>' body) gets substituted to the
@@ -1748,6 +1824,59 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
 }
 
 /* region_add_base_raw moved to lookup.c */
+
+/* Rewrite a member class template's cloned tag to scope it under the
+ * enclosing specialization. N4659 §17.5.2 [temp.mem]/2 — a member
+ * class template specialization is a member of a particular outer
+ * specialization. Itanium C++ ABI §5.1.5 encodes this nesting in the
+ * mangled name. Our human encoding produces:
+ *   OuterTag_t_<outer_args>_te___InnerTag
+ * which mangle_class_tag then suffixes with _t_<inner_args>_te_ for
+ * the inner template args carried on inst_ty.
+ *
+ * Both inst_ty (the cloned struct's own Type) and usage_type (the
+ * call-site var's TY_STRUCT) must share the same rewritten tag so
+ * the struct definition and method-call mangling agree. */
+static Token *make_scoped_member_tag(Type *owner, Token *inner_tag,
+                                      Arena *arena) {
+    if (!owner || !owner->tag || !inner_tag) return inner_tag;
+    int bufsize = 256;
+    char *buf = arena_alloc(arena, bufsize);
+    int pos = 0;
+    int n = owner->tag->len;
+    if (pos + n < bufsize) {
+        memcpy(buf + pos, owner->tag->loc, n);
+        pos += n;
+    }
+    if (owner->n_template_args > 0 && pos + 3 < bufsize) {
+        memcpy(buf + pos, "_t_", 3);
+        pos += 3;
+        for (int i = 0; i < owner->n_template_args; i++) {
+            if (i > 0 && pos < bufsize - 1) buf[pos++] = '_';
+            pos = mangle_type_to_buf(owner->template_args[i],
+                                      buf, pos, bufsize);
+        }
+        if (pos + 4 < bufsize) {
+            memcpy(buf + pos, "_te_", 4);
+            pos += 4;
+        }
+    }
+    if (pos + 2 < bufsize) {
+        memcpy(buf + pos, "__", 2);
+        pos += 2;
+    }
+    int in = inner_tag->len;
+    if (pos + in < bufsize) {
+        memcpy(buf + pos, inner_tag->loc, in);
+        pos += in;
+    }
+    Token *t = arena_alloc(arena, sizeof(Token));
+    *t = *inner_tag;
+    t->loc = buf;
+    t->len = pos;
+    t->kind = TK_IDENT;
+    return t;
+}
 
 /* Forward declarations for post-instantiation type patching */
 static void patch_all_types(Node *tu, DedupSet *ds, Arena *arena);
@@ -2142,9 +2271,26 @@ void template_instantiate(Node *tu, Arena *arena) {
          * requests from finding the existing instantiation. */
         char key[MAX_DEDUP_KEY];
         int key_len = 0;
+        /* For member class templates, prefix the key with the owner's
+         * tag and template args so two distinct enclosing
+         * specializations (e.g. Outer<int>::Inner<int> vs
+         * Outer<float>::Inner<int>) get separate clones. N4659
+         * §17.5.2/2 [temp.mem]. */
+        if (req->member_owner && req->member_owner->tag &&
+            key_len + req->member_owner->tag->len < MAX_DEDUP_KEY) {
+            memcpy(key + key_len, req->member_owner->tag->loc,
+                   req->member_owner->tag->len);
+            key_len += req->member_owner->tag->len;
+            key[key_len++] = '\0';
+            for (int i = 0; i < req->member_owner->n_template_args; i++) {
+                key_len = type_to_key(req->member_owner->template_args[i],
+                                       key, key_len, MAX_DEDUP_KEY);
+                key[key_len++] = '\0';
+            }
+        }
         if (req->name && key_len + req->name->len < MAX_DEDUP_KEY) {
-            memcpy(key, req->name->loc, req->name->len);
-            key_len = req->name->len;
+            memcpy(key + key_len, req->name->loc, req->name->len);
+            key_len += req->name->len;
         }
         key[key_len++] = '\0';
         {
@@ -2290,7 +2436,8 @@ void template_instantiate(Node *tu, Arena *arena) {
              * pattern args against the usage args. TY_DEPENDENT
              * positions in the pattern become bindings. */
             inst = instantiate_one(spec, req->template_id,
-                                    arena, tu, &reg, &extra_methods, &nextra);
+                                    arena, tu, &reg, req->member_owner,
+                                    &extra_methods, &nextra);
         } else if (spec) {
             /* Full specialization — use the concrete class directly.
              * No cloning or substitution needed. */
@@ -2328,7 +2475,22 @@ void template_instantiate(Node *tu, Arena *arena) {
             }
         } else {
             inst = instantiate_one(req->tmpl_def, req->template_id,
-                                      arena, tu, &reg, &extra_methods, &nextra);
+                                      arena, tu, &reg, req->member_owner,
+                                      &extra_methods, &nextra);
+        }
+        /* Member class template: rewrite the cloned struct's tag to a
+         * scoped name so the emitted symbol distinguishes
+         * Outer<X>::Inner<int> from a top-level Inner<int>. Done before
+         * sema_visit so methods inside the cloned struct mangle with
+         * the scoped tag. N4659 §17.5.2 [temp.mem]/2. */
+        if (inst && inst->kind == ND_CLASS_DEF && inst->class_def.ty &&
+            req->member_owner) {
+            Type *inst_ty = inst->class_def.ty;
+            Token *new_tag = make_scoped_member_tag(req->member_owner,
+                                                     inst_ty->tag, arena);
+            inst_ty->tag = new_tag;
+            inst->class_def.tag = new_tag;
+            if (req->usage_type) req->usage_type->tag = new_tag;
         }
         if (inst) {
             /* Phase-2 sema on the freshly-cloned subtree.
