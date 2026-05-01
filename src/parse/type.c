@@ -811,13 +811,11 @@ DeclSpec parse_type_specifiers(Parser *p) {
             Token *t4 = parser_peek_ahead(p, 4);
             bool is_dtor = false, is_ctor = false;
             if (t2 && t2->kind == TK_TILDE && t3 && t3->kind == TK_IDENT &&
-                t3->len == td->type->tag->len &&
-                memcmp(t3->loc, td->type->tag->loc, t3->len) == 0 &&
+                tokens_equal(t3, td->type->tag) &&
                 t4 && t4->kind == TK_LPAREN) {
                 is_dtor = true;
             } else if (t2 && t2->kind == TK_IDENT &&
-                       t2->len == td->type->tag->len &&
-                       memcmp(t2->loc, td->type->tag->loc, t2->len) == 0 &&
+                       tokens_equal(t2, td->type->tag) &&
                        t3 && t3->kind == TK_LPAREN) {
                 is_ctor = true;
             }
@@ -1029,9 +1027,7 @@ DeclSpec parse_type_specifiers(Parser *p) {
          * picked up by parse_declaration's function-def branch. */
         if (p->region && p->region->kind == REGION_CLASS &&
             p->region->owner_type && p->region->owner_type->tag &&
-            parser_peek(p)->len == p->region->owner_type->tag->len &&
-            memcmp(parser_peek(p)->loc, p->region->owner_type->tag->loc,
-                   parser_peek(p)->len) == 0 &&
+            tokens_equal(parser_peek(p), p->region->owner_type->tag) &&
             parser_peek_ahead(p, 1)->kind == TK_LPAREN) {
             p->pending_is_constructor = true;
             Type *vty = new_type(p, TY_VOID);

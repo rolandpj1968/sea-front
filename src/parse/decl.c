@@ -481,8 +481,7 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
         if (name_was_qualified &&
             qscope && qscope->kind == REGION_CLASS && qscope->owner_type &&
             qscope->owner_type->tag && name &&
-            name->len == qscope->owner_type->tag->len &&
-            memcmp(name->loc, qscope->owner_type->tag->loc, name->len) == 0) {
+            tokens_equal(name, qscope->owner_type->tag)) {
             p->pending_is_constructor = true;
         }
     }

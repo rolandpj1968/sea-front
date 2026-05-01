@@ -1016,8 +1016,7 @@ static bool deduce_from_pair(Type *P, Type *A, SubstMap *map) {
         /* Check if already bound (consistency) */
         for (int i = 0; i < map->nentries; i++) {
             Token *pn = map->entries[i].param_name;
-            if (pn && pn->len == P->tag->len &&
-                memcmp(pn->loc, P->tag->loc, pn->len) == 0) {
+            if (pn && tokens_equal(pn, P->tag)) {
                 /* Already bound — must be consistent */
                 return true;  /* trust the first binding */
             }
@@ -1312,8 +1311,7 @@ static bool ool_method_matches(Node *method, Type *target_class) {
                 for (int j = 0; j < method->template_decl.nparams; j++) {
                     Node *tp = method->template_decl.params[j];
                     Token *tn = tp ? tp->param.name : NULL;
-                    if (tn && tn->len == t->tag->len &&
-                        memcmp(tn->loc, t->tag->loc, tn->len) == 0) {
+                    if (tn && tokens_equal(tn, t->tag)) {
                         matches_tparam = true;
                         break;
                     }
@@ -2604,10 +2602,7 @@ void template_instantiate(Node *tu, Arena *arena) {
                 if (!mty) continue;
                 if (mty->kind != TY_STRUCT && mty->kind != TY_UNION)
                     continue;
-                if (mty->tag && bty->tag &&
-                    mty->tag->len == bty->tag->len &&
-                    memcmp(mty->tag->loc, bty->tag->loc,
-                           mty->tag->len) == 0)
+                if (mty->tag && bty->tag && tokens_equal(mty->tag, bty->tag))
                     a_needs_b = true;
             }
             /* Also check base types — base classes are embedded
@@ -2615,10 +2610,7 @@ void template_instantiate(Node *tu, Arena *arena) {
             for (int bt = 0; bt < a->class_def.nbase_types && !a_needs_b; bt++) {
                 Type *base = a->class_def.base_types[bt];
                 if (!base || !base->tag) continue;
-                if (bty->tag &&
-                    base->tag->len == bty->tag->len &&
-                    memcmp(base->tag->loc, bty->tag->loc,
-                           base->tag->len) == 0)
+                if (bty->tag && tokens_equal(base->tag, bty->tag))
                     a_needs_b = true;
             }
             if (a_needs_b) {

@@ -105,8 +105,7 @@ static bool is_ref_param(Token *name) {
     if (!name) return false;
     for (int i = 0; i < g_nref_params; i++) {
         Token *rp = g_ref_params[i];
-        if (rp && rp->len == name->len &&
-            memcmp(rp->loc, name->loc, name->len) == 0)
+        if (rp && tokens_equal(rp, name))
             return true;
     }
     return false;
@@ -1448,13 +1447,11 @@ static bool method_is_virtual(Type *class_type, Token *method_name) {
         Node *m = cdef->class_def.members[i];
         if (!m) continue;
         if (m->kind == ND_FUNC_DEF && m->func.name &&
-            m->func.name->len == method_name->len &&
-            memcmp(m->func.name->loc, method_name->loc, method_name->len) == 0)
+            tokens_equal(m->func.name, method_name))
             return m->func.is_virtual;
         if (m->kind == ND_VAR_DECL && m->var_decl.name &&
             m->var_decl.ty && m->var_decl.ty->kind == TY_FUNC &&
-            m->var_decl.name->len == method_name->len &&
-            memcmp(m->var_decl.name->loc, method_name->loc, method_name->len) == 0)
+            tokens_equal(m->var_decl.name, method_name))
             return m->var_decl.is_virtual;
     }
     return false;
@@ -1716,9 +1713,7 @@ static int score_type_pair(Type *pt, Type *at) {
             s += score_type_pair(pt->base, at->base);
         }
         if ((pt->kind == TY_STRUCT || pt->kind == TY_UNION) &&
-            pt->tag && at->tag &&
-            pt->tag->len == at->tag->len &&
-            memcmp(pt->tag->loc, at->tag->loc, pt->tag->len) == 0)
+            pt->tag && at->tag && tokens_equal(pt->tag, at->tag))
             s++;
         return s;
     }
@@ -1729,8 +1724,7 @@ static int score_type_pair(Type *pt, Type *at) {
         int s = 2;
         if ((at->kind == TY_STRUCT || at->kind == TY_UNION) &&
             pt->base->tag && at->tag &&
-            pt->base->tag->len == at->tag->len &&
-            memcmp(pt->base->tag->loc, at->tag->loc, pt->base->tag->len) == 0)
+            tokens_equal(pt->base->tag, at->tag))
             s++;
         return s;
     }
@@ -3394,8 +3388,7 @@ static void emit_expr(Node *n) {
                                         (pp->kind == TY_STRUCT || pp->kind == TY_UNION) &&
                                         (aa->kind == TY_STRUCT || aa->kind == TY_UNION) &&
                                         pp->tag && aa->tag &&
-                                        pp->tag->len == aa->tag->len &&
-                                        memcmp(pp->tag->loc, aa->tag->loc, pp->tag->len) == 0 &&
+                                        tokens_equal(pp->tag, aa->tag) &&
                                         pp->n_template_args == aa->n_template_args) {
                                         bool args_match = true;
                                         for (int j = 0; j < pp->n_template_args && args_match; j++) {

@@ -15,6 +15,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <errno.h>
+#include <assert.h>
 
 /*
  * Token kinds.
@@ -233,6 +234,22 @@ struct Token {
     bool at_bol;        /* at beginning of line */
     bool has_space;     /* preceded by whitespace */
 };
+
+/* Compare two Tokens by their identifier text. Tokens are pointers
+ * into the source buffer with an explicit length — no NUL terminator.
+ * Both tokens must be non-NULL; nullable fields (e.g. Type::tag) must
+ * be guarded at the call site before invoking this. */
+static inline bool tokens_equal(struct Token *a, struct Token *b) {
+    assert(a && b);
+    return a->len == b->len && memcmp(a->loc, b->loc, a->len) == 0;
+}
+
+/* Same as tokens_equal but compares against a literal string. */
+static inline bool token_equals_str(struct Token *t,
+                                    const char *s, int slen) {
+    assert(t);
+    return t->len == slen && memcmp(t->loc, s, slen) == 0;
+}
 
 /* Contiguous array of tokens — the output of the lexer.
  * Replaces the linked-list approach: better cache locality,

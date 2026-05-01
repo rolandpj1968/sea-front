@@ -791,8 +791,7 @@ static void visit_member(Sema *s, Node *n) {
                 } else if (cm->kind == ND_FUNC_DEF) {
                     cmn = cm->func.name;
                 }
-                if (cmn && cmn->len == m->len &&
-                    memcmp(cmn->loc, m->loc, m->len) == 0) {
+                if (cmn && tokens_equal(cmn, m)) {
                     if (cmt) n->resolved_type = cmt;
                     break;
                 }
@@ -1042,9 +1041,7 @@ static int ics_rank(Type *param, Type *arg) {
         Type *ab = arg->base;
         if ((pb->kind == TY_STRUCT || pb->kind == TY_UNION) &&
             (ab->kind == TY_STRUCT || ab->kind == TY_UNION) &&
-            pb->tag && ab->tag &&
-            pb->tag->len == ab->tag->len &&
-            memcmp(pb->tag->loc, ab->tag->loc, pb->tag->len) == 0)
+            pb->tag && ab->tag && tokens_equal(pb->tag, ab->tag))
             return ICS_PTR_SAME_TAG;
     }
     /* Integer conversion — N4659 §7.8 [conv.integral]. Any integral
@@ -1432,8 +1429,7 @@ static Node *build_template_id_from_deduced(Sema *s, Token *tname,
         if (pname) {
             for (int e = 0; e < deduced->nentries; e++) {
                 Token *en = deduced->entries[e].param_name;
-                if (en && en->len == pname->len &&
-                    memcmp(en->loc, pname->loc, pname->len) == 0) {
+                if (en && tokens_equal(en, pname)) {
                     ct = deduced->entries[e].concrete_type;
                     break;
                 }

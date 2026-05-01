@@ -55,7 +55,7 @@ static Type *subst_map_lookup(SubstMap *map, const char *name, int len) {
         Token *pn = map->entries[i].param_name;
         /* Skip TT-only entries — concrete_type is NULL by design. */
         if (!map->entries[i].concrete_type) continue;
-        if (pn && pn->len == len && memcmp(pn->loc, name, len) == 0)
+        if (pn && token_equals_str(pn, name, len))
             return map->entries[i].concrete_type;
     }
     return NULL;
@@ -65,7 +65,7 @@ Token *subst_map_lookup_tt(SubstMap *map, const char *name, int len) {
     for (int i = 0; i < map->nentries; i++) {
         if (!map->entries[i].tt_bound_name) continue;
         Token *pn = map->entries[i].param_name;
-        if (pn && pn->len == len && memcmp(pn->loc, name, len) == 0)
+        if (pn && token_equals_str(pn, name, len))
             return map->entries[i].tt_bound_name;
     }
     return NULL;
@@ -169,10 +169,7 @@ Type *subst_type(Type *ty, SubstMap *map, Arena *arena) {
                     Node *m = cls->class_def.members[i];
                     if (!m || m->kind != ND_TYPEDEF) continue;
                     if (!m->var_decl.name) continue;
-                    if (m->var_decl.name->len == ty->dep_member->len &&
-                        memcmp(m->var_decl.name->loc,
-                               ty->dep_member->loc,
-                               ty->dep_member->len) == 0) {
+                    if (tokens_equal(m->var_decl.name, ty->dep_member)) {
                         typedef_node = m;
                         break;
                     }
