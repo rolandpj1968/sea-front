@@ -1863,21 +1863,6 @@ static void canonicalize_type(Type *ty, TmplIdx *idx, Arena *arena) {
     int nparams = tmpl->template_decl.nparams;
     int nargs   = tid->template_id.nargs;
     if (nargs >= nparams) return;
-    /* Don't canonicalize when explicit args are dependent — defaults
-     * applied here would make the type look more concrete than the
-     * user wrote, biasing partial ordering of function templates
-     * (the generic 'vec<T>' would look more specialized than
-     * 'vec<T,A,vl_embed>' once defaulted to 'vec<T,va_heap,vl_ptr>',
-     * because positions 1 and 2 become concrete instead of staying
-     * dependent). Standard: the canonical type IS the defaulted form
-     * (N4659 §17.3 [temp.names]/3), but partial ordering operates on
-     * the as-written pattern (§17.5.5.2 [temp.func.order]). Skip
-     * canonicalization when ambiguity could result. */
-    for (int i = 0; i < nargs; i++) {
-        Node *a = tid->template_id.args[i];
-        Type *at = (a && a->kind == ND_VAR_DECL) ? a->var_decl.ty : NULL;
-        if (at && type_has_dependent(at)) return;
-    }
     /* Verify trailing params have defaults — bail if any don't. */
     for (int i = nargs; i < nparams; i++) {
         Node *p = tmpl->template_decl.params[i];
