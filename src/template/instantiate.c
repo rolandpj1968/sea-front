@@ -2069,7 +2069,17 @@ void template_instantiate(Node *tu, Arena *arena) {
         }
 
         /* Dedup check — use ALL usage args (not just the map, which
-         * may exclude fixed args from partial specializations). */
+         * may exclude fixed args from partial specializations).
+         *
+         * For FUNCTION templates we also include the ND_TEMPLATE_DECL
+         * pointer in the key, so two same-named function templates
+         * with the same template args but different function
+         * signatures (e.g. gcc 4.8 vec.h's gt_pch_nx<T,A>(vec*) and
+         * gt_pch_nx<T,A>(vec*, op, cookie)) don't dedup-collide.
+         * Class-template requests skip this — only one ND_TEMPLATE_
+         * DECL exists per class-template name in scope, and including
+         * the pointer would prevent later same-(name,args) class
+         * requests from finding the existing instantiation. */
         char key[MAX_DEDUP_KEY];
         int key_len = 0;
         if (req->name && key_len + req->name->len < MAX_DEDUP_KEY) {
@@ -2077,6 +2087,19 @@ void template_instantiate(Node *tu, Arena *arena) {
             key_len = req->name->len;
         }
         key[key_len++] = '\0';
+        {
+            Node *tmpl_inner_dk = req->tmpl_def
+                ? req->tmpl_def->template_decl.decl : NULL;
+            bool is_fn_tmpl = tmpl_inner_dk &&
+                (tmpl_inner_dk->kind == ND_FUNC_DEF ||
+                 tmpl_inner_dk->kind == ND_FUNC_DECL);
+            if (is_fn_tmpl &&
+                key_len + (int)sizeof(Node *) < MAX_DEDUP_KEY) {
+                memcpy(key + key_len, &req->tmpl_def, sizeof(Node *));
+                key_len += sizeof(Node *);
+                key[key_len++] = '\0';
+            }
+        }
         /* Include all usage args (explicit + defaults from map) */
         int total_args = na > tmp_map.nentries ? na : tmp_map.nentries;
         for (int i = 0; i < total_args; i++) {
