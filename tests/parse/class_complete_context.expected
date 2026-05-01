@@ -11,7 +11,7 @@
   (class-def "B"
     (func-def void "f" (params)
       (block
-        (var-decl (ptr struct Inner) "p" (cast struct Inner (null)))
+        (var-decl (ptr struct Inner) "p" (cast (ptr struct Inner) (call (ident "malloc") (sizeof struct Inner))))
         (cast void (ident "p"))))
     (class-def "Inner"
       (var-decl int "v")))

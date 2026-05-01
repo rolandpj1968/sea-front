@@ -1264,7 +1264,35 @@ static Node *unary_expr(Parser *p) {
             parser_skip_to_matching_rbrace(p);
         }
 
-        return new_cast_node(p, ty, /*operand=*/NULL, tok);  /* reuse CAST for now */
+        /* Lower 'new T' to '(T *)malloc(sizeof(T))'. C++03 default-
+         * initializes T (no-op for class-with-trivial-ctor / POD;
+         * non-trivial ctor isn't modelled here yet). For the bootstrap
+         * path the storage allocation is the load-bearing piece —
+         * gcc 4.8's vec.h does 'new vec<T>; v->create(n)', so the
+         * ctor is replaced by an explicit init call right after.
+         *
+         * TODO(seafront#new-ctor): run the ctor on the allocated
+         * storage when T has a non-trivial one. */
+        Node *malloc_call;
+        {
+            Node *callee = new_node(p, ND_IDENT, tok);
+            callee->ident.name = arena_alloc(p->arena, sizeof(Token));
+            *callee->ident.name = *tok;
+            callee->ident.name->loc = (char *)"malloc";
+            callee->ident.name->len = 6;
+            callee->ident.name->kind = TK_IDENT;
+            Node *sizeof_arg = new_node(p, ND_SIZEOF, tok);
+            sizeof_arg->sizeof_.ty = ty;
+            sizeof_arg->sizeof_.is_type = true;
+            malloc_call = new_node(p, ND_CALL, tok);
+            malloc_call->call.callee = callee;
+            malloc_call->call.args = arena_alloc(p->arena, sizeof(Node *));
+            malloc_call->call.args[0] = sizeof_arg;
+            malloc_call->call.nargs = 1;
+        }
+        Type *ptr_ty = new_type(p, TY_PTR);
+        ptr_ty->base = ty;
+        return new_cast_node(p, ptr_ty, malloc_call, tok);
     }
 
     /* delete-expression — N4659 §8.3.5 [expr.delete]
