@@ -861,6 +861,21 @@ static void collect_from_node(InstCollector *col, Node *n) {
                 }
             }
             collect_from_type(col, syn);
+        } else if (n->qualified.resolved_class_type &&
+                   n->qualified.resolved_class_type->template_id_node) {
+            /* Cloned ND_QUALIFIED whose substituted leading qualifier
+             * is a class-template instantiation. The original was
+             * 'T::method' (parts[0] = plain ident T, lead_tid = NULL);
+             * clone.c rewrites parts[0] to the substituted class's
+             * tag and sets resolved_class_type = sub. Without this
+             * arm, the call's owning class template (e.g.
+             * pointer_hash<gimple_d>) isn't collected for
+             * instantiation, so its OOL static methods never get
+             * cloned and the call links to nowhere.
+             * N4659 §17.7.1 [temp.inst] — implicit instantiation of
+             * a class template covers any specialization referenced
+             * by the program. */
+            collect_from_type(col, n->qualified.resolved_class_type);
         }
         break;
 
