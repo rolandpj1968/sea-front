@@ -1145,9 +1145,18 @@ static Declaration *resolve_free_function_overload(
             if (!inner) continue;
             int np = inner->func.nparams;
             /* Template argument deduction against the call args —
-             * §17.8.2.1 [temp.deduct.call]. */
-            SubstMap map = subst_map_new(arena,
-                np > 0 ? np : 1);
+             * §17.8.2.1 [temp.deduct.call]. SubstMap capacity is the
+             * number of TEMPLATE parameters (not function params),
+             * since each binding holds one template-arg→type mapping.
+             * Sizing by func.nparams silently drops bindings beyond
+             * the function arity — e.g. 1-arg foo<T,A>(vec<T,A>*)
+             * needs two slots (T, A) but np=1 left only one, so 'A'
+             * never bound and build_template_id_from_deduced returned
+             * NULL, leaving the call unmangled. */
+            int ntp = c->tmpl_node->template_decl.nparams;
+            int cap = ntp > np ? ntp : np;
+            if (cap < 1) cap = 1;
+            SubstMap map = subst_map_new(arena, cap);
             Type **pp = NULL;
             if (np > 0) {
                 pp = arena_alloc(arena, np * sizeof(Type *));
