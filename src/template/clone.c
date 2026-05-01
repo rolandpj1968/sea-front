@@ -75,6 +75,36 @@ Token *subst_map_lookup_tt(SubstMap *map, const char *name, int len) {
 /* Type substitution                                                   */
 /* ------------------------------------------------------------------ */
 
+/* True if ty mentions a TY_DEPENDENT anywhere in its structure
+ * (under PTR/REF/ARRAY/FUNC/template_id args). Used by subst_type to
+ * decide whether to recurse on a class-template arg type. */
+static bool type_has_dependent(Type *ty) {
+    if (!ty) return false;
+    if (ty->kind == TY_DEPENDENT) return true;
+    switch (ty->kind) {
+    case TY_PTR: case TY_REF: case TY_RVALREF: case TY_ARRAY:
+        return type_has_dependent(ty->base);
+    case TY_FUNC:
+        if (type_has_dependent(ty->ret)) return true;
+        for (int i = 0; i < ty->nparams; i++)
+            if (type_has_dependent(ty->params[i])) return true;
+        return false;
+    case TY_STRUCT: case TY_UNION:
+        if (ty->template_id_node &&
+            ty->template_id_node->kind == ND_TEMPLATE_ID) {
+            Node *tid = ty->template_id_node;
+            for (int i = 0; i < tid->template_id.nargs; i++) {
+                Node *a = tid->template_id.args[i];
+                Type *at = (a && a->kind == ND_VAR_DECL) ? a->var_decl.ty : NULL;
+                if (at && type_has_dependent(at)) return true;
+            }
+        }
+        return false;
+    default:
+        return false;
+    }
+}
+
 Type *subst_type(Type *ty, SubstMap *map, Arena *arena) {
     if (!ty) return NULL;
 
@@ -177,16 +207,15 @@ Type *subst_type(Type *ty, SubstMap *map, Arena *arena) {
         Node *tid = ty->template_id_node;
 
         /* N4659 §13.8.3 [temp.dep.type]: check if any template-id arg
-         * is dependent. Template params parse as TY_DEPENDENT thanks
-         * to the OOL scope fix (decl.c qscope wrapper). */
-        /* N4659 §13.8.3 [temp.dep.type]: check if any template-id arg
-         * is dependent. With the OOL scope fix (decl.c qscope→enclosing
-         * chain), template params reliably parse as TY_DEPENDENT. */
+         * type contains a dependent name anywhere in its structure —
+         * not just at the top level. 'vec<T*, A, vl_embed>' has args[0]
+         * = TY_PTR(TY_DEPENDENT(T)), which needs substitution even
+         * though the outermost kind isn't TY_DEPENDENT. */
         bool needs_subst = false;
         for (int i = 0; i < tid->template_id.nargs; i++) {
             Node *a = tid->template_id.args[i];
             Type *at = (a && a->kind == ND_VAR_DECL) ? a->var_decl.ty : NULL;
-            if (at && at->kind == TY_DEPENDENT) { needs_subst = true; break; }
+            if (at && type_has_dependent(at)) { needs_subst = true; break; }
         }
 
         if (needs_subst) {
@@ -199,7 +228,7 @@ Type *subst_type(Type *ty, SubstMap *map, Arena *arena) {
             for (int i = 0; i < tid->template_id.nargs; i++) {
                 Node *a = tid->template_id.args[i];
                 Type *at = (a && a->kind == ND_VAR_DECL) ? a->var_decl.ty : NULL;
-                if (at && at->kind == TY_DEPENDENT) {
+                if (at && type_has_dependent(at)) {
                     Type *sub = subst_type(at, map, arena);
                     Node *ac = arena_alloc(arena, sizeof(Node));
                     *ac = *a;

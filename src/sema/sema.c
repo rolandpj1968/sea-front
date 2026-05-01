@@ -1093,7 +1093,11 @@ static int ics_rank(Type *param, Type *arg) {
  * when a template is the winner. */
 typedef struct {
     Declaration *decl;
-    Type       **params;   /* effective param types */
+    Type       **params;          /* effective (post-substitution) types */
+    Type       **pattern_params;  /* pre-substitution; used for partial
+                                   * ordering of templates per N4659
+                                   * §17.5.5.2 [temp.func.order]. NULL
+                                   * for non-template cands. */
     int          nparams;
     bool         is_variadic;
     bool         is_template;
@@ -1115,6 +1119,72 @@ static Node *tmpl_inner_func(Node *tmpl) {
     if (d && (d->kind == ND_FUNC_DEF || d->kind == ND_FUNC_DECL))
         return d;
     return NULL;
+}
+
+/* Structural specialization comparison for partial ordering of
+ * function templates per N4659 §17.5.5.2 [temp.func.order].
+ *
+ * Returns:
+ *   +1 if A's pattern is strictly more specialized than B's
+ *   -1 if A and B are incomparable (different shapes, neither subsumes)
+ *    0 if equal generality (same shape down to dependent leaves)
+ *
+ * Heuristic: compound (PTR/REF/ARRAY/STRUCT) is more specialized than
+ * a bare TY_DEPENDENT at the same position; compound-vs-compound of
+ * matching kind recurses; mismatched kinds are incomparable. Doesn't
+ * fully implement the standard's transform-and-deduce algorithm but
+ * captures the common pattern: 'vec<T*,A,L>' is more specialized
+ * than 'vec<T,A,L>' because at args[0] one has TY_PTR(TY_DEP) while
+ * the other has TY_DEP.
+ *
+ * TODO(seafront#partial-order-fully): full §17.5.5.2 algorithm with
+ * synthesized fresh types and pairwise deduction.
+ */
+static int type_specialization_compare(Type *a, Type *b) {
+    if (!a || !b) return 0;
+    if (a == b) return 0;
+    /* Strip references — partial ordering rule strips top-level refs
+     * (§17.5.5.2/2). */
+    if (a->kind == TY_REF || a->kind == TY_RVALREF) a = a->base;
+    if (b->kind == TY_REF || b->kind == TY_RVALREF) b = b->base;
+    if (!a || !b) return 0;
+    if (a->kind == TY_DEPENDENT && b->kind == TY_DEPENDENT) return 0;
+    if (a->kind == TY_DEPENDENT) return -1;  /* a is more general → b wins */
+    /* But "b wins" means b is more specialized — so from A's perspective
+     * we return -1 to indicate "A loses the specialization race here."
+     * The caller treats -1 as "A is less specialized than B" in the
+     * comparison, but we need a signed convention. Re-do: return +1
+     * means "A more specialized," 0 means equal/no info, and we'll
+     * use a separate "incomparable" indicator. Use signed int with
+     * +1, -1, 0; let the caller treat saw +1 vs saw -1 separately. */
+    if (b->kind == TY_DEPENDENT) return +1;  /* a is more specialized */
+    if (a->kind != b->kind) return 0;        /* different concrete shapes:
+                                              * neither is more specialized
+                                              * by structural recursion;
+                                              * leave it to ICS. */
+    switch (a->kind) {
+    case TY_PTR: case TY_ARRAY:
+        return type_specialization_compare(a->base, b->base);
+    case TY_STRUCT: case TY_UNION:
+        if (a->n_template_args != b->n_template_args) return 0;
+        if (a->n_template_args == 0) return 0;
+        {
+            int saw_pos = 0, saw_neg = 0;
+            for (int i = 0; i < a->n_template_args; i++) {
+                int c = type_specialization_compare(
+                    a->template_args[i], b->template_args[i]);
+                if (c > 0) saw_pos++;
+                else if (c < 0) saw_neg++;
+            }
+            if (saw_pos && !saw_neg) return +1;
+            if (saw_neg && !saw_pos) return -1;
+            return 0;
+        }
+    case TY_FUNC:
+        return 0;
+    default:
+        return 0;
+    }
 }
 
 /* Pick the best-viable overload. On return, *out_deduced is set to
@@ -1190,11 +1260,12 @@ static Declaration *resolve_free_function_overload(
                 for (int k = 0; k < np; k++)
                     eff[k] = subst_type(pp[k], &map, arena);
             }
-            vc.params      = eff;
-            vc.nparams     = np;
-            vc.is_variadic = inner->func.is_variadic;
-            vc.is_template = true;
-            vc.deduced     = map;
+            vc.params         = eff;
+            vc.pattern_params = pp;   /* keep originals for §17.5.5.2 */
+            vc.nparams        = np;
+            vc.is_variadic    = inner->func.is_variadic;
+            vc.is_template    = true;
+            vc.deduced        = map;
         } else {
             continue;
         }
@@ -1228,10 +1299,57 @@ static Declaration *resolve_free_function_overload(
     }
 
     /* Pick best viable. */
+    /* N4659 §17.5.5.2 [temp.func.order] — partial ordering of function
+     * templates. When two viable cands are both templates, the one
+     * whose pattern is "more specialized" wins; the more general one
+     * is dropped. This prevents the primary 'gt_pch_nx<T,A>(vec<T,A,
+     * vl_embed>*)' from being picked when the partial spec
+     * 'gt_pch_nx<T,A>(vec<T*,A,vl_embed>*)' is also viable for the
+     * same call — the standard mandates the more-specialized form.
+     *
+     * Heuristic implementation: walk paired param patterns
+     * structurally; at each TY_DEPENDENT-vs-compound divergence, the
+     * compound side is more specialized; at compound-vs-compound,
+     * recurse. Doesn't fully implement the standard's transform-and-
+     * deduce-against-other algorithm (no synthesized fresh types),
+     * but covers the common patterns the standard handles. */
+    int spec_order[MAX_OVLD_CANDS][MAX_OVLD_CANDS] = {0};
+    /* spec_order[i][j] == 1 iff i is strictly more specialized than j */
     for (int i = 0; i < nv; i++) {
+        for (int j = 0; j < nv; j++) {
+            if (i == j) continue;
+            if (!viable[i].is_template || !viable[j].is_template) continue;
+            int saw_strict = 0;
+            int incomparable = 0;
+            /* Compare PRE-substitution patterns; post-substitution
+             * both cands collapse to the same concrete type and
+             * structural specialization is invisible. */
+            Type **pi = viable[i].pattern_params;
+            Type **pj = viable[j].pattern_params;
+            if (!pi || !pj) continue;
+            for (int k = 0; k < nargs && !incomparable; k++) {
+                int cmp = type_specialization_compare(pi[k], pj[k]);
+                if (cmp > 0) saw_strict = 1;
+                else if (cmp < 0) { incomparable = 1; saw_strict = 0; }
+            }
+            if (!incomparable && saw_strict) spec_order[i][j] = 1;
+        }
+    }
+    /* Drop any cand strictly less specialized than another viable.
+     * Mark vc.is_template=false won't work — use a separate kept[] mask. */
+    bool kept[MAX_OVLD_CANDS];
+    for (int i = 0; i < nv; i++) {
+        kept[i] = true;
+        for (int j = 0; j < nv; j++) {
+            if (spec_order[j][i]) { kept[i] = false; break; }
+        }
+    }
+
+    for (int i = 0; i < nv; i++) {
+        if (!kept[i]) continue;  /* dropped by partial-order pruning */
         bool is_best = true;
         for (int j = 0; j < nv && is_best; j++) {
-            if (i == j) continue;
+            if (i == j || !kept[j]) continue;
             bool le_all = true;
             bool lt_any = false;
             for (int k = 0; k < nargs; k++) {
