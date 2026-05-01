@@ -77,8 +77,10 @@ Token *subst_map_lookup_tt(SubstMap *map, const char *name, int len) {
 
 /* True if ty mentions a TY_DEPENDENT anywhere in its structure
  * (under PTR/REF/ARRAY/FUNC/template_id args). Used by subst_type to
- * decide whether to recurse on a class-template arg type. */
-static bool type_has_dependent(Type *ty) {
+ * decide whether to recurse on a class-template arg type, and by
+ * deduce_from_pair to detect that a non-matching A means failure
+ * (rather than silent success) when P is a dependent compound. */
+bool type_has_dependent(Type *ty) {
     if (!ty) return false;
     if (ty->kind == TY_DEPENDENT) return true;
     switch (ty->kind) {

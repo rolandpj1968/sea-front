@@ -72,6 +72,14 @@ Node *registry_lookup_class_template(TmplRegistry *reg,
                                      const char *name, int name_len);
 
 /*
+ * True if ty mentions a TY_DEPENDENT anywhere in its structure
+ * (under PTR/REF/ARRAY/FUNC/template-id args). Used by deduction
+ * and substitution to decide whether a Type carries a template
+ * parameter that needs binding/replacement.
+ */
+bool type_has_dependent(Type *ty);
+
+/*
  * Deep-copy a Node tree, applying subst_type to every Type* field
  * and recursively cloning child nodes. Tokens are shared (not
  * cloned) — they point into the original source buffer.

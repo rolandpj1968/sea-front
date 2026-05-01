@@ -995,35 +995,6 @@ static uint32_t hash_key(const char *key, int len) {
  * N4659 §17.8.2.1/2: "If P is a reference type, the type referred
  * to by P is used for type deduction."
  * N4659 §17.8.2.5/8: for pointer types, recurse on pointee. */
-/* Local mirror of clone.c's type_has_dependent — true if ty mentions
- * a TY_DEPENDENT anywhere in its structure. */
-static bool type_has_dependent_inline(Type *ty) {
-    if (!ty) return false;
-    if (ty->kind == TY_DEPENDENT) return true;
-    switch (ty->kind) {
-    case TY_PTR: case TY_REF: case TY_RVALREF: case TY_ARRAY:
-        return type_has_dependent_inline(ty->base);
-    case TY_FUNC:
-        if (type_has_dependent_inline(ty->ret)) return true;
-        for (int i = 0; i < ty->nparams; i++)
-            if (type_has_dependent_inline(ty->params[i])) return true;
-        return false;
-    case TY_STRUCT: case TY_UNION:
-        if (ty->template_id_node &&
-            ty->template_id_node->kind == ND_TEMPLATE_ID) {
-            Node *tid = ty->template_id_node;
-            for (int i = 0; i < tid->template_id.nargs; i++) {
-                Node *a = tid->template_id.args[i];
-                Type *at = (a && a->kind == ND_VAR_DECL) ? a->var_decl.ty : NULL;
-                if (at && type_has_dependent_inline(at)) return true;
-            }
-        }
-        return false;
-    default:
-        return false;
-    }
-}
-
 static bool deduce_from_pair(Type *P, Type *A, SubstMap *map) {
     if (!P || !A) return true;  /* nothing to deduce */
 
@@ -1065,13 +1036,13 @@ static bool deduce_from_pair(Type *P, Type *A, SubstMap *map) {
      * incompatible candidate stay viable. */
     if (P->kind == TY_PTR && A->kind == TY_PTR)
         return deduce_from_pair(P->base, A->base, map);
-    if (P->kind == TY_PTR) return !type_has_dependent_inline(P);
+    if (P->kind == TY_PTR) return !type_has_dependent(P);
     if (P->kind == TY_REF && A->kind == TY_REF)
         return deduce_from_pair(P->base, A->base, map);
-    if (P->kind == TY_REF) return !type_has_dependent_inline(P);
+    if (P->kind == TY_REF) return !type_has_dependent(P);
     if (P->kind == TY_ARRAY && A->kind == TY_ARRAY)
         return deduce_from_pair(P->base, A->base, map);
-    if (P->kind == TY_ARRAY) return !type_has_dependent_inline(P);
+    if (P->kind == TY_ARRAY) return !type_has_dependent(P);
 
     /* Class-template specialization on both sides: recurse through
      * template arguments. N4659 §17.8.2.5/9 [temp.deduct.type]: for
