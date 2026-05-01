@@ -21,10 +21,16 @@
 /* ------------------------------------------------------------------ */
 
 SubstMap subst_map_new(Arena *arena, int capacity) {
+    return subst_map_new_with_registry(arena, capacity, NULL);
+}
+
+SubstMap subst_map_new_with_registry(Arena *arena, int capacity,
+                                     TmplRegistry *reg) {
     SubstMap m = {0};
     m.entries = arena_alloc(arena, capacity * sizeof(SubstEntry));
     m.nentries = 0;
     m.capacity = capacity;
+    m.registry = reg;
     return m;
 }
 
@@ -94,6 +100,69 @@ Type *subst_type(Type *ty, SubstMap *map, Arena *arena) {
                 ty->dep_member->loc, ty->dep_member->len);
             if (md && md->type) return md->type;
             /* Fall through — leave dependent if we can't resolve. */
+        }
+        /* If concrete has no class_region yet (its instantiation
+         * hasn't been emitted), fall back to walking the source
+         * template definition cached on its template-id node. We
+         * find the typedef in the template's class body and
+         * substitute against concrete's template_args.
+         *
+         * Pattern: gcc 4.8 hash-table.h
+         *   hash_table<pointer_hash<gimple_d>>::find_slot —
+         * the outer hash_table body uses 'const T::value_type *',
+         * with T bound to pointer_hash<gimple_d>. pointer_hash
+         * carries 'typedef Type value_type', which resolves to
+         * gimple_d here. Without this fallback, the param mangles
+         * with T itself (pointer_hash<...>) instead of the typedef
+         * target — producing link-time mismatches against the
+         * actual definition's mangling. N4659 §17.7.1 [temp.inst]
+         * — instantiation must resolve dependent member-typedefs. */
+        if (ty->dep_member && !concrete->class_region &&
+            concrete->template_id_node &&
+            concrete->template_id_node->kind == ND_TEMPLATE_ID) {
+            Node *tid = concrete->template_id_node;
+            Node *tmpl = tid->template_id.resolved_tmpl;
+            if (!tmpl && tid->template_id.name && map->registry) {
+                tmpl = registry_lookup_class_template(map->registry,
+                                                tid->template_id.name->loc,
+                                                tid->template_id.name->len);
+            }
+            if (tmpl && tmpl->kind == ND_TEMPLATE_DECL &&
+                tmpl->template_decl.decl &&
+                tmpl->template_decl.decl->kind == ND_CLASS_DEF) {
+                Node *cls = tmpl->template_decl.decl;
+                /* Walk class members for the typedef. */
+                Node *typedef_node = NULL;
+                for (int i = 0; i < cls->class_def.nmembers; i++) {
+                    Node *m = cls->class_def.members[i];
+                    if (!m || m->kind != ND_TYPEDEF) continue;
+                    if (!m->var_decl.name) continue;
+                    if (m->var_decl.name->len == ty->dep_member->len &&
+                        memcmp(m->var_decl.name->loc,
+                               ty->dep_member->loc,
+                               ty->dep_member->len) == 0) {
+                        typedef_node = m;
+                        break;
+                    }
+                }
+                if (typedef_node && typedef_node->var_decl.ty) {
+                    /* Build inner SubstMap: template's params bound
+                     * to concrete's template_args. */
+                    int np = tmpl->template_decl.nparams;
+                    int na = concrete->n_template_args;
+                    SubstMap inner = subst_map_new_with_registry(arena,
+                        np > 0 ? np : 1, map->registry);
+                    for (int i = 0; i < np && i < na; i++) {
+                        Node *param = tmpl->template_decl.params[i];
+                        if (!param || !param->param.name) continue;
+                        if (concrete->template_args[i])
+                            subst_map_add(&inner, param->param.name,
+                                          concrete->template_args[i]);
+                    }
+                    return subst_type(typedef_node->var_decl.ty,
+                                      &inner, arena);
+                }
+            }
         }
         return concrete;
     }

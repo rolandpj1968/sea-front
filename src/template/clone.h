@@ -27,14 +27,26 @@ typedef struct {
     Token *tt_bound_name;   /* non-NULL iff this is a TT-param binding */
 } SubstEntry;
 
+/* Opaque type — defined in instantiate.c. Carried on SubstMap so
+ * subst_type can resolve dependent member-typedefs ('T::value_type')
+ * by walking the source template's class body when the substituted
+ * type's class_region isn't populated yet. */
+typedef struct TmplRegistry TmplRegistry;
+
 typedef struct {
-    SubstEntry *entries;
-    int         nentries;
-    int         capacity;
-    Arena      *arena;
+    SubstEntry   *entries;
+    int           nentries;
+    int           capacity;
+    Arena        *arena;
+    TmplRegistry *registry;   /* may be NULL — used for typedef fallback */
 } SubstMap;
 
 SubstMap subst_map_new(Arena *arena, int capacity);
+/* Same, plus an active TmplRegistry for typedef-fallback lookups
+ * (subst_type uses it when a substituted type's class_region isn't
+ * yet populated). Pass NULL to opt out. */
+SubstMap subst_map_new_with_registry(Arena *arena, int capacity,
+                                     TmplRegistry *reg);
 void     subst_map_add(SubstMap *m, Token *param_name, Type *concrete_type);
 /* Bind a template-template parameter name to a concrete class-template
  * name. Used at class-instantiation time when the template's i-th param
@@ -50,6 +62,14 @@ Token   *subst_map_lookup_tt(SubstMap *m, const char *name, int len);
  * unnecessary allocation).
  */
 Type *subst_type(Type *ty, SubstMap *map, Arena *arena);
+
+/*
+ * Look up a class template named (name, name_len) in `reg`.
+ * Returns the ND_TEMPLATE_DECL or NULL. Used by subst_type to walk
+ * a class template's body for dependent-typedef resolution.
+ */
+Node *registry_lookup_class_template(TmplRegistry *reg,
+                                     const char *name, int name_len);
 
 /*
  * Deep-copy a Node tree, applying subst_type to every Type* field

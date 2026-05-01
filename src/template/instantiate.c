@@ -36,10 +36,10 @@ struct TmplEntry {
     TmplEntry  *next;         /* hash chain */
 };
 
-typedef struct {
+struct TmplRegistry {
     TmplEntry *buckets[TMPL_REGISTRY_SIZE];
     Arena     *arena;
-} TmplRegistry;
+};
 
 /* hash_name is declared in parse.h and defined in lookup.c. */
 
@@ -474,6 +474,20 @@ static void collect_from_type(InstCollector *col, Type *ty) {
     if (tid->kind != ND_TEMPLATE_ID || !tid->template_id.name)
         return;
 
+    /* Resolve and cache the template definition on the template-id
+     * node, BEFORE the dep-args bail-out. subst_type relies on
+     * resolved_tmpl to walk a class template's body for dependent
+     * member-typedef lookup ('typename T::value_type') when the
+     * substituted type doesn't yet have its class_region populated.
+     * Without caching here, template-ids with dependent args (e.g.
+     * 'vec<T>' inside a class template body) never get resolved_tmpl
+     * set, and subst_type can't recover the typedef. */
+    Token *name = tid->template_id.name;
+    if (!tid->template_id.resolved_tmpl) {
+        Node *t = registry_find(col->reg, name->loc, name->len);
+        if (t) tid->template_id.resolved_tmpl = t;
+    }
+
     /* Skip template-ids that still have dependent (unresolved) args.
      * These appear inside cloned template bodies where an outer
      * template parameter hasn't been substituted yet. They'll be
@@ -488,8 +502,7 @@ static void collect_from_type(InstCollector *col, Type *ty) {
         if (aty && aty->kind == TY_DEPENDENT) return;
     }
 
-    Token *name = tid->template_id.name;
-    Node *tmpl = registry_find(col->reg, name->loc, name->len);
+    Node *tmpl = tid->template_id.resolved_tmpl;
     if (!tmpl) return;  /* template definition not found — skip */
 
     InstRequest *req = arena_alloc(col->arena, sizeof(InstRequest));
@@ -1358,7 +1371,7 @@ static Type *build_func_type_from_node(Node *func, Arena *arena) {
  * 'tu' is passed for finding out-of-class method templates.
  */
 static Node *instantiate_one(Node *tmpl, Node *template_id,
-                              Arena *arena, Node *tu,
+                              Arena *arena, Node *tu, TmplRegistry *reg,
                               Node ***extra_out, int *nextra) {
     if (!tmpl || tmpl->kind != ND_TEMPLATE_DECL) return NULL;
 
@@ -1380,7 +1393,8 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
      * positions must match exactly (already checked by the
      * specialization finder). */
     /* +1 capacity for the injected-class-name entry */
-    SubstMap map = subst_map_new(arena, (nparams > 0 ? nparams : 1) + 1);
+    SubstMap map = subst_map_new_with_registry(arena,
+        (nparams > 0 ? nparams : 1) + 1, reg);
 
     /* Check if this is a partial specialization */
     Type *inner_ty = NULL;
@@ -1696,6 +1710,16 @@ static void patch_all_types(Node *tu, DedupSet *ds, Arena *arena);
 /* Main entry point                                                    */
 /* ------------------------------------------------------------------ */
 
+/* Public lookup: clone.c calls this from subst_type via the registry
+ * field carried on SubstMap. Walks the registry to find a class
+ * template by name for dependent member-typedef resolution
+ * ('typename T::value_type'). */
+Node *registry_lookup_class_template(TmplRegistry *reg,
+                                     const char *name, int name_len) {
+    if (!reg) return NULL;
+    return registry_find(reg, name, name_len);
+}
+
 void template_instantiate(Node *tu, Arena *arena) {
     if (!tu || tu->kind != ND_TRANSLATION_UNIT) return;
 
@@ -1781,7 +1805,7 @@ void template_instantiate(Node *tu, Arena *arena) {
                        ? mr->class_tid->template_id.nargs : 0;
         int cap = np + outer_np;
         if (cap < 1) cap = 1;
-        SubstMap deduced = subst_map_new(arena, cap);
+        SubstMap deduced = subst_map_new_with_registry(arena, cap, &reg);
         if (!deduce_template_args(inner, mr->arg_types, mr->nargs, &deduced))
             continue;
 
@@ -1970,7 +1994,8 @@ void template_instantiate(Node *tu, Arena *arena) {
         Node *tmpl = req->tmpl_def;
         int np = tmpl->template_decl.nparams;
         int na = req->template_id->template_id.nargs;
-        SubstMap tmp_map = subst_map_new(arena, np > 0 ? np : 1);
+        SubstMap tmp_map = subst_map_new_with_registry(arena,
+            np > 0 ? np : 1, &reg);
         for (int i = 0; i < np; i++) {
             Node *param = tmpl->template_decl.params[i];
             if (!param || !param->param.name) continue;
@@ -2167,7 +2192,7 @@ void template_instantiate(Node *tu, Arena *arena) {
              * pattern args against the usage args. TY_DEPENDENT
              * positions in the pattern become bindings. */
             inst = instantiate_one(spec, req->template_id,
-                                    arena, tu, &extra_methods, &nextra);
+                                    arena, tu, &reg, &extra_methods, &nextra);
         } else if (spec) {
             /* Full specialization — use the concrete class directly.
              * No cloning or substitution needed. */
@@ -2205,7 +2230,7 @@ void template_instantiate(Node *tu, Arena *arena) {
             }
         } else {
             inst = instantiate_one(req->tmpl_def, req->template_id,
-                                      arena, tu, &extra_methods, &nextra);
+                                      arena, tu, &reg, &extra_methods, &nextra);
         }
         if (inst) {
             /* Phase-2 sema on the freshly-cloned subtree.
