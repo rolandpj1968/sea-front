@@ -518,7 +518,24 @@ struct Node {
         /* ND_VAR_DECL — N4659 §10 [dcl.dcl], §11 [dcl.decl]
          * A simple-declaration: decl-specifier-seq declarator(opt) = init(opt)
          * C++17: adds structured bindings (§11.5, deferred)
-         * C++20: adds constinit, consteval specifiers */
+         * C++20: adds constinit, consteval specifiers
+         *
+         * UNION-ALIAS HAZARD: when ty->kind == TY_FUNC (function
+         * declarators / prototypes), the parser stages the parsed
+         * parameter list via the func variant of this union —
+         * node->func.params/nparams/is_variadic. Those fields share
+         * memory with var_decl.init/ctor_args (offsets 16, 24-).
+         * If a function definition follows ('{' or ':' for ctor-init),
+         * a fresh ND_FUNC_DEF Node is allocated and the func.X fields
+         * are copied across (decl.c around line 1460). If only a
+         * prototype, the var_decl Node is returned with stale func
+         * data living where var_decl.init/ctor_args nominally sit.
+         *
+         * Convention: any code path that reads var_decl.init or
+         * var_decl.ctor_args MUST first check ty->kind != TY_FUNC.
+         * Sema and codegen do (they already discriminate prototypes
+         * up front); ast_dump does explicitly (--dump-ast caught
+         * this latent bug, May 2026). */
         struct {
             Type *ty;
             Token *name;

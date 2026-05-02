@@ -6,4 +6,4 @@
       (var-decl (ptr int) "p")
       (var-decl int "a" (ctor-args (num 1)))
       (var-decl (func-type int ()) "b")))
-  (var-decl (func-type int ((func-type int ()))) "c" ))
+  (var-decl (func-type int ((func-type int ()))) "c"))

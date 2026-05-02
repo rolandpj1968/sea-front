@@ -272,9 +272,12 @@ void parser_skip_gnu_attributes_with_mode(Parser *p, Token **out_mode) {
 
 Node *new_node(Parser *p, NodeKind kind, Token *tok) {
     Node *node = arena_alloc(p->arena, sizeof(Node));
+    /* arena_alloc memsets to zero, but defend against any callers
+     * that bypass it or any future arena change. Cost: one cache-
+     * line write on a fresh allocation. */
+    memset(node, 0, sizeof(Node));
     node->kind = kind;
     node->tok = tok;
-    node->resolved_type = NULL;
     return node;
 }
 

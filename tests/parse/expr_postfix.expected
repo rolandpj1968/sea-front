@@ -3,7 +3,7 @@
     (var-decl int "x")
     (var-decl int "y"))
   (var-decl (array int 10) "arr")
-  (var-decl (func-type int (int int)) "f" )
+  (var-decl (func-type int (int int)) "f")
   (func-def int "main" (params)
     (block
       (var-decl int "a" ([] (ident "arr") (num 3)))

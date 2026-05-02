@@ -1,5 +1,5 @@
 CC       = cc
-CFLAGS   = -std=c11 -Wall -Wextra -Wpedantic -g
+CFLAGS   = -std=c11 -Wall -Wextra -Wpedantic -Werror=switch -g
 BUILDDIR = build
 
 HDR      = src/sea-front.h

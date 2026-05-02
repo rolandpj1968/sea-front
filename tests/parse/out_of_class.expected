@@ -4,7 +4,7 @@
   (class-def "Outer"
     (typedef)
     (var-decl (func-type void ()) "method")
-    (var-decl (func-type int (int)) "multi" ))
+    (var-decl (func-type int (int)) "multi"))
   (func-def void "method" (params)
     (block
       (var-decl int "n" (num 42))

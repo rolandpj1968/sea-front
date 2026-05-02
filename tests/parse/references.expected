@@ -4,7 +4,7 @@
       (var-decl int "t" (ident "a"))
       (= (ident "a") (ident "b"))
       (= (ident "b") (ident "t"))))
-  (var-decl (func-type (rvalref int) ((rvalref int))) "rval_ref" )
+  (var-decl (func-type (rvalref int) ((rvalref int))) "rval_ref")
   (var-decl (ref const int) "cref" (num 42))
   (func-def int "main" (params)
     (block

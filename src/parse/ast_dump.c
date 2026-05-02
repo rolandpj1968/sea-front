@@ -20,6 +20,7 @@
  */
 
 #include "parse.h"
+#include <stdlib.h>
 
 static void indent(int depth) {
     for (int i = 0; i < depth; i++)
@@ -362,25 +363,41 @@ static void dump(Node *node, int depth) {
         printf(")");
         break;
 
-    case ND_VAR_DECL:
+    case ND_VAR_DECL: {
         printf("(var-decl ");
         dump_type(node->var_decl.ty);
         if (node->var_decl.name)
             printf(" \"%.*s\"", node->var_decl.name->len, node->var_decl.name->loc);
-        if (node->var_decl.init) {
-            printf(" ");
-            dump(node->var_decl.init, depth + 1);
+        /* For function-shape declarators (prototypes 'int f(int);' AND
+         * function-pointer decls 'int (*fp)(int);') the parser stages
+         * params/nparams/is_variadic via node->func — those fields
+         * alias var_decl.init/ctor_args. See the comment on the
+         * var_decl/func union in parse.h. Walk the type chain for any
+         * TY_FUNC; if found, skip the init/ctor_args reads. */
+        bool has_func_stage = false;
+        for (Type *t = node->var_decl.ty; t; t = t->base) {
+            if (t->kind == TY_FUNC) { has_func_stage = true; break; }
+            if (t->kind != TY_PTR && t->kind != TY_REF &&
+                t->kind != TY_RVALREF && t->kind != TY_ARRAY)
+                break;
         }
-        if (node->var_decl.has_ctor_init) {
-            printf(" (ctor-args");
-            for (int i = 0; i < node->var_decl.ctor_nargs; i++) {
+        if (!has_func_stage) {
+            if (node->var_decl.init) {
                 printf(" ");
-                dump(node->var_decl.ctor_args[i], depth + 1);
+                dump(node->var_decl.init, depth + 1);
             }
-            printf(")");
+            if (node->var_decl.has_ctor_init) {
+                printf(" (ctor-args");
+                for (int i = 0; i < node->var_decl.ctor_nargs; i++) {
+                    printf(" ");
+                    dump(node->var_decl.ctor_args[i], depth + 1);
+                }
+                printf(")");
+            }
         }
         printf(")");
         break;
+    }
 
     case ND_FUNC_DEF:
     case ND_FUNC_DECL:
@@ -482,6 +499,47 @@ static void dump(Node *node, int depth) {
         dump_children(node->tu.decls, node->tu.ndecls, depth + 1);
         printf(")");
         break;
+
+    case ND_OFFSETOF:
+        printf("(offsetof ");
+        dump_type(node->offsetof_.ty);
+        printf(" \"");
+        for (int i = 0; i < node->offsetof_.n_mem_toks; i++) {
+            Token *t = &node->offsetof_.mem_toks[i];
+            printf("%.*s", t->len, t->loc);
+        }
+        printf("\")");
+        break;
+
+    case ND_VA_ARG:
+        printf("(va-arg ");
+        dump(node->va_arg_.ap, depth + 1);
+        printf(" ");
+        dump_type(node->va_arg_.ty);
+        printf(")");
+        break;
+
+    case ND_STMT_EXPR:
+        printf("(stmt-expr ");
+        dump(node->stmt_expr.block, depth + 1);
+        printf(")");
+        break;
+
+    case ND_INIT_LIST:
+        printf("(init-list");
+        dump_children(node->init_list.elems, node->init_list.nelems, depth + 1);
+        printf(")");
+        break;
+
+    /* Fail hard on any unhandled NodeKind. -Werror=switch catches new
+     * enum values at compile time; this default catches anything
+     * else. Silent fall-through would emit a partial dump that
+     * corrupts golden-file diffs. Better to fail and force the
+     * golden update / new dump case to be added. */
+    default:
+        fprintf(stderr, "ast_dump: unhandled NodeKind %d\n",
+                (int)node->kind);
+        abort();
     }
 }
 

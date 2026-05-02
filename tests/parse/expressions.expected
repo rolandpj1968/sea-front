@@ -1,5 +1,5 @@
 (translation-unit
-  (var-decl (func-type int (int)) "f" )
+  (var-decl (func-type int (int)) "f")
   (func-def int "main" (params)
     (block
       (var-decl int "a" (sizeof int))
