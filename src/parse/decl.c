@@ -834,9 +834,9 @@ parse_suffixes:
 
             Node *node = new_var_decl_node(p, ty, name,
                                            name ? name : parser_peek(p));
-            node->func.params = (Node **)params.data;
-            node->func.nparams = params.len;
-            node->func.is_variadic = variadic;
+            node->var_decl.fn_params = (Node **)params.data;
+            node->var_decl.fn_nparams = params.len;
+            node->var_decl.fn_is_variadic = variadic;
             if (saved_region_for_params)
                 p->region = saved_region_for_params;
             return node;
@@ -974,9 +974,9 @@ parse_suffixes:
 
         Node *node = new_var_decl_node(p, ty, name,
                                        name ? name : parser_peek(p));
-        node->func.params = (Node **)params.data;
-        node->func.nparams = params.len;
-        node->func.is_variadic = variadic;
+        node->var_decl.fn_params = (Node **)params.data;
+        node->var_decl.fn_nparams = params.len;
+        node->var_decl.fn_is_variadic = variadic;
         return node;
     }
 
@@ -1457,9 +1457,9 @@ Node *parse_declaration(Parser *p) {
         Node *func = new_node(p, ND_FUNC_DEF, decl->tok);
         func->func.ret_ty = decl->var_decl.ty->ret;
         func->func.name = decl->var_decl.name;
-        func->func.params = decl->func.params;
-        func->func.nparams = decl->func.nparams;
-        func->func.is_variadic = decl->func.is_variadic;
+        func->func.params = decl->var_decl.fn_params;
+        func->func.nparams = decl->var_decl.fn_nparams;
+        func->func.is_variadic = decl->var_decl.fn_is_variadic;
         func->func.body = NULL;
         func->func.param_scope = NULL;
         func->func.class_type = NULL;

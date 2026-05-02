@@ -363,41 +363,25 @@ static void dump(Node *node, int depth) {
         printf(")");
         break;
 
-    case ND_VAR_DECL: {
+    case ND_VAR_DECL:
         printf("(var-decl ");
         dump_type(node->var_decl.ty);
         if (node->var_decl.name)
             printf(" \"%.*s\"", node->var_decl.name->len, node->var_decl.name->loc);
-        /* For function-shape declarators (prototypes 'int f(int);' AND
-         * function-pointer decls 'int (*fp)(int);') the parser stages
-         * params/nparams/is_variadic via node->func — those fields
-         * alias var_decl.init/ctor_args. See the comment on the
-         * var_decl/func union in parse.h. Walk the type chain for any
-         * TY_FUNC; if found, skip the init/ctor_args reads. */
-        bool has_func_stage = false;
-        for (Type *t = node->var_decl.ty; t; t = t->base) {
-            if (t->kind == TY_FUNC) { has_func_stage = true; break; }
-            if (t->kind != TY_PTR && t->kind != TY_REF &&
-                t->kind != TY_RVALREF && t->kind != TY_ARRAY)
-                break;
+        if (node->var_decl.init) {
+            printf(" ");
+            dump(node->var_decl.init, depth + 1);
         }
-        if (!has_func_stage) {
-            if (node->var_decl.init) {
+        if (node->var_decl.has_ctor_init) {
+            printf(" (ctor-args");
+            for (int i = 0; i < node->var_decl.ctor_nargs; i++) {
                 printf(" ");
-                dump(node->var_decl.init, depth + 1);
+                dump(node->var_decl.ctor_args[i], depth + 1);
             }
-            if (node->var_decl.has_ctor_init) {
-                printf(" (ctor-args");
-                for (int i = 0; i < node->var_decl.ctor_nargs; i++) {
-                    printf(" ");
-                    dump(node->var_decl.ctor_args[i], depth + 1);
-                }
-                printf(")");
-            }
+            printf(")");
         }
         printf(")");
         break;
-    }
 
     case ND_FUNC_DEF:
     case ND_FUNC_DECL:

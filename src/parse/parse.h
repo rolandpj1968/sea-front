@@ -518,24 +518,7 @@ struct Node {
         /* ND_VAR_DECL — N4659 §10 [dcl.dcl], §11 [dcl.decl]
          * A simple-declaration: decl-specifier-seq declarator(opt) = init(opt)
          * C++17: adds structured bindings (§11.5, deferred)
-         * C++20: adds constinit, consteval specifiers
-         *
-         * UNION-ALIAS HAZARD: when ty->kind == TY_FUNC (function
-         * declarators / prototypes), the parser stages the parsed
-         * parameter list via the func variant of this union —
-         * node->func.params/nparams/is_variadic. Those fields share
-         * memory with var_decl.init/ctor_args (offsets 16, 24-).
-         * If a function definition follows ('{' or ':' for ctor-init),
-         * a fresh ND_FUNC_DEF Node is allocated and the func.X fields
-         * are copied across (decl.c around line 1460). If only a
-         * prototype, the var_decl Node is returned with stale func
-         * data living where var_decl.init/ctor_args nominally sit.
-         *
-         * Convention: any code path that reads var_decl.init or
-         * var_decl.ctor_args MUST first check ty->kind != TY_FUNC.
-         * Sema and codegen do (they already discriminate prototypes
-         * up front); ast_dump does explicitly (--dump-ast caught
-         * this latent bug, May 2026). */
+         * C++20: adds constinit, consteval specifiers */
         struct {
             Type *ty;
             Token *name;
@@ -548,6 +531,21 @@ struct Node {
             Node **ctor_args;
             int    ctor_nargs;
             bool   has_ctor_init;
+            /* Function-shape declarator staging (prototype OR
+             * function-pointer OR a function declarator that's about
+             * to be promoted to ND_FUNC_DEF when '{' / ':' follows).
+             * parse_declarator can't yet tell whether the result is a
+             * prototype or a definition, so it stashes the parsed
+             * params here. parse_declaration's promotion path
+             * (decl.c around line 1460) copies these into a freshly
+             * allocated ND_FUNC_DEF when the body starts.
+             *
+             * Previously aliased through node->func.X via the union —
+             * which clobbered var_decl.init / ctor_args at the same
+             * offsets (caught by --dump-ast hard-fail, May 2026). */
+            Node **fn_params;
+            int    fn_nparams;
+            bool   fn_is_variadic;
             /* True for class-member function declarations (ND_VAR_DECL
              * with TY_FUNC) that are constructors / destructors —
              * used by emit_class_def's forward-decl loop to mangle
