@@ -1686,6 +1686,23 @@ static void visit(Sema *s, Node *n) {
          * as a type, then the trailing segment in its class_region.
          * Sets resolved_type so codegen can use decl param types
          * for mangling instead of call-site arg types. */
+        /* Single-part global qualifier '::name' — N4659 §8.1.4.3
+         * [expr.prim.id.qual]: lookup in global namespace, ignoring
+         * local/class shadows. Walk up to global scope and resolve
+         * there; without this, callee_ft is NULL at the call site
+         * and emit_arg_for_param's "unknown-callee, ref-param ident"
+         * pass-through path suppresses the deref — '::free(v)' where
+         * v is a 'vec*&' parameter emits as 'free(v)' (frees the
+         * stack address-of-pointer) instead of 'free(*v)'. */
+        if (n->qualified.global_scope && n->qualified.nparts == 1 &&
+            s->cur_scope && n->qualified.parts[0]) {
+            DeclarativeRegion *global = s->cur_scope;
+            while (global->enclosing) global = global->enclosing;
+            Token *nm = n->qualified.parts[0];
+            Declaration *d = lookup_in_scope(global, nm->loc, nm->len);
+            if (d && d->type)
+                n->resolved_type = d->type;
+        }
         if (n->qualified.nparts >= 2 && s->cur_scope) {
             Token *lead = n->qualified.parts[0];
             Token *member = n->qualified.parts[n->qualified.nparts - 1];
