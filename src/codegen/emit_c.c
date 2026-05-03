@@ -4681,6 +4681,24 @@ static void emit_expr(Node *n) {
                 "emit_expr: unhandled ND_QUALIFIED nparts=%d global=%d\n",
                 n->qualified.nparts, (int)n->qualified.global_scope);
         abort();
+    case ND_TEMPLATE_ID: {
+        /* Bare template-id 'Foo<args>' in expression position. Most
+         * sites that produce one (subscript base, callee, type arg)
+         * have already special-cased it before falling here. Anything
+         * left over is the call-site pattern that ND_CALL emit didn't
+         * recognise — emit just the bare template name so the
+         * surrounding C parses (call(args), unary-on-name, etc.).
+         * The resulting symbol is undeclared at link time, surfacing
+         * the unresolved template instantiation as a link error
+         * rather than a silently-wrong C compile.
+         * TODO(seafront#tmpl-id-expr): proper instantiation lookup. */
+        if (n->template_id.name)
+            fprintf(stdout, "%.*s",
+                    n->template_id.name->len, n->template_id.name->loc);
+        else
+            fputc('0', stdout);
+        return;
+    }
     default:
         /* Silent-discard placeholder is a trap: the surrounding C
          * stays parseable (e.g. a comment-shaped placeholder
