@@ -452,21 +452,37 @@ static Node *primary_expr(Parser *p) {
     }
 
     /* GCC/Clang type-trait intrinsics in expression context:
-     *   __is_trivial(T), __is_assignable(T, U), __is_same(T, U), etc.
+     *   __is_trivial(T), __is_assignable(T, U), __is_same(T, U),
+     *   __has_trivial_constructor(T), __underlying_type(T), etc.
      * These are bool-valued built-ins whose arguments are TYPES, not
      * expressions, so we can't let parse_assign_expr try to evaluate
-     * 'T&' as bitwise-and. Detect '__name (' for any unknown leading-
-     * underscore identifier and skip the balanced parens.
+     * 'T&' as bitwise-and. Detect the known type-trait families and
+     * skip the balanced parens.
      *
-     * Exclude __builtin_va_start / __builtin_va_end — those are
-     * regular calls (expression-typed args) and need to flow through
-     * the normal call path so gcc gets the live ap pointer. */
-    bool is_va_passthrough =
-        (tok->len == 18 && memcmp(tok->loc, "__builtin_va_start", 18) == 0) ||
-        (tok->len == 16 && memcmp(tok->loc, "__builtin_va_end", 16) == 0);
-    if (!is_va_passthrough &&
-        tok->kind == TK_IDENT && tok->len >= 2 &&
-        tok->loc[0] == '_' && tok->loc[1] == '_' &&
+     * Crucially, __builtin_* must NOT match here — those are real
+     * compiler intrinsics (e.g. __builtin_ctzl, __builtin_clz,
+     * __builtin_popcount, __builtin_constant_p) whose arguments are
+     * expressions and whose return value matters. Discarding them
+     * collapses, e.g., exact_log2(4096) to return 0, which wedges
+     * the ggc allocator at runtime. Type-arg __builtin_* such as
+     * __builtin_offsetof / __builtin_va_arg / __builtin_types_compatible_p
+     * are handled (or absent) elsewhere. */
+    bool is_type_trait =
+        tok->kind == TK_IDENT && tok->len >= 5 &&
+        ((tok->loc[0] == '_' && tok->loc[1] == '_' && tok->loc[2] == 'i' &&
+          tok->loc[3] == 's' && tok->loc[4] == '_') ||
+         (tok->loc[0] == '_' && tok->loc[1] == '_' && tok->loc[2] == 'h' &&
+          tok->loc[3] == 'a' && tok->loc[4] == 's' && tok->len > 5 &&
+          tok->loc[5] == '_') ||
+         (tok->len == 17 && memcmp(tok->loc, "__underlying_type", 17) == 0) ||
+         /* __alignof / __alignof__: GCC alignment-of operator. Accepts
+          * either a type or an expression. We can't disambiguate cheaply
+          * here, so swallow the parens and emit an opaque bool — the
+          * concrete value is rarely needed in practice (default template
+          * args, never instantiated by gcc 4.8). */
+         (tok->len == 9 && memcmp(tok->loc, "__alignof", 9) == 0) ||
+         (tok->len == 11 && memcmp(tok->loc, "__alignof__", 11) == 0));
+    if (is_type_trait &&
         parser_peek_ahead(p, 1)->kind == TK_LPAREN &&
         lookup_unqualified(p, tok->loc, tok->len) == NULL) {
         Token *name_tok = parser_advance(p);
