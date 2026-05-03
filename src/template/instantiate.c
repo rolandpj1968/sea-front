@@ -1378,12 +1378,34 @@ static bool ool_method_matches(Node *method, Type *target_class) {
         memcmp(mct->tag->loc, target_class->tag->loc, mct->tag->len) != 0)
         return false;
     /* Refinement: when both sides carry template-id patterns, require
-     * them to unify. This keeps 'vec<T,A,vl_embed>::f' from binding
-     * to 'vec<T,A,vl_ptr>' or to the primary. */
+     * them to unify AND have the same pattern shape — same positions
+     * dependent on each side. C++ partial-spec ordering (N4659
+     * §17.6.5.2 [temp.func.order]/2 + §17.6.5 [temp.class.spec.match])
+     * makes each partial spec a distinct entity; an OOL definition
+     * belongs to exactly one. Without the shape check, a less-
+     * specialized OOL like 'vec<T,A,vl_ptr>::splice' would bind to
+     * the more-specialized empty 'vec<T,va_gc,vl_ptr>' partial spec
+     * (T,A both dependent in OOL; T dependent + va_gc concrete in
+     * target — template_ids_unify accepts because TY_DEPENDENT in
+     * pattern matches any concrete, but the specs are different
+     * entities and the OOL doesn't apply). */
     Node *m_tid = inner->func.qual_tid;
     Node *t_tid = target_class->template_id_node;
-    if (m_tid && t_tid)
-        return template_ids_unify(m_tid, t_tid);
+    if (m_tid && t_tid) {
+        if (!template_ids_unify(m_tid, t_tid)) return false;
+        if (m_tid->template_id.nargs != t_tid->template_id.nargs)
+            return false;
+        for (int i = 0; i < m_tid->template_id.nargs; i++) {
+            Node *aa = m_tid->template_id.args[i];
+            Node *bb = t_tid->template_id.args[i];
+            Type *at = (aa && aa->kind == ND_VAR_DECL) ? aa->var_decl.ty : NULL;
+            Type *bt = (bb && bb->kind == ND_VAR_DECL) ? bb->var_decl.ty : NULL;
+            bool a_dep = !at || at->kind == TY_DEPENDENT;
+            bool b_dep = !bt || bt->kind == TY_DEPENDENT;
+            if (a_dep != b_dep) return false;
+        }
+        return true;
+    }
     /* OOL qualifier has template-id args but target has no pattern
      * (primary instantiation). This is legitimate when the OOL's
      * args are all dependent (template params of the method itself,
