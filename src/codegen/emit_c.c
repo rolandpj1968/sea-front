@@ -2617,10 +2617,21 @@ static void emit_expr(Node *n) {
     }
     switch (n->kind) {
     case ND_NUM:
-        if (n->num.is_signed)
-            fprintf(stdout, "%lld", (long long)n->num.lo);
+        /* N4659 §5.13.2 [lex.icon]: an integer-literal's type depends
+         * on suffix (u/U, l/L, ll/LL, z/Z) and base. Dropping the
+         * suffix changes the type and silently introduces UB — e.g.
+         * '1L << 32' becomes '1 << 32', which on a 32-bit int target
+         * is undefined and on a 64-bit-int target evaluates to 0L
+         * instead of 1L<<32. The original token text already carries
+         * the suffix, so prefer emitting it verbatim. Synthesized
+         * ND_NUM nodes (no source token) fall back to a width-safe
+         * suffix-bearing format. */
+        if (n->tok && n->tok->loc && n->tok->len > 0)
+            fwrite(n->tok->loc, 1, (size_t)n->tok->len, stdout);
+        else if (n->num.is_signed)
+            fprintf(stdout, "%lldLL", (long long)n->num.lo);
         else
-            fprintf(stdout, "%lluU", (unsigned long long)n->num.lo);
+            fprintf(stdout, "%lluULL", (unsigned long long)n->num.lo);
         return;
     case ND_FNUM:
         fprintf(stdout, "%g", n->fnum.fval);
