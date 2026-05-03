@@ -4660,8 +4660,18 @@ static void emit_expr(Node *n) {
         return;
     }
     default:
-        fputs("/* expr */", stdout);
-        return;
+        /* Silent-discard placeholder is a trap: the surrounding C
+         * stays parseable (e.g. a comment-shaped placeholder
+         * followed by '(v, size)' becomes a comma-expression call),
+         * so the bug only surfaces at runtime as a corrupted value.
+         * Hard-fail here forces unhandled cases to be addressed at
+         * codegen time, not chased through ICE backtraces. */
+        fprintf(stderr,
+                "emit_expr: unhandled NodeKind=%d at %s:%d\n",
+                (int)n->kind,
+                n->tok && n->tok->loc ? "<source>" : "<synth>",
+                0);
+        abort();
     }
 }
 
