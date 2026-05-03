@@ -3172,39 +3172,47 @@ static void emit_expr(Node *n) {
                      * through that Type so template args land in the
                      * symbol. Otherwise emit the bare class_tok
                      * text (the common 'Class::method' case). */
-                    if (callee_q->qualified.resolved_class_type) {
-                        /* mangle_class_tag emits its own 'sf__' prefix. */
-                        mangle_class_tag(callee_q->qualified.resolved_class_type);
-                    } else {
-                        /* Base-class member lookup: when the named class
-                         * doesn't define the method directly but inherits
-                         * it from a base, the def is mangled with the
-                         * BASE class's tag. Walk the named class's bases
-                         * to find which one owns the method, and mangle
-                         * through that. gcc 4.8 hash_table::dispose
-                         * calls Descriptor::remove where Descriptor
-                         * inherits remove() from typed_noop_remove<T>;
-                         * sea-front emitted sf__<Descriptor>__remove_*
-                         * but the only def is sf__typed_noop_remove_t_..._te___remove_*.
-                         * N4659 §6.4.5 [class.qual] + §13.1 [class.derived].
-                         */
-                        Type *owner_class = NULL;
-                        Node *cdef = NULL;
-                        Type stub_class = {0};
-                        stub_class.kind = TY_STRUCT;
-                        stub_class.tag = class_tok;
-                        cdef = find_class_def_by_tag_only(&stub_class);
-                        if (cdef && cdef->class_def.ty &&
-                            cdef->class_def.ty->class_region) {
-                            DeclarativeRegion *cr = cdef->class_def.ty->class_region;
-                            /* Direct lookup (no base walk) — own buckets only. */
-                            Declaration *direct = NULL;
-                            uint32_t bidx = 0;
-                            (void)bidx;  /* placeholder; we use lookup_own */
-                            direct = region_lookup_own(cr,
+                    /* Base-class member lookup: when the named class
+                     * doesn't define the method directly but inherits
+                     * it from a base, the def is mangled with the
+                     * BASE class's tag. gcc 4.8 hash_table::dispose
+                     * calls Descriptor::remove where Descriptor
+                     * inherits remove() from typed_noop_remove<T>;
+                     * pointer_hash<X> has the same shape (inherits
+                     * remove from typed_noop_remove<X>). Sea-front
+                     * would otherwise emit the call mangled with the
+                     * derived class's tag — symbol that no def
+                     * matches. N4659 §6.4.5 [class.qual] +
+                     * §13.1 [class.derived]. */
+                    Type *owner_class = NULL;
+                    {
+                        Type *probe_class = NULL;
+                        if (callee_q->qualified.resolved_class_type) {
+                            /* Try args-aware lookup first so we hit
+                             * the instantiated class_def with bases
+                             * patched (patch_all_types). */
+                            Node *cdef = find_class_def_by_tag_args(
+                                callee_q->qualified.resolved_class_type);
+                            if (!cdef)
+                                cdef = find_class_def_by_tag_only(
+                                    callee_q->qualified.resolved_class_type);
+                            if (cdef && cdef->class_def.ty)
+                                probe_class = cdef->class_def.ty;
+                            else
+                                probe_class = callee_q->qualified.resolved_class_type;
+                        } else {
+                            Type stub = {0};
+                            stub.kind = TY_STRUCT;
+                            stub.tag = class_tok;
+                            Node *cdef = find_class_def_by_tag_only(&stub);
+                            if (cdef && cdef->class_def.ty)
+                                probe_class = cdef->class_def.ty;
+                        }
+                        if (probe_class && probe_class->class_region) {
+                            DeclarativeRegion *cr = probe_class->class_region;
+                            Declaration *direct = region_lookup_own(cr,
                                 method_tok->loc, method_tok->len);
                             if (!direct) {
-                                /* Not in this class — walk bases. */
                                 for (int bi = 0; bi < cr->nbases; bi++) {
                                     DeclarativeRegion *br = cr->bases[bi];
                                     if (!br) continue;
@@ -3217,15 +3225,18 @@ static void emit_expr(Node *n) {
                                 }
                             }
                         }
-                        if (owner_class) {
-                            mangle_class_tag(owner_class);
-                        } else {
-                            fputs("sf__", stdout);
-                            fprintf(stdout, "%.*s",
-                                    class_tok->len, class_tok->loc);
-                            if (ltid && ltid->kind == ND_TEMPLATE_ID)
-                                emit_template_id_suffix(ltid);
-                        }
+                    }
+                    if (owner_class) {
+                        mangle_class_tag(owner_class);
+                    } else if (callee_q->qualified.resolved_class_type) {
+                        /* mangle_class_tag emits its own 'sf__' prefix. */
+                        mangle_class_tag(callee_q->qualified.resolved_class_type);
+                    } else {
+                        fputs("sf__", stdout);
+                        fprintf(stdout, "%.*s",
+                                class_tok->len, class_tok->loc);
+                        if (ltid && ltid->kind == ND_TEMPLATE_ID)
+                            emit_template_id_suffix(ltid);
                     }
                     fprintf(stdout, "__%.*s",
                             method_tok->len, method_tok->loc);
