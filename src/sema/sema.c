@@ -732,14 +732,34 @@ static void visit_do(Sema *s, Node *n) {
 }
 
 /* for-statement — N4659 §9.5.4 [stmt.for]. The init, cond, and inc
- * sub-expressions live in for-init scope (§6.3.3 [basic.scope.for]);
- * the parser already arranged the scope chain so we don't need to
- * manage it here. */
+ * sub-expressions live in for-init scope (§6.3.3 [basic.scope.for]).
+ * Mirror the if-with-init handling: re-chain the captured for-init
+ * scope onto the current sema cur_scope and push it before walking
+ * the children, so a 'for (struct X *x = ...; x != y; ...)' resolves
+ * x to the variable (not the type X) inside the cond and inc.
+ * Without this, a shadowing variable like vec.h's
+ *   for (struct loop *loop = ...; loop != root; ...)
+ * looks up bare 'loop' in scopes that contain only the type tag,
+ * and codegen mis-classifies the comparison as a struct-operator
+ * overload. */
 static void visit_for(Sema *s, Node *n) {
+    DeclarativeRegion *saved = s->cur_scope;
+    DeclarativeRegion *saved_enclosing = NULL;
+    bool pushed = false;
+    if (n->for_.scope) {
+        saved_enclosing = n->for_.scope->enclosing;
+        n->for_.scope->enclosing = s->cur_scope;
+        s->cur_scope = n->for_.scope;
+        pushed = true;
+    }
     visit(s, n->for_.init);
     visit(s, n->for_.cond);
     visit(s, n->for_.inc);
     visit(s, n->for_.body);
+    if (pushed) {
+        s->cur_scope = saved;
+        n->for_.scope->enclosing = saved_enclosing;
+    }
 }
 
 static void visit_member(Sema *s, Node *n) {

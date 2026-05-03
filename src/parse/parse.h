@@ -483,6 +483,16 @@ struct Node {
             Node *cond;     /* condition, or NULL */
             Node *inc;      /* expression, or NULL */
             Node *body;
+            /* Scope containing the for-init declaration (the
+             * REGION_BLOCK pushed by parse_for_stmt). Stored on the
+             * node so sema can re-enter it when visiting cond / inc /
+             * body — without this, names declared in the init are
+             * invisible to the cond and a shadowing variable like
+             * 'struct loop *loop' (vec.h pattern) resolves to the
+             * type rather than the variable, mis-classifying
+             * 'loop != X' as a struct-operator overload.
+             * N4659 §6.3.3/4 [basic.scope.block]. */
+            DeclarativeRegion *scope;
         } for_;
 
         /* ND_SWITCH — N4659 §9.4.2 [stmt.switch]

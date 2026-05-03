@@ -362,9 +362,16 @@ static Node *parse_for_stmt(Parser *p) {
 
     Node *body = parse_stmt(p);
 
+    /* Capture the for-init scope BEFORE popping so sema can re-enter
+     * it when visiting cond/inc/body. N4659 §6.3.3/4 [basic.scope.
+     * block]: names declared in the for-init are local to the for
+     * statement. */
+    DeclarativeRegion *for_scope = p->region;
     region_pop(p);
 
-    return new_for_node(p, init, cond, inc, body, tok);
+    Node *node = new_for_node(p, init, cond, inc, body, tok);
+    node->for_.scope = for_scope;
+    return node;
 }
 
 /*
