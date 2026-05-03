@@ -706,16 +706,8 @@ static Node *primary_expr(Parser *p) {
             }
         }
 
-        /* If we consumed just one name, treat as a simple ident even
-         * with a leading ::. Per N4659 §8.1.4.3 [expr.prim.id.qual],
-         * '::name' is "lookup in global namespace, ignoring local
-         * shadows" — for free functions in TU-scope (the only use in
-         * gcc 4.8 source, e.g. ::ggc_realloc_stat), this collapses to
-         * the same name. Emitting as ND_IDENT lets the regular call-
-         * mangling path handle the callee; otherwise emit_expr has no
-         * ND_QUALIFIED handler and falls into a placeholder that
-         * silently turns the call into a comma-expression on its args. */
-        if (parts.len == 1) {
+        /* If we consumed just one name with no ::, it's a simple ident */
+        if (parts.len == 1 && !global_scope) {
             Token *name = (Token *)parts.data[0];
 
             /* Rule 4 — N4659 §17.2/2 [temp.names]: after name lookup

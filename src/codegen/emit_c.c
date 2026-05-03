@@ -4659,6 +4659,28 @@ static void emit_expr(Node *n) {
         }
         return;
     }
+    case ND_QUALIFIED:
+        /* '::name' (single-part global qualifier) — N4659 §8.1.4.3
+         * [expr.prim.id.qual]: lookup in global namespace, ignoring
+         * local/class shadows. Inside class methods this matters: e.g.
+         * 'vec<T>::qsort' calls '::qsort' from libc, NOT recursively
+         * dispatching to the same member. Emit parts[0] verbatim
+         * (target is C linkage in every gcc 4.8 site we hit). */
+        if (n->qualified.global_scope && n->qualified.nparts == 1 &&
+            n->qualified.parts[0]) {
+            Token *nm = n->qualified.parts[0];
+            fprintf(stdout, "%.*s", nm->len, nm->loc);
+            return;
+        }
+        /* Class-qualified non-call uses (e.g. 'Foo::bar' as a function-
+         * pointer value, 'Foo::CONSTANT'). Bare-emit the joined name —
+         * sema usually resolves these via resolved_class_type for
+         * compounds; for now fall through to abort if we hit something
+         * we don't recognise. TODO(seafront#qid-emit): general handler. */
+        fprintf(stderr,
+                "emit_expr: unhandled ND_QUALIFIED nparts=%d global=%d\n",
+                n->qualified.nparts, (int)n->qualified.global_scope);
+        abort();
     default:
         /* Silent-discard placeholder is a trap: the surrounding C
          * stays parseable (e.g. a comment-shaped placeholder
