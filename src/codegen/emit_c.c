@@ -3904,10 +3904,32 @@ static void emit_expr(Node *n) {
                             }
                         } else {
                             call_np = np;
+                            /* Member-template call: the instantiation
+                             * pipeline set callee->resolved_type to the
+                             * substituted TY_FUNC carrying the deduced
+                             * param types. Prefer those over the source
+                             * template-decl's TY_DEPENDENT params so the
+                             * mangle suffix matches the cloned def's
+                             * symbol. Gate on the resolved overload
+                             * actually containing TY_DEPENDENT — non-
+                             * template overloads have concrete param
+                             * types from resolve_overload and their
+                             * arity is the source of truth (overriding
+                             * with a different-arity TY_FUNC would
+                             * mangle to a wrong symbol). N4659 §17.5.2
+                             * [temp.mem] + §17.7.1 [temp.inst]; Itanium
+                             * C++ ABI §5.1. */
+                            Type *cty = callee->resolved_type;
+                            if (cty && cty->kind == TY_FUNC &&
+                                cty->params && cty->nparams > 0 &&
+                                ty_contains_dependent(call_pty, call_np)) {
+                                call_pty = cty->params;
+                                call_np = cty->nparams;
+                            }
                             bool mc = candidate_is_const(winner);
                             mangle_class_method_cv(method_class,
                                                      callee->member.member,
-                                                     call_pty, np, mc);
+                                                     call_pty, call_np, mc);
                         }
                     }
                     fputc('(', stdout);

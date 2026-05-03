@@ -837,6 +837,49 @@ static void collect_from_node(InstCollector *col, Node *n) {
                 col->member_count++;
             }
         }
+        /* Member-access call 'obj.method(args)' / 'p->method(args)'
+         * where method is a member template. N4659 §17.5.2 [temp.mem] +
+         * §16.3.1.1 [over.match.call.general]. The receiver carries
+         * the enclosing class instantiation; we look up the method
+         * name in that class's member-template registry. Pattern from
+         * gcc 4.8 vec.h: 'v.splice<T2,A2>(src)'. */
+        if (n->call.callee && n->call.callee->kind == ND_MEMBER &&
+            n->call.callee->member.member &&
+            n->call.callee->member.obj) {
+            Type *ot = n->call.callee->member.obj->resolved_type;
+            /* Peel ref/ptr layers — same shape as codegen does for
+             * 'p->m()'. */
+            while (ot && (ot->kind == TY_PTR || ot->kind == TY_REF ||
+                          ot->kind == TY_RVALREF))
+                ot = ot->base;
+            if (ot && (ot->kind == TY_STRUCT || ot->kind == TY_UNION) &&
+                ot->tag) {
+                Token *name = n->call.callee->member.member;
+                TmplEntry *me = registry_find_member(col->reg,
+                    ot->tag->loc, ot->tag->len, name->loc, name->len);
+                if (me) {
+                    MemberTmplRequest *mr = arena_alloc(col->arena,
+                        sizeof(MemberTmplRequest));
+                    mr->entry = me;
+                    mr->nargs = n->call.nargs;
+                    mr->call_node = n;
+                    mr->class_tid = NULL;
+                    mr->enclosing_class = ot;
+                    if (n->call.nargs > 0) {
+                        mr->arg_types = arena_alloc(col->arena,
+                            n->call.nargs * sizeof(Type *));
+                        for (int i = 0; i < n->call.nargs; i++)
+                            mr->arg_types[i] = n->call.args[i]
+                                ? n->call.args[i]->resolved_type : NULL;
+                    } else {
+                        mr->arg_types = NULL;
+                    }
+                    mr->next = col->member_head;
+                    col->member_head = mr;
+                    col->member_count++;
+                }
+            }
+        }
         break;
 
     case ND_MEMBER:
