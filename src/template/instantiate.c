@@ -2133,7 +2133,30 @@ void template_instantiate(Node *tu, Arena *arena) {
                               key, pos, MAX_DEDUP_KEY);
             key[pos++] = '\0';
         }
-        if (dedup_find(&ds, key, pos)) continue;
+        {
+            /* Member-template dedup hit: the (class, member, args)
+             * already produced a clone earlier this round. The call
+             * site still needs callee->resolved_type set to the
+             * substituted TY_FUNC so codegen mangles its param
+             * suffix with concrete types — without this propagation,
+             * the second-and-later call site falls back to the
+             * source template-decl's TY_DEPENDENT params and emits
+             * a bogus 'name_p_Argument_pe_' symbol that doesn't
+             * match the unique definition's
+             * 'name_p_<concrete>_pe_'. Pattern: gcc 4.8 tree-ssa-
+             * threadupdate.c three identical 'redirection_data
+             * .traverse<ssa_local_info_t*, ...>(&local_info)' calls.
+             * N4659 §17.7.1 [temp.inst]: each unique
+             * specialization is one entity; identical (template,
+             * args) calls all reach it. */
+            Type *existing = dedup_find(&ds, key, pos);
+            if (existing) {
+                if (mr->call_node && mr->call_node->call.callee &&
+                    existing->kind == TY_FUNC && existing->params)
+                    mr->call_node->call.callee->resolved_type = existing;
+                continue;
+            }
+        }
 
         /* N4659 §17.5.2/5 [temp.mem]: if in-class member is a
          * declaration without body, find the OOL definition.
@@ -2253,8 +2276,14 @@ void template_instantiate(Node *tu, Arena *arena) {
 
         /* N4659 §16.3 [over.match]: build TY_FUNC from cloned params
          * and set as resolved_type on the call-site callee so the
-         * param suffix matches between definition and call. */
-        if (mr->call_node && mr->call_node->call.callee) {
+         * param suffix matches between definition and call. Store
+         * the same TY_FUNC as the dedup value so subsequent same-
+         * (class, member, args) calls can wire it onto their
+         * callees too (see dedup-hit branch above). */
+        Type *ft = arena_alloc(arena, sizeof(Type));
+        ft->kind = TY_FUNC;
+        ft->ret = cloned->func.ret_ty;
+        {
             int cnp = cloned->func.nparams;
             Type **cparams = NULL;
             if (cnp > 0) {
@@ -2262,18 +2291,14 @@ void template_instantiate(Node *tu, Arena *arena) {
                 for (int i = 0; i < cnp; i++)
                     cparams[i] = cloned->func.params[i]->param.ty;
             }
-            Type *ft = arena_alloc(arena, sizeof(Type));
-            ft->kind = TY_FUNC;
-            ft->ret = cloned->func.ret_ty;
             ft->params = cparams;
             ft->nparams = cnp;
-            mr->call_node->call.callee->resolved_type = ft;
         }
+        if (mr->call_node && mr->call_node->call.callee)
+            mr->call_node->call.callee->resolved_type = ft;
 
-        /* Register in dedup set */
-        Type *dummy = arena_alloc(arena, sizeof(Type));
-        dummy->kind = TY_FUNC;
-        dedup_add(&ds, key, pos, dummy);
+        /* Register in dedup set carrying the substituted TY_FUNC. */
+        dedup_add(&ds, key, pos, ft);
 
         inst_push(all_instantiated, &total_inst, &ninst_this_round,
                   cloned, "member-template instantiation");
