@@ -1495,7 +1495,29 @@ static void visit_call(Sema *s, Node *n) {
             n->call.callee->ident.resolved_decl = winner;
             if (winner->type)
                 n->call.callee->resolved_type = winner->type;
-            if (winner_is_template && winner->tmpl_node) {
+            /* Only synthesise an ND_TEMPLATE_ID for FREE function
+             * templates. The OOL definition of a class-template
+             * member method is wrapped in an ND_TEMPLATE_DECL whose
+             * head re-states the outer class's template params; the
+             * method itself is not a free function template. If we
+             * synthesise here, the call gets routed through the
+             * free-fn-template instantiation path (instantiate.c
+             * around line 1880), which mangles the symbol as
+             * 'name_t_<args>_te__p_<params>_pe_' with no class
+             * scope — exactly the bug pattern from gcc 4.8 vec.h
+             * 'splice (src)' inside vec<T,A,vl_ptr>::safe_splice.
+             * Detect via inner func's class_type / qual_tid and
+             * skip — the implicit-this method-call lowering in
+             * codegen handles these correctly. N4659 §17.5.2/2
+             * [temp.mem]. */
+            Node *tn_inner = winner->tmpl_node ?
+                winner->tmpl_node->template_decl.decl : NULL;
+            bool is_ool_method = tn_inner &&
+                (tn_inner->kind == ND_FUNC_DEF ||
+                 tn_inner->kind == ND_FUNC_DECL) &&
+                (tn_inner->func.class_type != NULL ||
+                 tn_inner->func.qual_tid != NULL);
+            if (winner_is_template && winner->tmpl_node && !is_ool_method) {
                 Node *tid = build_template_id_from_deduced(s,
                     n->call.callee->ident.name,
                     n->call.callee->tok,
@@ -1522,7 +1544,16 @@ static void visit_call(Sema *s, Node *n) {
         Declaration *d = n->call.callee->ident.resolved_decl;
         if (d && d->entity == ENTITY_TEMPLATE && d->tmpl_node) {
             Node *inner = tmpl_inner_func(d->tmpl_node);
-            if (inner) {
+            /* Skip OOL definitions of class-template member methods —
+             * they carry the outer class's template head but are not
+             * free function templates. See the matching guard above
+             * in the multi-overload path. N4659 §17.5.2/2 [temp.mem]. */
+            bool is_ool_method = inner &&
+                (inner->kind == ND_FUNC_DEF ||
+                 inner->kind == ND_FUNC_DECL) &&
+                (inner->func.class_type != NULL ||
+                 inner->func.qual_tid != NULL);
+            if (inner && !is_ool_method) {
                 Type *at[MAX_OVLD_CANDS];
                 int na = n->call.nargs;
                 if (na > MAX_OVLD_CANDS) na = MAX_OVLD_CANDS;
