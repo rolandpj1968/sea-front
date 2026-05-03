@@ -2020,8 +2020,26 @@ static Node *find_class_def_by_tag_only(Type *class_type) {
     Node *found = NULL;
     for (int i = 0; i < g_tu->tu.ndecls; i++) {
         Node *d = g_tu->tu.decls[i];
-        if (!d || d->kind != ND_CLASS_DEF) continue;
-        Type *t = d->class_def.ty;
+        if (!d) continue;
+        Type *t = NULL;
+        if (d->kind == ND_CLASS_DEF) {
+            t = d->class_def.ty;
+        } else if (d->kind == ND_TYPEDEF) {
+            /* A struct definition inside a typedef wrapper:
+             *   typedef struct pre_expr_d : Base { ... } *pre_expr;
+             * The struct lives on var_decl.ty (peeling ptr/array
+             * layers). Sea-front parses these as ND_TYPEDEF whose
+             * declared type contains the class def's class_region.
+             * Without picking up this shape, qualified-call
+             * mangling can't find the struct's bases (gcc 4.8
+             * tree-ssa-pre.c pre_expr_d / expr_pred_trans_d). */
+            Type *ty = d->var_decl.ty;
+            while (ty && (ty->kind == TY_PTR || ty->kind == TY_ARRAY))
+                ty = ty->base;
+            if (ty && (ty->kind == TY_STRUCT || ty->kind == TY_UNION) &&
+                ty->class_def)
+                t = ty;
+        }
         if (!t || !t->tag || t->kind != class_type->kind) continue;
         if (t->tag->len != class_type->tag->len) continue;
         if (memcmp(t->tag->loc, class_type->tag->loc, t->tag->len) != 0) continue;
@@ -2030,7 +2048,7 @@ static Node *find_class_def_by_tag_only(Type *class_type) {
          * find_class_def_by_tag_args instead. */
         if (t->n_template_args > 0) continue;
         if (found) return NULL;  /* ambiguous */
-        found = d;
+        found = (d->kind == ND_TYPEDEF) ? t->class_def : d;
     }
     return found;
 }

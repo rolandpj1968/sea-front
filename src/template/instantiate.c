@@ -2768,9 +2768,29 @@ void template_instantiate(Node *tu, Arena *arena) {
     }
     for (int i = 0; i < tu->tu.ndecls; i++) {
         Node *d = tu->tu.decls[i];
-        if (d && d->kind == ND_CLASS_DEF &&
-            n_all_class_defs < (int)(sizeof(all_class_defs)/sizeof(all_class_defs[0])))
+        if (!d) continue;
+        if (d->kind == ND_CLASS_DEF &&
+            n_all_class_defs < (int)(sizeof(all_class_defs)/sizeof(all_class_defs[0]))) {
             all_class_defs[n_all_class_defs++] = d;
+        } else if (d->kind == ND_TYPEDEF) {
+            /* Pick up class defs hidden inside typedef wrappers:
+             *   typedef struct pre_expr_d : typed_noop_remove<pre_expr_d>
+             *   { ... } *pre_expr;
+             * The class is on var_decl.ty (peeling ptr/array layers).
+             * Without this, the post-instantiation base-region
+             * patching skips the class and its inheritance link
+             * from the template base never gets set — qualified
+             * static calls 'pre_expr_d::remove' end up mangled
+             * with the derived prefix and fail to link
+             * (gcc 4.8 tree-ssa-pre.c). N4659 §13.1 [class.derived]. */
+            Type *ty = d->var_decl.ty;
+            while (ty && (ty->kind == TY_PTR || ty->kind == TY_ARRAY))
+                ty = ty->base;
+            if (ty && (ty->kind == TY_STRUCT || ty->kind == TY_UNION) &&
+                ty->class_def &&
+                n_all_class_defs < (int)(sizeof(all_class_defs)/sizeof(all_class_defs[0])))
+                all_class_defs[n_all_class_defs++] = ty->class_def;
+        }
     }
     for (int i = 0; i < n_all_class_defs; i++) {
         Node *inst = all_class_defs[i];
