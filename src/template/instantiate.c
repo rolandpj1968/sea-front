@@ -346,7 +346,32 @@ static void build_registry(TmplRegistry *reg, Node *n) {
     switch (n->kind) {
     case ND_TEMPLATE_DECL: {
         Token *name = template_name(n);
-        if (name)
+        Node *inner = n->template_decl.decl;
+        /* OOL definition of a class-template member method:
+         *   template<typename T, typename A>
+         *   void vec<T, A, vl_ptr>::splice(vec<T, A, vl_ptr> &src) { ... }
+         * The leading template head re-states the OUTER class
+         * template's params; the method itself is NOT a free
+         * function template. Detected by inner being a function with
+         * class_type set (or qual_tid carrying the class qualifier
+         * template-id). Skip top-level registration — the call-site
+         * resolution path uses the class membership, not a free
+         * lookup keyed on the bare method name.
+         *
+         * Without this filter, registry_add records the OOL func
+         * under its plain method name; subsequent lookups treat it
+         * as a free function template, the bare-template rewrite
+         * synthesises a template-id with the OOL's params bound to
+         * the deduced types, and the cloned function's class_type
+         * keeps its TY_DEPENDENT outer params (T leaks into the
+         * mangled symbol). N4659 §17.5.2/2 [temp.mem]: a member of
+         * a class template defined outside its class definition is
+         * a member, not a separate template. */
+        bool is_ool_method = inner &&
+            (inner->kind == ND_FUNC_DEF || inner->kind == ND_FUNC_DECL) &&
+            (inner->func.class_type != NULL ||
+             inner->func.qual_tid != NULL);
+        if (name && !is_ool_method)
             registry_add(reg, name->loc, name->len, n);
         /* If the template wraps a class def, descend so any member
          * templates inside the class template are also registered.
@@ -354,7 +379,6 @@ static void build_registry(TmplRegistry *reg, Node *n) {
          * Box { template<class U> static T *cast(U *); };' — both
          * heads need separate registration so a qualified call like
          * Box<int>::cast<float>(p) can find the member template. */
-        Node *inner = n->template_decl.decl;
         if (inner && inner->kind == ND_CLASS_DEF)
             build_registry(reg, inner);
         break;
