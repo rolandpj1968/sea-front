@@ -1475,8 +1475,19 @@ Node *parse_declaration(Parser *p) {
         func->func.body_end_pos = -1;
         func->func.deferred_class_region = NULL;
 
-        /* Register the function name in the enclosing scope */
-        if (func->func.name)
+        /* Register the function name in the enclosing scope —
+         * but NOT for OOL constructors/destructors. N4659 §15.1
+         * [class.ctor]/1: "Constructors do not have names." (§15.4
+         * [class.dtor] is parallel for destructors.) Their
+         * declarator-id reuses the class name, but registering
+         * 'Class' as ENTITY_VARIABLE in the enclosing namespace
+         * would shadow the class-name lookup downstream — e.g.
+         * after parsing 'complex<float>::complex(...)' inside
+         * 'namespace std', a later 'std::complex<_Tp> __t(...)'
+         * lookup-in-scope returns the ctor variable instead of
+         * the class type, breaking the type-spec parse. */
+        if (func->func.name && !func->func.is_constructor &&
+            !func->func.is_destructor)
             region_declare(p, func->func.name->loc,
                           func->func.name->len, ENTITY_VARIABLE,
                           decl->var_decl.ty);

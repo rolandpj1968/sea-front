@@ -828,6 +828,79 @@ DeclSpec parse_type_specifiers(Parser *p) {
             }
         }
     }
+    /* Same OOL ctor/dtor recognition for class-template qualifiers:
+     *   'Box<T,A>::Box('  /  'Box<T,A>::~Box('.
+     *
+     * N4659 §15.1 [class.ctor]/2: "When the unqualified-id of a
+     * member function declarator names the same class as the
+     * qualifier of the member function declarator ... and that
+     * class is the constructor's class, then the function so
+     * declared is a constructor."
+     *
+     * The trailing 'Box' after '::' is therefore the constructor's
+     * declarator-id (per §11.3 [dcl.meaning]), NOT a continuation
+     * of a nested-name-specifier. Without preempting,
+     * parse_type_specifiers' qualified-name walk would consume
+     * 'Box<T,A>::Box' as a type (Box is the injected-class-name
+     * of Box<T,A>), leaving '()' for parse_declarator as an
+     * abstract function declarator with no name — codegen then has
+     * no constructor to emit.
+     *
+     * We scan past the balanced '<...>' template-args and check for
+     * '::Name(' (ctor) or '::~Name(' (dtor) where Name matches the
+     * leading template name. Pattern from gcc 4.8 hash-table.h:
+     *   template<T, template<typename> class A>
+     *   hash_table<T, A>::hash_table() : htab(NULL) { } */
+    if (!seen_any && parser_peek(p)->kind == TK_IDENT &&
+        parser_peek_ahead(p, 1)->kind == TK_LT &&
+        lookup_is_template_name(p, parser_peek(p))) {
+        Token *first = parser_peek(p);
+        /* Scan past the balanced '<...>'. The depth counter handles
+         * nested templates ('vec<vec<int>>'); a TK_SHR token closes
+         * two depths per N4659 §17.2/3 [temp.names]. */
+        int n = 2;  /* skip the leading '<' */
+        int depth = 1;
+        const int MAX_SCAN = 256;
+        while (depth > 0 && n < MAX_SCAN) {
+            Token *t = parser_peek_ahead(p, n);
+            if (!t || t->kind == TK_EOF) break;
+            if (t->kind == TK_LT) depth++;
+            else if (t->kind == TK_GT) depth--;
+            else if (t->kind == TK_SHR) {
+                depth -= 2;
+                if (depth < 0) depth = 0;
+            }
+            n++;
+        }
+        if (depth == 0) {
+            /* n now points at the token AFTER the closing '>'.
+             * Expect '::Name(' or '::~Name('. */
+            Token *t_scope = parser_peek_ahead(p, n);
+            Token *t_name  = parser_peek_ahead(p, n + 1);
+            Token *t_after = parser_peek_ahead(p, n + 2);
+            Token *t_after2 = parser_peek_ahead(p, n + 3);
+            bool is_dtor = false, is_ctor = false;
+            if (t_scope && t_scope->kind == TK_SCOPE && t_name &&
+                t_name->kind == TK_TILDE && t_after &&
+                t_after->kind == TK_IDENT &&
+                tokens_equal(t_after, first) &&
+                t_after2 && t_after2->kind == TK_LPAREN) {
+                is_dtor = true;
+            } else if (t_scope && t_scope->kind == TK_SCOPE && t_name &&
+                       t_name->kind == TK_IDENT &&
+                       tokens_equal(t_name, first) &&
+                       t_after && t_after->kind == TK_LPAREN) {
+                is_ctor = true;
+            }
+            if (is_ctor || is_dtor) {
+                if (is_ctor) p->pending_is_constructor = true;
+                if (is_dtor) p->pending_is_destructor = true;
+                Type *vty = new_type(p, TY_VOID);
+                result.type = vty;
+                return result;
+            }
+        }
+    }
 
     if (!seen_any && parser_peek(p)->kind == TK_IDENT &&
         parser_peek_ahead(p, 1)->kind == TK_SCOPE) {
