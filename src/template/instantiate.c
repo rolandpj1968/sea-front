@@ -715,6 +715,17 @@ static void collect_from_node(InstCollector *col, Node *n) {
         collect_from_node(col, n->ret.expr);
         break;
 
+    case ND_LABEL:
+        /* labeled-statement (N4659 §9.1 [stmt.label]) wraps the next
+         * statement after the label. Without this case the labeled
+         * statement is silently skipped during instantiation
+         * collection — any free-fn-template call inside (e.g.
+         * `done: return vec_safe_length(...)`) leaves its
+         * ND_TEMPLATE_ID callee uninstantiated and codegen emits
+         * the bare unmangled name. */
+        collect_from_node(col, n->label.stmt);
+        break;
+
     case ND_BINARY:
     case ND_ASSIGN:
         collect_from_node(col, n->binary.lhs);
