@@ -36,6 +36,13 @@ performance. This is a bootstrap tool — clarity is the priority.
   with C++20 (N4861) and C++23 (N4950) section numbers noted where they
   differ. Format: `N4659 §6.4.1 [basic.lookup.unqual]`.
 
+- **No column-aligned padding.** A single space between the return type
+  and the function name (`Type *foo(...)`, not `Type    *foo(...)`).
+  The alignment looks tidy until the next rename, wider return type, or
+  new entry — then it pulls subsequent additions toward an arbitrary
+  column and the file fights every diff. Same rule for variable
+  declarations and struct fields: don't pad to align trailing names.
+
 ## Naming
 
 - **Namespace all public functions** to avoid collisions:
