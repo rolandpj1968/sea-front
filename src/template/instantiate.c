@@ -1723,8 +1723,16 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
     if (cloned->kind == ND_CLASS_DEF && inst_ty) {
 
         /* Build a class_region for the instantiated class so sema
-         * can resolve member references inside method bodies. */
-        DeclarativeRegion *cr = region_build_class(cloned, inst_ty, arena);
+         * can resolve member references inside method bodies. The
+         * enclosing scope is inherited from the source template's
+         * own class_region (the namespace it was declared in) — so
+         * unqualified lookups in cloned method bodies reach the
+         * same global helpers as the original. */
+        DeclarativeRegion *src_enclosing = NULL;
+        if (inner->class_def.ty && inner->class_def.ty->class_region)
+            src_enclosing = inner->class_def.ty->class_region->enclosing;
+        DeclarativeRegion *cr = region_build_class(cloned, inst_ty,
+                                                   src_enclosing, arena);
         inst_ty->class_region = cr;
         inst_ty->class_def = cloned;
         /* Scan the cloned members for ctor/dtor/virtual flags.
@@ -2287,6 +2295,29 @@ void template_instantiate(Node *tu, Arena *arena) {
         /* Register in dedup set carrying the substituted TY_FUNC. */
         dedup_add(&ds, key, pos, ft);
 
+        /* Wire a prototype scope so phase-2 sema can resolve names
+         * (parameters, sibling class members, free helpers in the
+         * declaring namespace) inside the cloned body.
+         *
+         * The enclosing must reach through the owning class region
+         * first, then up to the namespace — anything else makes
+         * unqualified sibling-member calls miss. Pattern: gcc 4.8
+         * vec.h's `va_heap::reserve` body calls `release (v)`
+         * unqualified; the class region resolves it to
+         * `va_heap::release` so codegen mangles it correctly. With
+         * the namespace as direct enclosing, the lookup skips past
+         * the class and the call emits as bare `release`. */
+        if (cloned->func.body && !cloned->func.param_scope) {
+            DeclarativeRegion *enc = NULL;
+            if (mr->entry->owner_class &&
+                mr->entry->owner_class->class_region)
+                enc = mr->entry->owner_class->class_region;
+            else if (tu)
+                enc = tu->tu.global_scope;
+            cloned->func.param_scope = region_build_prototype(
+                cloned, enc, arena);
+        }
+
         inst_push(all_instantiated, &total_inst, &ninst_this_round,
                   cloned, "member-template instantiation");
     }
@@ -2556,10 +2587,20 @@ void template_instantiate(Node *tu, Arena *arena) {
                             sty->template_args[i] = type_arg_from_node(
                                 req->template_id->template_id.args[i]);
                     }
-                    /* Build class_region if not already present */
+                    /* Build class_region if not already present.
+                     * Inherit the source template's enclosing scope so
+                     * unqualified lookups in method bodies reach the
+                     * declaring namespace's free helpers. */
                     if (!sty->class_region) {
+                        DeclarativeRegion *src_enclosing = NULL;
+                        Node *src = req->tmpl_def
+                            ? req->tmpl_def->template_decl.decl : NULL;
+                        if (src && src->class_def.ty &&
+                            src->class_def.ty->class_region)
+                            src_enclosing =
+                                src->class_def.ty->class_region->enclosing;
                         sty->class_region = region_build_class(
-                            inst, sty, arena);
+                            inst, sty, src_enclosing, arena);
                         sty->class_def = inst;
                     }
                     /* Wire method param scopes */

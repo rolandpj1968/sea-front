@@ -567,11 +567,20 @@ void region_add_base_raw(DeclarativeRegion *r, DeclarativeRegion *base,
  * recognise them as callable.
  */
 DeclarativeRegion *region_build_class(Node *class_def, Type *owner,
-                                       Arena *arena) {
+                                      DeclarativeRegion *enclosing,
+                                      Arena *arena) {
     DeclarativeRegion *cr = arena_alloc(arena, sizeof(DeclarativeRegion));
     memset(cr, 0, sizeof(DeclarativeRegion));
     cr->kind = REGION_CLASS;
     cr->owner_type = owner;
+    /* N4659 §6.3.7 [basic.scope.class]/1: a class scope is enclosed
+     * by the scope where the class was declared. Without this,
+     * unqualified-name lookup from a method body dead-ends at the
+     * class — global helpers (free function templates like vec_safe_*,
+     * standard-library names) become unreachable. Parse-time class
+     * regions get this from region_push; the instantiation pass calls
+     * us directly and must supply the source template's enclosing. */
+    cr->enclosing = enclosing;
     for (int i = 0; i < class_def->class_def.nmembers; i++) {
         Node *m = class_def->class_def.members[i];
         if (!m) continue;

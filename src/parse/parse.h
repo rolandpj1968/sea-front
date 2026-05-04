@@ -1619,7 +1619,8 @@ Declaration *region_lookup_own(DeclarativeRegion *r,
 void region_add_base_raw(DeclarativeRegion *r, DeclarativeRegion *base,
                           Arena *arena);
 DeclarativeRegion *region_build_class(Node *class_def, Type *owner,
-                                       Arena *arena);
+                                      DeclarativeRegion *enclosing,
+                                      Arena *arena);
 DeclarativeRegion *region_build_prototype(Node *func,
                                            DeclarativeRegion *enclosing,
                                            Arena *arena);
