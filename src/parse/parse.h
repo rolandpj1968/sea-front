@@ -1235,11 +1235,11 @@ struct Parser {
 /* Token stream — index-based cursor into contiguous array */
 Token *parser_peek(Parser *p);                 /* current token (no advance) */
 Token *parser_peek_ahead(Parser *p, int n);    /* lookahead by n tokens */
-Token *parser_advance(Parser *p);             /* return current, advance position */
-bool   parser_at(Parser *p, TokenKind k);
-bool   parser_consume(Parser *p, TokenKind k);
+Token *parser_advance(Parser *p);              /* return current, advance position */
+bool parser_at(Parser *p, TokenKind k);
+bool parser_consume(Parser *p, TokenKind k);
 Token *parser_expect(Parser *p, TokenKind k);
-bool   parser_at_eof(Parser *p);
+bool parser_at_eof(Parser *p);
 
 /* Skip past a balanced delimiter pair. The caller must have already
  * consumed the opening token; on return, the matching closing token
@@ -1263,7 +1263,7 @@ void parser_skip_to_matching_rbrace(Parser *p);
 
 /* Tentative parsing — save/restore parser state (position + region) */
 ParseState parser_save(Parser *p);
-void       parser_restore(Parser *p, ParseState saved);
+void parser_restore(Parser *p, ParseState saved);
 
 /* GCC extension: __attribute__((...)) — skip any sequence of these.
  * Lexer treats __attribute__ as a plain identifier. */

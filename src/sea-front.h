@@ -318,7 +318,7 @@ typedef struct {
 
 Arena arena_new(void);
 void *arena_alloc(Arena *a, size_t size);
-void  arena_free_all(Arena *a);
+void arena_free_all(Arena *a);
 
 typedef struct {
     void **data;
@@ -327,8 +327,8 @@ typedef struct {
     Arena *arena;
 } Vec;
 
-Vec   vec_new(Arena *arena);
-void  vec_push(Vec *v, void *item);
+Vec vec_new(Arena *arena);
+void vec_push(Vec *v, void *item);
 void *vec_get(Vec *v, int index);
 
 /*
@@ -351,6 +351,6 @@ typedef enum {
  * parse — public API
  */
 Node *parse(TokenArray tokens, Arena *arena, CppStandard std);
-void  dump_ast(Node *node, int indent);
+void dump_ast(Node *node, int indent);
 
 #endif /* SEA_FRONT_H */
