@@ -268,6 +268,12 @@ static void mark_enum_body_emitted(Token *toks) {
  * regular emitters, which appear later in the file. */
 static void emit_expr(Node *n);
 static void emit_type(Type *ty);
+static void emit_array_dims(Type *array_chain);
+/* Walks a TY_PTR/TY_ARRAY chain and emits a C declarator interleaving
+ * '*' and '[N]' brackets around the optional name; returns true when
+ * a pointer-to-array shape was detected and emitted, false otherwise.
+ * 'name' may be NULL (used in casts / function returns / sizeof). */
+static bool emit_pointer_to_array_declarator(Type *ty, Token *name);
 static void emit_mangled_class_tag(Type *class_type);
 static void emit_stmt(Node *n);
 static int collect_call_arg_types(Node **args, int nargs, Type ***out_types);
@@ -1473,8 +1479,66 @@ static bool method_is_virtual(Type *class_type, Token *method_name) {
 /* Type emission                                                      */
 /* ------------------------------------------------------------------ */
 
+/* Walk a chain of TY_ARRAY layers and emit literal '[N]' brackets in
+ * source (outermost-first) order. Stops on the first non-array node.
+ * For unsized arrays emits '[]'; for arbitrary-expression sizes emits
+ * '[expr]' verbatim. N4659 §11.3.4 [dcl.array]. */
+static void emit_array_dims(Type *array_chain) {
+    for (Type *d = array_chain; d && d->kind == TY_ARRAY; d = d->base) {
+        if (d->array_len >= 0) {
+            fprintf(stdout, "[%d]", d->array_len);
+        } else if (d->array_size_expr) {
+            fputc('[', stdout);
+            emit_expr(d->array_size_expr);
+            fputc(']', stdout);
+        } else {
+            fputs("[]", stdout);
+        }
+    }
+}
+
+/* Emit a generalized C declarator for the pointer-to-array shape
+ *   ELEM (***NAME[outer_dims])[inner_dims]
+ * (any number of outer-array layers, any number of pointer layers,
+ * any number of inner-array layers, then a non-array/non-ptr element).
+ * Returns true on a successful match + emit; false if the type doesn't
+ * fit the shape and the caller should fall back. N4659 §11.3
+ * [dcl.meaning]. */
+static bool emit_pointer_to_array_declarator(Type *ty, Token *name) {
+    if (!ty) return false;
+    Type *t = ty;
+    Type *outer_dims_head = NULL;
+    while (t && t->kind == TY_ARRAY) {
+        if (!outer_dims_head) outer_dims_head = t;
+        t = t->base;
+    }
+    int n_ptrs = 0;
+    while (t && t->kind == TY_PTR) { n_ptrs++; t = t->base; }
+    if (n_ptrs < 1 || !t || t->kind != TY_ARRAY) return false;
+    Type *inner_dims_head = t;
+    Type *elem = inner_dims_head;
+    while (elem && elem->kind == TY_ARRAY) elem = elem->base;
+    if (!elem || elem->kind == TY_ARRAY || elem->kind == TY_PTR) return false;
+    emit_type(elem);
+    fputs(" (", stdout);
+    for (int i = 0; i < n_ptrs; i++) fputc('*', stdout);
+    if (name) fprintf(stdout, "%.*s", name->len, name->loc);
+    emit_array_dims(outer_dims_head);
+    fputc(')', stdout);
+    emit_array_dims(inner_dims_head);
+    return true;
+}
+
+
 static void emit_type(Type *ty) {
     if (!ty) { fputs("/*?*/ int", stdout); return; }
+
+    /* Pointer-to-array shape — emit using the C declarator-interleave
+     * form 'ELEM (***)[N]' instead of decaying everything to '**...'.
+     * Without this, casts and return types lose the inner array bound
+     * and 'sizeof(T(*)[N])' computes sizeof(T*) instead of N*sizeof(T).
+     * N4659 §8.3.3 [expr.sizeof] / §11.3 [dcl.meaning]. */
+    if (emit_pointer_to_array_declarator(ty, /*name=*/NULL)) return;
 
     /* cv-qualifier placement:
      *   TY_PTR with is_const: 'T * const' (const pointer to T) —
@@ -2314,6 +2378,46 @@ static int emit_class_op_mangled_name(Type *class_ty, const char *op_suffix,
 static void emit_param_declarator(Type *ty, Token *name, int idx);
 static void emit_func_header(Type *ret_ty, Token *name,
                               Node **params, int nparams, bool variadic) {
+    /* Pointer-to-array return type — N4659 §11.3 [dcl.meaning]: the
+     * function name MUST sit inside the parens with the '*':
+     *   int (*f(args))[5]
+     * Without this, emit_type would print 'int (*)[5] f(args)' which
+     * isn't valid C. */
+    {
+        Type *t = ret_ty;
+        int n_ptrs = 0;
+        while (t && t->kind == TY_PTR) { n_ptrs++; t = t->base; }
+        if (n_ptrs >= 1 && t && t->kind == TY_ARRAY) {
+            Type *inner_dims_head = t;
+            Type *elem = inner_dims_head;
+            while (elem && elem->kind == TY_ARRAY) elem = elem->base;
+            if (elem && elem->kind != TY_ARRAY && elem->kind != TY_PTR &&
+                elem->kind != TY_FUNC) {
+                emit_type(elem);
+                fputs(" (", stdout);
+                for (int i = 0; i < n_ptrs; i++) fputc('*', stdout);
+                if (name)
+                    fprintf(stdout, "%.*s", name->len, name->loc);
+                fputc('(', stdout);
+                if (nparams == 0 && !variadic) {
+                    fputs("void", stdout);
+                } else {
+                    for (int i = 0; i < nparams; i++) {
+                        if (i > 0) fputs(", ", stdout);
+                        Node *p = params[i];
+                        emit_param_declarator(p->param.ty, p->param.name, i);
+                    }
+                    if (variadic) {
+                        if (nparams > 0) fputs(", ", stdout);
+                        fputs("...", stdout);
+                    }
+                }
+                fputs("))", stdout);
+                emit_array_dims(inner_dims_head);
+                return;
+            }
+        }
+    }
     bool ret_is_fptr = ret_ty && ret_ty->kind == TY_PTR &&
                        ret_ty->base && ret_ty->base->kind == TY_FUNC;
     if (ret_is_fptr) {
@@ -2369,6 +2473,16 @@ static void emit_func_header(Type *ret_ty, Token *name,
  * already does that decay. Unnamed parameters get __sf_unused_N
  * because C requires named params in definitions. */
 static void emit_param_declarator(Type *ty, Token *name, int idx) {
+    /* Pointer-to-array parameters keep their array shape — C's
+     * function-arg adjustment (N4659 §11.3.5/5 [dcl.fct]) already
+     * decays a top-level array to a pointer; for already-pointer-to-
+     * array we want the interleaved 'T (*p)[N]' so the bound stays
+     * visible to sizeof inside the callee. */
+    if (emit_pointer_to_array_declarator(ty,
+            name ? name : NULL)) {
+        if (!name) fprintf(stdout, " __sf_unused_%d", idx);
+        return;
+    }
     /* N4659 §11.3 [dcl.meaning]: function pointer parameters
      * require declarator-interleaving in C:
      *   void (*name)(int)     — pointer to function
@@ -4887,76 +5001,28 @@ static void emit_var_decl_inner(Node *n) {
     }
     /* Pointer-to-array / array-of-pointer-to-array — N4659 §11.3
      * [dcl.meaning]: C declarator syntax interleaves '*' with the
-     * name. Pattern shapes (any number of outer-array layers + one
-     * pointer + any number of inner-array layers):
-     *   T (*name)[N]                 — pointer to array of N T's
-     *   T (*name[M])[N]              — array of M pointers, each to T[N]
-     *   T (*name[M1][M2])[N1][N2]    — generalized
-     * Without this branch the generic emit_type collapses both array
-     * layers and the pointer to '**', losing the inner array bound.
-     * Real-world bite: gcc 4.8 ira-int.h
-     *   move_table *x_ira_register_move_cost[MAX_MACHINE_MODE];
-     * with 'typedef unsigned short move_table[N_REG_CLASSES]' — the
-     * indexing 'x_ira_register_move_cost[mode][cl1][cl2]' is layout-
-     * dependent on the inner [N_REG_CLASSES] dimension.
+     * name. Generalized shape:
+     *   ELEM (***NAME[outer_dims])[inner_dims]
+     * supporting any number of leading outer-array layers, any number
+     * of pointer layers, and any number of inner-array layers. Without
+     * this branch the generic emit_type collapses array layers to '*'
+     * and loses the inner array bounds.
      *
-     * Detect: zero-or-more leading TY_ARRAY, then TY_PTR, then one-or-
-     * more TY_ARRAY, then a non-array/non-ptr element. */
-    if (ty && n->var_decl.name) {
-        Type *t = ty;
-        Type *outer_dims_head = NULL;
-        Type *outer_dims_tail = NULL;
-        int  outer_count = 0;
-        while (t && t->kind == TY_ARRAY) {
-            if (!outer_dims_head) outer_dims_head = t;
-            outer_dims_tail = t;
-            outer_count++;
-            t = t->base;
+     * Real-world bites:
+     *   gcc 4.8 ira-int.h: move_table *x_..._[MAX_MACHINE_MODE]
+     *     (1 PTR + 1 inner-array — indexing depends on the layout)
+     *   gcc 4.8 cgraph.h: cgraph_node **node_pointers[N]
+     *     (2 PTRs — pointer-to-pointer-to-array shape)
+     *
+     * Detect: zero-or-more leading TY_ARRAY, then ONE-OR-MORE TY_PTR,
+     * then ONE-OR-MORE TY_ARRAY, then a non-array/non-ptr element. */
+    if (ty && n->var_decl.name &&
+        emit_pointer_to_array_declarator(ty, n->var_decl.name)) {
+        if (n->var_decl.init) {
+            fputs(" = ", stdout);
+            emit_expr(n->var_decl.init);
         }
-        if (t && t->kind == TY_PTR && t->base && t->base->kind == TY_ARRAY) {
-            Type *inner_dims_head = t->base;
-            Type *elem = inner_dims_head;
-            while (elem && elem->kind == TY_ARRAY) elem = elem->base;
-            if (elem && elem->kind != TY_ARRAY && elem->kind != TY_PTR) {
-                emit_type(elem);
-                fputs(" (*", stdout);
-                fprintf(stdout, "%.*s", n->var_decl.name->len,
-                        n->var_decl.name->loc);
-                /* Outer array dims (outermost-first = source order). */
-                for (Type *d = outer_dims_head; d && d->kind == TY_ARRAY;
-                     d = d->base) {
-                    if (d->array_len >= 0)
-                        fprintf(stdout, "[%d]", d->array_len);
-                    else if (d->array_size_expr) {
-                        fputc('[', stdout);
-                        emit_expr(d->array_size_expr);
-                        fputc(']', stdout);
-                    } else {
-                        fputs("[]", stdout);
-                    }
-                }
-                fputs(")", stdout);
-                /* Inner array dims (the ones the pointer addresses). */
-                for (Type *d = inner_dims_head; d && d->kind == TY_ARRAY;
-                     d = d->base) {
-                    if (d->array_len >= 0)
-                        fprintf(stdout, "[%d]", d->array_len);
-                    else if (d->array_size_expr) {
-                        fputc('[', stdout);
-                        emit_expr(d->array_size_expr);
-                        fputc(']', stdout);
-                    } else {
-                        fputs("[]", stdout);
-                    }
-                }
-                if (n->var_decl.init) {
-                    fputs(" = ", stdout);
-                    emit_expr(n->var_decl.init);
-                }
-                (void)outer_dims_tail; (void)outer_count;
-                return;
-            }
-        }
+        return;
     }
     if (ty && ty->kind == TY_ARRAY) {
         /* Multi-dim arrays: 'T name[N1][N2]'. Walk the TY_ARRAY chain
@@ -7884,6 +7950,39 @@ static void emit_top_level(Node *n) {
              * declarator-interleaving (N4659 §11.3):
              *   void (*signal(int, void(*)(int)))(int);
              * rather than the invalid 'void (*)(int) signal(...)'. */
+            /* Function returning a pointer-to-array — name interleaves
+             * with the '*' inside the parens. N4659 §11.3 [dcl.meaning]. */
+            {
+                Type *t = fty->ret;
+                int n_ptrs = 0;
+                while (t && t->kind == TY_PTR) { n_ptrs++; t = t->base; }
+                if (n_ptrs >= 1 && t && t->kind == TY_ARRAY) {
+                    Type *inner_dims = t;
+                    Type *elem = inner_dims;
+                    while (elem && elem->kind == TY_ARRAY) elem = elem->base;
+                    if (elem && elem->kind != TY_ARRAY &&
+                        elem->kind != TY_PTR && elem->kind != TY_FUNC) {
+                        emit_type(elem);
+                        fputs(" (", stdout);
+                        for (int i = 0; i < n_ptrs; i++) fputc('*', stdout);
+                        fprintf(stdout, "%.*s(",
+                                n->var_decl.name->len, n->var_decl.name->loc);
+                        if (fty->nparams == 0) {
+                            fputs("void", stdout);
+                        } else {
+                            for (int i = 0; i < fty->nparams; i++) {
+                                if (i > 0) fputs(", ", stdout);
+                                emit_type(fty->params[i]);
+                            }
+                            if (fty->is_variadic) fputs(", ...", stdout);
+                        }
+                        fputs("))", stdout);
+                        emit_array_dims(inner_dims);
+                        fputs(";\n", stdout);
+                        return;
+                    }
+                }
+            }
             bool ret_is_fptr = fty->ret && fty->ret->kind == TY_PTR &&
                                fty->ret->base && fty->ret->base->kind == TY_FUNC;
             if (ret_is_fptr) {
