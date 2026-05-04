@@ -2376,6 +2376,7 @@ static int emit_class_op_mangled_name(Type *class_ty, const char *op_suffix,
  * Actually, to keep call sites simple, this helper emits the params
  * inline. Callers just pass the full param set. */
 static void emit_param_declarator(Type *ty, Token *name, int idx);
+static void emit_param_list(Node **params, int nparams, bool variadic);
 static void emit_func_header(Type *ret_ty, Token *name,
                               Node **params, int nparams, bool variadic) {
     /* Pointer-to-array return type — N4659 §11.3 [dcl.meaning]: the
@@ -2398,21 +2399,8 @@ static void emit_func_header(Type *ret_ty, Token *name,
                 for (int i = 0; i < n_ptrs; i++) fputc('*', stdout);
                 if (name)
                     fprintf(stdout, "%.*s", name->len, name->loc);
-                fputc('(', stdout);
-                if (nparams == 0 && !variadic) {
-                    fputs("void", stdout);
-                } else {
-                    for (int i = 0; i < nparams; i++) {
-                        if (i > 0) fputs(", ", stdout);
-                        Node *p = params[i];
-                        emit_param_declarator(p->param.ty, p->param.name, i);
-                    }
-                    if (variadic) {
-                        if (nparams > 0) fputs(", ", stdout);
-                        fputs("...", stdout);
-                    }
-                }
-                fputs("))", stdout);
+                emit_param_list(params, nparams, variadic);
+                fputc(')', stdout);
                 emit_array_dims(inner_dims_head);
                 return;
             }
@@ -2426,21 +2414,8 @@ static void emit_func_header(Type *ret_ty, Token *name,
         fputs(" (*", stdout);
         if (name)
             fprintf(stdout, "%.*s", name->len, name->loc);
-        fputc('(', stdout);
-        if (nparams == 0 && !variadic) {
-            fputs("void", stdout);
-        } else {
-            for (int i = 0; i < nparams; i++) {
-                if (i > 0) fputs(", ", stdout);
-                Node *p = params[i];
-                emit_param_declarator(p->param.ty, p->param.name, i);
-            }
-            if (variadic) {
-                if (nparams > 0) fputs(", ", stdout);
-                fputs("...", stdout);
-            }
-        }
-        fputs("))(", stdout);
+        emit_param_list(params, nparams, variadic);
+        fputs(")(", stdout);
         emit_func_param_types(fty);
         fputc(')', stdout);
         return;
@@ -2449,6 +2424,20 @@ static void emit_func_header(Type *ret_ty, Token *name,
     fputc(' ', stdout);
     if (name)
         fprintf(stdout, "%.*s", name->len, name->loc);
+    emit_param_list(params, nparams, variadic);
+}
+
+/* Emit a parameter's 'type name' pair. C interleaves the name with
+ * the declarator for function-pointer parameters ('int (*p)(int)'),
+ * so we can't just emit_type then name. Arrays also decay to pointer
+ * in parameter position (N4659 §11.3.4/5 [dcl.array]); emit_type
+ * already does that decay. Unnamed parameters get __sf_unused_N
+ * because C requires named params in definitions. */
+/* Emit '(p1, p2, ..., pN)' or '(void)' or '(p1, ...)' — the parameter
+ * list of a function declarator with surrounding parentheses. Centralises
+ * the void-on-empty + variadic-trailing-... handling shared by every
+ * function-emit site. N4659 §11.3.5 [dcl.fct]. */
+static void emit_param_list(Node **params, int nparams, bool variadic) {
     fputc('(', stdout);
     if (nparams == 0 && !variadic) {
         fputs("void", stdout);
@@ -2466,12 +2455,6 @@ static void emit_func_header(Type *ret_ty, Token *name,
     fputc(')', stdout);
 }
 
-/* Emit a parameter's 'type name' pair. C interleaves the name with
- * the declarator for function-pointer parameters ('int (*p)(int)'),
- * so we can't just emit_type then name. Arrays also decay to pointer
- * in parameter position (N4659 §11.3.4/5 [dcl.array]); emit_type
- * already does that decay. Unnamed parameters get __sf_unused_N
- * because C requires named params in definitions. */
 static void emit_param_declarator(Type *ty, Token *name, int idx) {
     /* Pointer-to-array parameters keep their array shape — C's
      * function-arg adjustment (N4659 §11.3.5/5 [dcl.fct]) already
@@ -6997,21 +6980,8 @@ static void emit_free_func_header(Type *ret_ty, Token *name,
         emit_type(fty->ret);
         fputs(" (*", stdout);
         emit_free_func_mangled_name(name, ptypes, np);
-        fputc('(', stdout);
-        if (nparams == 0 && !variadic) {
-            fputs("void", stdout);
-        } else {
-            for (int i = 0; i < nparams; i++) {
-                if (i > 0) fputs(", ", stdout);
-                Node *p = params[i];
-                emit_param_declarator(p->param.ty, p->param.name, i);
-            }
-            if (variadic) {
-                if (nparams > 0) fputs(", ", stdout);
-                fputs("...", stdout);
-            }
-        }
-        fputs("))(", stdout);
+        emit_param_list(params, nparams, variadic);
+        fputs(")(", stdout);
         emit_func_param_types(fty);
         fputc(')', stdout);
         return;
@@ -7019,21 +6989,7 @@ static void emit_free_func_header(Type *ret_ty, Token *name,
     emit_type(ret_ty);
     fputc(' ', stdout);
     emit_free_func_mangled_name(name, ptypes, np);
-    fputc('(', stdout);
-    if (nparams == 0 && !variadic) {
-        fputs("void", stdout);
-    } else {
-        for (int i = 0; i < nparams; i++) {
-            if (i > 0) fputs(", ", stdout);
-            Node *p = params[i];
-            emit_param_declarator(p->param.ty, p->param.name, i);
-        }
-        if (variadic) {
-            if (nparams > 0) fputs(", ", stdout);
-            fputs("...", stdout);
-        }
-    }
-    fputc(')', stdout);
+    emit_param_list(params, nparams, variadic);
 }
 
 static void emit_func_def(Node *n) {

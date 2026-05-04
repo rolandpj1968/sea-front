@@ -497,6 +497,34 @@ typedef struct {
     Node              *cur_class_tid;
 } InstCollector;
 
+/* Build a MemberTmplRequest from a call site and push it onto the
+ * collector's member-request list. Centralises the build + arg-type
+ * capture + linked-list insertion shared by the qualified-call,
+ * sibling-call, and member-access-call paths. N4659 §17.5.2 [temp.mem]. */
+static void record_member_request(InstCollector *col, TmplEntry *entry,
+                                   Node *call_node,
+                                   Node *class_tid,
+                                   Type *enclosing_class) {
+    MemberTmplRequest *mr = arena_alloc(col->arena, sizeof(MemberTmplRequest));
+    mr->entry = entry;
+    mr->call_node = call_node;
+    mr->class_tid = class_tid;
+    mr->enclosing_class = enclosing_class;
+    int na = call_node ? call_node->call.nargs : 0;
+    mr->nargs = na;
+    if (na > 0) {
+        mr->arg_types = arena_alloc(col->arena, na * sizeof(Type *));
+        for (int i = 0; i < na; i++)
+            mr->arg_types[i] = call_node->call.args[i]
+                ? call_node->call.args[i]->resolved_type : NULL;
+    } else {
+        mr->arg_types = NULL;
+    }
+    mr->next = col->member_head;
+    col->member_head = mr;
+    col->member_count++;
+}
+
 /*
  * Check if a Type references a template instantiation (has a
  * template_id_node set) and, if so, record a request.
@@ -810,26 +838,9 @@ static void collect_from_node(InstCollector *col, Node *n) {
                     class_tok->loc, class_tok->len,
                     method_tok->loc, method_tok->len);
                 if (me) {
-                    /* Collect call-site arg types for deduction */
-                    MemberTmplRequest *mr = arena_alloc(col->arena,
-                        sizeof(MemberTmplRequest));
-                    mr->entry = me;
-                    mr->nargs = n->call.nargs;
-                    mr->call_node = n;
-                    mr->class_tid = n->call.callee->qualified.lead_tid;
-                    mr->enclosing_class = NULL; /* qualified path carries class_tid */
-                    if (n->call.nargs > 0) {
-                        mr->arg_types = arena_alloc(col->arena,
-                            n->call.nargs * sizeof(Type *));
-                        for (int i = 0; i < n->call.nargs; i++)
-                            mr->arg_types[i] = n->call.args[i]
-                                ? n->call.args[i]->resolved_type : NULL;
-                    } else {
-                        mr->arg_types = NULL;
-                    }
-                    mr->next = col->member_head;
-                    col->member_head = mr;
-                    col->member_count++;
+                    /* qualified path carries class_tid */
+                    record_member_request(col, me, n,
+                        n->call.callee->qualified.lead_tid, NULL);
                 }
             }
         }
@@ -856,27 +867,9 @@ static void collect_from_node(InstCollector *col, Node *n) {
             TmplEntry *me = registry_find_member(col->reg,
                 cls->loc, cls->len, name->loc, name->len);
             if (me) {
-                MemberTmplRequest *mr = arena_alloc(col->arena,
-                    sizeof(MemberTmplRequest));
-                mr->entry = me;
-                mr->nargs = n->call.nargs;
-                mr->call_node = n;
-                /* Reuse the enclosing call's class instantiation —
-                 * a sibling call inherits the same class<args>. */
-                mr->class_tid = col->cur_class_tid;
-                mr->enclosing_class = col->cur_class;
-                if (n->call.nargs > 0) {
-                    mr->arg_types = arena_alloc(col->arena,
-                        n->call.nargs * sizeof(Type *));
-                    for (int i = 0; i < n->call.nargs; i++)
-                        mr->arg_types[i] = n->call.args[i]
-                            ? n->call.args[i]->resolved_type : NULL;
-                } else {
-                    mr->arg_types = NULL;
-                }
-                mr->next = col->member_head;
-                col->member_head = mr;
-                col->member_count++;
+                /* Sibling call inherits the enclosing class<args>. */
+                record_member_request(col, me, n,
+                    col->cur_class_tid, col->cur_class);
             }
         }
     skip_sibling_member: ;
@@ -900,27 +893,8 @@ static void collect_from_node(InstCollector *col, Node *n) {
                 Token *name = n->call.callee->member.member;
                 TmplEntry *me = registry_find_member(col->reg,
                     ot->tag->loc, ot->tag->len, name->loc, name->len);
-                if (me) {
-                    MemberTmplRequest *mr = arena_alloc(col->arena,
-                        sizeof(MemberTmplRequest));
-                    mr->entry = me;
-                    mr->nargs = n->call.nargs;
-                    mr->call_node = n;
-                    mr->class_tid = NULL;
-                    mr->enclosing_class = ot;
-                    if (n->call.nargs > 0) {
-                        mr->arg_types = arena_alloc(col->arena,
-                            n->call.nargs * sizeof(Type *));
-                        for (int i = 0; i < n->call.nargs; i++)
-                            mr->arg_types[i] = n->call.args[i]
-                                ? n->call.args[i]->resolved_type : NULL;
-                    } else {
-                        mr->arg_types = NULL;
-                    }
-                    mr->next = col->member_head;
-                    col->member_head = mr;
-                    col->member_count++;
-                }
+                if (me)
+                    record_member_request(col, me, n, NULL, ot);
             }
         }
         break;
