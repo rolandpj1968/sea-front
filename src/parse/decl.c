@@ -987,28 +987,45 @@ parse_suffixes:
      * unsized-array bracket. Skip attributes here so they don't get
      * misparsed as array dimensions. */
     parser_skip_cxx_attributes(p);
+    /* N4659 §11.3.4 [dcl.array]: in 'T arr[A][B]' the leftmost bracket
+     * is the OUTER dimension. Internally an array type wraps another
+     * type: array(T, B) is "array of B T's". Building 'T[A][B]'
+     * therefore requires applying [B] first (inner) then [A] (outer)
+     * so the outer wrap's size is A. Reading dims left-to-right
+     * collects them in source order; we then wrap right-to-left.
+     *
+     * Previously this loop applied dims as it read them, producing
+     * 'T[B][A]' (dims swapped) — silently miscompiled gcc 4.8 tree.c's
+     * 'tree_contains_struct[MAX_TREE_CODES][64]' to '[64][MAX_TREE_CODES]'
+     * so indexed writes overran the array into adjacent globals.
+     */
+#define MAX_ARRAY_DIMS 8
+    int  dim_lens[MAX_ARRAY_DIMS];
+    Node *dim_exprs[MAX_ARRAY_DIMS];
+    int  ndims = 0;
     while (parser_at(p, TK_LBRACKET) &&
            parser_peek_ahead(p, 1)->kind != TK_LBRACKET) {
         parser_advance(p);  /* consume [ */
-        int len = -1;  /* unsized / expression-sized */
+        int len = -1;
         Node *size_expr = NULL;
         if (!parser_at(p, TK_RBRACKET)) {
-            /* N4659 §11.3.4 [dcl.array]: the size is a constant-
-             * expression. For integer literals we extract the value
-             * into array_len. For non-literal expressions (macros
-             * that expand to sizeof(...)/N, template params, etc.)
-             * we keep the Node so codegen can re-emit it verbatim —
-             * essential for sys-header structs like sigset_t whose
-             * size is 1024/(8*sizeof(long)). */
             size_expr = parse_assign_expr(p);
             if (size_expr && size_expr->kind == ND_NUM)
                 len = (int)size_expr->num.lo;
         }
         parser_expect(p, TK_RBRACKET);
-        ty = new_array_type(p, ty, len);
-        if (len < 0 && size_expr && size_expr->kind != ND_NUM)
-            ty->array_size_expr = size_expr;
+        if (ndims < MAX_ARRAY_DIMS) {
+            dim_lens[ndims]  = len;
+            dim_exprs[ndims] = (len < 0 && size_expr && size_expr->kind != ND_NUM)
+                                 ? size_expr : NULL;
+            ndims++;
+        }
     }
+    for (int i = ndims - 1; i >= 0; i--) {
+        ty = new_array_type(p, ty, dim_lens[i]);
+        if (dim_exprs[i]) ty->array_size_expr = dim_exprs[i];
+    }
+#undef MAX_ARRAY_DIMS
 
     /* Apply deferred wrappers from a grouped declarator — see the
      * grouped-declarator branch for the rationale. */
