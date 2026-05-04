@@ -4350,10 +4350,35 @@ static void emit_expr(Node *n) {
         return;
     case ND_SIZEOF:
         fputs("sizeof(", stdout);
-        if (n->sizeof_.is_type && n->sizeof_.ty)
-            emit_type(n->sizeof_.ty);
-        else if (n->sizeof_.expr)
+        if (n->sizeof_.is_type && n->sizeof_.ty) {
+            /* Preserve array bounds in sizeof — emit_type would decay
+             * TY_ARRAY to '*' giving sizeof(T*) for a typedef'd array
+             * type. C's sizeof never decays; '\''sizeof(int[5])'\'' is 20.
+             * Pattern: gcc 4.8 ira.c'\''s '\''XNEWVEC(move_table, N)'\'' where
+             * 'typedef unsigned short move_table[N_REG_CLASSES]'.
+             * N4659 §8.3.3 [expr.sizeof]/2. */
+            Type *st = n->sizeof_.ty;
+            if (st && st->kind == TY_ARRAY) {
+                Type *elem = st;
+                while (elem && elem->kind == TY_ARRAY) elem = elem->base;
+                if (elem) emit_type(elem);
+                for (Type *d = st; d && d->kind == TY_ARRAY; d = d->base) {
+                    if (d->array_len >= 0)
+                        fprintf(stdout, "[%d]", d->array_len);
+                    else if (d->array_size_expr) {
+                        fputc('[', stdout);
+                        emit_expr(d->array_size_expr);
+                        fputc(']', stdout);
+                    } else {
+                        fputs("[]", stdout);
+                    }
+                }
+            } else {
+                emit_type(st);
+            }
+        } else if (n->sizeof_.expr) {
             emit_expr(n->sizeof_.expr);
+        }
         fputc(')', stdout);
         return;
     case ND_ALIGNOF:
