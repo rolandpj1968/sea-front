@@ -2115,6 +2115,49 @@ void template_instantiate(Node *tu, Arena *arena) {
         int cap = np + outer_np;
         if (cap < 1) cap = 1;
         SubstMap deduced = subst_map_new_with_registry(arena, cap, &reg);
+
+        /* Seed outer class-template param→arg bindings BEFORE
+         * function-arg deduction. N4659 §17.5.2/2 [temp.mem]: when a
+         * class template's member is itself a template, its body can
+         * reference both the outer class's parameters and the inner
+         * member-template's parameters. Without this seed, an outer
+         * param appearing in the member's body (but not in its
+         * function-parameter types) leaks through cloning as
+         * TY_DEPENDENT.
+         *
+         * The bindings come from either the qualified-call shape
+         * (mr->class_tid carries the explicit class-template-id) or
+         * the unqualified-sibling shape (mr->enclosing_class carries
+         * the substituted class type with template_args). */
+        Type *owner = mr->entry->owner_class;
+        Node *outer_tmpl = NULL;
+        if (owner && owner->tag)
+            outer_tmpl = registry_find(&reg, owner->tag->loc, owner->tag->len);
+        if (outer_tmpl && outer_tmpl->kind == ND_TEMPLATE_DECL) {
+            int onp = outer_tmpl->template_decl.nparams;
+            if (mr->class_tid && mr->class_tid->kind == ND_TEMPLATE_ID) {
+                int xna = mr->class_tid->template_id.nargs;
+                int n = onp < xna ? onp : xna;
+                for (int i = 0; i < n; i++) {
+                    Node *p = outer_tmpl->template_decl.params[i];
+                    if (!p || !p->param.name) continue;
+                    Type *cta = type_arg_from_node(
+                        mr->class_tid->template_id.args[i]);
+                    if (cta) subst_map_add(&deduced, p->param.name, cta);
+                }
+            } else if (mr->enclosing_class &&
+                       mr->enclosing_class->n_template_args > 0) {
+                int xna = mr->enclosing_class->n_template_args;
+                int n = onp < xna ? onp : xna;
+                for (int i = 0; i < n; i++) {
+                    Node *p = outer_tmpl->template_decl.params[i];
+                    if (!p || !p->param.name) continue;
+                    subst_map_add(&deduced, p->param.name,
+                                  mr->enclosing_class->template_args[i]);
+                }
+            }
+        }
+
         if (!deduce_template_args(inner, mr->arg_types, mr->nargs, &deduced))
             continue;
 
