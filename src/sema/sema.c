@@ -762,6 +762,59 @@ static void visit_for(Sema *s, Node *n) {
     }
 }
 
+/* Substitute the class-template parameter bindings encoded on
+ * `class_ty` (a TY_STRUCT/TY_UNION carrying a template_id_node)
+ * into a member's declared type. Returns the substituted type, or
+ * `member_ty` unchanged if class_ty isn't a template instance or
+ * member_ty has no dependent components.
+ *
+ * Without this, `outer.last()` on a class-template instance has
+ * resolved_type = TY_REF(T) where T is TY_DEPENDENT — a chained
+ * `.field` access on the result strips ref to T (still dependent)
+ * and looks up `field` on a TY_DEPENDENT, which silently returns
+ * resolved_type=NULL. Overload resolution at a containing call
+ * sees NULL arg-types and skips the rewrite to ND_TEMPLATE_ID,
+ * leaving the free function template uninstantiated at link time.
+ *
+ * N4659 §17.5.2 [temp.mem] / §17.6.7 [temp.dep]. */
+static Type *subst_member_type_with_class_args(Sema *s,
+                                                Type *member_ty,
+                                                Type *class_ty) {
+    if (!member_ty || !class_ty) return member_ty;
+    if (!type_has_dependent(member_ty)) return member_ty;
+    Node *tid = class_ty->template_id_node;
+    if (!tid || tid->kind != ND_TEMPLATE_ID) return member_ty;
+    /* Find the primary template's parameter list. Prefer the
+     * resolved_tmpl set by sema; fall back to a name lookup so
+     * pass-1 visits (before any other sema pass annotated the
+     * template-id) can still substitute. */
+    Node *tmpl = tid->template_id.resolved_tmpl;
+    if ((!tmpl || tmpl->kind != ND_TEMPLATE_DECL) &&
+        tid->template_id.name && s->cur_scope) {
+        Declaration *td = lookup_kind_from(s->cur_scope,
+            tid->template_id.name->loc,
+            tid->template_id.name->len, ENTITY_TEMPLATE);
+        if (td && td->tmpl_node &&
+            td->tmpl_node->kind == ND_TEMPLATE_DECL)
+            tmpl = td->tmpl_node;
+    }
+    if (!tmpl || tmpl->kind != ND_TEMPLATE_DECL) return member_ty;
+    int nparams = tmpl->template_decl.nparams;
+    int nargs   = tid->template_id.nargs;
+    if (nparams == 0 || nargs == 0) return member_ty;
+    SubstMap map = subst_map_new(s->arena, nparams);
+    int n = nargs < nparams ? nargs : nparams;
+    for (int i = 0; i < n; i++) {
+        Node *p = tmpl->template_decl.params[i];
+        Node *a = tid->template_id.args[i];
+        if (!p || !p->param.name) continue;
+        Type *aty = (a && a->kind == ND_VAR_DECL) ? a->var_decl.ty : NULL;
+        if (aty) subst_map_add(&map, p->param.name, aty);
+    }
+    if (map.nentries == 0) return member_ty;
+    return subst_type(member_ty, &map, s->arena);
+}
+
 static void visit_member(Sema *s, Node *n) {
     visit(s, n->member.obj);
     /* For p->member, the obj's type is a pointer to a struct/union;
@@ -774,6 +827,13 @@ static void visit_member(Sema *s, Node *n) {
     if (ot->kind == TY_REF || ot->kind == TY_RVALREF) ot = ot->base;
     if (!ot) return;
     if (ot->kind != TY_STRUCT && ot->kind != TY_UNION) return;
+    /* Preserve the call-site type's template_id_node BEFORE swapping
+     * to the canonical type — class-template parameter substitution
+     * for the looked-up member's declared type needs the call-site
+     * args, but the canonical-tag Type carries the primary template's
+     * un-substituted shape (template_id_node=NULL). N4659 §17.6.7
+     * [temp.dep]. */
+    Type *call_site_ty = ot;
     /* For template instantiations whose Type copy lacks class_region
      * but has class_def (e.g. function parameter types), fall back
      * to scanning the class_def's members directly. This mirrors
@@ -797,6 +857,50 @@ static void visit_member(Sema *s, Node *n) {
         if (td && td->type &&
             (td->type->class_region || td->type->class_def))
             ot = td->type;
+        /* Class-template instance: tag matches a template name. The
+         * registered ENTITY_TAG/ENTITY_TYPE may be a pre-body copy
+         * with NULL class_region; the class body lives on a template
+         * specialization's inner ND_CLASS_DEF. Walk all templates with
+         * this name (primary + partial specs) and prefer one whose
+         * class body is non-empty AND matches the call-site args.
+         *
+         * The gcc 4.8 vec.h pattern has an empty primary
+         * `template<class,class,class> struct vec { };` and a partial
+         * specialization `vec<T,A,vl_embed>` carrying every method;
+         * naively walking to the primary returns the empty body and
+         * the lookup misses methods like `last()`. N4659 §17.8.3.2
+         * [temp.class.spec.match]. */
+        if (!ot->class_region && !ot->class_def && ot->tag) {
+            Declaration *cands[16];
+            int n = lookup_overload_set_from(s->cur_scope,
+                ot->tag->loc, ot->tag->len, cands, 16);
+            Type *best = NULL;
+            int best_score = -1;
+            for (int i = 0; i < n; i++) {
+                Declaration *cd = cands[i];
+                if (!cd || cd->entity != ENTITY_TEMPLATE ||
+                    !cd->tmpl_node ||
+                    cd->tmpl_node->kind != ND_TEMPLATE_DECL)
+                    continue;
+                Node *inner = cd->tmpl_node->template_decl.decl;
+                if (!inner || inner->kind != ND_CLASS_DEF) continue;
+                Type *ity = inner->class_def.ty;
+                if (!ity) continue;
+                /* Score: prefer specializations with members, then
+                 * those whose template_id_node matches the call-site
+                 * args. Without proper §17.8.3.2 matching this is a
+                 * heuristic — sufficient for vec.h's empty-primary +
+                 * vl_embed-partial pattern. */
+                int score = 0;
+                if (inner->class_def.nmembers > 0) score += 10;
+                if (ity->template_id_node) score += 1;
+                if (score > best_score) {
+                    best_score = score;
+                    best = ity;
+                }
+            }
+            if (best) ot = best;
+        }
     }
     if (!ot->class_region && ot->class_def) {
         Token *m = n->member.member;
@@ -810,9 +914,34 @@ static void visit_member(Sema *s, Node *n) {
                     cmn = cm->var_decl.name; cmt = cm->var_decl.ty;
                 } else if (cm->kind == ND_FUNC_DEF) {
                     cmn = cm->func.name;
+                    /* Synthesize a TY_FUNC for the method so callers
+                     * (visit_call → ct->ret) can read the return type.
+                     * Without this, `outer.last()` on a class-template
+                     * fallback path leaves resolved_type=NULL and any
+                     * subsequent `.field` access on the call result
+                     * silently drops out — overload resolution for a
+                     * containing call sees a NULL arg-type and fails
+                     * to rewrite the callee to ND_TEMPLATE_ID, so the
+                     * free function template never gets instantiated.
+                     * N4659 §17.5.2 [temp.mem] / §8.2.5 [expr.ref]. */
+                    Type *ft = arena_alloc(s->arena, sizeof(Type));
+                    memset(ft, 0, sizeof(*ft));
+                    ft->kind = TY_FUNC;
+                    ft->ret = cm->func.ret_ty;
+                    int np = cm->func.nparams;
+                    if (np > 0) {
+                        ft->params = arena_alloc(s->arena,
+                            np * sizeof(Type *));
+                        for (int i = 0; i < np; i++)
+                            ft->params[i] = cm->func.params[i]->param.ty;
+                    }
+                    ft->nparams = np;
+                    cmt = ft;
                 }
                 if (cmn && tokens_equal(cmn, m)) {
-                    if (cmt) n->resolved_type = cmt;
+                    if (cmt)
+                        n->resolved_type = subst_member_type_with_class_args(
+                            s, cmt, call_site_ty);
                     break;
                 }
             }
@@ -831,7 +960,8 @@ static void visit_member(Sema *s, Node *n) {
      * enclosing namespace. */
     Declaration *d = lookup_in_scope(ot->class_region, m->loc, m->len);
     if (d && d->type)
-        n->resolved_type = d->type;
+        n->resolved_type = subst_member_type_with_class_args(
+            s, d->type, call_site_ty);
     if (n->member.obj && n->member.obj->is_type_dependent)
         n->is_type_dependent = true;
 }
