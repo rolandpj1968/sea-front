@@ -1788,6 +1788,62 @@ static void visit_call(Sema *s, Node *n) {
             }
         }
     }
+    /* Explicit-template-id call 'name<args>(call-args)' — resolve the
+     * template overload and stamp template_id.resolved_tmpl so the
+     * instantiation pass picks the right candidate. Without this, the
+     * registry-side fallback returns the FIRST entry with the matching
+     * name, which can be of the wrong arity entirely (e.g. picking
+     * 'foo<T,A>(Vec<T,A>*&, unsigned)' for a 3-arg call to
+     * 'foo<T,A>(Vec<T,A>*, op_t, void*)'). N4659 §16.3 [over.match] +
+     * §17.8.2.1 [temp.deduct.call]. */
+    if (n->call.callee && n->call.callee->kind == ND_TEMPLATE_ID &&
+        !n->call.callee->template_id.resolved_tmpl &&
+        n->call.callee->template_id.name &&
+        s->cur_scope) {
+        Token *tname = n->call.callee->template_id.name;
+        Vec ov = vec_new(s->arena);
+        lookup_overload_set_into_vec(s->cur_scope,
+                                      tname->loc, tname->len, &ov);
+        if (ov.len >= 1) {
+            Type *at[MAX_OVLD_CANDS];
+            int na = n->call.nargs;
+            if (na > MAX_OVLD_CANDS) na = MAX_OVLD_CANDS;
+            for (int i = 0; i < na; i++)
+                at[i] = n->call.args[i] ? n->call.args[i]->resolved_type : NULL;
+            SubstMap deduced = {0};
+            bool winner_is_template = false;
+            Declaration *winner = resolve_free_function_overload(
+                (Declaration **)ov.data, ov.len,
+                at, na, s->arena,
+                &deduced, &winner_is_template);
+            /* Skip when the winner is a class member (in-class member
+             * template or OOL member method). Stamping resolved_tmpl
+             * would route the call through the FREE-function template
+             * path in instantiate.c, which mangles without class scope
+             * and never inserts the implicit 'this'. The sibling-
+             * member-template detection in instantiate.c handles those
+             * shapes natively from the (still NULL) resolved_tmpl.
+             * N4659 §17.5.2 [temp.mem]. */
+            bool winner_is_member = false;
+            if (winner) {
+                if (winner->home && winner->home->kind == REGION_CLASS)
+                    winner_is_member = true;
+                else if (winner->tmpl_node) {
+                    Node *inner = tmpl_inner_func(winner->tmpl_node);
+                    if (inner &&
+                        (inner->kind == ND_FUNC_DEF ||
+                         inner->kind == ND_FUNC_DECL) &&
+                        (inner->func.class_type != NULL ||
+                         inner->func.qual_tid != NULL))
+                        winner_is_member = true;
+                }
+            }
+            if (winner && !winner_is_member &&
+                winner->entity == ENTITY_TEMPLATE && winner->tmpl_node)
+                n->call.callee->template_id.resolved_tmpl = winner->tmpl_node;
+        }
+    }
+
     /* Functional-cast / explicit-type-conversion: 'Foo(args)' where
      * Foo is a type-name. N4659 §8.2.3 [expr.type.conv]: a simple-
      * type-specifier (or typename-specifier) followed by a
