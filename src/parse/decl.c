@@ -1722,29 +1722,44 @@ Node *parse_declaration(Parser *p) {
     if (parser_at(p, TK_KW_ASM)) {
         parser_advance(p);
         parser_expect(p, TK_LPAREN);
-        /* Walk consecutive string-literal tokens. C/C++ adjacent
+        /* Concatenate consecutive string-literal tokens — C/C++ adjacent
          * string-literal concatenation (N4659 §5.13.5/13 [lex.string])
-         * applies inside __asm__ too. glibc's <stdlib.h> uses
+         * applies inside __asm__ too. Pattern: glibc <stdlib.h> uses
          *   __asm__ ("" "__isoc23_strtoul")
-         * to ABI-version a libc symbol; the empty leading literal
-         * tricks single-token capture into emitting NOTHING. Keep
-         * the LAST non-empty literal as the asm-rename target —
-         * SHORTCUT (ours, not the standard): we do not emit a true
-         * concatenation, so 'asm("a" "b")' would lose the "a". The
-         * real-world pattern (single non-empty name, optional empty
-         * decoration) is the only one we've encountered in glibc /
-         * gcc 4.8 source.
-         * TODO(seafront#asm-concat): full concatenation support. */
-        Token *picked = NULL;
-        while (parser_at(p, TK_STR)) {
+         * to ABI-version a libc symbol. The single-token shortcut would
+         * either lose the first non-empty literal or emit nothing. */
+        Token *toks[16];
+        int  n = 0;
+        int  total_payload = 0;
+        while (parser_at(p, TK_STR) && n < 16) {
             Token *t = parser_peek(p);
-            /* len >= 2 means at least the surrounding quotes; >2
-             * means non-empty payload. */
-            if (!picked || t->len > 2) picked = t;
+            toks[n++] = t;
+            if (t->len >= 2) total_payload += t->len - 2;
             parser_advance(p);
         }
-        if (picked) {
-            decl->var_decl.asm_name = picked;
+        if (n == 1) {
+            decl->var_decl.asm_name = toks[0];
+            decl->var_decl.storage_flags |= DECL_C_LINKAGE;
+        } else if (n > 1) {
+            /* Synthesise a Token whose payload is '"' + joined-bodies + '"'
+             * so emit_asm_name's loc+1 / len-2 slicing produces the
+             * concatenated name. */
+            int buf_len = total_payload + 2;
+            char *buf = arena_alloc(p->arena, buf_len);
+            buf[0] = '"';
+            int pos = 1;
+            for (int i = 0; i < n; i++) {
+                Token *t = toks[i];
+                if (t->len < 2) continue;
+                memcpy(buf + pos, t->loc + 1, t->len - 2);
+                pos += t->len - 2;
+            }
+            buf[pos++] = '"';
+            Token *synth = arena_alloc(p->arena, sizeof(Token));
+            *synth = *toks[0];
+            synth->loc = buf;
+            synth->len = buf_len;
+            decl->var_decl.asm_name = synth;
             decl->var_decl.storage_flags |= DECL_C_LINKAGE;
         }
         /* Tolerate any leftover tokens before the ')'. */
