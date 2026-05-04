@@ -1899,8 +1899,30 @@ static void visit(Sema *s, Node *n) {
             Token *lead = n->qualified.parts[0];
             Token *member = n->qualified.parts[n->qualified.nparts - 1];
             if (lead && member) {
-                Declaration *ld = lookup_unqualified_from(s->cur_scope,
-                    lead->loc, lead->len);
+                /* N4659 §6.4.3 [basic.lookup.qual]: in a qualified-id
+                 * 'C::m', the lookup of `C` is class-name lookup —
+                 * variables, functions, and enumerators of the same
+                 * name are ignored. Prefer ENTITY_TAG / ENTITY_TYPE /
+                 * ENTITY_TEMPLATE; only fall back to general unqualified
+                 * lookup if none of those resolve. Pattern: gcc 4.8
+                 * tree-ssa-threadupdate.c declares
+                 *   static hash_table<redirection_data> redirection_data;
+                 * The variable shadows the struct name. Without this,
+                 * `redirection_data::hash(p)` resolves the leading
+                 * qualifier to the variable's type (hash_table) and
+                 * codegen mangles the call with hash_table's tag —
+                 * link fails. */
+                Declaration *ld = lookup_kind_from(s->cur_scope,
+                    lead->loc, lead->len, ENTITY_TAG);
+                if (!ld)
+                    ld = lookup_kind_from(s->cur_scope,
+                        lead->loc, lead->len, ENTITY_TYPE);
+                if (!ld)
+                    ld = lookup_kind_from(s->cur_scope,
+                        lead->loc, lead->len, ENTITY_TEMPLATE);
+                if (!ld)
+                    ld = lookup_unqualified_from(s->cur_scope,
+                        lead->loc, lead->len);
                 if (ld && ld->type && ld->type->class_region) {
                     Declaration *md = lookup_in_scope(ld->type->class_region,
                         member->loc, member->len);
