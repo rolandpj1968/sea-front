@@ -1040,13 +1040,9 @@ static const char *binop_token_to_op_str(TokenKind op, int *out_len) {
  * with TY_FUNC) or NULL. Linear scan of the class's member list.
  * Falls back through the TU when class_ty->class_def isn't hooked
  * up on this Type* copy. */
-static Node *find_class_operator_subscript(Sema *s, Type *class_ty) {
-    if (!class_ty) return NULL;
-    Node *cd = class_ty->class_def;
-    if (!cd && s && s->tu) {
-        Node *d = find_class_def_in_tu(s->tu, class_ty);
-        if (d) cd = d;
-    }
+/* Walk a class_def's members for the operator[] entry. Inline helper
+ * factored out so the partial-spec fallback below can reuse it. */
+static Node *scan_op_subscript(Node *cd) {
     if (!cd) return NULL;
     for (int i = 0; i < cd->class_def.nmembers; i++) {
         Node *m = cd->class_def.members[i];
@@ -1060,6 +1056,39 @@ static Node *find_class_operator_subscript(Sema *s, Type *class_ty) {
         const char *after = mn->loc + mn->len;
         while (*after == ' ' || *after == '\t') after++;
         if (after[0] == '[') return m;
+    }
+    return NULL;
+}
+
+static Node *find_class_operator_subscript(Sema *s, Type *class_ty) {
+    if (!class_ty) return NULL;
+    Node *cd = class_ty->class_def;
+    if (!cd && s && s->tu) {
+        Node *d = find_class_def_in_tu(s->tu, class_ty);
+        if (d) cd = d;
+    }
+    Node *m = scan_op_subscript(cd);
+    if (m) return m;
+    /* Class-template instance fallback — same shape as visit_member.
+     * The canonical class_def may be the empty primary; the operator[]
+     * lives on a partial spec (e.g. vec<T,A,vl_ptr>). Walk every
+     * specialization with the same tag and check each. N4659 §17.8.3.2
+     * [temp.class.spec.match]. */
+    if (class_ty->tag && s && s->cur_scope) {
+        Declaration *cands[16];
+        int n_cands = lookup_overload_set_from(s->cur_scope,
+            class_ty->tag->loc, class_ty->tag->len, cands, 16);
+        for (int i = 0; i < n_cands; i++) {
+            Declaration *c = cands[i];
+            if (!c || c->entity != ENTITY_TEMPLATE ||
+                !c->tmpl_node ||
+                c->tmpl_node->kind != ND_TEMPLATE_DECL)
+                continue;
+            Node *inner = c->tmpl_node->template_decl.decl;
+            if (!inner || inner->kind != ND_CLASS_DEF) continue;
+            m = scan_op_subscript(inner);
+            if (m) return m;
+        }
     }
     return NULL;
 }
@@ -1091,6 +1120,15 @@ static void visit_subscript(Sema *s, Node *n) {
             if (m->kind == ND_FUNC_DEF) ret = m->func.ret_ty;
             else if (m->kind == ND_VAR_DECL && m->var_decl.ty)
                 ret = m->var_decl.ty->ret;
+            /* If the looked-up operator[] came from a class-template
+             * partial spec, the return type carries TY_DEPENDENT in
+             * the spec's pattern variables. Substitute the call-site
+             * template-id args so the result is concrete (e.g. T&
+             * → ipa_agg_jump_function& → ipa_agg_jump_function after
+             * the ref-strip). Otherwise downstream `.field` access on
+             * the subscript result silently NULLs and any free
+             * function template called with that result emits bare. */
+            if (ret) ret = subst_member_type_with_class_args(s, ret, bt);
             if (ret && (ret->kind == TY_REF || ret->kind == TY_RVALREF) &&
                 ret->base)
                 ret = ret->base;
