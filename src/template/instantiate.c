@@ -834,26 +834,16 @@ static void collect_from_node(InstCollector *col, Node *n) {
             }
         }
         /* Unqualified call inside a class member function — may name a
-         * sibling member template. gcc 4.8 va_heap::reserve<T>'s body
-         * calls release(v); per N4659 §6.4.1 [basic.lookup.unqual]
-         * unqualified lookup finds the sibling member release. The
-         * static-method-this fix (#136) already mangles the call to
-         * 'sf__A__release_*', but without this collection path the
-         * member template was never instantiated → undefined symbol.
+         * sibling member template. Per N4659 §6.4.1 [basic.lookup.unqual]
+         * unqualified lookup from inside a class method finds sibling
+         * members. Without this collection path the called template
+         * was never instantiated → undefined symbol at link.
          * Match by current class context + member name.
          *
          * Also handles explicit-template-args calls: ND_TEMPLATE_ID
-         * callees with concrete (post-clone) args take this same
-         * path. Pattern: gcc 4.8 hash-table.h's
-         * `traverse_noresize<Argument, Callback>(argument)` from
-         * inside hash_table::traverse — Argument substitutes through
-         * the cloned body but Callback is a non-type template
-         * parameter (function pointer) that sea-front doesn't track,
-         * so the callee stays ND_TEMPLATE_ID with one TY_DEPENDENT
-         * placeholder. We dispatch on the bare name and let the
-         * member-template instantiation use whatever args we can
-         * deduce; the unsubstituted Callback ends up as a
-         * pass-through in the cloned body. */
+         * callees take this same path. Dispatch on the bare name and
+         * let the member-template instantiation use whatever args
+         * deduction can bind. */
         if (col->cur_class && col->cur_class->tag &&
             n->call.callee &&
             (n->call.callee->kind == ND_IDENT ||
@@ -1688,9 +1678,25 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
             /* Fall back to default if no explicit argument */
             if (!arg_ty && param->param.default_type)
                 arg_ty = subst_type(param->param.default_type, &map, arena);
-            if (arg_ty)
+            if (arg_ty) {
                 subst_map_add(&map, pname, arg_ty);
-            /* else: non-type param or missing default — not yet handled */
+                continue;
+            }
+            /* Non-type template parameter — N4659 §17.1/4 [temp.param].
+             * The arg is an expression; for the function-pointer NTTP
+             * shape, that's an ND_IDENT naming a function. Bind the
+             * param name to the identifier so the cloned body's
+             * references get rewritten via clone.c's ND_IDENT name-
+             * substitution. Piggybacks on the TT-param machinery
+             * (subst_map_add_tt) — both shapes are "name → Token"
+             * bindings; the binding kind is implicit at the use site
+             * (TT names appear in ND_QUALIFIED parts[0]; NTTP names
+             * appear in bare ND_IDENT positions). */
+            if (i < nargs) {
+                Node *a = template_id->template_id.args[i];
+                if (a && a->kind == ND_IDENT && a->ident.name)
+                    subst_map_add_tt(&map, pname, a->ident.name);
+            }
         }
     }
 
@@ -2112,17 +2118,57 @@ void template_instantiate(Node *tu, Arena *arena) {
         if (!deduce_template_args(inner, mr->arg_types, mr->nargs, &deduced))
             continue;
 
+        /* N4659 §17.1/4 [temp.param] + §17.8.2/1 [temp.deduct]: when
+         * a member template is called with explicit args
+         * '...m<X, &foo>(arg)' the function-arg deduction above only
+         * binds those template params that appear in the function's
+         * parameter types. Non-type template parameters (NTTPs)
+         * passed explicitly are NOT covered by deduction — bind them
+         * here from the call-site's explicit template-id args. The
+         * binding piggybacks on the TT-param slot (subst_map_add_tt):
+         * both shapes are "param-name → Token" rewrites that
+         * clone.c's ND_IDENT case applies during cloning.
+         *
+         * NTTP params are recognised by param.ty != NULL (the type
+         * of the constant — int, function pointer, etc.). Type-params
+         * have ty == NULL, so they're skipped. */
+        {
+            Node *cb = mr->call_node ? mr->call_node->call.callee : NULL;
+            /* The explicit template-id may sit at the call's callee
+             * (unqualified call shape: 'name<args>(...)' parses as
+             * ND_CALL(callee=ND_TEMPLATE_ID, ...)) or, for a member
+             * call ('obj.name<args>(...)') the callee is ND_MEMBER
+             * carrying member.template_id with the parsed args. */
+            Node *xtid = NULL;
+            if (cb) {
+                if (cb->kind == ND_TEMPLATE_ID)
+                    xtid = cb;
+                else if (cb->kind == ND_MEMBER && cb->member.template_id)
+                    xtid = cb->member.template_id;
+            }
+            if (xtid) {
+                int xna = xtid->template_id.nargs;
+                for (int i = 0; i < np && i < xna; i++) {
+                    Node *param = tmpl->template_decl.params[i];
+                    if (!param || param->kind != ND_PARAM) continue;
+                    if (!param->param.ty) continue;  /* type-param, not NTTP */
+                    if (!param->param.name) continue;
+                    Node *a = xtid->template_id.args[i];
+                    if (a && a->kind == ND_IDENT && a->ident.name)
+                        subst_map_add_tt(&deduced, param->param.name, a->ident.name);
+                }
+            }
+        }
+
         /* Dedup key: class + NUL + class-template-args (if any) +
          * NUL + member + NUL + member-template deduced types.
          *
-         * Including the class-template args is required for the
-         * gcc 4.8 is_a_helper<T>::cast<U> pattern: with T=cgraph_node
-         * vs T=varpool_node and the same U=symtab_node_def, the
-         * deduced map only carries U (T is the class template's
-         * parameter, not deduced from the in-class member's params).
-         * Without the class args in the key, the second class
-         * instantiation collides with the first → only one def
-         * emitted, the other call goes unresolved at link.
+         * Including the class-template args is required when a
+         * sibling member template inside a class template depends
+         * on the class's parameters but those don't appear in the
+         * member-template's own deduced args (e.g. helper<T>'s
+         * member m<U>() — distinct T values must produce distinct
+         * symbols even when called with the same U).
          * N4659 §17.7.1 [temp.inst]: each distinct argument set
          * (across BOTH heads) produces a distinct specialization. */
         char key[MAX_DEDUP_KEY];
@@ -2321,16 +2367,15 @@ void template_instantiate(Node *tu, Arena *arena) {
         if (mr->call_node && mr->call_node->call.callee) {
             Node *cb = mr->call_node->call.callee;
             cb->resolved_type = ft;
-            /* For unqualified explicit-template-args sibling calls
-             * (the cloned `traverse_noresize<Argument, Callback>(arg)`
-             * inside hash_table::traverse), reduce the callee from
-             * ND_TEMPLATE_ID to ND_IDENT with implicit_this set so
-             * codegen lowers via the standard class-method dispatch
-             * (mangling as `sf__hash_table_t_..._te___traverse_noresize_*`).
-             * Without this the default ND_TEMPLATE_ID emit prints the
-             * bare name and the link breaks. The ND_IDENT path is what
-             * the unqualified-no-template-args sibling case (gcc 4.8
-             * va_heap::reserve calling release(v)) already takes. */
+            /* For unqualified explicit-template-args sibling calls,
+             * reduce the callee from ND_TEMPLATE_ID to
+             * ND_IDENT(implicit_this) so codegen lowers via the
+             * standard class-method dispatch (mangling as
+             * sf__<class>_..._te___<member>_*). Without this, the
+             * default ND_TEMPLATE_ID emit prints the bare name and
+             * the link breaks. The ND_IDENT path is what the
+             * unqualified-no-template-args sibling case already
+             * takes. */
             if (cb->kind == ND_TEMPLATE_ID &&
                 cb->template_id.name &&
                 mr->enclosing_class) {
@@ -2353,12 +2398,10 @@ void template_instantiate(Node *tu, Arena *arena) {
          *
          * The enclosing must reach through the owning class region
          * first, then up to the namespace — anything else makes
-         * unqualified sibling-member calls miss. Pattern: gcc 4.8
-         * vec.h's `va_heap::reserve` body calls `release (v)`
-         * unqualified; the class region resolves it to
-         * `va_heap::release` so codegen mangles it correctly. With
-         * the namespace as direct enclosing, the lookup skips past
-         * the class and the call emits as bare `release`. */
+         * unqualified sibling-member calls miss. With the namespace
+         * as direct enclosing, an unqualified call to a sibling
+         * static member skips past the class and emits as a bare
+         * unmangled name. */
         if (cloned->func.body && !cloned->func.param_scope) {
             DeclarativeRegion *enc = NULL;
             if (mr->entry->owner_class &&

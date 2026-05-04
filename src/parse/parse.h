@@ -362,6 +362,17 @@ struct Node {
             Node *obj;
             Token *member;
             TokenKind op;
+            /* Explicit template-argument-list on a member name —
+             *   obj.method<X, Y>(args) / obj->method<X, Y>(args)
+             * N4659 §17.2 [temp.names]: this is a template-id that
+             * names a member function template. Carried separately
+             * because the resulting expression is still a member
+             * access (not a free template-id), but the args are
+             * needed by the instantiation pass to bind non-type
+             * template parameters (N4659 §17.1/4 [temp.param]) that
+             * deduction can't recover from the call args alone.
+             * NULL when there's no '<...>' after the member name. */
+            Node *template_id;
         } member;
 
         /* ND_SUBSCRIPT — N4659 §8.2.1 [expr.sub]

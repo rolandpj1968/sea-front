@@ -1036,6 +1036,7 @@ static Node *postfix_expr(Parser *p) {
              *   x.operator OP    (e.g. __t.operator->())
              *   x.~T()           (pseudo-destructor) */
             Token *member;
+            Node *member_tid = NULL;  /* explicit '<args>' on member */
             if (parser_at(p, TK_KW_OPERATOR)) {
                 member = parser_advance(p);
                 /* Consume the operator-symbol (one or two tokens). */
@@ -1113,7 +1114,7 @@ static Node *postfix_expr(Parser *p) {
                         }
                     }
                     if (looks_like_template_id)
-                        parse_template_id(p, member);
+                        member_tid = parse_template_id(p, member);
                 }
                 /* Qualified continuation through a class-template-id
                  * member access:
@@ -1153,6 +1154,7 @@ static Node *postfix_expr(Parser *p) {
             }
 
             node = new_member_node(p, node, member, op, tok);
+            node->member.template_id = member_tid;
             continue;
         }
 

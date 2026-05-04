@@ -394,6 +394,23 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
 
     case ND_IDENT:
         c->ident = n->ident;
+        /* Non-type template parameter substitution: when this ident
+         * names an NTTP whose binding was recorded via the TT-param
+         * slot (the slot is reused for any "name → Token" binding;
+         * TT-param uses appear in ND_QUALIFIED parts[0], so they
+         * never collide with bare-ident NTTP uses here). N4659
+         * §17.1/4 [temp.param] + §17.7.1 [temp.inst]. */
+        if (c->ident.name) {
+            Token *bound = subst_map_lookup_tt(map,
+                c->ident.name->loc, c->ident.name->len);
+            if (bound) {
+                c->ident.name = bound;
+                /* Clear cached resolution — the rewritten name maps
+                 * to a different decl which sema will re-resolve. */
+                c->ident.resolved_decl = NULL;
+                c->resolved_type = NULL;
+            }
+        }
         break;
 
     case ND_QUALIFIED:
@@ -518,6 +535,13 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
     case ND_MEMBER:
         c->member = n->member;
         c->member.obj = clone_node(n->member.obj, map, arena);
+        /* Clone any explicit template-id on the member name so its
+         * type/value args get substituted alongside the rest of the
+         * cloned expression. N4659 §17.2 [temp.names] +
+         * §17.7.1 [temp.inst]. */
+        if (n->member.template_id)
+            c->member.template_id = clone_node(n->member.template_id,
+                                               map, arena);
         break;
 
     case ND_SUBSCRIPT:
