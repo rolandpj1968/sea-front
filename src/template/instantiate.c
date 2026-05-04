@@ -840,12 +840,29 @@ static void collect_from_node(InstCollector *col, Node *n) {
          * static-method-this fix (#136) already mangles the call to
          * 'sf__A__release_*', but without this collection path the
          * member template was never instantiated → undefined symbol.
-         * Match by current class context + member name. */
+         * Match by current class context + member name.
+         *
+         * Also handles explicit-template-args calls: ND_TEMPLATE_ID
+         * callees with concrete (post-clone) args take this same
+         * path. Pattern: gcc 4.8 hash-table.h's
+         * `traverse_noresize<Argument, Callback>(argument)` from
+         * inside hash_table::traverse — Argument substitutes through
+         * the cloned body but Callback is a non-type template
+         * parameter (function pointer) that sea-front doesn't track,
+         * so the callee stays ND_TEMPLATE_ID with one TY_DEPENDENT
+         * placeholder. We dispatch on the bare name and let the
+         * member-template instantiation use whatever args we can
+         * deduce; the unsubstituted Callback ends up as a
+         * pass-through in the cloned body. */
         if (col->cur_class && col->cur_class->tag &&
-            n->call.callee && n->call.callee->kind == ND_IDENT &&
-            n->call.callee->ident.name) {
+            n->call.callee &&
+            (n->call.callee->kind == ND_IDENT ||
+             n->call.callee->kind == ND_TEMPLATE_ID)) {
             Token *cls = col->cur_class->tag;
-            Token *name = n->call.callee->ident.name;
+            Token *name = (n->call.callee->kind == ND_IDENT)
+                ? n->call.callee->ident.name
+                : n->call.callee->template_id.name;
+            if (!name) goto skip_sibling_member;
             TmplEntry *me = registry_find_member(col->reg,
                 cls->loc, cls->len, name->loc, name->len);
             if (me) {
@@ -872,6 +889,7 @@ static void collect_from_node(InstCollector *col, Node *n) {
                 col->member_count++;
             }
         }
+    skip_sibling_member: ;
         /* Member-access call 'obj.method(args)' / 'p->method(args)'
          * where method is a member template. N4659 §17.5.2 [temp.mem] +
          * §16.3.1.1 [over.match.call.general]. The receiver carries
@@ -2300,8 +2318,31 @@ void template_instantiate(Node *tu, Arena *arena) {
          * (class, member, args) calls can wire it onto their
          * callees too (see dedup-hit branch above). */
         Type *ft = func_type_from_func_def(arena, cloned);
-        if (mr->call_node && mr->call_node->call.callee)
-            mr->call_node->call.callee->resolved_type = ft;
+        if (mr->call_node && mr->call_node->call.callee) {
+            Node *cb = mr->call_node->call.callee;
+            cb->resolved_type = ft;
+            /* For unqualified explicit-template-args sibling calls
+             * (the cloned `traverse_noresize<Argument, Callback>(arg)`
+             * inside hash_table::traverse), reduce the callee from
+             * ND_TEMPLATE_ID to ND_IDENT with implicit_this set so
+             * codegen lowers via the standard class-method dispatch
+             * (mangling as `sf__hash_table_t_..._te___traverse_noresize_*`).
+             * Without this the default ND_TEMPLATE_ID emit prints the
+             * bare name and the link breaks. The ND_IDENT path is what
+             * the unqualified-no-template-args sibling case (gcc 4.8
+             * va_heap::reserve calling release(v)) already takes. */
+            if (cb->kind == ND_TEMPLATE_ID &&
+                cb->template_id.name &&
+                mr->enclosing_class) {
+                Token *bare = cb->template_id.name;
+                cb->kind = ND_IDENT;
+                cb->ident.name = bare;
+                cb->ident.implicit_this = true;
+                cb->ident.resolved_decl = NULL;
+                cb->ident.overload_set = NULL;
+                cb->ident.n_overloads = 0;
+            }
+        }
 
         /* Register in dedup set carrying the substituted TY_FUNC. */
         dedup_add(&ds, key, pos, ft);
