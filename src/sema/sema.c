@@ -863,12 +863,12 @@ static void visit_member(Sema *s, Node *n) {
          * this name (primary + partial specs) and prefer one whose
          * class body is non-empty AND matches the call-site args.
          *
-         * The gcc 4.8 vec.h pattern has an empty primary
-         * `template<class,class,class> struct vec { };` and a partial
-         * specialization `vec<T,A,vl_embed>` carrying every method;
-         * naively walking to the primary returns the empty body and
-         * the lookup misses methods like `last()`. N4659 §17.8.3.2
-         * [temp.class.spec.match]. */
+         * Common shape: an empty primary
+         * `template<class,class,class> struct C { };` paired with one
+         * or more populated partial specializations carrying every
+         * method. Naively walking to the primary returns the empty
+         * body and the lookup misses every member.
+         * N4659 §17.8.3.2 [temp.class.spec.match]. */
         if (!ot->class_region && !ot->class_def && ot->tag) {
             Declaration *cands[16];
             int n = lookup_overload_set_from(s->cur_scope,
@@ -888,8 +888,8 @@ static void visit_member(Sema *s, Node *n) {
                 /* Score: prefer specializations with members, then
                  * those whose template_id_node matches the call-site
                  * args. Without proper §17.8.3.2 matching this is a
-                 * heuristic — sufficient for vec.h's empty-primary +
-                 * vl_embed-partial pattern. */
+                 * heuristic — sufficient for the empty-primary +
+                 * populated-partial-spec shape. */
                 int score = 0;
                 if (inner->class_def.nmembers > 0) score += 10;
                 if (ity->template_id_node) score += 1;
@@ -948,11 +948,11 @@ static void visit_member(Sema *s, Node *n) {
     Declaration *d = lookup_in_scope(ot->class_region, m->loc, m->len);
     /* Class-template instance fallback: if the canonical class
      * (the primary template's region) doesn't have the member, try
-     * each specialization's region until one resolves. The empty
-     * primary `template<class,class,class> struct vec { };` plus
-     * a populated partial spec `vec<T,A,vl_embed>` is the gcc 4.8
-     * vec.h pattern — the canonical lookup hits the empty primary,
-     * misses every method, and a chained `outer.last().field` then
+     * each specialization's region until one resolves. An empty
+     * primary `template<class,class,class> struct C { };` paired
+     * with populated partial specializations is the shape that
+     * needs this — the canonical lookup hits the empty primary,
+     * misses every method, and any chained `obj.method().field`
      * propagates NULL up through the call.
      * N4659 §17.8.3.2 [temp.class.spec.match]. */
     if (!d && ot->tag && s->cur_scope) {
@@ -1127,11 +1127,11 @@ static void visit_subscript(Sema *s, Node *n) {
             /* If the looked-up operator[] came from a class-template
              * partial spec, the return type carries TY_DEPENDENT in
              * the spec's pattern variables. Substitute the call-site
-             * template-id args so the result is concrete (e.g. T&
-             * → ipa_agg_jump_function& → ipa_agg_jump_function after
-             * the ref-strip). Otherwise downstream `.field` access on
-             * the subscript result silently NULLs and any free
-             * function template called with that result emits bare. */
+             * template-id args so the result is concrete (T& → C& →
+             * C after the ref-strip). Otherwise downstream `.field`
+             * access on the subscript result silently NULLs and any
+             * free function template called with that result emits
+             * bare. */
             if (ret) ret = subst_member_type_with_class_args(s, ret, bt);
             if (ret && (ret->kind == TY_REF || ret->kind == TY_RVALREF) &&
                 ret->base)
@@ -1907,15 +1907,15 @@ static void visit(Sema *s, Node *n) {
                  * 'C::m', the lookup of `C` is class-name lookup —
                  * variables, functions, and enumerators of the same
                  * name are ignored. Prefer ENTITY_TAG / ENTITY_TYPE /
-                 * ENTITY_TEMPLATE; only fall back to general unqualified
-                 * lookup if none of those resolve. Pattern: gcc 4.8
-                 * tree-ssa-threadupdate.c declares
-                 *   static hash_table<redirection_data> redirection_data;
-                 * The variable shadows the struct name. Without this,
-                 * `redirection_data::hash(p)` resolves the leading
-                 * qualifier to the variable's type (hash_table) and
-                 * codegen mangles the call with hash_table's tag —
-                 * link fails. */
+                 * ENTITY_TEMPLATE; only fall back to general
+                 * unqualified lookup if none of those resolve. Real-
+                 * world shape (also legal C):
+                 *   struct C { static int hash(...); };
+                 *   static SomeOther C;   // variable shadows the tag
+                 *   ... C::hash(arg);    // class-name lookup wins
+                 * Without this, the leading qualifier resolves to the
+                 * variable's type and codegen mangles the call with
+                 * the wrong class tag. */
                 Declaration *ld = lookup_kind_from(s->cur_scope,
                     lead->loc, lead->len, ENTITY_TAG);
                 if (!ld)
