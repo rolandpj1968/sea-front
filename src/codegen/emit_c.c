@@ -995,13 +995,25 @@ static void hoist_temps_in_expr(Node *n) {
             /* Operator-overload rvalue: '(a op b).method()' where 'op'
              * is an overloaded binary/unary on struct operands. sema's
              * resolved_type is often NULL for this; infer from an
-             * operand. Pattern: gcc 4.8 gimple-fold.c '(a - b).sext(p)'. */
+             * operand. Pattern: gcc 4.8 gimple-fold.c '(a - b).sext(p)'.
+             * Exclude pointer dereference: '(*p).method()' has an
+             * lvalue receiver — '&(*p) == p' — and force-hoisting copies
+             * the entire struct via a stack temp. For vec<T,A,vl_embed>
+             * (which is a flexible-array-style container) the copy
+             * truncates the trailing data, so iterate(&copy, i, ...)
+             * reads garbage past the first element. N4659 §8.2.5
+             * [expr.ref] / §8.3.1 [expr.unary.op]. Pattern: gcc 4.8
+             * 'FOR_EACH_VEC_ELT (*level->class_shadowed, i, cb)'. */
             else if (k == ND_BINARY || k == ND_UNARY || k == ND_POSTFIX) {
-                Node *op = (k == ND_BINARY) ? obj->binary.lhs : obj->unary.operand;
-                Type *ty = obj->resolved_type;
-                if (!ty && op) ty = op->resolved_type;
-                if (ty && (ty->kind == TY_STRUCT || ty->kind == TY_UNION))
-                    hoist_emit_decl(obj);
+                bool is_deref = (k == ND_UNARY && obj->unary.op == TK_STAR);
+                if (!is_deref) {
+                    Node *op = (k == ND_BINARY) ? obj->binary.lhs
+                                                : obj->unary.operand;
+                    Type *ty = obj->resolved_type;
+                    if (!ty && op) ty = op->resolved_type;
+                    if (ty && (ty->kind == TY_STRUCT || ty->kind == TY_UNION))
+                        hoist_emit_decl(obj);
+                }
             }
             /* Ternary rvalue: '(c ? a : b).method()' where both
              * branches return struct. Pattern: gcc 4.8 tree-ssa-ccp.c
