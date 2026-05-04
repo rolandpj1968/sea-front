@@ -791,54 +791,21 @@ static Type *subst_member_type_with_class_args(Sema *s,
     Node *tmpl = tid->template_id.resolved_tmpl;
     if ((!tmpl || tmpl->kind != ND_TEMPLATE_DECL) &&
         tid->template_id.name && s->cur_scope) {
-        /* Find the PRIMARY template, not just any specialization.
-         * lookup_kind_from(ENTITY_TEMPLATE) returns the first match,
-         * which for vec.h can be a partial spec like
-         * `vec<T, va_gc, vl_ptr>` (1 named param). Using its 1-param
-         * head to bind tid's 3 args leaves A and L unbound, so they
-         * leak as TY_DEPENDENT through subst_type — symbols come out
-         * mangled as sf__vec_t_X_A_vl_embed_*.
-         *
-         * The primary is the one whose inner ND_CLASS_DEF Type has no
-         * template_id_node (partial specs do; the primary doesn't),
-         * with the most named params (covers the case where a forward
-         * declaration with unnamed params is registered before the
-         * primary). N4659 §17.6.4/9 [temp.arg.default] — defaults are
-         * declared on the primary. */
-        Declaration *cands[16];
-        int n_cands = lookup_overload_set_from(s->cur_scope,
+        tmpl = find_primary_template_in_scope(s->cur_scope,
             tid->template_id.name->loc,
-            tid->template_id.name->len, cands, 16);
-        int best_named = -1;
-        for (int i = 0; i < n_cands; i++) {
-            Declaration *cd = cands[i];
-            if (!cd || cd->entity != ENTITY_TEMPLATE ||
-                !cd->tmpl_node ||
-                cd->tmpl_node->kind != ND_TEMPLATE_DECL)
-                continue;
-            Node *inner = cd->tmpl_node->template_decl.decl;
-            if (!inner) continue;
-            /* Skip partial specs: their inner type carries a
-             * template_id_node; the primary's doesn't. */
-            Type *ity = (inner->kind == ND_CLASS_DEF) ?
-                inner->class_def.ty : NULL;
-            if (ity && ity->template_id_node) continue;
-            int np = cd->tmpl_node->template_decl.nparams;
-            int named = 0;
-            for (int k = 0; k < np; k++) {
-                Node *p = cd->tmpl_node->template_decl.params[k];
-                if (p && p->param.name) named++;
-            }
-            if (named > best_named) {
-                best_named = named;
-                tmpl = cd->tmpl_node;
-            }
-        }
+            tid->template_id.name->len);
     }
     if (!tmpl || tmpl->kind != ND_TEMPLATE_DECL) return member_ty;
     int nparams = tmpl->template_decl.nparams;
     int nargs   = tid->template_id.nargs;
     if (nparams == 0 || nargs == 0) return member_ty;
+    /* The picked template must accommodate every tid arg — otherwise
+     * we're keying a SubstMap from a partial spec's narrower head
+     * against a wider tid, leaving the trailing args unbound and
+     * leaking TY_DEPENDENT through subst_type. find_primary_template_
+     * in_scope should already prevent this; the check makes the
+     * invariant load-bearing instead of best-effort. */
+    if (nparams < nargs) return member_ty;
     SubstMap map = subst_map_new(s->arena, nparams);
     subst_map_bind_args(&map,
         tmpl->template_decl.params, nparams,

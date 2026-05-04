@@ -624,3 +624,51 @@ DeclarativeRegion *region_build_prototype(Node *func,
     }
     return ps;
 }
+
+Node *find_primary_template_in_scope(DeclarativeRegion *start,
+                                     const char *name, int name_len) {
+    if (!start || !name) return NULL;
+    Declaration *cands[16];
+    int n_cands = lookup_overload_set_from(start, name, name_len, cands, 16);
+    Node *best = NULL;
+    int best_score = -1;
+    for (int i = 0; i < n_cands; i++) {
+        Declaration *cd = cands[i];
+        if (!cd || cd->entity != ENTITY_TEMPLATE ||
+            !cd->tmpl_node ||
+            cd->tmpl_node->kind != ND_TEMPLATE_DECL)
+            continue;
+        Node *inner = cd->tmpl_node->template_decl.decl;
+        if (!inner) continue;
+        /* Primary: no template_id_node on inner declaration's type.
+         * Function templates have no inner type — they qualify too. */
+        Type *ity = NULL;
+        if (inner->kind == ND_CLASS_DEF)     ity = inner->class_def.ty;
+        else if (inner->kind == ND_VAR_DECL) ity = inner->var_decl.ty;
+        bool is_primary = false;
+        if (inner->kind == ND_FUNC_DEF || inner->kind == ND_FUNC_DECL)
+            is_primary = true;
+        else if (ity && !ity->template_id_node)
+            is_primary = true;
+        if (!is_primary) continue;
+        /* Score by named-param count + default-type count. The
+         * forward declaration `template<typename, typename, typename>
+         * struct vec;` has 3 unnamed params (score 0); the primary
+         * `template<typename T, typename A=va_heap, typename L=...>
+         * struct vec` has 3 named + 2 defaults (score 5). The score
+         * lets the latest declaration with merged defaults win. */
+        int np = cd->tmpl_node->template_decl.nparams;
+        int score = 0;
+        for (int k = 0; k < np; k++) {
+            Node *tp = cd->tmpl_node->template_decl.params[k];
+            if (!tp) continue;
+            if (tp->param.name) score++;
+            if (tp->param.default_type) score++;
+        }
+        if (score > best_score) {
+            best_score = score;
+            best = cd->tmpl_node;
+        }
+    }
+    return best;
+}

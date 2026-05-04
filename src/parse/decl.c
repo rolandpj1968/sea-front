@@ -2733,43 +2733,8 @@ Node *parse_template_id(Parser *p, Token *name) {
      * prefer the one with the most default_types populated — that's
      * the latest declaration in source order and carries merged
      * defaults. */
-    Declaration *decls[16];
-    int nd = lookup_overload_set_from(p->region, name->loc, name->len,
-                                       decls, 16);
-    Node *primary = NULL;
-    int primary_defaults = -1;
-    for (int i = 0; i < nd; i++) {
-        Declaration *cand = decls[i];
-        if (!cand || cand->entity != ENTITY_TEMPLATE ||
-            !cand->tmpl_node ||
-            cand->tmpl_node->kind != ND_TEMPLATE_DECL)
-            continue;
-        Node *inner = cand->tmpl_node->template_decl.decl;
-        if (!inner) continue;
-        Type *ity = NULL;
-        if (inner->kind == ND_CLASS_DEF)     ity = inner->class_def.ty;
-        else if (inner->kind == ND_VAR_DECL) ity = inner->var_decl.ty;
-        /* Primary: no template_id_node on inner type. For function
-         * templates there's no inner type; treat any func-template
-         * as primary. */
-        bool is_primary = false;
-        if (inner->kind == ND_FUNC_DEF || inner->kind == ND_FUNC_DECL)
-            is_primary = true;
-        else if (ity && !ity->template_id_node)
-            is_primary = true;
-        if (!is_primary) continue;
-        /* Score by how many default_types are populated. */
-        int ndef = 0;
-        int np = cand->tmpl_node->template_decl.nparams;
-        for (int k = 0; k < np; k++) {
-            Node *tp = cand->tmpl_node->template_decl.params[k];
-            if (tp && tp->param.default_type) ndef++;
-        }
-        if (ndef > primary_defaults) {
-            primary_defaults = ndef;
-            primary = cand->tmpl_node;
-        }
-    }
+    Node *primary = find_primary_template_in_scope(p->region,
+        name->loc, name->len);
 
     if (primary) {
         int np = primary->template_decl.nparams;

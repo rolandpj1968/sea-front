@@ -1621,6 +1621,28 @@ void region_add_base_raw(DeclarativeRegion *r, DeclarativeRegion *base,
 DeclarativeRegion *region_build_class(Node *class_def, Type *owner,
                                       DeclarativeRegion *enclosing,
                                       Arena *arena);
+
+/* Find the primary class/variable/function template named `name` in
+ * the scope chain starting at `start`. The primary is the
+ * ND_TEMPLATE_DECL whose inner declaration is NOT a partial / full
+ * specialization — i.e. its inner type carries no template_id_node
+ * (function templates, which have no inner Type, qualify if their
+ * head has at least one named parameter). Among multiple primary
+ * candidates (forward-decl + definition), prefer the one with the
+ * most named parameters and the most populated default_type entries.
+ *
+ * Returns NULL if no primary is in scope. Used by sema substitution
+ * and parse-time default-arg expansion — sites that need the
+ * primary's parameter NAMES to key a SubstMap. Picking any other
+ * specialization (a partial spec with fewer params) silently leaves
+ * extra args of the call site unbound, leaking TY_DEPENDENT through
+ * subst_type into mangled symbols.
+ *
+ * N4659 §17.6.4/9 [temp.arg.default] — defaults declared on the
+ * primary; §17.8.3 [temp.class.spec] — partial specs are distinct
+ * templates from the primary. */
+Node *find_primary_template_in_scope(DeclarativeRegion *start,
+                                     const char *name, int name_len);
 DeclarativeRegion *region_build_prototype(Node *func,
                                            DeclarativeRegion *enclosing,
                                            Arena *arena);
