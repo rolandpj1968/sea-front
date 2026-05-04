@@ -1722,12 +1722,32 @@ Node *parse_declaration(Parser *p) {
     if (parser_at(p, TK_KW_ASM)) {
         parser_advance(p);
         parser_expect(p, TK_LPAREN);
-        if (parser_at(p, TK_STR)) {
-            decl->var_decl.asm_name = parser_peek(p);
-            decl->var_decl.storage_flags |= DECL_C_LINKAGE;
+        /* Walk consecutive string-literal tokens. C/C++ adjacent
+         * string-literal concatenation (N4659 §5.13.5/13 [lex.string])
+         * applies inside __asm__ too. glibc's <stdlib.h> uses
+         *   __asm__ ("" "__isoc23_strtoul")
+         * to ABI-version a libc symbol; the empty leading literal
+         * tricks single-token capture into emitting NOTHING. Keep
+         * the LAST non-empty literal as the asm-rename target —
+         * SHORTCUT (ours, not the standard): we do not emit a true
+         * concatenation, so 'asm("a" "b")' would lose the "a". The
+         * real-world pattern (single non-empty name, optional empty
+         * decoration) is the only one we've encountered in glibc /
+         * gcc 4.8 source.
+         * TODO(seafront#asm-concat): full concatenation support. */
+        Token *picked = NULL;
+        while (parser_at(p, TK_STR)) {
+            Token *t = parser_peek(p);
+            /* len >= 2 means at least the surrounding quotes; >2
+             * means non-empty payload. */
+            if (!picked || t->len > 2) picked = t;
             parser_advance(p);
         }
-        /* Tolerate any leftover tokens before the ')' (rare). */
+        if (picked) {
+            decl->var_decl.asm_name = picked;
+            decl->var_decl.storage_flags |= DECL_C_LINKAGE;
+        }
+        /* Tolerate any leftover tokens before the ')'. */
         while (!parser_at_eof(p) && !parser_at(p, TK_RPAREN))
             parser_advance(p);
         parser_expect(p, TK_RPAREN);
