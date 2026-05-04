@@ -942,6 +942,32 @@ static void visit_member(Sema *s, Node *n) {
      * stops at the class — it does NOT climb out to the
      * enclosing namespace. */
     Declaration *d = lookup_in_scope(ot->class_region, m->loc, m->len);
+    /* Class-template instance fallback: if the canonical class
+     * (the primary template's region) doesn't have the member, try
+     * each specialization's region until one resolves. The empty
+     * primary `template<class,class,class> struct vec { };` plus
+     * a populated partial spec `vec<T,A,vl_embed>` is the gcc 4.8
+     * vec.h pattern — the canonical lookup hits the empty primary,
+     * misses every method, and a chained `outer.last().field` then
+     * propagates NULL up through the call.
+     * N4659 §17.8.3.2 [temp.class.spec.match]. */
+    if (!d && ot->tag && s->cur_scope) {
+        Declaration *cands[16];
+        int n_cands = lookup_overload_set_from(s->cur_scope,
+            ot->tag->loc, ot->tag->len, cands, 16);
+        for (int i = 0; i < n_cands && !d; i++) {
+            Declaration *cd = cands[i];
+            if (!cd || cd->entity != ENTITY_TEMPLATE ||
+                !cd->tmpl_node ||
+                cd->tmpl_node->kind != ND_TEMPLATE_DECL)
+                continue;
+            Node *inner = cd->tmpl_node->template_decl.decl;
+            if (!inner || inner->kind != ND_CLASS_DEF) continue;
+            Type *ity = inner->class_def.ty;
+            if (!ity || !ity->class_region) continue;
+            d = lookup_in_scope(ity->class_region, m->loc, m->len);
+        }
+    }
     if (d && d->type)
         n->resolved_type = subst_member_type_with_class_args(
             s, d->type, call_site_ty);
