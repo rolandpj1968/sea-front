@@ -1643,37 +1643,6 @@ static Node *build_template_id_from_deduced(Sema *s, Token *tname,
 }
 
 static void visit_call(Sema *s, Node *n) {
-    {
-        const char *want = getenv("SEA_DEBUG_CALL_NAME");
-        if (want && n->call.callee) {
-            Token *cn = NULL;
-            int kind = n->call.callee->kind;
-            int nargs = 0;
-            if (kind == ND_IDENT)
-                cn = n->call.callee->ident.name;
-            else if (kind == ND_TEMPLATE_ID) {
-                cn = n->call.callee->template_id.name;
-                nargs = n->call.callee->template_id.nargs;
-            }
-            if (cn && cn->len == (int)strlen(want) &&
-                memcmp(cn->loc, want, cn->len) == 0) {
-                fprintf(stderr, "[call] '%s' callee.kind=%d tid_nargs=%d\n",
-                    want, kind, nargs);
-                if (kind == ND_TEMPLATE_ID) {
-                    Node *tid = n->call.callee;
-                    for (int i = 0; i < tid->template_id.nargs; i++) {
-                        Node *a = tid->template_id.args[i];
-                        Type *aty = (a && a->kind == ND_VAR_DECL) ?
-                            a->var_decl.ty : NULL;
-                        fprintf(stderr, "  arg[%d] ty.kind=%d tag='%.*s'\n",
-                            i, aty ? aty->kind : -1,
-                            aty && aty->tag ? aty->tag->len : 0,
-                            aty && aty->tag ? aty->tag->loc : "");
-                    }
-                }
-            }
-        }
-    }
     visit(s, n->call.callee);
     for (int i = 0; i < n->call.nargs; i++)
         visit(s, n->call.args[i]);

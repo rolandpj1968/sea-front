@@ -4186,28 +4186,6 @@ static void emit_expr(Node *n) {
                     for (int i = 0; i < na; i++)
                         at[i] = rd_fty->params[i];
                 }
-                if (getenv("SF_DBG_CALL")) {
-                    Token *nm = n->call.callee->ident.name;
-                    if (nm && nm->len == 9 && memcmp(nm->loc, "gt_pch_nx", 9) == 0 && na == 3) {
-                        fprintf(stderr, "DBG call gt_pch_nx na=3 arg0.kind=%d",
-                            n->call.args[0] ? n->call.args[0]->kind : -1);
-                        /* Walk into arg[0]. */
-                        Node *a = n->call.args[0];
-                        int depth = 0;
-                        while (a && depth < 6) {
-                            fprintf(stderr, " | d=%d kind=%d rt=%p",
-                                depth, a->kind, (void*)a->resolved_type);
-                            if (a->resolved_type)
-                                fprintf(stderr, "(tk=%d)", a->resolved_type->kind);
-                            if (a->kind == ND_UNARY) a = a->unary.operand;
-                            else if (a->kind == ND_SUBSCRIPT) a = a->subscript.base;
-                            else if (a->kind == ND_CALL) a = a->call.callee;
-                            else break;
-                            depth++;
-                        }
-                        fprintf(stderr, "\n");
-                    }
-                }
                 /* Prefer the resolved decl's PARAM types over the call's
                  * ARG types when computing the mangle suffix. This
                  * keeps the call's mangled name in sync with the def's
