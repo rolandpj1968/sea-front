@@ -4870,6 +4870,79 @@ static void emit_var_decl_inner(Node *n) {
             return;
         }
     }
+    /* Pointer-to-array / array-of-pointer-to-array — N4659 §11.3
+     * [dcl.meaning]: C declarator syntax interleaves '*' with the
+     * name. Pattern shapes (any number of outer-array layers + one
+     * pointer + any number of inner-array layers):
+     *   T (*name)[N]                 — pointer to array of N T's
+     *   T (*name[M])[N]              — array of M pointers, each to T[N]
+     *   T (*name[M1][M2])[N1][N2]    — generalized
+     * Without this branch the generic emit_type collapses both array
+     * layers and the pointer to '**', losing the inner array bound.
+     * Real-world bite: gcc 4.8 ira-int.h
+     *   move_table *x_ira_register_move_cost[MAX_MACHINE_MODE];
+     * with 'typedef unsigned short move_table[N_REG_CLASSES]' — the
+     * indexing 'x_ira_register_move_cost[mode][cl1][cl2]' is layout-
+     * dependent on the inner [N_REG_CLASSES] dimension.
+     *
+     * Detect: zero-or-more leading TY_ARRAY, then TY_PTR, then one-or-
+     * more TY_ARRAY, then a non-array/non-ptr element. */
+    if (ty && n->var_decl.name) {
+        Type *t = ty;
+        Type *outer_dims_head = NULL;
+        Type *outer_dims_tail = NULL;
+        int  outer_count = 0;
+        while (t && t->kind == TY_ARRAY) {
+            if (!outer_dims_head) outer_dims_head = t;
+            outer_dims_tail = t;
+            outer_count++;
+            t = t->base;
+        }
+        if (t && t->kind == TY_PTR && t->base && t->base->kind == TY_ARRAY) {
+            Type *inner_dims_head = t->base;
+            Type *elem = inner_dims_head;
+            while (elem && elem->kind == TY_ARRAY) elem = elem->base;
+            if (elem && elem->kind != TY_ARRAY && elem->kind != TY_PTR) {
+                emit_type(elem);
+                fputs(" (*", stdout);
+                fprintf(stdout, "%.*s", n->var_decl.name->len,
+                        n->var_decl.name->loc);
+                /* Outer array dims (outermost-first = source order). */
+                for (Type *d = outer_dims_head; d && d->kind == TY_ARRAY;
+                     d = d->base) {
+                    if (d->array_len >= 0)
+                        fprintf(stdout, "[%d]", d->array_len);
+                    else if (d->array_size_expr) {
+                        fputc('[', stdout);
+                        emit_expr(d->array_size_expr);
+                        fputc(']', stdout);
+                    } else {
+                        fputs("[]", stdout);
+                    }
+                }
+                fputs(")", stdout);
+                /* Inner array dims (the ones the pointer addresses). */
+                for (Type *d = inner_dims_head; d && d->kind == TY_ARRAY;
+                     d = d->base) {
+                    if (d->array_len >= 0)
+                        fprintf(stdout, "[%d]", d->array_len);
+                    else if (d->array_size_expr) {
+                        fputc('[', stdout);
+                        emit_expr(d->array_size_expr);
+                        fputc(']', stdout);
+                    } else {
+                        fputs("[]", stdout);
+                    }
+                }
+                if (n->var_decl.init) {
+                    fputs(" = ", stdout);
+                    emit_expr(n->var_decl.init);
+                }
+                (void)outer_dims_tail; (void)outer_count;
+                return;
+            }
+        }
+    }
     if (ty && ty->kind == TY_ARRAY) {
         /* Multi-dim arrays: 'T name[N1][N2]'. Walk the TY_ARRAY chain
          * to the INNERMOST element type, emit that, then emit name
