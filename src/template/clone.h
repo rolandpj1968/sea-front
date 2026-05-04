@@ -48,6 +48,18 @@ SubstMap subst_map_new(Arena *arena, int capacity);
 SubstMap subst_map_new_with_registry(Arena *arena, int capacity,
                                      TmplRegistry *reg);
 void     subst_map_add(SubstMap *m, Token *param_name, Type *concrete_type);
+/* Bulk-bind: pair the leading positions of `params[]` (a template's
+ * parameter Nodes) with `args[]` (a template-id's argument Nodes) and
+ * add each (param.name, args[i].var_decl.ty) entry to the map. Loops
+ * for min(nparams, nargs) positions. Skips positions where the param
+ * has no name (non-type / template-template params) or the arg
+ * doesn't carry a Type. Helper for the explicit-args step of
+ * SubstMap construction at parse-time default expansion, sema member-
+ * access substitution, and similar sites — does NOT handle defaults,
+ * TT-bindings, or partial-spec pattern unification (callers that need
+ * those add them on top). */
+void     subst_map_bind_args(SubstMap *m, Node **params, int nparams,
+                              Node **args, int nargs);
 /* Bind a template-template parameter name to a concrete class-template
  * name. Used at class-instantiation time when the template's i-th param
  * is a TT-param and the i-th usage arg names a class template. */

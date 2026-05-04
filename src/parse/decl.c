@@ -2775,14 +2775,9 @@ Node *parse_template_id(Parser *p, Token *name) {
         int np = primary->template_decl.nparams;
         if (args.len < np) {
             SubstMap map = subst_map_new(p->arena, np > 0 ? np : 1);
-            for (int i = 0; i < args.len && i < np; i++) {
-                Node *tp = primary->template_decl.params[i];
-                Node *arg = (Node *)args.data[i];
-                if (!tp || !tp->param.name) continue;
-                Type *at = (arg && arg->kind == ND_VAR_DECL)
-                    ? arg->var_decl.ty : NULL;
-                if (at) subst_map_add(&map, tp->param.name, at);
-            }
+            subst_map_bind_args(&map,
+                primary->template_decl.params, np,
+                (Node **)args.data, args.len);
             for (int i = args.len; i < np; i++) {
                 Node *tp = primary->template_decl.params[i];
                 if (!tp || !tp->param.default_type) break;

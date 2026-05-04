@@ -1912,3 +1912,30 @@ bool types_equivalent(Type *a, Type *b) {
                a->is_volatile == b->is_volatile;
     }
 }
+
+Node *find_class_def_in_tu(Node *tu, Type *class_ty) {
+    if (!tu || tu->kind != ND_TRANSLATION_UNIT || !class_ty) return NULL;
+    for (int i = 0; i < tu->tu.ndecls; i++) {
+        Node *d = tu->tu.decls[i];
+        if (!d || d->kind != ND_CLASS_DEF) continue;
+        if (types_equivalent(d->class_def.ty, class_ty)) return d;
+    }
+    return NULL;
+}
+
+Type *func_type_from_func_def(Arena *arena, Node *fn) {
+    if (!fn || (fn->kind != ND_FUNC_DEF && fn->kind != ND_FUNC_DECL))
+        return NULL;
+    Type *ft = arena_alloc(arena, sizeof(Type));
+    ft->kind = TY_FUNC;
+    ft->ret = fn->func.ret_ty;
+    ft->is_variadic = fn->func.is_variadic;
+    int np = fn->func.nparams;
+    if (np > 0) {
+        ft->params = arena_alloc(arena, np * sizeof(Type *));
+        for (int i = 0; i < np; i++)
+            ft->params[i] = fn->func.params[i]->param.ty;
+    }
+    ft->nparams = np;
+    return ft;
+}

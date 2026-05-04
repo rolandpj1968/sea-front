@@ -42,6 +42,18 @@ void subst_map_add(SubstMap *m, Token *param_name, Type *concrete_type) {
     m->nentries++;
 }
 
+void subst_map_bind_args(SubstMap *m, Node **params, int nparams,
+                         Node **args, int nargs) {
+    int n = nparams < nargs ? nparams : nargs;
+    for (int i = 0; i < n; i++) {
+        Node *p = params ? params[i] : NULL;
+        Node *a = args   ? args[i]   : NULL;
+        if (!p || !p->param.name) continue;
+        Type *aty = (a && a->kind == ND_VAR_DECL) ? a->var_decl.ty : NULL;
+        if (aty) subst_map_add(m, p->param.name, aty);
+    }
+}
+
 void subst_map_add_tt(SubstMap *m, Token *param_name, Token *bound_name) {
     if (m->nentries >= m->capacity) return;
     m->entries[m->nentries].param_name = param_name;

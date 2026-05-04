@@ -1493,6 +1493,22 @@ Type *new_func_type(Parser *p, Type *ret, Type **params, int nparams, bool varia
  * codegen dedup and sema overload resolution. */
 bool types_equivalent(Type *a, Type *b);
 
+/* Find the ND_CLASS_DEF in `tu` whose Type is structurally equivalent
+ * to `class_ty` (matched via types_equivalent — same tag + same
+ * template_args). Returns NULL if no match. Used when a Type copy
+ * lacks class_def/class_region but a populated one exists in the TU
+ * (template instantiation produces shared Type pointers, but typedef
+ * and method-return paths can carry stripped copies). */
+Node *find_class_def_in_tu(Node *tu, Type *class_ty);
+
+/* Build a TY_FUNC from an ND_FUNC_DEF / ND_FUNC_DECL — copies ret_ty,
+ * params[].param.ty, nparams, and is_variadic onto a new Type. Used
+ * when a method lookup yields a function Node directly and the caller
+ * needs a Type* for downstream handling (visit_call's ret-type read,
+ * member-template instantiation publishing the substituted signature).
+ * Returns NULL for non-function inputs. */
+Type *func_type_from_func_def(Arena *arena, Node *fn);
+
 /* Check if current token starts a declaration (type-specifier keyword
  * or, with name lookup, a user-defined type-name) */
 bool parser_at_type_specifier(Parser *p);

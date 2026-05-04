@@ -1994,21 +1994,13 @@ static bool method_returns_ref(Type *class_type, Token *name) {
  * instantiated ND_CLASS_DEF sits in the TU and is identifiable by
  * (tag, template_args). Returns NULL if no match.
  *
- * SHORTCUT (ours, not the standard): template_args match by Type*
- * identity — fine because the instantiation pass shares Type* for
- * the same concrete args, but would miss a logically-equal arg
- * constructed from a different pointer. */
+ * Templates only — bails when class_type has no template_args so that
+ * accidental misuse with a plain class falls through to the caller's
+ * non-template fallback (find_class_def_by_tag_only). Shared lookup
+ * machinery lives on the parse-side find_class_def_in_tu. */
 static Node *find_class_def_by_tag_args(Type *class_type) {
-    if (!g_tu || !class_type || !class_type->tag ||
-        class_type->n_template_args <= 0)
-        return NULL;
-    for (int i = 0; i < g_tu->tu.ndecls; i++) {
-        Node *d = g_tu->tu.decls[i];
-        if (!d || d->kind != ND_CLASS_DEF) continue;
-        Type *t = d->class_def.ty;
-        if (same_template_instantiation(t, class_type)) return d;
-    }
-    return NULL;
+    if (!class_type || class_type->n_template_args <= 0) return NULL;
+    return find_class_def_in_tu(g_tu, class_type);
 }
 
 /* For plain (non-template) classes: walk the TU looking for the

@@ -803,14 +803,9 @@ static Type *subst_member_type_with_class_args(Sema *s,
     int nargs   = tid->template_id.nargs;
     if (nparams == 0 || nargs == 0) return member_ty;
     SubstMap map = subst_map_new(s->arena, nparams);
-    int n = nargs < nparams ? nargs : nparams;
-    for (int i = 0; i < n; i++) {
-        Node *p = tmpl->template_decl.params[i];
-        Node *a = tid->template_id.args[i];
-        if (!p || !p->param.name) continue;
-        Type *aty = (a && a->kind == ND_VAR_DECL) ? a->var_decl.ty : NULL;
-        if (aty) subst_map_add(&map, p->param.name, aty);
-    }
+    subst_map_bind_args(&map,
+        tmpl->template_decl.params, nparams,
+        tid->template_id.args, nargs);
     if (map.nentries == 0) return member_ty;
     return subst_type(member_ty, &map, s->arena);
 }
@@ -914,29 +909,17 @@ static void visit_member(Sema *s, Node *n) {
                     cmn = cm->var_decl.name; cmt = cm->var_decl.ty;
                 } else if (cm->kind == ND_FUNC_DEF) {
                     cmn = cm->func.name;
-                    /* Synthesize a TY_FUNC for the method so callers
-                     * (visit_call → ct->ret) can read the return type.
-                     * Without this, `outer.last()` on a class-template
-                     * fallback path leaves resolved_type=NULL and any
-                     * subsequent `.field` access on the call result
-                     * silently drops out — overload resolution for a
-                     * containing call sees a NULL arg-type and fails
-                     * to rewrite the callee to ND_TEMPLATE_ID, so the
-                     * free function template never gets instantiated.
-                     * N4659 §17.5.2 [temp.mem] / §8.2.5 [expr.ref]. */
-                    Type *ft = arena_alloc(s->arena, sizeof(Type));
-                    memset(ft, 0, sizeof(*ft));
-                    ft->kind = TY_FUNC;
-                    ft->ret = cm->func.ret_ty;
-                    int np = cm->func.nparams;
-                    if (np > 0) {
-                        ft->params = arena_alloc(s->arena,
-                            np * sizeof(Type *));
-                        for (int i = 0; i < np; i++)
-                            ft->params[i] = cm->func.params[i]->param.ty;
-                    }
-                    ft->nparams = np;
-                    cmt = ft;
+                    /* Synthesize a TY_FUNC so callers (visit_call →
+                     * ct->ret) can read the return type. Without this,
+                     * `outer.last()` on a class-template fallback path
+                     * leaves resolved_type=NULL, any subsequent
+                     * `.field` access silently drops out, and overload
+                     * resolution at a containing call sees NULL
+                     * arg-types and skips the rewrite to ND_TEMPLATE_ID
+                     * so the free function template is never
+                     * instantiated. N4659 §17.5.2 [temp.mem] / §8.2.5
+                     * [expr.ref]. */
+                    cmt = func_type_from_func_def(s->arena, cm);
                 }
                 if (cmn && tokens_equal(cmn, m)) {
                     if (cmt)
@@ -966,22 +949,6 @@ static void visit_member(Sema *s, Node *n) {
         n->is_type_dependent = true;
 }
 
-/* Look for an ND_CLASS_DEF in the TU whose Type matches class_ty
- * by tag + template_args (structural). Template instantiation /
- * cloning can leave a Type* copy without class_def populated even
- * though a real one exists in the TU — find it the explicit way.
- * Returns the Node's class_def.ty (which has class_def hooked up). */
-static Node *find_class_def_node_by_tag_args(Node *tu, Type *class_ty) {
-    if (!tu || !class_ty || !class_ty->tag) return NULL;
-    for (int i = 0; i < tu->tu.ndecls; i++) {
-        Node *d = tu->tu.decls[i];
-        if (!d || d->kind != ND_CLASS_DEF) continue;
-        Type *t = d->class_def.ty;
-        if (types_equivalent(t, class_ty)) return d;
-    }
-    return NULL;
-}
-
 /* Look up a class operator method by token-suffix string (e.g. "+",
  * "-", "==", "!=") and return its declared return type — N4659
  * §16.5 [over.oper]. Used by visit_binary so that 'a op b' on
@@ -996,7 +963,7 @@ static Type *find_class_operator_return_type(Sema *s, Type *class_ty,
     if (!class_ty || !op) return NULL;
     Node *cd = class_ty->class_def;
     if (!cd && s && s->tu) {
-        Node *d = find_class_def_node_by_tag_args(s->tu, class_ty);
+        Node *d = find_class_def_in_tu(s->tu, class_ty);
         if (d) cd = d;
     }
     if (!cd) return NULL;
@@ -1051,7 +1018,7 @@ static Node *find_class_operator_subscript(Sema *s, Type *class_ty) {
     if (!class_ty) return NULL;
     Node *cd = class_ty->class_def;
     if (!cd && s && s->tu) {
-        Node *d = find_class_def_node_by_tag_args(s->tu, class_ty);
+        Node *d = find_class_def_in_tu(s->tu, class_ty);
         if (d) cd = d;
     }
     if (!cd) return NULL;
@@ -2069,13 +2036,9 @@ static void canonicalize_type(Type *ty, TmplIdx *idx, Arena *arena) {
     /* Build a SubstMap from the explicit args so 'A::default_layout'-
      * style defaults can resolve against earlier bindings. */
     SubstMap map = subst_map_new(arena, nparams > 0 ? nparams : 1);
-    for (int i = 0; i < nargs; i++) {
-        Node *p = tmpl->template_decl.params[i];
-        Node *a = tid->template_id.args[i];
-        if (!p || !p->param.name) continue;
-        Type *aty = (a && a->kind == ND_VAR_DECL) ? a->var_decl.ty : NULL;
-        if (aty) subst_map_add(&map, p->param.name, aty);
-    }
+    subst_map_bind_args(&map,
+        tmpl->template_decl.params, nparams,
+        tid->template_id.args, nargs);
     /* Materialize defaults. */
     Node **new_args = arena_alloc(arena, nparams * sizeof(Node *));
     Type **new_targs = arena_alloc(arena, nparams * sizeof(Type *));

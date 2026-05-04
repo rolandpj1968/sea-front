@@ -2280,20 +2280,7 @@ void template_instantiate(Node *tu, Arena *arena) {
          * the same TY_FUNC as the dedup value so subsequent same-
          * (class, member, args) calls can wire it onto their
          * callees too (see dedup-hit branch above). */
-        Type *ft = arena_alloc(arena, sizeof(Type));
-        ft->kind = TY_FUNC;
-        ft->ret = cloned->func.ret_ty;
-        {
-            int cnp = cloned->func.nparams;
-            Type **cparams = NULL;
-            if (cnp > 0) {
-                cparams = arena_alloc(arena, cnp * sizeof(Type *));
-                for (int i = 0; i < cnp; i++)
-                    cparams[i] = cloned->func.params[i]->param.ty;
-            }
-            ft->params = cparams;
-            ft->nparams = cnp;
-        }
+        Type *ft = func_type_from_func_def(arena, cloned);
         if (mr->call_node && mr->call_node->call.callee)
             mr->call_node->call.callee->resolved_type = ft;
 
