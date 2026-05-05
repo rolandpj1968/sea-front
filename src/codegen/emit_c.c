@@ -1024,8 +1024,8 @@ static void hoist_temps_in_expr(Node *n, bool in_shortcircuit) {
         /* The two arms are conditionally evaluated — propagate the
          * defer-assignment flag so any hoist inside them defers. */
         hoist_temps_in_expr(n->ternary.cond, in_shortcircuit);
-        hoist_temps_in_expr(n->ternary.then_, /*in_short*/ true);
-        hoist_temps_in_expr(n->ternary.else_, /*in_short*/ true);
+        hoist_temps_in_expr(n->ternary.then_, /*in_shortcircuit=*/true);
+        hoist_temps_in_expr(n->ternary.else_, /*in_shortcircuit=*/true);
         return;
     case ND_MEMBER:
         hoist_temps_in_expr(n->member.obj, in_shortcircuit);
@@ -1137,19 +1137,19 @@ static void hoist_stmt_temps(Node *s) {
         if (direct_init) {
             /* Recurse into the call's children only — don't hoist
              * the call itself. */
-            if (init->call.callee) hoist_temps_in_expr(init->call.callee, false);
+            if (init->call.callee) hoist_temps_in_expr(init->call.callee, /*in_shortcircuit=*/false);
             for (int i = 0; i < init->call.nargs; i++)
-                hoist_temps_in_expr(init->call.args[i], false);
+                hoist_temps_in_expr(init->call.args[i], /*in_shortcircuit=*/false);
         } else {
-            hoist_temps_in_expr(init, false);
+            hoist_temps_in_expr(init, /*in_shortcircuit=*/false);
         }
         return;
     }
     case ND_EXPR_STMT:
-        hoist_temps_in_expr(s->expr_stmt.expr, false);
+        hoist_temps_in_expr(s->expr_stmt.expr, /*in_shortcircuit=*/false);
         return;
     case ND_RETURN:
-        hoist_temps_in_expr(s->ret.expr, false);
+        hoist_temps_in_expr(s->ret.expr, /*in_shortcircuit=*/false);
         return;
     case ND_CASE:
     case ND_DEFAULT:
@@ -5935,7 +5935,7 @@ static void emit_stmt(Node *n) {
             /* Hoist temps from the cond (inside the mini-block,
              * so their decls are emitted at the mini-block's
              * indent level). */
-            hoist_temps_in_expr(n->if_.cond, false);
+            hoist_temps_in_expr(n->if_.cond, /*in_shortcircuit=*/false);
 
             /* Assign the cond into the synthetic. */
             emit_indent();
@@ -6051,7 +6051,7 @@ static void emit_stmt(Node *n) {
             emit_indent();
             emit_open_brace();
             int saved_nlive = g_cf.nlive;
-            hoist_temps_in_expr(n->while_.cond, false);
+            hoist_temps_in_expr(n->while_.cond, /*in_shortcircuit=*/false);
             emit_indent();
             fprintf(stdout, "%s = ", cond_name);
             emit_expr(n->while_.cond);
@@ -6145,7 +6145,7 @@ static void emit_stmt(Node *n) {
             emit_indent();
             emit_open_brace();
             int saved_nlive = g_cf.nlive;
-            hoist_temps_in_expr(n->do_.cond, false);
+            hoist_temps_in_expr(n->do_.cond, /*in_shortcircuit=*/false);
             emit_indent();
             fprintf(stdout, "%s = ", cond_name);
             emit_expr(n->do_.cond);
@@ -6299,7 +6299,7 @@ static void emit_stmt(Node *n) {
             emit_indent();
             emit_open_brace();
             int saved_nlive = g_cf.nlive;
-            hoist_temps_in_expr(n->for_.cond, false);
+            hoist_temps_in_expr(n->for_.cond, /*in_shortcircuit=*/false);
             emit_indent();
             fprintf(stdout, "%s = ", cond_name);
             emit_expr(n->for_.cond);
