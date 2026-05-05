@@ -52,8 +52,28 @@ for src in $files; do
     base=$WORK/t$n_total
     [ "$SEA_DG_VERBOSE" = "1" ] && echo "RUN  $rel" >&2
 
-    # Step 1: preprocess (host g++ -E, c++03 mode).
-    if ! timeout "$SEA_DG_TIMEOUT" g++ -E -std=c++03 -w "$src" -o "$base.i" \
+    # Step 1: preprocess. Point libstdc++ search path at gcc 4.8's
+    # own headers (modern host libstdc++ uses C++14+ builtins like
+    # __is_trivially_copyable that gcc 4.8's frontend rejects), and
+    # define-out a few modern glibc attribute decorators that the 4.8
+    # frontend doesn't recognise (__malloc__ with arguments, etc.).
+    # The aim is to make the preprocessed input look as much like
+    # gcc-4.8-era as possible, so any cc1plus failure thereafter
+    # reflects a real frontend bug rather than host-environment drift.
+    GCC48_LIBSTDCXX_SRC="$HOME/src/sea-front-deps/gcc-4.8.5/libstdc++-v3/include"
+    GCC48_LIBSTDCXX_BUILD="$HOME/src/sea-front-deps/gcc-4.8.5/build-sf/x86_64-unknown-linux-gnu/libstdc++-v3/include"
+    GCC48_LIBSUPCXX="$HOME/src/sea-front-deps/gcc-4.8.5/libstdc++-v3/libsupc++"
+    PP_INC="-nostdinc++ \
+        -I$GCC48_LIBSTDCXX_BUILD/x86_64-unknown-linux-gnu \
+        -I$GCC48_LIBSTDCXX_BUILD \
+        -I$GCC48_LIBSTDCXX_SRC \
+        -I$GCC48_LIBSTDCXX_SRC/c_global \
+        -I$GCC48_LIBSUPCXX"
+    PP_DEFS="-D__attribute_malloc__= -D__attr_dealloc_fclose= -D__attr_dealloc_free= \
+        -D__attr_access(x)= -D__fortified_attr_access(a,b,c)= -D__attribute_alloc_size__(...)="
+    if ! timeout "$SEA_DG_TIMEOUT" g++ -E -std=c++03 -w \
+            $PP_INC $PP_DEFS \
+            "$src" -o "$base.i" \
             > "$WORK/out" 2> "$WORK/err"; then
         echo "E_FRONT  $rel"
         n_efront=$((n_efront + 1))
