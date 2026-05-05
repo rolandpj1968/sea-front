@@ -810,8 +810,11 @@ static void hoist_emit_decl(Node *call, bool in_shortcircuit) {
             int na = collect_call_arg_types(call->call.args,
                                              call->call.nargs, &at);
             Type **pty = NULL;
-            int np = resolve_overload(call->resolved_type, NULL, true,
-                                       at, na, false, &pty, NULL);
+            int np = resolve_overload(call->resolved_type, /*name=*/NULL,
+                                       /*is_ctor=*/true,
+                                       at, na,
+                                       /*receiver_is_const=*/false,
+                                       &pty, /*out_best=*/NULL);
             if (np < 0) {
                 /* No matching ctor — skip ctor call. For plain C
                  * structs whose has_default_ctor was transitively
@@ -1753,11 +1756,11 @@ static void emit_storage_flags_impl(int flags, bool for_definition) {
 }
 
 static void emit_storage_flags(int flags) {
-    emit_storage_flags_impl(flags, false);
+    emit_storage_flags_impl(flags, /*for_definition=*/false);
 }
 
 static void emit_storage_flags_for_def(int flags) {
-    emit_storage_flags_impl(flags, true);
+    emit_storage_flags_impl(flags, /*for_definition=*/true);
 }
 
 /* Collect the parameter types of a function AST node (ND_FUNC_DEF
@@ -3731,7 +3734,8 @@ static void emit_expr(Node *n) {
                 int na = collect_call_arg_types(n->call.args,
                                                  n->call.nargs, &at);
                 Node *winner = NULL;
-                int np = resolve_overload(class_type, mname, false,
+                int np = resolve_overload(class_type, mname,
+                                           /*is_ctor=*/false,
                                            at, na,
                                            g_current_method_is_const,
                                            &call_pty, &winner);
@@ -4056,7 +4060,8 @@ static void emit_expr(Node *n) {
                         Node *winner = NULL;
                         int np = resolve_overload(method_class,
                                                    callee->member.member,
-                                                   false, at, na,
+                                                   /*is_ctor=*/false,
+                                                   at, na,
                                                    recv_const,
                                                    &call_pty, &winner);
                         winner_method = winner;
@@ -5851,8 +5856,11 @@ static void emit_stmt(Node *n) {
                     int na = collect_call_arg_types(n->var_decl.ctor_args,
                                                      n->var_decl.ctor_nargs, &at);
                     Type **pty = NULL;
-                    int np = resolve_overload(n->var_decl.ty, NULL, true,
-                                               at, na, false, &pty, NULL);
+                    int np = resolve_overload(n->var_decl.ty, /*name=*/NULL,
+                                               /*is_ctor=*/true,
+                                               at, na,
+                                               /*receiver_is_const=*/false,
+                                               &pty, /*out_best=*/NULL);
                     if (np < 0)
                         die_no_overload(n->var_decl.ty, NULL, na,
                                          "direct-init ctor call");
@@ -6614,8 +6622,10 @@ static void emit_ctor_mem_init_one(Node *func, Node *m) {
                 Type **at = NULL;
                 int na = collect_call_arg_types(found->args, found->nargs, &at);
                 Type **pty = NULL;
-                int np = resolve_overload(mty, NULL, true, at, na,
-                                           false, &pty, NULL);
+                int np = resolve_overload(mty, /*name=*/NULL,
+                                           /*is_ctor=*/true, at, na,
+                                           /*receiver_is_const=*/false,
+                                           &pty, /*out_best=*/NULL);
                 if (np < 0) {
                     /* No matching ctor. For a 0-arg mem-init (`: m()`)
                      * on a plain C struct whose has_default_ctor is
@@ -6646,8 +6656,11 @@ static void emit_ctor_mem_init_one(Node *func, Node *m) {
                  * is the C trivial kind (zero-fill by the enclosing
                  * emit's {0} or nothing). N4659 §15.1/4 [class.ctor]. */
                 Type **pty = NULL;
-                int np = resolve_overload(mty, NULL, true, NULL, 0,
-                                           false, &pty, NULL);
+                int np = resolve_overload(mty, /*name=*/NULL,
+                                           /*is_ctor=*/true,
+                                           /*arg_types=*/NULL, /*nargs=*/0,
+                                           /*receiver_is_const=*/false,
+                                           &pty, /*out_best=*/NULL);
                 if (np >= 0) {
                     emit_indent();
                     mangle_class_ctor(mty, pty, np);
