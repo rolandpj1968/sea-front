@@ -95,13 +95,10 @@ STDCXX_FLAGS="-nostdinc++ \
     -I$SEA_LIBSUPCXX"
 
 # Strip post-4.8 glibc decorators that gcc 4.8's frontend can't parse.
-SF_DEFINES="-DGCC_VERSION=4004 \
-    -D__attribute_malloc__= -D__attr_dealloc_fclose= -D__attr_dealloc_free= \
-    -D'__attr_dealloc(d,a)=' -D'__attr_access(x)=' \
-    -D'__fortified_attr_access(a,b,c)=' \
-    -D'__attribute_alloc_size__(...)=' \
-    -D_Float32=float -D_Float64=double -D_Float128=double \
-    -D_Float32x=float -D_Float64x=double"
+# The -include of cc1plus-via-sf-compat.h is the load-bearing piece —
+# it pulls in cdefs.h, then undefs+redefines the gcc-11+ attribute
+# macros to empty so cc1plus's parser doesn't see them.
+SF_DEFINES="-DGCC_VERSION=4004 -include $SCRIPT_DIR/cc1plus-via-sf-compat.h"
 
 TMPDIR=${TMPDIR:-/tmp}
 
