@@ -77,9 +77,11 @@ for arg in "$@"; do
     esac
 done
 
-# No source files — pure link.
-[ -z "$INPUTS" ] && exec "$SEA_CC" "$@"
-[ "$MODE" = "link" ] && exec "$SEA_CC" "$@"
+# No source files — pure link. -no-pie because cc1plus emits the
+# non-PIE codegen gcc 4.8 ships with; modern host linkers default to
+# PIE and reject the resulting relocations.
+[ -z "$INPUTS" ] && exec "$SEA_CC" -no-pie "$@"
+[ "$MODE" = "link" ] && exec "$SEA_CC" -no-pie "$@"
 
 [ -z "$STD_FLAG" ] && STD_FLAG="-std=c++03"
 
