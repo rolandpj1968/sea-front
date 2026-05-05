@@ -63,6 +63,20 @@ performance. This is a bootstrap tool — clarity is the priority.
   descriptive names for wider scope. Avoid redundant prefixes — `ns` not
   `ns_name` (namespace name is redundant).
 
+- **Annotate magic argument literals.** When a call passes a bare
+  `true` / `false` / `0` / `NULL` for a parameter whose role isn't
+  obvious from context, prefix the literal with the parameter name as
+  an inline comment so the call self-documents:
+
+  ```c
+  do_thing(arg, /*recursive=*/false);
+  hoist_temps_in_expr(rhs, /*in_shortcircuit=*/true);
+  ```
+
+  Reading the call shouldn't require jumping to the declaration.
+  Skip when the function name + value already make the meaning
+  obvious (`set_enabled(true)`).
+
 ## Memory
 
 - **Arena allocator for all AST/Type/Declaration allocations.** No
