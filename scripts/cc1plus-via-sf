@@ -1,0 +1,132 @@
+#!/bin/sh
+# cc1plus-via-sf — drive sea-front-built cc1plus as a g++ replacement.
+#
+# Stand-in for g++ that uses the cc1plus binary built through sea-front
+# as the C++ compiler. Same interface contract as g++ -c / -o:
+#   - compile mode:   cc1plus-via-sf [flags] -c source.cc -o out.o
+#   - link mode:      cc1plus-via-sf [flags] -o exe a.o b.o ...
+#   - passthrough:    cc1plus-via-sf -E ...    (preprocessor-only)
+#
+# Pipeline for each C++ source:
+#   1. host g++ -E (with gcc 4.8 libstdc++ headers + glibc-strip defines)
+#                                   → preprocessed.i
+#   2. our cc1plus  preprocessed.i → asm.s
+#   3. host as       asm.s          → out.o
+#   4. (link mode)   host cc        → executable
+#
+# Used for the gcc 4.8 stage-1 self-bootstrap:
+#   make CXX=cc1plus-via-sf cc1plus    # rebuild cc1plus with our cc1plus
+#
+# Env:
+#   CC1PLUS              path to our cc1plus     (default: gcc-4.8.5/build-sf/gcc/cc1plus)
+#   SEA_LIBSTDCXX_SRC    gcc-4.8 libstdc++ src   (auto-derived if unset)
+#   SEA_LIBSTDCXX_BUILD  gcc-4.8 libstdc++ build (auto-derived if unset)
+
+set -e
+
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+CC1PLUS="${CC1PLUS:-$HOME/src/sea-front-deps/gcc-4.8.5/build-sf/gcc/cc1plus}"
+SEA_CC="${SEA_CC:-cc}"
+SEA_CPP="${SEA_CPP:-g++}"
+SEA_AS="${SEA_AS:-as}"
+SEA_LIBSTDCXX_SRC="${SEA_LIBSTDCXX_SRC:-$HOME/src/sea-front-deps/gcc-4.8.5/libstdc++-v3/include}"
+SEA_LIBSTDCXX_BUILD="${SEA_LIBSTDCXX_BUILD:-$HOME/src/sea-front-deps/gcc-4.8.5/build-sf/x86_64-unknown-linux-gnu/libstdc++-v3/include}"
+SEA_LIBSUPCXX="${SEA_LIBSUPCXX:-$HOME/src/sea-front-deps/gcc-4.8.5/libstdc++-v3/libsupc++}"
+SEA_VERBOSE="${SEA_VERBOSE:-0}"
+
+[ -x "$CC1PLUS" ] || { echo "ERROR: cc1plus not found at $CC1PLUS" >&2; exit 2; }
+
+log() { [ "$SEA_VERBOSE" = "1" ] && echo "[cc1plus-via-sf] $*" >&2 || true; }
+
+shell_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+
+# Pass through -E (preprocess-only) and link-only invocations.
+for a in "$@"; do
+    case "$a" in
+        -E|-S|-M|-MM) exec "$SEA_CPP" "$@" ;;
+    esac
+done
+
+# Argument parsing — collect inputs (.cc/.cpp/.C/.c), output, flags.
+MODE="link"
+OUTPUT=""
+INPUTS=""
+CPP_FLAGS=""
+CC_FLAGS=""
+STD_FLAG=""
+PREV=""
+for arg in "$@"; do
+    if [ "$PREV" = "-o" ]; then OUTPUT="$arg"; PREV=""; continue; fi
+    if [ "$PREV" = "-MT" ] || [ "$PREV" = "-MF" ]; then
+        CPP_FLAGS="$CPP_FLAGS $(shell_quote "$arg")"; PREV=""; continue
+    fi
+    PREV=""
+    qarg=$(shell_quote "$arg")
+    case "$arg" in
+        -c) MODE="compile" ;;
+        -o) PREV="-o" ;;
+        -I*|-D*|-U*|-include*|-isystem*|-iquote*) CPP_FLAGS="$CPP_FLAGS $qarg" ;;
+        -std=*) STD_FLAG="$arg"; CPP_FLAGS="$CPP_FLAGS $qarg" ;;
+        -W*|-f*|-g*|-O*|-m*|-pipe|-pthread|-static*) CC_FLAGS="$CC_FLAGS $qarg" ;;
+        -l*|-L*) CC_FLAGS="$CC_FLAGS $qarg" ;;
+        -MD|-MMD|-MP) CPP_FLAGS="$CPP_FLAGS $qarg" ;;
+        -MT|-MF) CPP_FLAGS="$CPP_FLAGS $qarg"; PREV="$arg" ;;
+        *.cpp|*.cc|*.cxx|*.C|*.c|*.ii|*.i) INPUTS="$INPUTS $qarg" ;;
+        *.o|*.a|*.so) CC_FLAGS="$CC_FLAGS $qarg" ;;
+        *) CPP_FLAGS="$CPP_FLAGS $qarg"; CC_FLAGS="$CC_FLAGS $qarg" ;;
+    esac
+done
+
+# No source files — pure link.
+[ -z "$INPUTS" ] && exec "$SEA_CC" "$@"
+[ "$MODE" = "link" ] && exec "$SEA_CC" "$@"
+
+[ -z "$STD_FLAG" ] && STD_FLAG="-std=c++03"
+
+eval "set -- $INPUTS"
+[ -z "$OUTPUT" ] && [ "$MODE" = "compile" ] && OUTPUT=$(basename "$1" | sed 's/\.[^.]*$/.o/')
+
+# Header overrides — gcc 4.8 era libstdc++ + glibc-strip defines.
+STDCXX_FLAGS="-nostdinc++ \
+    -I$SEA_LIBSTDCXX_BUILD/x86_64-unknown-linux-gnu \
+    -I$SEA_LIBSTDCXX_BUILD \
+    -I$SEA_LIBSTDCXX_SRC \
+    -I$SEA_LIBSTDCXX_SRC/c_global \
+    -I$SEA_LIBSUPCXX"
+
+# Strip post-4.8 glibc decorators that gcc 4.8's frontend can't parse.
+SF_DEFINES="-DGCC_VERSION=4004 \
+    -D__attribute_malloc__= -D__attr_dealloc_fclose= -D__attr_dealloc_free= \
+    -D'__attr_dealloc(d,a)=' -D'__attr_access(x)=' \
+    -D'__fortified_attr_access(a,b,c)=' \
+    -D'__attribute_alloc_size__(...)=' \
+    -D_Float32=float -D_Float64=double -D_Float128=double \
+    -D_Float32x=float -D_Float64x=double"
+
+TMPDIR=${TMPDIR:-/tmp}
+
+for src in "$@"; do
+    log "compile: $src"
+    base=$(basename "$src" | sed 's/\.[^.]*$//')
+    pp="$TMPDIR/cc1pvs_pp_${base}_$$.i"
+    asm="$TMPDIR/cc1pvs_s_${base}_$$.s"
+
+    qsrc=$(shell_quote "$src")
+    qpp=$(shell_quote "$pp")
+    qasm=$(shell_quote "$asm")
+    qout=$(shell_quote "$OUTPUT")
+
+    # Step 1 — preprocess.
+    log "  pp: $SEA_CPP -E $SF_DEFINES $STD_FLAG $STDCXX_FLAGS $CPP_FLAGS $src"
+    eval "$SEA_CPP -E $SF_DEFINES $STD_FLAG $STDCXX_FLAGS $CPP_FLAGS $qsrc -o $qpp"
+
+    # Step 2 — cc1plus → asm.
+    log "  cc1plus: $CC1PLUS -quiet -O0 $pp -o $asm"
+    "$CC1PLUS" -quiet -O0 "$pp" -o "$asm"
+
+    # Step 3 — assemble.
+    log "  as: $SEA_AS $asm -o $OUTPUT"
+    eval "$SEA_AS $qasm -o $qout"
+
+    rm -f "$pp" "$asm"
+done

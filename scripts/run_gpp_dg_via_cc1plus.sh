@@ -69,8 +69,24 @@ for src in $files; do
         -I$GCC48_LIBSTDCXX_SRC \
         -I$GCC48_LIBSTDCXX_SRC/c_global \
         -I$GCC48_LIBSUPCXX"
+    # Modern glibc 2.34+ pollutes its headers with constructs gcc-4.8's
+    # frontend can't parse:
+    #   - extended __malloc__(deallocator, argno) attribute
+    #   - _Float32 / _Float64 / _Float128 literal type names
+    #   - __attr_dealloc / __attr_access decorators
+    # Strip them here. Tests that genuinely USE the affected types are
+    # out of scope; tests that merely #include <stdio.h> en passant
+    # would otherwise spuriously fail at the include stage.
+    # Approximate _Float128 etc. by their nearest gcc-4.8 type. Wrong
+    # for tests that genuinely use _Float128 arithmetic, but right
+    # enough for tests that only #include <stdio.h>/<stdlib.h>/<math.h>
+    # in passing and would otherwise fail to parse the type name.
     PP_DEFS="-D__attribute_malloc__= -D__attr_dealloc_fclose= -D__attr_dealloc_free= \
-        -D__attr_access(x)= -D__fortified_attr_access(a,b,c)= -D__attribute_alloc_size__(...)="
+        -D__attr_access(x)= -D__fortified_attr_access(a,b,c)= \
+        -D__attribute_alloc_size__(...)= \
+        -D__attr_dealloc(d,a)= \
+        -D_Float32=float -D_Float64=double -D_Float128=double \
+        -D_Float32x=float -D_Float64x=double"
     if ! timeout "$SEA_DG_TIMEOUT" g++ -E -std=c++03 -w \
             $PP_INC $PP_DEFS \
             "$src" -o "$base.i" \
