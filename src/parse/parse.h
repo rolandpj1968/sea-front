@@ -214,6 +214,17 @@ struct Node {
      * re-emitting the expression. NULL when no hoisting happened. */
     const char *codegen_temp_name;
 
+    /* Codegen-only: when set, the temp's RHS-expression has not yet
+     * been assigned. emit_expr emits '(name = orig_expr, name)' on
+     * first use and clears the flag, so the assignment happens AT the
+     * use site rather than as a sibling statement. Required when the
+     * use sits inside a short-circuit ('&&', '||') or conditional ('?:')
+     * operand whose evaluation may be skipped — the prologue-style
+     * hoist would have run the call unconditionally and corrupted
+     * short-circuit / conditional semantics. ISO C comma operator;
+     * no GNU statement-expression dependency. */
+    bool codegen_temp_pending_assign;
+
     /* Codegen-only: set true once this node has been emitted at
      * top level. Used to dedup top-level ND_VAR_DECLs that get
      * walked twice — once in PHASE_STRUCTS via the ND_BLOCK

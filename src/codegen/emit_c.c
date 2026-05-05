@@ -718,7 +718,29 @@ static bool is_class_temp_call(Node *n) {
     return false;
 }
 
-static void hoist_emit_decl(Node *call) {
+/* Emit '&<expr>' for implicit-this binding, with one piece of cleverness:
+ * if <expr> is a deferred-assign hoist (codegen_temp_pending_assign),
+ * inline the assignment into the comma operator —
+ *   (name = call(), &name)
+ * — so the call evaluates only when the surrounding short-circuit /
+ * conditional context actually reaches the use site, AND the result is
+ * a true address (not '&(comma)' which is invalid in ISO C). */
+static void emit_addrof_for_this(Node *n) {
+    if (n && n->codegen_temp_name && n->codegen_temp_pending_assign) {
+        const char *name = n->codegen_temp_name;
+        n->codegen_temp_pending_assign = false;
+        n->codegen_temp_name = NULL;
+        fprintf(stdout, "(%s = ", name);
+        emit_expr(n);
+        fprintf(stdout, ", &%s)", name);
+        n->codegen_temp_name = name;
+        return;
+    }
+    fputc('&', stdout);
+    emit_expr(n);
+}
+
+static void hoist_emit_decl(Node *call, bool in_shortcircuit) {
     int id = g_cf.next_label_id++;
     /* The temp name lives in a small static buffer pool — one per
      * temp, since multiple temps can be live in the same statement
@@ -806,12 +828,27 @@ static void hoist_emit_decl(Node *call) {
         }
         fputs(");\n", stdout);
     } else {
-        /* Function call returning a class — direct copy form. */
-        emit_indent();
-        emit_type(call->resolved_type);
-        fprintf(stdout, " %s = ", name);
-        emit_expr(call);  /* call's children may already be substituted */
-        fputs(";\n", stdout);
+        /* Function call returning a class — direct copy form.
+         * If we're hoisting INSIDE a short-circuit / conditional
+         * operand (in_shortcircuit), defer the assignment to the use
+         * site so the call only runs when the gate actually reaches
+         * it. ISO C comma at the use; no GNU stmt-expr dependency.
+         * Pattern: gcc 4.8 cgraph.c
+         *   gcc_checking_assert(!virtual_offset
+         *                       || tree_to_double_int(virtual_offset)...)
+         * — eager hoist crashed cc1plus on NULL virtual_offset. */
+        if (in_shortcircuit) {
+            emit_indent();
+            emit_type(call->resolved_type);
+            fprintf(stdout, " %s;\n", name);
+            call->codegen_temp_pending_assign = true;
+        } else {
+            emit_indent();
+            emit_type(call->resolved_type);
+            fprintf(stdout, " %s = ", name);
+            emit_expr(call);
+            fputs(";\n", stdout);
+        }
     }
 
 hoist_done:
@@ -833,13 +870,13 @@ hoist_done:
     }
 }
 
-static void hoist_temps_in_expr(Node *n) {
+static void hoist_temps_in_expr(Node *n, bool in_shortcircuit) {
     if (!n) return;
     switch (n->kind) {
     case ND_CALL:
-        if (n->call.callee) hoist_temps_in_expr(n->call.callee);
+        if (n->call.callee) hoist_temps_in_expr(n->call.callee, in_shortcircuit);
         for (int i = 0; i < n->call.nargs; i++)
-            hoist_temps_in_expr(n->call.args[i]);
+            hoist_temps_in_expr(n->call.args[i], in_shortcircuit);
         /* 'obj(args)' where obj is a class value with operator() →
          * dispatch will take '&obj'. If obj is an rvalue (call,
          * operator overload result), hoist it first. Pattern: gcc
@@ -863,7 +900,7 @@ static void hoist_temps_in_expr(Node *n) {
                      callee_->unary.operand->resolved_type &&
                      (callee_->unary.operand->resolved_type->kind == TY_STRUCT ||
                       callee_->unary.operand->resolved_type->kind == TY_UNION)))
-                    hoist_emit_decl(callee_);
+                    hoist_emit_decl(callee_, in_shortcircuit);
             }
         }
         /* Arg passed to a reference parameter is lowered to '&(arg)'.
@@ -905,16 +942,23 @@ static void hoist_temps_in_expr(Node *n) {
                 } else {
                     pass_by_ref = false;
                 }
-                if (pass_by_ref) hoist_emit_decl(arg);
+                if (pass_by_ref) hoist_emit_decl(arg, in_shortcircuit);
             }
         }
-        if (is_class_temp_call(n)) hoist_emit_decl(n);
+        if (is_class_temp_call(n)) hoist_emit_decl(n, in_shortcircuit);
         return;
     case ND_BINARY:
-    case ND_ASSIGN:
-        /* Both share the 'binary' member layout. */
-        hoist_temps_in_expr(n->binary.lhs);
-        hoist_temps_in_expr(n->binary.rhs);
+    case ND_ASSIGN: {
+        /* Both share the 'binary' member layout.
+         * For '&&' and '||' the RHS is conditionally evaluated — any
+         * hoist inside it must defer the assignment to the use site
+         * (else the call runs unconditionally and breaks the gate).
+         * The LHS always evaluates, so it inherits the outer context. */
+        bool rhs_short = in_shortcircuit ||
+            (n->kind == ND_BINARY &&
+             (n->binary.op == TK_LAND || n->binary.op == TK_LOR));
+        hoist_temps_in_expr(n->binary.lhs, in_shortcircuit);
+        hoist_temps_in_expr(n->binary.rhs, rhs_short);
         /* Struct-typed lhs of a binary/compound-assign op dispatches
          * through an overloaded operator: 'a == b' → 'sf__T__eq(&a, b)'.
          * If lhs is an rvalue call 'f() == b', the emitted '&f()' is
@@ -928,7 +972,7 @@ static void hoist_temps_in_expr(Node *n) {
             if (lk == ND_CALL && lhs->resolved_type &&
                 (lhs->resolved_type->kind == TY_STRUCT ||
                  lhs->resolved_type->kind == TY_UNION))
-                hoist_emit_decl(lhs);
+                hoist_emit_decl(lhs, in_shortcircuit);
             /* Nested operator-overload LHS '(a op1 b) op2 c' where op1
              * returns struct — same issue. Skip plain pointer deref
              * '*p' (lvalue, safe to address without hoist). */
@@ -937,21 +981,22 @@ static void hoist_temps_in_expr(Node *n) {
                     lhs->binary.lhs->resolved_type : NULL;
                 if (op_ty && (op_ty->kind == TY_STRUCT ||
                                op_ty->kind == TY_UNION))
-                    hoist_emit_decl(lhs);
+                    hoist_emit_decl(lhs, in_shortcircuit);
             } else if ((lk == ND_UNARY || lk == ND_POSTFIX) &&
                         lhs->unary.op != TK_STAR) {
                 Type *op_ty = lhs->unary.operand ?
                     lhs->unary.operand->resolved_type : NULL;
                 if (op_ty && (op_ty->kind == TY_STRUCT ||
                                op_ty->kind == TY_UNION))
-                    hoist_emit_decl(lhs);
+                    hoist_emit_decl(lhs, in_shortcircuit);
             }
         }
         return;
+    }
     case ND_UNARY:
     case ND_POSTFIX:
         /* Both share the 'unary' member layout. */
-        hoist_temps_in_expr(n->unary.operand);
+        hoist_temps_in_expr(n->unary.operand, in_shortcircuit);
         /* Unary overload on a struct operand: '-x' → 'sf__T__minus(&x)'.
          * Force-hoist rvalue struct-returning operand so the emitted
          * '&f()' stays valid. N4659 §16.5 [over.oper]. */
@@ -961,7 +1006,7 @@ static void hoist_temps_in_expr(Node *n) {
             if (ok == ND_CALL && op->resolved_type &&
                 (op->resolved_type->kind == TY_STRUCT ||
                  op->resolved_type->kind == TY_UNION))
-                hoist_emit_decl(op);
+                hoist_emit_decl(op, in_shortcircuit);
             /* Nested struct-operator '~(a op b)': infer from operand's
              * own lhs since sema leaves the binary's resolved_type NULL
              * for struct operands. Pattern: gcc 4.8 tree-vrp.c
@@ -971,17 +1016,19 @@ static void hoist_temps_in_expr(Node *n) {
                     op->binary.lhs->resolved_type : NULL;
                 if (sub_ty && (sub_ty->kind == TY_STRUCT ||
                                 sub_ty->kind == TY_UNION))
-                    hoist_emit_decl(op);
+                    hoist_emit_decl(op, in_shortcircuit);
             }
         }
         return;
     case ND_TERNARY:
-        hoist_temps_in_expr(n->ternary.cond);
-        hoist_temps_in_expr(n->ternary.then_);
-        hoist_temps_in_expr(n->ternary.else_);
+        /* The two arms are conditionally evaluated — propagate the
+         * defer-assignment flag so any hoist inside them defers. */
+        hoist_temps_in_expr(n->ternary.cond, in_shortcircuit);
+        hoist_temps_in_expr(n->ternary.then_, /*in_short*/ true);
+        hoist_temps_in_expr(n->ternary.else_, /*in_short*/ true);
         return;
     case ND_MEMBER:
-        hoist_temps_in_expr(n->member.obj);
+        hoist_temps_in_expr(n->member.obj, in_shortcircuit);
         /* Method dispatch needs an lvalue for '&obj'. If the obj is
          * an rvalue struct-returning call that wasn't already hoisted
          * (e.g. no dtor), force-hoist so '&__SF_temp_N' is valid C.
@@ -997,7 +1044,7 @@ static void hoist_temps_in_expr(Node *n) {
             if (k == ND_CALL && obj->resolved_type &&
                 (obj->resolved_type->kind == TY_STRUCT ||
                  obj->resolved_type->kind == TY_UNION))
-                hoist_emit_decl(obj);
+                hoist_emit_decl(obj, in_shortcircuit);
             /* Operator-overload rvalue: '(a op b).method()' where 'op'
              * is an overloaded binary/unary on struct operands. sema's
              * resolved_type is often NULL for this; infer from an
@@ -1018,7 +1065,7 @@ static void hoist_temps_in_expr(Node *n) {
                     Type *ty = obj->resolved_type;
                     if (!ty && op) ty = op->resolved_type;
                     if (ty && (ty->kind == TY_STRUCT || ty->kind == TY_UNION))
-                        hoist_emit_decl(obj);
+                        hoist_emit_decl(obj, in_shortcircuit);
                 }
             }
             /* Ternary rvalue: '(c ? a : b).method()' where both
@@ -1031,13 +1078,13 @@ static void hoist_temps_in_expr(Node *n) {
                 if (!ty && obj->ternary.else_)
                     ty = obj->ternary.else_->resolved_type;
                 if (ty && (ty->kind == TY_STRUCT || ty->kind == TY_UNION))
-                    hoist_emit_decl(obj);
+                    hoist_emit_decl(obj, in_shortcircuit);
             }
         }
         return;
     case ND_SUBSCRIPT:
-        hoist_temps_in_expr(n->subscript.base);
-        hoist_temps_in_expr(n->subscript.index);
+        hoist_temps_in_expr(n->subscript.base, in_shortcircuit);
+        hoist_temps_in_expr(n->subscript.index, in_shortcircuit);
         /* Class-type subscript lowers to 'sf__T__subscript(&base, idx)'.
          * Force-hoist an rvalue struct-returning call base so '&f()'
          * stays valid. N4659 §16.5.5 [over.sub]. */
@@ -1046,14 +1093,14 @@ static void hoist_temps_in_expr(Node *n) {
             n->subscript.base->resolved_type &&
             (n->subscript.base->resolved_type->kind == TY_STRUCT ||
              n->subscript.base->resolved_type->kind == TY_UNION))
-            hoist_emit_decl(n->subscript.base);
+            hoist_emit_decl(n->subscript.base, in_shortcircuit);
         return;
     case ND_CAST:
-        hoist_temps_in_expr(n->cast.operand);
+        hoist_temps_in_expr(n->cast.operand, in_shortcircuit);
         return;
     case ND_COMMA:
-        hoist_temps_in_expr(n->comma.lhs);
-        hoist_temps_in_expr(n->comma.rhs);
+        hoist_temps_in_expr(n->comma.lhs, in_shortcircuit);
+        hoist_temps_in_expr(n->comma.rhs, in_shortcircuit);
         return;
     default:
         return;
@@ -1090,19 +1137,19 @@ static void hoist_stmt_temps(Node *s) {
         if (direct_init) {
             /* Recurse into the call's children only — don't hoist
              * the call itself. */
-            if (init->call.callee) hoist_temps_in_expr(init->call.callee);
+            if (init->call.callee) hoist_temps_in_expr(init->call.callee, false);
             for (int i = 0; i < init->call.nargs; i++)
-                hoist_temps_in_expr(init->call.args[i]);
+                hoist_temps_in_expr(init->call.args[i], false);
         } else {
-            hoist_temps_in_expr(init);
+            hoist_temps_in_expr(init, false);
         }
         return;
     }
     case ND_EXPR_STMT:
-        hoist_temps_in_expr(s->expr_stmt.expr);
+        hoist_temps_in_expr(s->expr_stmt.expr, false);
         return;
     case ND_RETURN:
-        hoist_temps_in_expr(s->ret.expr);
+        hoist_temps_in_expr(s->ret.expr, false);
         return;
     case ND_CASE:
     case ND_DEFAULT:
@@ -2887,8 +2934,8 @@ static void emit_expr(Node *n) {
                     n->binary.lhs ? n->binary.lhs->resolved_type : NULL);
                 int np = emit_class_op_mangled_name(lhs_ty, suffix, args, 1,
                                                      lhs_const, &pty, NULL);
-                fputs("(&", stdout);
-                emit_expr(n->binary.lhs);
+                fputc('(', stdout);
+                emit_addrof_for_this(n->binary.lhs);
                 fputs(", ", stdout);
                 emit_arg_for_param(n->binary.rhs,
                                     (pty && np > 0) ? pty[0] : NULL);
@@ -2920,8 +2967,8 @@ static void emit_expr(Node *n) {
                     n->binary.lhs ? n->binary.lhs->resolved_type : NULL);
                 int np = emit_class_op_mangled_name(lhs_ty, suffix, args, 1,
                                                      lhs_const, &pty, NULL);
-                fputs("(&", stdout);
-                emit_expr(n->binary.lhs);
+                fputc('(', stdout);
+                emit_addrof_for_this(n->binary.lhs);
                 fputs(", ", stdout);
                 emit_arg_for_param(n->binary.rhs,
                                     (pty && np > 0) ? pty[0] : NULL);
@@ -3159,8 +3206,7 @@ static void emit_expr(Node *n) {
                     fputc('(', stdout);
                     /* Implicit this — lvalue callee address. */
                     if (is_addressable_lvalue(callee_)) {
-                        fputc('&', stdout);
-                        emit_expr(callee_);
+                        emit_addrof_for_this(callee_);
                     } else {
                         /* Rvalue callee (e.g. result of operator*): use
                          * compound-literal trick or rely on hoist. Fall
@@ -4125,8 +4171,7 @@ static void emit_expr(Node *n) {
                     emit_expr(obj);
                     g_suppress_ref_deref = saved_suppress;
                 } else {
-                    fputc('&', stdout);
-                    emit_expr(obj);
+                    emit_addrof_for_this(obj);
                 }
                 after_base_this_emit:;
                 /* Default-argument injection for method calls. Reach
@@ -5890,7 +5935,7 @@ static void emit_stmt(Node *n) {
             /* Hoist temps from the cond (inside the mini-block,
              * so their decls are emitted at the mini-block's
              * indent level). */
-            hoist_temps_in_expr(n->if_.cond);
+            hoist_temps_in_expr(n->if_.cond, false);
 
             /* Assign the cond into the synthetic. */
             emit_indent();
@@ -6006,7 +6051,7 @@ static void emit_stmt(Node *n) {
             emit_indent();
             emit_open_brace();
             int saved_nlive = g_cf.nlive;
-            hoist_temps_in_expr(n->while_.cond);
+            hoist_temps_in_expr(n->while_.cond, false);
             emit_indent();
             fprintf(stdout, "%s = ", cond_name);
             emit_expr(n->while_.cond);
@@ -6100,7 +6145,7 @@ static void emit_stmt(Node *n) {
             emit_indent();
             emit_open_brace();
             int saved_nlive = g_cf.nlive;
-            hoist_temps_in_expr(n->do_.cond);
+            hoist_temps_in_expr(n->do_.cond, false);
             emit_indent();
             fprintf(stdout, "%s = ", cond_name);
             emit_expr(n->do_.cond);
@@ -6254,7 +6299,7 @@ static void emit_stmt(Node *n) {
             emit_indent();
             emit_open_brace();
             int saved_nlive = g_cf.nlive;
-            hoist_temps_in_expr(n->for_.cond);
+            hoist_temps_in_expr(n->for_.cond, false);
             emit_indent();
             fprintf(stdout, "%s = ", cond_name);
             emit_expr(n->for_.cond);
