@@ -174,12 +174,12 @@ done
 # If no C++ source files, this is a pure link or C compile — pass through
 if [ -z "$INPUTS" ]; then
     log "No source files — passthrough to $SEA_CC"
-    exec $SEA_CC "$@" $SEA_AUTO_LIBS
+    exec $SEA_CC -no-pie "$@" $SEA_AUTO_LIBS
 fi
 
 if [ "$MODE" = "link" ]; then
     log "Link mode — passthrough to $SEA_CC"
-    exec $SEA_CC "$@" $SEA_AUTO_LIBS
+    exec $SEA_CC -no-pie "$@" $SEA_AUTO_LIBS
 fi
 
 # Unpack INPUTS (space-separated shell-quoted) into positional params
