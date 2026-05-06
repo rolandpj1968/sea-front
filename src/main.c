@@ -63,8 +63,12 @@ static void dump_tokens(TokenArray ta) {
 
 static void usage(void) {
     fprintf(stderr, "usage: sea-front [--dump-tokens] [--dump-ast] [--emit-c] [--no-lines]\n"
-                    "                 [--std=c++03|11|14|17|20|23] <file>\n");
+                    "                 [--std=c++03|11|14|17|20|23] [--version] <file>\n");
     exit(1);
+}
+
+static void show_version(void) {
+    printf("sea-front %s (%s)\n", SF_VERSION, SF_VERSION_NAME);
 }
 
 int main(int argc, char **argv) {
@@ -75,7 +79,10 @@ int main(int argc, char **argv) {
     const char *filename = NULL;
 
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--dump-tokens") == 0) {
+        if (strcmp(argv[i], "--version") == 0) {
+            show_version();
+            return 0;
+        } else if (strcmp(argv[i], "--dump-tokens") == 0) {
             do_dump_tokens = true;
         } else if (strcmp(argv[i], "--dump-ast") == 0) {
             do_dump_ast = true;

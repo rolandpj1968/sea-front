@@ -1,5 +1,7 @@
 # sea-front
 
+**v0.1.0 — Bootstrap I — gcc 4.8 fixed point** ([CHANGELOG](CHANGELOG.md))
+
 A C++-to-C transpiler written in C, for trusted bootstrapping of GCC and Clang.
 
 ## The Problem
@@ -32,23 +34,29 @@ hex0 → ... → mescc → tcc → gcc 4.7.4
 
 ## Status
 
-**Active development.** Lexer, parser, sema, template instantiation, and C
-codegen are all working end-to-end. Plumbed into the gcc 4.8 build via a
-`sea-front-cc` wrapper script that intercepts CXX compilation
-(preprocess → sea-front → cc).
+**Stage A bootstrap complete.** A cc1plus binary built end-to-end through
+sea-front from gcc 4.8 source compiles and runs real C++ programs, and is a
+self-consistent fixed point under the gcc bootstrap protocol
+(stage2 == stage3 byte-equal). See [the milestone section below](#bootstrap-milestone-stage-a-gcc-48).
+
+Lexer, parser, sema, template instantiation, and C codegen all work
+end-to-end. Plumbed into the gcc 4.8 build via two wrapper scripts:
+`scripts/sea-front-cc` (the transpiler driving the initial host bootstrap)
+and `scripts/cc1plus-via-sf` (drives sea-front-built cc1plus as a g++
+replacement for stage-N rebuilds).
 
 ### Bootstrap Targets
 
 | Stage | Target | C++ Standard | Status |
 |-------|--------|-------------|--------|
-| **A** | gcc 4.8 (bootstrap bridge) | C++03 | ~98% of objects build via real Makefile + sea-front-cc |
+| **A** | gcc 4.8 (bootstrap bridge) | C++03 | ✅ stage2 == stage3 byte-equal (v0.1.0) |
 | **B** | Modern gcc | C++14 | Grammar ready, features incremental |
 | **C** | LLVM/Clang | C++17 | Grammar ready, features incremental |
 
-Stage A is the immediate goal: transpile gcc 4.8's C++ source to C, producing
-the first C++ compiler in the trusted bootstrap chain. Stages B and C extend
-upward to modern compilers. See
-[Trusted Bootstrap Design](docs/trusted-bootstrap-design.md).
+Stage A — the canonical bootstrappable.org rung — is the immediate goal:
+transpile gcc 4.8's C++ source to C, producing the first C++ compiler in the
+trusted bootstrap chain. Stages B and C extend upward to modern compilers.
+See [Trusted Bootstrap Design](docs/trusted-bootstrap-design.md).
 
 | Component | Status |
 |-----------|--------|
@@ -64,10 +72,31 @@ upward to modern compilers. See
 
 - 144 lexer unit tests
 - 42 parser integration tests
-- 187 emit-c end-to-end tests (C++ in → C out → compile → execute → verify)
+- 301 emit-c end-to-end tests (C++ in → C out → compile → execute → verify)
+- 4 multi-TU deduplication tests
 - 28/28 gated + 52/52 stretch libstdc++ header smoke tests
-- gcc 4.8 source: 384/391 source files (~98%) compile via real Makefile +
-  `sea-front-cc`
+- gcc 4.8 source: 403 of 404 .o files in cc1plus rebuild compile clean
+  through cc1plus-built-by-sea-front
+
+## Bootstrap milestone (Stage A, gcc 4.8)
+
+```
+cc1plus-stage0  53.3 MB  (built by sea-front-cc — initial host bootstrap)
+cc1plus-stage1  24.9 MB  (built by stage-0 via cc1plus-via-sf)
+cc1plus-stage2  23.7 MB  (built by stage-1 — first fully self-built)
+cc1plus-stage3  23.7 MB  (built by stage-2 — fixed point)
+```
+
+**stage2 vs stage3 after stripping debug + BUILD-ID and masking the 16-byte
+embedded `executable_checksum`: 18,601,376 bytes, perfectly equal.** The 16
+checksum bytes are gcc 4.8's own MD5 over input .o files whose debug-info
+timestamps differ between stages — a non-determinism in gcc 4.8 itself, not
+introduced by sea-front.
+
+This is the bootstrappable.org rung. cc1plus-built-by-sea-front is a working,
+deterministic, self-consistent C++ compiler. Reproduction recipe and the
+strip+cmp comparison procedure are in [CHANGELOG.md](CHANGELOG.md) and the
+session-context memory.
 
 ## Building
 
@@ -101,6 +130,9 @@ bash bootstrap.sh   # single-command build with no make dependency
 
 # As a CXX wrapper for a real build system
 make CXX=./scripts/sea-front-cc CXX_FOR_BUILD=g++ ...
+
+# Print version
+./build/sea-front --version
 ```
 
 ## Documentation
