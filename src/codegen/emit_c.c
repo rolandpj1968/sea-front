@@ -3126,17 +3126,32 @@ static void emit_expr(Node *n) {
                 return;
             }
         }
-        /* For &(ref_param): the ref is already a pointer, so &(*x)
-         * cancels out to just x. Suppress the deref ONLY when the
-         * AMP's operand is a bare ident naming a ref-param. For
-         * compound operands like &v->x or &v[i] the inner ident still
-         * needs deref — without that gate, the suppression leaked
-         * down into nested ident emissions and produced 'v->x' where
-         * '(*v)->x' was needed. */
+        /* '&ref_param' — N4659 §8.3.2 [dcl.ref]: a reference IS the
+         * referent at the language level, so &ref yields the address
+         * of the referent. In our C lowering the ref is already a
+         * pointer holding that address, so the whole expression is
+         * just the bare ident — emit no '&' and no deref.
+         *
+         * Pattern that surfaced this: gcc 4.8 gengtype-generated
+         *   void gt_ggc_mx (struct foo_s& x_r) {
+         *     struct foo_s *x = &x_r;       // C++: address of referent
+         *     gt_ggc_m_9tree_node ((*x).field);
+         *   }
+         * Old emit produced 'struct foo_s* x = (&x_r);' (Foo**), then
+         * '(*x).field' read the parameter slot as if it were Foo and
+         * passed garbage to the GC mark walker. cc1plus segfaulted
+         * during ggc_collect on the bad pointer.
+         *
+         * Gate is bare ND_IDENT because compound operands (&v->x,
+         * &v[i]) still need '&' applied to the lowered expression. */
         if (n->unary.op == TK_AMP &&
             n->unary.operand && n->unary.operand->kind == ND_IDENT &&
             is_ref_param(n->unary.operand->ident.name)) {
+            bool saved = g_suppress_ref_deref;
             g_suppress_ref_deref = true;
+            emit_expr(n->unary.operand);
+            g_suppress_ref_deref = saved;
+            return;
         }
         /* `delete v` — N4659 §8.3.5 [expr.delete]. Stub: emit
          * `((void)(v))` (discard, no-op). Same TODO as ND_CAST's
