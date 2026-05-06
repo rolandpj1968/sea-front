@@ -514,6 +514,25 @@ Node *parse(TokenArray tokens, Arena *arena, CppStandard std) {
             vec_push(&decls, decl);
     }
 
+    /* Append synthesized lambda function definitions before any
+     * regular decl that uses them. The lambda expressions emitted
+     * by the parser are bare ND_IDENTs referencing __sf_lambda_<N>;
+     * those names must be visible in the TU's decl list so codegen
+     * sees the bodies. Prepending preserves "decl before use" for
+     * any caller in the original program order — N4659 §3.3.2
+     * [basic.scope.pdecl]. */
+    if (p.lambda_count > 0) {
+        int total = p.lambda_count + (int)decls.len;
+        Node **out = arena_alloc(arena, sizeof(*out) * total);
+        memcpy(out, p.lambda_decls, sizeof(*out) * p.lambda_count);
+        memcpy(out + p.lambda_count, decls.data,
+               sizeof(*out) * decls.len);
+        Node *tu = new_node(&p, ND_TRANSLATION_UNIT, &tokens.tokens[0]);
+        tu->tu.decls = out;
+        tu->tu.ndecls = total;
+        tu->tu.global_scope = global_scope;
+        return tu;
+    }
     Node *tu = new_node(&p, ND_TRANSLATION_UNIT, &tokens.tokens[0]);
     tu->tu.decls = (Node **)decls.data;
     tu->tu.ndecls = decls.len;

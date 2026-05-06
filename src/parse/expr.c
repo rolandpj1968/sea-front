@@ -248,29 +248,133 @@ static Node *primary_expr(Parser *p) {
          *   lambda-introducer lambda-declarator(opt) compound-statement
          *   lambda-introducer: [ lambda-capture(opt) ]
          *
-         * C++20: adds explicit template-parameter-list
-         *   (lambda-introducer <T-params> requires-clause(opt) ...),
-         *   pack-expansion in init-capture.
-         * C++23: adds static lambda-specifier, restructures
-         *   lambda-declarator with lambda-specifier-seq.
+         * Captureless lambdas with an explicit trailing return type
+         * are LOWERED — the body becomes a synthesized static-inline
+         * function '__sf_lambda_<N>' at TU scope and the lambda
+         * expression evaluates to that function's name (decays to a
+         * fn pointer per C/C++ rules).
          *
-         * '[' as a primary expression is unambiguously a lambda
-         * (postfix '[' subscripts an existing operand and is handled
-         * by the postfix loop, not here). Skip-and-discard for now —
-         * we don't lower lambdas yet, but we MUST parse past them so
-         * surrounding code stays parseable. The result is an opaque
-         * placeholder.
-         *
-         * Sequence to skip:
-         *   1. capture list  [ ... ]    (balanced bracket count)
-         *   2. optional template-parameter-list (C++20)
-         *   3. optional lambda-declarator (params + specifiers + ret)
-         *   4. compound-statement { ... }
+         * Capturing lambdas and lambdas with deduced return type
+         * (no '->' trailing return) fall back to the legacy
+         * skip-and-discard path that returns an opaque ND_NULLPTR
+         * placeholder. Real auto-return deduction is the followup.
          */
+        ParseState saved = parser_save(p);
+        parser_advance(p);  /* consume [ */
+        bool captureless = parser_consume(p, TK_RBRACKET);
+        if (captureless && parser_consume(p, TK_LPAREN)) {
+            /* Parse param list inline — small reimplementation of the
+             * loop in decl.c; lambdas have no default args, no
+             * variadic, no class-scoped param-name shadowing concerns. */
+            Node **params = NULL; int nparams = 0; int cap = 0;
+            if (!parser_at(p, TK_RPAREN)) {
+                for (;;) {
+                    DeclSpec pspec = parse_type_specifiers(p);
+                    Node *pd = pspec.type ? parse_declarator(p, pspec.type) : NULL;
+                    if (!pd) break;
+                    pd->kind = ND_PARAM;
+                    if (nparams == cap) {
+                        cap = cap ? cap * 2 : 4;
+                        Node **n = arena_alloc(p->arena, sizeof(*n) * cap);
+                        if (params) memcpy(n, params, sizeof(*n) * nparams);
+                        params = n;
+                    }
+                    params[nparams++] = pd;
+                    if (!parser_consume(p, TK_COMMA)) break;
+                }
+            }
+            if (parser_consume(p, TK_RPAREN)) {
+                /* Optional 'mutable', 'constexpr', 'noexcept(...)' —
+                 * skip until '->' or '{'. */
+                while (!parser_at(p, TK_ARROW) &&
+                       !parser_at(p, TK_LBRACE) && !parser_at_eof(p))
+                    parser_advance(p);
+                if (parser_consume(p, TK_ARROW)) {
+                    /* Trailing return type — parse_type_specifiers +
+                     * an abstract declarator. Use the same machinery as
+                     * function returns. */
+                    DeclSpec rspec = parse_type_specifiers(p);
+                    Type *ret_ty = rspec.type;
+                    /* Honor pointer/reference qualifiers in the
+                     * trailing-return — '-> int*' / '-> T&'. */
+                    while (parser_consume(p, TK_STAR)) {
+                        Type *pt = new_type(p, TY_PTR);
+                        pt->base = ret_ty;
+                        ret_ty = pt;
+                    }
+                    if (parser_consume(p, TK_AMP)) {
+                        Type *rt = new_type(p, TY_REF);
+                        rt->base = ret_ty;
+                        ret_ty = rt;
+                    }
+                    if (ret_ty && parser_at(p, TK_LBRACE)) {
+                        Node *body = parse_compound_stmt(p);
+                        /* Synthesize a unique name token. The arena
+                         * holds the buffer; tokens reference it. */
+                        char buf[32];
+                        int n = snprintf(buf, sizeof(buf), "__sf_lambda_%d",
+                                         p->lambda_count);
+                        char *name_buf = arena_alloc(p->arena, n + 1);
+                        memcpy(name_buf, buf, n);
+                        name_buf[n] = '\0';
+                        Token *name_tok = arena_alloc(p->arena, sizeof(*name_tok));
+                        memset(name_tok, 0, sizeof(*name_tok));
+                        name_tok->kind = TK_IDENT;
+                        name_tok->loc = name_buf;
+                        name_tok->len = n;
+                        name_tok->file = tok->file;
+                        name_tok->line = tok->line;
+                        name_tok->col = tok->col;
+                        Node *fd = new_node(p, ND_FUNC_DEF, tok);
+                        fd->func.name = name_tok;
+                        fd->func.ret_ty = ret_ty;
+                        fd->func.params = params;
+                        fd->func.nparams = nparams;
+                        fd->func.body = body;
+                        fd->func.body_start_pos = -1;
+                        /* Push to parser's lambda list — appended to
+                         * the TU at translation-unit assembly. */
+                        if (p->lambda_count == p->lambda_cap) {
+                            int ncap = p->lambda_cap ? p->lambda_cap * 2 : 8;
+                            Node **n2 = arena_alloc(p->arena,
+                                sizeof(*n2) * ncap);
+                            if (p->lambda_decls)
+                                memcpy(n2, p->lambda_decls,
+                                       sizeof(*n2) * p->lambda_count);
+                            p->lambda_decls = n2;
+                            p->lambda_cap = ncap;
+                        }
+                        p->lambda_decls[p->lambda_count++] = fd;
+                        /* Build a TY_FUNC for the lambda so the
+                         * lambda-expression's resolved_type is set at
+                         * parse time. Avoids needing the synthesized
+                         * function name to be visible in any
+                         * declarative region for sema lookup —
+                         * skipping that lets us keep the lambda parser
+                         * scope-free. Auto deduction then handles the
+                         * function-to-pointer decay. */
+                        Type **pt = NULL;
+                        if (nparams > 0) {
+                            pt = arena_alloc(p->arena,
+                                sizeof(*pt) * nparams);
+                            for (int i = 0; i < nparams; i++)
+                                pt[i] = params[i]->var_decl.ty;
+                        }
+                        Type *fty = new_func_type(p, ret_ty, pt,
+                                                   nparams, false);
+                        Node *ref = new_node(p, ND_IDENT, name_tok);
+                        ref->ident.name = name_tok;
+                        ref->resolved_type = fty;
+                        return ref;
+                    }
+                }
+            }
+        }
+        /* Fallback: skip-and-discard. Restore position and re-skip
+         * with the legacy bracket/paren/brace skipper. */
+        parser_restore(p, saved);
         parser_advance(p);  /* consume [ */
         parser_skip_to_matching_rbracket(p);
-        /* Optional template parameter list (C++20 generic lambda
-         * with explicit template params). */
         if (parser_at(p, TK_LT)) {
             int adepth = 1;
             parser_advance(p);
@@ -288,7 +392,6 @@ static Node *primary_expr(Parser *p) {
             if (parser_at(p, TK_GT) || parser_at(p, TK_SHR))
                 parser_advance(p);
         }
-        /* Optional lambda-declarator (params + specifiers). */
         if (parser_consume(p, TK_LPAREN)) {
             int pdepth = 1;
             while (pdepth > 0 && !parser_at_eof(p)) {
@@ -300,15 +403,9 @@ static Node *primary_expr(Parser *p) {
                 parser_advance(p);
             }
             parser_expect(p, TK_RPAREN);
-            /* Skip declarator suffixes: mutable, constexpr,
-             * noexcept(...), -> trailing-return-type, attributes.
-             * Stop at '{' which begins the body. */
-            while (!parser_at(p, TK_LBRACE) && !parser_at_eof(p)) {
-                if (parser_at(p, TK_LBRACE)) break;
+            while (!parser_at(p, TK_LBRACE) && !parser_at_eof(p))
                 parser_advance(p);
-            }
         }
-        /* Compound-statement body — must be present. */
         if (parser_consume(p, TK_LBRACE)) {
             int bdepth = 1;
             while (bdepth > 0 && !parser_at_eof(p)) {
@@ -321,7 +418,6 @@ static Node *primary_expr(Parser *p) {
             }
             parser_expect(p, TK_RBRACE);
         }
-        /* Opaque placeholder — sema/codegen don't model lambdas. */
         return new_node(p, ND_NULLPTR, tok);
     }
 

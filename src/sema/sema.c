@@ -603,6 +603,15 @@ static void visit_var_decl(Sema *s, Node *n) {
             if (deduced && (deduced->kind == TY_REF ||
                             deduced->kind == TY_RVALREF))
                 deduced = deduced->base;
+            /* Function-to-pointer decay — §7.1.6.4.1: deduction with
+             * 'auto x = f;' where f names a function gives x the
+             * function pointer type. Also applies when the initializer
+             * is a captureless lambda (lowered to a fn name). */
+            if (deduced && deduced->kind == TY_FUNC && outer == leaf) {
+                Type *fp = sema_new_type(s, TY_PTR);
+                fp->base = deduced;
+                deduced = fp;
+            }
             /* For 'auto*': peel one pointer level off the initializer
              * to get the pointee type. */
             if (deduced && outer != leaf && outer->kind == TY_PTR &&

@@ -1248,6 +1248,15 @@ struct Parser {
     int template_depth;        /* nesting depth of template-argument-lists being parsed.
                                 * When > 0, TK_SHR (>>) is treated as two '>' tokens
                                 * (N4659 §17.2/3 [temp.names]). */
+    /* C++11 captureless lambdas — N4659 §8.1.5 [expr.prim.lambda].
+     * Each lambda expression synthesizes an ND_FUNC_DEF named
+     * '__sf_lambda_<counter>'. Parser stashes them here; parse_tu
+     * appends them to the TU's decls before returning so codegen
+     * emits the bodies. The lambda expression itself lowers to
+     * '&__sf_lambda_<counter>' (a fn pointer). */
+    Node **lambda_decls;
+    int lambda_count;
+    int lambda_cap;
     bool split_shr;            /* true when a >> (TK_SHR) has been "split": the first >
                                 * was consumed, the second > is virtual. parser_peek()/
                                 * parser_at() return a synthetic TK_GT; parser_advance()
