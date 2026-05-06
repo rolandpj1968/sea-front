@@ -78,11 +78,14 @@ for arg in "$@"; do
     esac
 done
 
-# No source files — pure link. -no-pie because cc1plus emits the
-# non-PIE codegen gcc 4.8 ships with; modern host linkers default to
-# PIE and reject the resulting relocations.
-[ -z "$INPUTS" ] && exec "$SEA_CC" -no-pie "$@"
-[ "$MODE" = "link" ] && exec "$SEA_CC" -no-pie "$@"
+# No source files — pure link. Use host g++ (not cc) so that
+# -static-libstdc++ / -static-libgcc are honored and the C++ runtime
+# (operator new, __cxa_guard_*, __gxx_personality_v0) link cleanly.
+# -no-pie because cc1plus emits the non-PIE codegen gcc 4.8 ships
+# with; modern host linkers default to PIE and reject those
+# relocations.
+[ -z "$INPUTS" ] && exec "$SEA_CPP" -no-pie "$@"
+[ "$MODE" = "link" ] && exec "$SEA_CPP" -no-pie "$@"
 
 [ -z "$STD_FLAG" ] && STD_FLAG="-std=c++03"
 
