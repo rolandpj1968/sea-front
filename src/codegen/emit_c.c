@@ -1238,6 +1238,9 @@ static bool subtree_has_cleanups(Node *n) {
                subtree_has_cleanups(n->for_.cond) ||
                subtree_has_cleanups(n->for_.inc) ||
                subtree_has_cleanups(n->for_.body);
+    case ND_RANGE_FOR:
+        return subtree_has_cleanups(n->range_for.range) ||
+               subtree_has_cleanups(n->range_for.body);
     case ND_RETURN:
         return subtree_has_cleanups(n->ret.expr);
     case ND_EXPR_STMT:
@@ -2090,6 +2093,33 @@ static int resolve_overload(Type *class_type, Token *name, bool is_ctor,
 
 /* Check if a method on class_type returns a reference (TY_REF / TY_RVALREF).
  * Used to decide whether to wrap method calls in (*...) for ref-return deref. */
+/* Look up a 0-arg method's return type on a class. Used by the
+ * range-for desugar to determine the iterator type from begin()/end().
+ * Returns NULL if no matching method is found. */
+static Type *class_method_return_type(Type *class_type, const char *name,
+                                       int name_len) {
+    if (!class_type || !class_type->class_def) return NULL;
+    Node *cd = class_type->class_def;
+    for (int i = 0; i < cd->class_def.nmembers; i++) {
+        Node *m = cd->class_def.members[i];
+        if (!m) continue;
+        Token *mn = NULL;
+        Type *ret = NULL;
+        if (m->kind == ND_FUNC_DEF) {
+            mn = m->func.name;
+            ret = m->func.ret_ty;
+        } else if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
+                   m->var_decl.ty->kind == TY_FUNC) {
+            mn = m->var_decl.name;
+            ret = m->var_decl.ty->ret;
+        }
+        if (!mn || mn->len != name_len) continue;
+        if (memcmp(mn->loc, name, name_len) != 0) continue;
+        return ret;
+    }
+    return NULL;
+}
+
 static bool method_returns_ref(Type *class_type, Token *name) {
     if (!class_type || !class_type->class_def || !name) return false;
     Node *cd = class_type->class_def;
@@ -6430,6 +6460,78 @@ static void emit_stmt(Node *n) {
         g_cf.nlive--;
         emit_indent();
         fprintf(stdout, "__SF_loop_break_%d: ;\n", brk);
+        return;
+    }
+    case ND_RANGE_FOR: {
+        /* C++11 range-based for — N4659 §9.5.4 [stmt.ranged].
+         * Desugar to a C-style loop over begin()/end() (containers)
+         * or pointer/array bounds (built-in arrays). The decl variable
+         * is freshly bound per iteration to '*__sf_it'.
+         *
+         * Two shapes supported:
+         *   1. Range expr is TY_ARRAY[N] — iterate as 'T* p, *e=p+N'.
+         *   2. Range expr is TY_STRUCT/UNION with begin()/end() methods
+         *      — call them via mangled symbols and assume the iterator
+         *      type is whatever begin() returns.
+         *
+         * Limitations: range expression is emitted twice (begin + end
+         * call). For ident / member shapes that's harmless; for a
+         * side-effecting call, we'd need to bind to a local first.
+         * Doesn't yet support range-decl with deduced 'auto&' (use
+         * the deduced type from sema). */
+        Node *range = n->range_for.range;
+        Node *decl  = n->range_for.decl;
+        Node *body  = n->range_for.body;
+        Type *range_ty = range ? range->resolved_type : NULL;
+        if (range_ty && (range_ty->kind == TY_REF ||
+                          range_ty->kind == TY_RVALREF))
+            range_ty = range_ty->base;
+        Token *decl_name = decl ? decl->var_decl.name : NULL;
+        Type *decl_ty = decl ? decl->var_decl.ty : NULL;
+        if (!decl_name || !decl_ty || !range_ty) {
+            fputs("/* sf: unsupported range-for (missing decl/range type) */ {}\n",
+                  stdout);
+            return;
+        }
+        if (range_ty->kind == TY_ARRAY && range_ty->array_len > 0) {
+            fputs("{\n", stdout); g_indent++;
+            emit_indent(); emit_type(range_ty->base);
+            fputs(" *__sf_end = (", stdout); emit_expr(range);
+            fprintf(stdout, ") + %d;\n", range_ty->array_len);
+            emit_indent(); fputs("for (", stdout); emit_type(range_ty->base);
+            fputs(" *__sf_it = (", stdout); emit_expr(range);
+            fputs("); __sf_it != __sf_end; ++__sf_it) {\n", stdout);
+            g_indent++; emit_indent(); emit_type(decl_ty);
+            fprintf(stdout, " %.*s = *__sf_it;\n",
+                    decl_name->len, decl_name->loc);
+            emit_indent(); emit_stmt(body);
+            g_indent--; emit_indent(); fputs("}\n", stdout);
+            g_indent--; emit_indent(); fputs("}\n", stdout);
+            return;
+        }
+        if (range_ty->kind == TY_STRUCT || range_ty->kind == TY_UNION) {
+            Type *iter_ty = class_method_return_type(range_ty, "begin", 5);
+            if (iter_ty) {
+                fputs("{\n", stdout); g_indent++;
+                emit_indent(); emit_type(iter_ty); fputs(" __sf_end = ", stdout);
+                mangle_class_tag(range_ty); fputs("__end_p_void_pe_(&(", stdout);
+                emit_expr(range); fputs("));\n", stdout);
+                emit_indent(); fputs("for (", stdout); emit_type(iter_ty);
+                fputs(" __sf_it = ", stdout);
+                mangle_class_tag(range_ty); fputs("__begin_p_void_pe_(&(", stdout);
+                emit_expr(range); fputs(")); __sf_it != __sf_end; ++__sf_it) {\n",
+                                          stdout);
+                g_indent++; emit_indent(); emit_type(decl_ty);
+                fprintf(stdout, " %.*s = *__sf_it;\n",
+                        decl_name->len, decl_name->loc);
+                emit_indent(); emit_stmt(body);
+                g_indent--; emit_indent(); fputs("}\n", stdout);
+                g_indent--; emit_indent(); fputs("}\n", stdout);
+                return;
+            }
+        }
+        fputs("/* sf: unsupported range-for (no begin/end method) */ {}\n",
+              stdout);
         return;
     }
     case ND_GOTO: {

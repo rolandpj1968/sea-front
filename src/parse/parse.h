@@ -114,8 +114,8 @@ typedef enum {
                          * C++23 adds: if consteval (N4950 §9.4.2) */
     ND_WHILE,           /* while — N4659 §9.5.1 [stmt.while] */
     ND_DO,              /* do-while — N4659 §9.5.2 [stmt.do] */
-    ND_FOR,             /* for — N4659 §9.5.3 [stmt.for]
-                         * C++11 adds: range-based for (§9.5.4 [stmt.ranged]) */
+    ND_FOR,             /* for — N4659 §9.5.3 [stmt.for] */
+    ND_RANGE_FOR,       /* C++11 range-based for — §9.5.4 [stmt.ranged] */
     ND_SWITCH,          /* switch — N4659 §9.4.2 [stmt.switch]
                          * C++17 adds: init-statement */
     ND_CASE,            /* case — N4659 §9.1 [stmt.label] */
@@ -498,7 +498,6 @@ struct Node {
         } do_;
 
         /* ND_FOR — N4659 §9.5.3 [stmt.for]
-         * C++11: range-based for (§9.5.4) deferred to later stage.
          * C++17: init-statement in if/switch is similar pattern. */
         struct {
             Node *init;     /* init-statement or declaration */
@@ -516,6 +515,17 @@ struct Node {
              * N4659 §6.3.3/4 [basic.scope.block]. */
             DeclarativeRegion *scope;
         } for_;
+
+        /* ND_RANGE_FOR — C++11 range-based for, §9.5.4 [stmt.ranged].
+         *   for ( for-range-declaration : for-range-initializer ) statement
+         * Codegen desugars to a C-style for over begin()/end() (or
+         * pointer/array bounds for built-in arrays). */
+        struct {
+            Node *decl;     /* for-range-declaration (ND_VAR_DECL) */
+            Node *range;    /* the container expression after ':' */
+            Node *body;
+            DeclarativeRegion *scope;
+        } range_for;
 
         /* ND_SWITCH — N4659 §9.4.2 [stmt.switch]
          * C++17: adds init-statement. */

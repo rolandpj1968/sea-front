@@ -301,6 +301,7 @@ static Node *parse_for_stmt(Parser *p) {
         if (is_range) {
             Type *bt = NULL;
             Node *decl = NULL;
+            DeclarativeRegion *scope = p->region;
             if (parser_at_type_specifier(p)) {
                 bt = parse_type_specifiers(p).type;
                 if (bt) decl = parse_declarator(p, bt);
@@ -318,9 +319,12 @@ static Node *parse_for_stmt(Parser *p) {
             parser_expect(p, TK_RPAREN);
             Node *body = parse_stmt(p);
             region_pop(p);
-            (void)decl; (void)range;
-            return new_for_node(p, /*init=*/NULL, /*cond=*/NULL,
-                                /*inc=*/NULL, body, tok);
+            Node *n = new_node(p, ND_RANGE_FOR, tok);
+            n->range_for.decl = decl;
+            n->range_for.range = range;
+            n->range_for.body = body;
+            n->range_for.scope = scope;
+            return n;
         }
     }
 

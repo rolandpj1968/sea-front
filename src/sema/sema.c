@@ -2030,6 +2030,15 @@ static void visit(Sema *s, Node *n) {
     case ND_WHILE:     visit_while(s, n);     break;
     case ND_DO:        visit_do(s, n);        break;
     case ND_FOR:       visit_for(s, n);       break;
+    case ND_RANGE_FOR: {
+        DeclarativeRegion *saved = s->cur_scope;
+        if (n->range_for.scope) s->cur_scope = n->range_for.scope;
+        visit(s, n->range_for.range);
+        visit(s, n->range_for.decl);
+        visit(s, n->range_for.body);
+        s->cur_scope = saved;
+        break;
+    }
     case ND_CALL:      visit_call(s, n);      break;
     case ND_SUBSCRIPT: visit_subscript(s, n); break;
     case ND_MEMBER:    visit_member(s, n);    break;
@@ -2326,6 +2335,11 @@ static void canonicalize_walk_node(Node *n, TmplIdx *idx, Arena *arena) {
         canonicalize_walk_node(n->for_.cond, idx, arena);
         canonicalize_walk_node(n->for_.inc, idx, arena);
         canonicalize_walk_node(n->for_.body, idx, arena);
+        break;
+    case ND_RANGE_FOR:
+        canonicalize_walk_node(n->range_for.decl, idx, arena);
+        canonicalize_walk_node(n->range_for.range, idx, arena);
+        canonicalize_walk_node(n->range_for.body, idx, arena);
         break;
     case ND_RETURN:
         canonicalize_walk_node(n->ret.expr, idx, arena);

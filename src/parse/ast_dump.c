@@ -324,6 +324,19 @@ static void dump(Node *node, int depth) {
         printf(")");
         break;
 
+    case ND_RANGE_FOR:
+        printf("(range-for ");
+        if (node->range_for.decl) dump(node->range_for.decl, depth + 1);
+        else printf("(null)");
+        printf(" : ");
+        if (node->range_for.range) dump(node->range_for.range, depth + 1);
+        else printf("(null)");
+        printf("\n");
+        indent(depth + 1);
+        dump(node->range_for.body, depth + 1);
+        printf(")");
+        break;
+
     case ND_SWITCH:
         printf("(switch ");
         dump(node->switch_.expr, depth + 1);
