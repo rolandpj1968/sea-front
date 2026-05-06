@@ -5307,6 +5307,19 @@ static void emit_var_decl_inner(Node *n) {
         } else if (var_is_ref && !init_is_ref && !init_is_ptr) {
             fputc('&', stdout);
             emit_expr(n->var_decl.init);
+        } else if (var_is_ref && init_e && init_e->kind == ND_IDENT &&
+                   is_ref_param(init_e->ident.name)) {
+            /* Ref var bound to another ref-param: both lower to T*,
+             * emit the bare ident (suppress the usual deref). Pattern:
+             *   void f(T& a) { T& b = a; ... }     — same referent
+             *   const T& c = a;
+             *   auto& d = a;                       — auto deduces T&
+             * Without this, emit_expr would produce '(*a)' and the
+             * decl 'T* b = (*a)' fails C type-checking. */
+            bool saved = g_suppress_ref_deref;
+            g_suppress_ref_deref = true;
+            emit_expr(init_e);
+            g_suppress_ref_deref = saved;
         } else {
             emit_expr(n->var_decl.init);
         }

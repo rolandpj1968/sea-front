@@ -424,10 +424,16 @@ static void visit_unary(Sema *s, Node *n) {
         n->resolved_type = ot;  /* preserves type, modulo promotion */
         break;
     case TK_AMP: {
-        /* Address-of: result is pointer-to-operand-type. */
+        /* Address-of: result is pointer-to-operand-type. There are
+         * no pointers-to-references in C++ (N4659 §11.3.1/1), so
+         * if the operand's lvalue type is T& or T&&, strip to T —
+         * '&ref' yields T*, not T&* or T&&*. */
         if (!ot) break;
+        Type *referent = ot;
+        if (referent->kind == TY_REF || referent->kind == TY_RVALREF)
+            referent = referent->base;
         Type *ptr = sema_new_type(s, TY_PTR);
-        ptr->base = ot;
+        ptr->base = referent;
         n->resolved_type = ptr;
         break;
     }
@@ -574,6 +580,44 @@ static void visit_var_decl(Sema *s, Node *n) {
      * to pick the right ctor (e.g. copy vs converting). */
     for (int i = 0; i < n->var_decl.ctor_nargs; i++)
         visit(s, n->var_decl.ctor_args[i]);
+    /* C++11 'auto' deduction — N4659 §10.1.7.4 [dcl.spec.auto]/6.
+     * Three forms supported:
+     *   auto  x = e;   — T = e (refs stripped, decay-ish)
+     *   auto& x = e;   — T = e (refs stripped); outer is ref
+     *   auto* x = e;   — T = pointee of e; outer is ptr
+     * Find the 'is_auto' leaf inside any TY_PTR / TY_REF / TY_RVALREF
+     * wrappers and replace it with the deduced base. The outer
+     * wrappers (and their cv-qualifiers) survive unchanged. */
+    if (n->var_decl.ty && n->var_decl.init) {
+        Type *outer = n->var_decl.ty;
+        Type *leaf = outer;
+        while (leaf && !leaf->is_auto &&
+               (leaf->kind == TY_PTR || leaf->kind == TY_REF ||
+                leaf->kind == TY_RVALREF))
+            leaf = leaf->base;
+        if (leaf && leaf->is_auto) {
+            Type *init_ty = n->var_decl.init->resolved_type;
+            Type *deduced = init_ty;
+            /* Strip initializer's outermost ref — auto sees the
+             * referent type, not the reference. §10.1.7.4.1/3 */
+            if (deduced && (deduced->kind == TY_REF ||
+                            deduced->kind == TY_RVALREF))
+                deduced = deduced->base;
+            /* For 'auto*': peel one pointer level off the initializer
+             * to get the pointee type. */
+            if (deduced && outer != leaf && outer->kind == TY_PTR &&
+                deduced->kind == TY_PTR)
+                deduced = deduced->base;
+            if (deduced) {
+                bool keep_const    = leaf->is_const;
+                bool keep_volatile = leaf->is_volatile;
+                *leaf = *deduced;
+                leaf->is_auto     = false;
+                leaf->is_const    |= keep_const;
+                leaf->is_volatile |= keep_volatile;
+            }
+        }
+    }
     n->resolved_type = n->var_decl.ty;
 }
 

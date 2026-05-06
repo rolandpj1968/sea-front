@@ -188,6 +188,7 @@ DeclSpec parse_type_specifiers(Parser *p) {
             Type *ty = new_type(p, TY_INT);
             ty->is_const = is_const;
             ty->is_volatile = is_volatile;
+            ty->is_auto = true;
             result.type = ty;
             return result;
         }

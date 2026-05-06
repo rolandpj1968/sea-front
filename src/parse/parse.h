@@ -893,6 +893,12 @@ struct Type {
     bool is_const;
     bool is_volatile;
 
+    /* C++11 'auto' placeholder — N4659 §10.1.7.4 [dcl.spec.auto].
+     * Parser emits TY_INT with is_auto=true; sema's visit_var_decl
+     * deduces from the initializer and overwrites the kind/base/etc.
+     * Cleared after deduction. */
+    bool is_auto;
+
     /* Pointed-to / element / referenced type. Used by:
      *   TY_PTR     — N4659 §11.3.1 [dcl.ptr]   (T*)
      *   TY_REF     — N4659 §11.3.2 [dcl.ref]   (T&)
