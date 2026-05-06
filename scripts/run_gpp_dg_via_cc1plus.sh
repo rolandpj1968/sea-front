@@ -63,32 +63,21 @@ for src in $files; do
     GCC48_LIBSTDCXX_SRC="$HOME/src/sea-front-deps/gcc-4.8.5/libstdc++-v3/include"
     GCC48_LIBSTDCXX_BUILD="$HOME/src/sea-front-deps/gcc-4.8.5/build-sf/x86_64-unknown-linux-gnu/libstdc++-v3/include"
     GCC48_LIBSUPCXX="$HOME/src/sea-front-deps/gcc-4.8.5/libstdc++-v3/libsupc++"
+    GLIBC_SHIM="${SEA_GLIBC_SHIM:-$HOME/src/sea-front-deps/glibc-shim}"
+    # -isystem $GLIBC_SHIM puts our era-correct sys/cdefs.h +
+    # bits/floatn{,-common}.h ahead of the host's. With those in place,
+    # modern glibc 2.34+ host headers reference only macros that resolve
+    # cleanly under gcc 4.8 (post-4.8 attribute decorators all expand to
+    # empty; __HAVE_FLOAT* are 0 so no _FloatN types are declared).
     PP_INC="-nostdinc++ \
         -I$GCC48_LIBSTDCXX_BUILD/x86_64-unknown-linux-gnu \
         -I$GCC48_LIBSTDCXX_BUILD \
         -I$GCC48_LIBSTDCXX_SRC \
         -I$GCC48_LIBSTDCXX_SRC/c_global \
-        -I$GCC48_LIBSUPCXX"
-    # Modern glibc 2.34+ pollutes its headers with constructs gcc-4.8's
-    # frontend can't parse:
-    #   - extended __malloc__(deallocator, argno) attribute
-    #   - _Float32 / _Float64 / _Float128 literal type names
-    #   - __attr_dealloc / __attr_access decorators
-    # Strip them here. Tests that genuinely USE the affected types are
-    # out of scope; tests that merely #include <stdio.h> en passant
-    # would otherwise spuriously fail at the include stage.
-    # Approximate _Float128 etc. by their nearest gcc-4.8 type. Wrong
-    # for tests that genuinely use _Float128 arithmetic, but right
-    # enough for tests that only #include <stdio.h>/<stdlib.h>/<math.h>
-    # in passing and would otherwise fail to parse the type name.
-    PP_DEFS="-D__attribute_malloc__= -D__attr_dealloc_fclose= -D__attr_dealloc_free= \
-        -D__attr_access(x)= -D__fortified_attr_access(a,b,c)= \
-        -D__attribute_alloc_size__(...)= \
-        -D__attr_dealloc(d,a)= \
-        -D_Float32=float -D_Float64=double -D_Float128=double \
-        -D_Float32x=float -D_Float64x=double"
+        -I$GCC48_LIBSUPCXX \
+        -isystem $GLIBC_SHIM"
     if ! timeout "$SEA_DG_TIMEOUT" g++ -E -std=c++03 -w \
-            $PP_INC $PP_DEFS \
+            $PP_INC \
             "$src" -o "$base.i" \
             > "$WORK/out" 2> "$WORK/err"; then
         echo "E_FRONT  $rel"
