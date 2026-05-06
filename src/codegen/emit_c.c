@@ -4495,6 +4495,43 @@ static void emit_expr(Node *n) {
             fputs("*)0)", stdout);
             return;
         }
+        /* Cast TO a reference type — target lowers to T*. The cast
+         * binds an lvalue (or the result of a ref-yielding expr) to
+         * a reference, so the C-level emission is 'address of the
+         * operand'. Same shape as unary '&':
+         *   - operand is a ref-param ident: bare ident (already T*)
+         *   - operand is itself a ref (lowered to T*): bare expr
+         *   - otherwise: '&' + operand
+         *
+         * Pattern: 'static_cast<T&&>(x)' from std::move and the
+         * common rvalue-ref binding idiom. N4659 §8.2.9 [expr.static.cast]
+         * / §8.3.2 [dcl.ref]. Without this, '(struct T*)x' where x
+         * is a value or '(struct T*)(*x)' where x is a ref-param both
+         * fail C type-checking. */
+        if (n->cast.ty &&
+            (n->cast.ty->kind == TY_REF || n->cast.ty->kind == TY_RVALREF)) {
+            Node *op = n->cast.operand;
+            bool op_is_ref_param = op->kind == ND_IDENT &&
+                                    is_ref_param(op->ident.name);
+            bool op_already_ptr = ty_is_ref(op->resolved_type);
+            fputc('(', stdout);
+            emit_type(n->cast.ty);
+            fputc(')', stdout);
+            if (op_is_ref_param) {
+                bool saved = g_suppress_ref_deref;
+                g_suppress_ref_deref = true;
+                emit_expr(op);
+                g_suppress_ref_deref = saved;
+            } else if (op_already_ptr) {
+                emit_expr(op);
+            } else {
+                fputc('&', stdout);
+                fputc('(', stdout);
+                emit_expr(op);
+                fputc(')', stdout);
+            }
+            return;
+        }
         fputc('(', stdout);
         emit_type(n->cast.ty);
         fputc(')', stdout);
