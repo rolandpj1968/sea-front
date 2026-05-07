@@ -2010,6 +2010,19 @@ static void visit(Sema *s, Node *n) {
                 if (!ld)
                     ld = lookup_unqualified_from(s->cur_scope,
                         lead->loc, lead->len);
+                /* Namespace lead (N4659 §6.4.3 [basic.lookup.qual]):
+                 * 'NS::name' looks up `name` in the namespace's region.
+                 * Entries like a global variable inside the namespace
+                 * (e.g. `namespace bidi { vec_t vec; }`, then
+                 * `bidi::vec.method()` from outside) need the variable's
+                 * type recorded on the qualified-id so the enclosing
+                 * member-call emit can dispatch through the class. */
+                if (ld && ld->entity == ENTITY_NAMESPACE && ld->ns_region) {
+                    Declaration *md = lookup_in_scope(ld->ns_region,
+                        member->loc, member->len);
+                    if (md && md->type)
+                        n->resolved_type = md->type;
+                }
                 if (ld && ld->type && ld->type->class_region) {
                     Declaration *md = lookup_in_scope(ld->type->class_region,
                         member->loc, member->len);
