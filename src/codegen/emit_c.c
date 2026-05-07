@@ -8623,6 +8623,11 @@ static void emit_prelude(void) {
     fputs("    __SF_UNWIND_RETURN = 1,\n", stdout);
     fputs("    __SF_UNWIND_BREAK  = 2,\n", stdout);
     fputs("    __SF_UNWIND_CONT   = 3,\n", stdout);
+    /* Exception-throw unwind state — N4659 §18 [except], lowering
+     * detail in docs/exceptions.md. The chain machinery treats THROW
+     * the same as RETURN/BREAK/CONT; the difference is at try-block
+     * landing pads (see __SF_CHAIN_THROW below). */
+    fputs("    __SF_UNWIND_THROW  = 4,\n", stdout);
     fputs("} __SF_unwind_t;\n", stdout);
     /* Rewrite macros — set the unwind state and jump to the
      * innermost cleanup label (which then chains outward). */
@@ -8675,6 +8680,59 @@ static void emit_prelude(void) {
     fputs("#define __SF_CHAIN_CONT(lbl) "
           "do { if (__SF_unwind == __SF_UNWIND_CONT)   goto lbl; } while (0)\n",
           stdout);
+    fputs("#define __SF_CHAIN_THROW(lbl) "
+          "do { if (__SF_unwind == __SF_UNWIND_THROW)  goto lbl; } while (0)\n",
+          stdout);
+
+    /* Exception-handling runtime — see docs/exceptions.md (TLS
+     * polling). Slice 2 emits the declarations only; lowering of
+     * 'throw' / 'catch' against this state lands in slices 3+. The
+     * exception-state instance is currently a plain TU-scope global;
+     * cross-TU propagation (slice 5) will move the storage to a
+     * single shared definition (e.g. via a small runtime .c).
+     *
+     * Layout matches docs/exceptions.md: state piggybacks on the
+     * existing __SF_unwind chain (see __SF_unwind_t above) — the
+     * dedicated `state` field is reserved for cross-function
+     * exception scenarios where a separate slot is more convenient
+     * than threading __SF_unwind through every call. */
+    fputs("struct __sf_type_info {\n", stdout);
+    fputs("    const char *name;\n", stdout);
+    /* Single-inheritance fast path — parent chain walk for
+     * catch-by-base. NULL for primitives and root classes. */
+    fputs("    const struct __sf_type_info *parent;\n", stdout);
+    /* Multi-inheritance bases: deferred (see docs/rtti.md). The
+     * field is reserved so the layout stays stable when MI ships. */
+    fputs("    int n_parents;\n", stdout);
+    fputs("    const void *parents;\n", stdout);
+    fputs("};\n", stdout);
+    fputs("struct __sf_exception_state {\n", stdout);
+    fputs("    __SF_unwind_t state;\n", stdout);
+    /* Heap-allocated thrown object for class-type throws; for
+     * primitive throws (slice 3 first cut) this slot is reused as
+     * inline storage via uintptr_t cast (positive int up to one
+     * pointer-width). The eventual heap pathway lands when class-
+     * type throws ship. */
+    fputs("    void *exc_obj;\n", stdout);
+    fputs("    const struct __sf_type_info *exc_type;\n", stdout);
+    fputs("    void (*exc_dtor)(void *);\n", stdout);
+    fputs("};\n", stdout);
+    /* C11 thread-local storage. Standard rather than __thread so
+     * cproc / non-GNU C compilers stay supported. Single-threaded
+     * targets see this as a regular global with no extra cost.
+     * Marked 'static' for slice 2: keeps the symbol TU-local so
+     * multi-TU links don't get duplicate-definition errors. The
+     * downside is that exceptions cannot propagate across TU
+     * boundaries today — every TU has its own state. Slice 5 moves
+     * this to a single shared definition (likely via a designated
+     * runtime TU emitting the global, others declaring extern). */
+    fputs("#if __STDC_VERSION__ >= 201112L\n", stdout);
+    fputs("static _Thread_local struct __sf_exception_state __sf_exc_state;\n", stdout);
+    fputs("#elif defined(__GNUC__) || defined(__clang__)\n", stdout);
+    fputs("static __thread struct __sf_exception_state __sf_exc_state;\n", stdout);
+    fputs("#else\n", stdout);
+    fputs("static struct __sf_exception_state __sf_exc_state;\n", stdout);
+    fputs("#endif\n", stdout);
     /* __SF_INLINE — multi-TU dedup for inline-eligible functions
      * (in-class methods, synthesized ctor/dtor wrappers, dtor body
      * functions, eventually template instantiations).
