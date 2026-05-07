@@ -912,6 +912,22 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
         c->tu = n->tu;
         /* Should not be cloned — top-level container */
         break;
+
+    case ND_STMT_EXPR:
+        /* GCC statement-expression — '({ stmts; expr; })'. The body
+         * is a structured ND_BLOCK that may reference template
+         * parameters via identifiers, types, or nested template-ids
+         * — all need substitution. Without recursing here, the
+         * cloned ND_STMT_EXPR has block=NULL and emit_c renders it
+         * as empty parens '()' inside the surrounding cast or
+         * assignment. Real-world hit: gcc 14 libcpp/identifiers.cc
+         * 'template<typename Node> alloc_node' whose body is the
+         * XOBNEW macro — a deeply-nested __extension__ ({...}) with
+         * stmt-exprs at multiple levels. The instantiated template
+         * dropped the entire body. */
+        c->stmt_expr.block = clone_node(n->stmt_expr.block, map, arena);
+        break;
+
     default:
         /* Hygiene: NodeKinds above cover everything parse/expr.c,
          * parse/stmt.c, parse/decl.c produce. A future NodeKind
