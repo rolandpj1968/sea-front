@@ -52,6 +52,58 @@ static Type t_int_arr5       = { .kind = TY_ARRAY, .base = &t_int, .array_len = 
 /* Active-mangler kind is a runtime global. */
 extern MangleKind g_mangle_kind;
 
+/* Mock tokens for class/namespace names. The Token API takes a
+ * non-const char*; we use mutable buffers since nothing should
+ * write through them. */
+static char tok_text_T[] = "T";
+static char tok_text_A[] = "A";
+static char tok_text_std[] = "std";
+static char tok_text_ns[] = "ns";
+static char tok_text_foo[] = "foo";
+
+static Token tok_T   = { .kind = TK_IDENT, .loc = tok_text_T,   .len = 1 };
+static Token tok_A   = { .kind = TK_IDENT, .loc = tok_text_A,   .len = 1 };
+static Token tok_std = { .kind = TK_IDENT, .loc = tok_text_std, .len = 3 };
+static Token tok_ns  = { .kind = TK_IDENT, .loc = tok_text_ns,  .len = 2 };
+static Token tok_foo = { .kind = TK_IDENT, .loc = tok_text_foo, .len = 3 };
+
+/* Mock declarative regions. A class's class_region's enclosing
+ * chain is what the namespace walker traverses. */
+static DeclarativeRegion reg_global = { .kind = REGION_NAMESPACE };
+static DeclarativeRegion reg_std    = { .kind = REGION_NAMESPACE };
+static DeclarativeRegion reg_ns     = { .kind = REGION_NAMESPACE };
+static DeclarativeRegion reg_class_T_global = { .kind = REGION_CLASS };
+static DeclarativeRegion reg_class_T_std    = { .kind = REGION_CLASS };
+static DeclarativeRegion reg_class_T_ns     = { .kind = REGION_CLASS };
+
+static Type t_class_T_global = { .kind = TY_STRUCT, .tag = &tok_T };
+static Type t_class_T_std    = { .kind = TY_STRUCT, .tag = &tok_T };
+static Type t_class_T_ns     = { .kind = TY_STRUCT, .tag = &tok_T };
+static Type t_class_A_global = { .kind = TY_STRUCT, .tag = &tok_A };
+
+static void wire_regions(void) {
+    /* std and ns enclose global. Each class region encloses its
+     * containing namespace. */
+    reg_std.enclosing = &reg_global;
+    reg_std.name      = &tok_std;
+    reg_ns.enclosing  = &reg_global;
+    reg_ns.name       = &tok_ns;
+
+    reg_class_T_global.enclosing = &reg_global;
+    reg_class_T_global.owner_type = &t_class_T_global;
+    reg_class_T_std.enclosing    = &reg_std;
+    reg_class_T_std.owner_type   = &t_class_T_std;
+    reg_class_T_ns.enclosing     = &reg_ns;
+    reg_class_T_ns.owner_type    = &t_class_T_ns;
+
+    t_class_T_global.class_region = &reg_class_T_global;
+    t_class_T_std.class_region    = &reg_class_T_std;
+    t_class_T_ns.class_region     = &reg_class_T_ns;
+    t_class_A_global.class_region = &reg_class_T_global;
+    /* (re-uses the global region; its owner_type is wrong but we
+     * never query that on this Type for the fixtures below). */
+}
+
 static void run_fixture_type(const char *label, Type *ty) {
     printf("%s: ", label);
     itan_emit_type_for_mangle(ty);
@@ -64,8 +116,16 @@ static void run_fixture_params(const char *label, Type **params, int n) {
     putchar('\n');
 }
 
+static void run_fixture_method(const char *label, Type *cls, Token *m,
+                                Type **params, int np, bool is_const) {
+    printf("%s: ", label);
+    itan_mangle_class_method_cv(cls, m, params, np, is_const);
+    putchar('\n');
+}
+
 int main(void) {
     g_mangle_kind = MANGLE_ITANIUM;
+    wire_regions();
 
     /* Fundamentals — Itanium ABI §5.1.5. */
     run_fixture_type("void",            &t_void);
@@ -132,6 +192,44 @@ int main(void) {
     {
         /* No params. */
         run_fixture_params("p_void", NULL, 0);
+    }
+
+    /* ---------- Stage 2 fixtures: names + class methods ---------- */
+
+    /* Class type as a parameter. */
+    {
+        Type *p[] = { &t_class_A_global };
+        run_fixture_params("p_class_A_global", p, 1);
+    }
+    {
+        /* `T` from std namespace as a param: NSt1TE. */
+        Type *p[] = { &t_class_T_std };
+        run_fixture_params("p_class_T_std", p, 1);
+    }
+    {
+        /* `T` from ns namespace: N2ns1TE. */
+        Type *p[] = { &t_class_T_ns };
+        run_fixture_params("p_class_T_ns", p, 1);
+    }
+
+    /* Method calls. */
+    run_fixture_method("m_global_T_foo_void",
+        &t_class_T_global, &tok_foo, NULL, 0, false);
+    run_fixture_method("m_global_T_foo_int",
+        &t_class_T_global, &tok_foo, (Type*[]){ &t_int }, 1, false);
+    run_fixture_method("m_global_T_foo_const",
+        &t_class_T_global, &tok_foo, NULL, 0, true);
+    run_fixture_method("m_std_T_foo_void",
+        &t_class_T_std, &tok_foo, NULL, 0, false);
+    run_fixture_method("m_ns_T_foo_void",
+        &t_class_T_ns, &tok_foo, NULL, 0, false);
+    {
+        /* Method `void T::foo(T*, T*)` — second T* should sub. */
+        Type t_T_ptr  = { .kind = TY_PTR, .base = &t_class_T_global };
+        Type t_T_ptr2 = { .kind = TY_PTR, .base = &t_class_T_global };
+        Type *p[] = { &t_T_ptr, &t_T_ptr2 };
+        run_fixture_method("m_global_T_foo_T_ptr_T_ptr",
+            &t_class_T_global, &tok_foo, p, 2, false);
     }
 
     return 0;

@@ -32,7 +32,8 @@ fi
 # a one-line .cpp with `void f(<types>)` and check g++'s mangled
 # symbol's param portion matches our emit.
 
-# Param fixtures keyed by label → (cpp param list, expected suffix).
+# Param-only fixtures (`void f(<cpp>)` whose mangled symbol's suffix
+# after `_Z1f` should match <expected>).
 # Format: <label>|<cpp>|<expected>
 PAIRS='
 p_int|int|i
@@ -43,6 +44,17 @@ p_int_ptr_ptr|int**|PPi
 p_int_ptr_x3_const_int_ptr|int*, int*, int*, const int*|PiS_S_PKi
 p_int_array5_decays|int[5]|Pi
 p_void||v
+'
+
+# Whole-symbol fixtures — sea-front emitted `_Z…`, gcc-via-source
+# should emit the same. Format: <label>|<cpp>|<expected_full_symbol>
+WHOLE='
+m_global_T_foo_void|struct T { void foo(); }; void T::foo() {}|_ZN1T3fooEv
+m_global_T_foo_int|struct T { void foo(int); }; void T::foo(int) {}|_ZN1T3fooEi
+m_global_T_foo_const|struct T { void foo() const; }; void T::foo() const {}|_ZNK1T3fooEv
+m_std_T_foo_void|namespace std { struct T { void foo(); }; void T::foo() {} }|_ZNSt1T3fooEv
+m_ns_T_foo_void|namespace ns { struct T { void foo(); }; void T::foo() {} }|_ZN2ns1T3fooEv
+m_global_T_foo_T_ptr_T_ptr|struct T { void foo(T*, T*); }; void T::foo(T*, T*) {}|_ZN1T3fooEPS_S0_
 '
 
 # Helpers
@@ -59,20 +71,17 @@ echo "$PAIRS" | grep . | while IFS='|' read -r label cpp expected; do
     if [ -z "$cpp" ]; then
         printf 'void f(){}\n' > "$src"
     else
-        # Use named anonymous params so g++ doesn't warn unused.
-        # Replace literal commas with ',' between named placeholders.
-        # Easier: just emit `void f(<types>) {}` — gcc accepts unnamed.
         printf 'void f(%s){}\n' "$cpp" > "$src"
     fi
     if ! g++ -c -fno-rtti -fno-exceptions -w -o "$obj" "$src" 2>"$TMPDIR/$label.err"; then
         echo "test_mangle_itanium: g++ failed to compile fixture '$label':"
         cat "$TMPDIR/$label.err"
-        failed=1; continue
+        continue
     fi
     sym=$(nm "$obj" | awk '/T _Z1f/{print $NF; exit}')
     if [ -z "$sym" ]; then
         echo "test_mangle_itanium: no _Z1f symbol from g++ for '$label'"
-        failed=1; continue
+        continue
     fi
     gcc_suffix=$(extract_after_1f "$sym")
     if [ "$gcc_suffix" != "$expected" ]; then
@@ -80,7 +89,27 @@ echo "$PAIRS" | grep . | while IFS='|' read -r label cpp expected; do
         echo "  cpp:      $cpp"
         echo "  gcc:      $gcc_suffix"
         echo "  expected: $expected"
-        failed=1
+    fi
+done
+
+echo "$WHOLE" | grep . | while IFS='|' read -r label cpp expected; do
+    [ -z "$label" ] && continue
+    src="$TMPDIR/$label.cpp"
+    obj="$TMPDIR/$label.o"
+    printf '%s\n' "$cpp" > "$src"
+    if ! g++ -c -fno-rtti -fno-exceptions -w -o "$obj" "$src" 2>"$TMPDIR/$label.err"; then
+        echo "test_mangle_itanium: g++ failed for '$label':"
+        cat "$TMPDIR/$label.err"
+        continue
+    fi
+    # Find the matching method symbol in the object. We narrow to
+    # 'foo' since the fixture method is always named that.
+    sym=$(nm "$obj" | awk '/T _Z.*3foo/{print $NF; exit}')
+    if [ "$sym" != "$expected" ]; then
+        echo "test_mangle_itanium: whole-symbol mismatch for '$label':"
+        echo "  cpp:      $cpp"
+        echo "  gcc:      $sym"
+        echo "  expected: $expected"
     fi
 done
 # Note: subshell modifications to `failed` don't propagate; rely on

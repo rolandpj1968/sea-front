@@ -27,3 +27,12 @@ p_int_ptr_ptr: PPi
 p_int_ptr_x3_const_int_ptr: PiS_S_PKi
 p_int_array5_decays: Pi
 p_void: v
+p_class_A_global: 1A
+p_class_T_std: NSt1TE
+p_class_T_ns: N2ns1TE
+m_global_T_foo_void: _ZN1T3fooEv
+m_global_T_foo_int: _ZN1T3fooEi
+m_global_T_foo_const: _ZNK1T3fooEv
+m_std_T_foo_void: _ZNSt1T3fooEv
+m_ns_T_foo_void: _ZN2ns1T3fooEv
+m_global_T_foo_T_ptr_T_ptr: _ZN1T3fooEPS_S0_

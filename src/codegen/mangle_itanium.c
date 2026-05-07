@@ -147,6 +147,128 @@ static const char *builtin_code(Type *ty) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Name encoding — Itanium ABI §5.1.6 [mangle.name]                   */
+/* ------------------------------------------------------------------ */
+
+/* Source-name: <length><identifier>. Itanium ABI §5.1.6.4. */
+static void emit_source_name(Token *name) {
+    if (!name) { fputs("4anon", stdout); return; }
+    fprintf(stdout, "%d%.*s", name->len, name->len, name->loc);
+}
+
+/* True iff `name` is exactly "std" — qualifies for the St standard
+ * substitution (§5.1.6.5 [mangle.subst]). */
+static bool tok_is_std(Token *name) {
+    return name && name->len == 3 && memcmp(name->loc, "std", 3) == 0;
+}
+
+/* Walk a TY_STRUCT/UNION/ENUM Type's enclosing namespace chain,
+ * outermost-first. Stage 2 supports only namespace and direct-class
+ * scope (no nested classes / template prefixes — those land in
+ * Stages 3-4). Returns the count of namespace prefixes collected;
+ * the caller decides whether to wrap them with N...E. */
+enum { ITAN_MAX_NS = 16 };
+
+typedef struct {
+    Token *names[ITAN_MAX_NS];
+    int    n;
+} NsChain;
+
+static void collect_namespace_chain(Type *ty, NsChain *out) {
+    out->n = 0;
+    if (!ty || !ty->class_region) return;
+    DeclarativeRegion *r = ty->class_region->enclosing;
+    while (r && out->n < ITAN_MAX_NS) {
+        if (r->kind == REGION_NAMESPACE && r->name)
+            out->names[out->n++] = r->name;
+        r = r->enclosing;
+    }
+}
+
+/* Emit a single substitution for a previously-pushed prefix Type, if
+ * present. Returns true on hit. Used between prefix steps so a
+ * second reference to `ns::T` becomes `S0_` instead of repeating the
+ * full prefix. */
+static bool try_emit_prefix_sub(ItanCtx *c, Type *ty) {
+    return ctx_try_emit_sub(c, ty);
+}
+
+/* Synthetic Type slot for tracking intermediate prefixes (e.g. the
+ * `std::` prefix as its own entity, distinct from `std::T`). One
+ * slot per namespace level. */
+static Type g_ns_prefix_slots[ITAN_MAX_NS];
+
+/* Emit the full TY_STRUCT/UNION/ENUM name, with nested-name wrapping
+ * if there are namespace qualifiers. Pushes intermediate prefixes
+ * onto the sub table per §5.1.6.5 so future references back-ref. */
+static void emit_class_or_enum_name(ItanCtx *c, Type *ty) {
+    NsChain chain;
+    collect_namespace_chain(ty, &chain);
+
+    /* Outermost first (chain is innermost-first; iterate reversed). */
+    /* Reverse into out_outer for clarity. */
+    Token *outer[ITAN_MAX_NS];
+    for (int i = 0; i < chain.n; i++)
+        outer[i] = chain.names[chain.n - 1 - i];
+
+    if (chain.n == 0) {
+        /* Unscoped — just <source-name>. §5.1.6.4. */
+        emit_source_name(ty->tag);
+        return;
+    }
+
+    /* Nested-name N...E. */
+    fputc('N', stdout);
+
+    /* Walk outermost → innermost emitting each prefix. The first
+     * namespace gets the St shortcut if it's "std"; later prefixes
+     * just emit source-name. After each prefix is emitted, push a
+     * synthetic Type marker so future references can short-cut. */
+    int start = 0;
+    if (tok_is_std(outer[0])) {
+        fputs("St", stdout);
+        /* St doesn't go on the sub table itself (standard subs are
+         * not added per §5.1.6.5). */
+        start = 1;
+    }
+
+    for (int i = start; i < chain.n; i++) {
+        /* Try sub for the prefix-up-to-here. We use a synthetic
+         * Type slot keyed by the namespace token's loc; structural
+         * comparison would otherwise rebuild the same string. */
+        Type *slot = &g_ns_prefix_slots[i];
+        slot->kind = TY_STRUCT;
+        slot->tag  = outer[i];
+        if (try_emit_prefix_sub(c, slot)) {
+            /* Already in table — just shortcut and we're done with
+             * the namespace portion. Continue from i+1 for any
+             * deeper prefix. */
+            /* For Stage 2 we don't yet handle deeper prefixes
+             * after a sub hit; the simple case is "all of the
+             * namespace prefix back-refs to one slot". */
+            start = i + 1;
+            /* Re-emit the source-names from start onwards. */
+            for (int j = start; j < chain.n; j++) {
+                emit_source_name(outer[j]);
+                ctx_push(c, &g_ns_prefix_slots[j]);
+            }
+            emit_source_name(ty->tag);
+            fputc('E', stdout);
+            return;
+        }
+        emit_source_name(outer[i]);
+        ctx_push(c, slot);
+    }
+
+    /* Class name as the unqualified terminal. Push the FULL class
+     * Type as a sub candidate. */
+    emit_source_name(ty->tag);
+    /* The class itself is pushed by the caller (emit_type's
+     * TY_STRUCT branch), not here, to keep the push-once invariant. */
+    fputc('E', stdout);
+}
+
+/* ------------------------------------------------------------------ */
 /* Type encoding (recursive)                                          */
 /* ------------------------------------------------------------------ */
 
@@ -251,16 +373,8 @@ static void emit_type(ItanCtx *c, Type *ty) {
         return;
     }
     case TY_STRUCT: case TY_UNION: case TY_ENUM:
-        /* Stage 2 implements names. Until then, emit a placeholder
-         * that's clearly distinguishable in test output and won't be
-         * confused with a real symbol. The 'u' (vendor-extended type)
-         * prefix per §5.1.5 takes a source-name; we use it as a
-         * distinguishable marker. */
         if (ctx_try_emit_sub(c, ty)) return;
-        if (ty->tag)
-            fprintf(stdout, "u%d%.*s", ty->tag->len, ty->tag->len, ty->tag->loc);
-        else
-            fputs("u4anon", stdout);
+        emit_class_or_enum_name(c, ty);
         ctx_push(c, ty);
         return;
     case TY_DEPENDENT:
@@ -328,15 +442,76 @@ static void itan_unimpl(const char *what) {
 }
 
 void itan_mangle_class_tag(Type *class_type) {
-    (void)class_type; itan_unimpl("mangle_class_tag (Stage 2)");
+    /* C struct tags are TU-local C identifiers, not linker symbols.
+     * Itanium has no opinion on them — sea-front keeps the human-
+     * readable form for grep-friendly disassembly even under
+     * --mangling=itanium. The shape `sf__<scope>__<name>` is a
+     * plausible C identifier and doesn't collide with Itanium-
+     * mangled symbols (which start with `_Z`). */
+    extern Mangler g_mangler_human;
+    Mangler *saved = g_mangler;
+    g_mangler = &g_mangler_human;
+    mangle_class_tag(class_type);  /* re-enters with HUMAN dispatch */
+    g_mangler = saved;
 }
 
+/* Method mangling — Itanium ABI §5.1.4 [mangle.entity-name].
+ * Shape: _Z N <cv?> <prefix> <method-name> E <params>
+ * where <cv> is K (const) and/or V (volatile) on the implicit object
+ * parameter (§5.1.5.2 [mangle.member-fn]). */
 void itan_mangle_class_method_cv(Type *class_type, Token *method_name,
                                   Type **param_types, int nparams,
                                   bool is_const) {
-    (void)class_type; (void)method_name; (void)param_types;
-    (void)nparams; (void)is_const;
-    itan_unimpl("mangle_class_method_cv (Stage 2)");
+    ItanCtx ctx;
+    ctx_reset(&ctx);
+    fputs("_Z", stdout);
+
+    /* Build prefix from namespace chain + class. The class always
+     * adds at least one nesting level, so we always emit N...E. */
+    NsChain chain;
+    collect_namespace_chain(class_type, &chain);
+
+    Token *outer[ITAN_MAX_NS];
+    for (int i = 0; i < chain.n; i++)
+        outer[i] = chain.names[chain.n - 1 - i];
+
+    fputc('N', stdout);
+    if (is_const) fputc('K', stdout);
+
+    int start = 0;
+    if (chain.n > 0 && tok_is_std(outer[0])) {
+        fputs("St", stdout);
+        start = 1;
+    }
+
+    /* Emit namespace prefixes, pushing each. */
+    for (int i = start; i < chain.n; i++) {
+        Type *slot = &g_ns_prefix_slots[i];
+        slot->kind = TY_STRUCT;
+        slot->tag  = outer[i];
+        emit_source_name(outer[i]);
+        ctx_push(&ctx, slot);
+    }
+    /* Class as the next prefix step — push it so the same class
+     * appearing in a parameter type later back-refs. */
+    emit_source_name(class_type->tag);
+    ctx_push(&ctx, class_type);
+
+    /* Method name (the unqualified terminal). Itanium has special
+     * encodings for ctors/dtors/operators (Stages 4-5); a regular
+     * method is just <source-name>. */
+    emit_source_name(method_name);
+    fputc('E', stdout);
+
+    /* Parameter type list — substitution table CONTINUES from the
+     * prefix walk (the class Type at top of stack can be back-
+     * referenced if it appears in a param type). */
+    if (nparams == 0) {
+        fputc('v', stdout);
+    } else {
+        for (int i = 0; i < nparams; i++)
+            emit_type(&ctx, normalize_param(param_types[i], i));
+    }
 }
 
 void itan_mangle_class_ctor(Type *class_type,
