@@ -2891,11 +2891,20 @@ static void emit_expr(Node *n) {
          * §8.1.5.2/15), '(*__self->x)' for by-ref (closure member is
          * T*; the rebind models §8.1.5.2 reference-capture semantics
          * in C, which has no native references). The closure's __self
-         * parameter itself is emitted as-is. */
+         * parameter itself is emitted as-is.
+         *
+         * '[this]' (§8.1.5.2/8): the captured implicit object pointer
+         * is stored as '__self->__this' (closure member type Class*).
+         * A bare 'this' inside the lambda body emits as that access;
+         * implicit-this member references (e.g. 'm' resolving to the
+         * enclosing class's member) handled below in the implicit_this
+         * branch. */
         if (g_current_lambda_fn && n->ident.name) {
             Token *nm = n->ident.name;
+            bool has_this_cap = false;
             for (int i = 0; i < g_current_lambda_fn->func.ncaptures; i++) {
                 Capture *c = &g_current_lambda_fn->func.captures[i];
+                if (c->is_this) { has_this_cap = true; continue; }
                 if (!c->name) continue;
                 if (c->name->len == nm->len &&
                     memcmp(c->name->loc, nm->loc, nm->len) == 0) {
@@ -2910,6 +2919,10 @@ static void emit_expr(Node *n) {
                     return;
                 }
             }
+            if (has_this_cap && nm->kind == TK_KW_THIS) {
+                fputs("__self->__this", stdout);
+                return;
+            }
         }
         /* SHORTCUT (ours, not the standard): gcc vec.h defines
          * 'extern vnull vNULL;' with a template conversion operator
@@ -2922,7 +2935,19 @@ static void emit_expr(Node *n) {
             return;
         }
         if (n->ident.implicit_this && !g_current_method_is_static) {
-            fputs("this->", stdout);
+            /* Inside a capturing lambda with '[this]' (§8.1.5.2/8),
+             * implicit-this references go through the closure's
+             * '__this' member instead of the lambda's non-existent
+             * 'this' parameter. */
+            bool lam_has_this = false;
+            if (g_current_lambda_fn) {
+                for (int i = 0; i < g_current_lambda_fn->func.ncaptures; i++)
+                    if (g_current_lambda_fn->func.captures[i].is_this) {
+                        lam_has_this = true; break;
+                    }
+            }
+            if (lam_has_this) fputs("__self->__this->", stdout);
+            else              fputs("this->",            stdout);
             /* If the resolved declaration lives in a BASE class of
              * the current class, walk through the __sf_base chain
              * — N4659 §11 [class.derived]. */

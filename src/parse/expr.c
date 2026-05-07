@@ -124,6 +124,234 @@ static int get_binop_prec(Parser *p, TokenKind k) {
 /*       requires-expression      — NOT YET (§8.1.7.3, C++20)         */
 /* ------------------------------------------------------------------ */
 
+/* Default-capture body walker — N4659 §8.1.5.2 [expr.prim.lambda
+ * .capture]. With '[&]' or '[=]' specified, every identifier in the
+ * body that names an entity in the reaching scope (auto local /
+ * parameter of the enclosing fn) becomes an implicit capture; any
+ * reference to an enclosing class member implicitly captures *this.
+ * Walked AFTER the body parses (so parse_compound_stmt's REGION_
+ * BLOCK has popped — block-local decls inside the lambda body
+ * don't reach lookup and won't be treated as captures). */
+typedef struct {
+    Capture **captures;
+    int      *ncaptures;
+    int      *ccap;
+    int       default_kind;  /* 1 = '&', 2 = '=' */
+    bool      has_this;
+} CaptureWalkCtx;
+
+static bool capture_already_has(CaptureWalkCtx *ctx, Token *name) {
+    for (int i = 0; i < *ctx->ncaptures; i++) {
+        Capture *c = &(*ctx->captures)[i];
+        if (c->is_this || !c->name) continue;
+        if (c->name->len == name->len &&
+            memcmp(c->name->loc, name->loc, name->len) == 0)
+            return true;
+    }
+    return false;
+}
+
+static void capture_grow(Parser *p, CaptureWalkCtx *ctx) {
+    if (*ctx->ncaptures == *ctx->ccap) {
+        int nc = *ctx->ccap ? *ctx->ccap * 2 : 4;
+        Capture *cn = arena_alloc(p->arena, sizeof(*cn) * nc);
+        if (*ctx->captures)
+            memcpy(cn, *ctx->captures, sizeof(*cn) * *ctx->ncaptures);
+        *ctx->captures = cn;
+        *ctx->ccap = nc;
+    }
+}
+
+static void capture_add_named(Parser *p, CaptureWalkCtx *ctx,
+                               Token *name, bool by_ref) {
+    capture_grow(p, ctx);
+    Capture *c = &(*ctx->captures)[(*ctx->ncaptures)++];
+    memset(c, 0, sizeof(*c));
+    c->name   = name;
+    c->by_ref = by_ref;
+}
+
+static void capture_add_this(Parser *p, CaptureWalkCtx *ctx) {
+    if (ctx->has_this) return;
+    capture_grow(p, ctx);
+    Capture *c = &(*ctx->captures)[(*ctx->ncaptures)++];
+    memset(c, 0, sizeof(*c));
+    c->is_this = true;
+    c->by_ref  = true;
+    ctx->has_this = true;
+}
+
+static void default_capture_walk(Parser *p, Node *n, CaptureWalkCtx *ctx) {
+    if (!n) return;
+    /* Don't descend into nested lambdas — they own their own
+     * capture set. The outer default capture only sees identifiers
+     * lexically in the immediately enclosing lambda's body. */
+    if (n->kind == ND_LAMBDA) return;
+    switch (n->kind) {
+    case ND_IDENT: {
+        Token *nm = n->ident.name;
+        if (!nm) return;
+        if (nm->kind == TK_KW_THIS) { capture_add_this(p, ctx); return; }
+        if (nm->kind != TK_IDENT)   return;
+        if (capture_already_has(ctx, nm)) return;
+        Declaration *d = lookup_unqualified(p, nm->loc, nm->len);
+        if (!d || !d->home) return;
+        /* Class member referenced unqualifiedly → implicit *this. */
+        if (d->home->kind == REGION_CLASS) {
+            capture_add_this(p, ctx);
+            return;
+        }
+        /* Auto local / function parameter → implicit named capture.
+         * Default '[&]' captures by reference; '[=]' by value. */
+        if (d->home->kind == REGION_BLOCK ||
+            d->home->kind == REGION_PROTOTYPE) {
+            capture_add_named(p, ctx, nm, ctx->default_kind == 1);
+        }
+        /* Namespace / global / template / other: not captured. */
+        return;
+    }
+    case ND_BLOCK:
+        for (int i = 0; i < n->block.nstmts; i++)
+            default_capture_walk(p, n->block.stmts[i], ctx);
+        break;
+    case ND_BINARY: case ND_ASSIGN: case ND_COMMA:
+        default_capture_walk(p, n->binary.lhs, ctx);
+        default_capture_walk(p, n->binary.rhs, ctx);
+        break;
+    case ND_UNARY: case ND_POSTFIX:
+        default_capture_walk(p, n->unary.operand, ctx);
+        break;
+    case ND_TERNARY:
+        default_capture_walk(p, n->ternary.cond,  ctx);
+        default_capture_walk(p, n->ternary.then_, ctx);
+        default_capture_walk(p, n->ternary.else_, ctx);
+        break;
+    case ND_CALL:
+        default_capture_walk(p, n->call.callee, ctx);
+        for (int i = 0; i < n->call.nargs; i++)
+            default_capture_walk(p, n->call.args[i], ctx);
+        break;
+    case ND_MEMBER:
+        default_capture_walk(p, n->member.obj, ctx);
+        break;
+    case ND_SUBSCRIPT:
+        default_capture_walk(p, n->subscript.base, ctx);
+        default_capture_walk(p, n->subscript.index, ctx);
+        break;
+    case ND_CAST:
+        default_capture_walk(p, n->cast.operand, ctx);
+        break;
+    case ND_RETURN:
+        default_capture_walk(p, n->ret.expr, ctx);
+        break;
+    case ND_EXPR_STMT:
+        default_capture_walk(p, n->expr_stmt.expr, ctx);
+        break;
+    case ND_IF:
+        default_capture_walk(p, n->if_.cond,  ctx);
+        default_capture_walk(p, n->if_.then_, ctx);
+        default_capture_walk(p, n->if_.else_, ctx);
+        break;
+    case ND_WHILE: case ND_DO:
+        default_capture_walk(p, n->while_.cond, ctx);
+        default_capture_walk(p, n->while_.body, ctx);
+        break;
+    case ND_FOR:
+        default_capture_walk(p, n->for_.init, ctx);
+        default_capture_walk(p, n->for_.cond, ctx);
+        default_capture_walk(p, n->for_.inc,  ctx);
+        default_capture_walk(p, n->for_.body, ctx);
+        break;
+    case ND_RANGE_FOR:
+        default_capture_walk(p, n->range_for.range, ctx);
+        default_capture_walk(p, n->range_for.body,  ctx);
+        break;
+    case ND_SWITCH:
+        default_capture_walk(p, n->switch_.expr, ctx);
+        default_capture_walk(p, n->switch_.body, ctx);
+        break;
+    case ND_CASE:
+        default_capture_walk(p, n->case_.expr, ctx);
+        default_capture_walk(p, n->case_.stmt, ctx);
+        break;
+    case ND_DEFAULT:
+        default_capture_walk(p, n->default_.stmt, ctx);
+        break;
+    case ND_LABEL:
+        default_capture_walk(p, n->label.stmt, ctx);
+        break;
+    case ND_INIT_LIST:
+        for (int i = 0; i < n->init_list.nelems; i++)
+            default_capture_walk(p, n->init_list.elems[i], ctx);
+        break;
+    case ND_VAR_DECL:
+        default_capture_walk(p, n->var_decl.init, ctx);
+        for (int i = 0; i < n->var_decl.ctor_nargs; i++)
+            default_capture_walk(p, n->var_decl.ctor_args[i], ctx);
+        break;
+    default:
+        break;
+    }
+}
+
+/* Lambda auto-return deduction — N4659 §8.1.5.4 [expr.prim.lambda
+ * .closure]/4 + §10.1.7.4 [dcl.spec.auto] (return-type deduction).
+ * When the lambda omits a trailing '->' return type, deduce from
+ * the first return statement's expression. Conservative: handles
+ * literal kinds and ident-by-lookup. Anything more complex (calls,
+ * arithmetic, casts) returns NULL and the caller falls back to
+ * the skip-and-discard path. Bodies with no return statement
+ * deduce to 'void' (§8.1.5.4/4). */
+static Type *deduce_lambda_return(Parser *p, Node *body);
+
+static Type *deduce_lambda_return_expr(Parser *p, Node *e) {
+    if (!e) return new_type(p, TY_VOID);
+    switch (e->kind) {
+    case ND_NUM:      return new_type(p, TY_INT);
+    case ND_FNUM:     return new_type(p, TY_DOUBLE);
+    case ND_BOOL_LIT: return new_type(p, TY_BOOL);
+    case ND_CHAR:     return new_type(p, TY_INT);  /* char literal is int in C */
+    case ND_NULLPTR:  {
+        Type *t = new_type(p, TY_PTR);
+        t->base  = new_type(p, TY_VOID);
+        return t;
+    }
+    case ND_IDENT: {
+        Token *nm = e->ident.name;
+        if (!nm || nm->kind != TK_IDENT) return NULL;
+        Declaration *d = lookup_unqualified(p, nm->loc, nm->len);
+        return (d && d->type) ? d->type : NULL;
+    }
+    default:
+        return NULL;
+    }
+}
+
+static Type *deduce_lambda_return(Parser *p, Node *body) {
+    if (!body) return NULL;
+    switch (body->kind) {
+    case ND_RETURN:
+        return deduce_lambda_return_expr(p, body->ret.expr);
+    case ND_BLOCK:
+        for (int i = 0; i < body->block.nstmts; i++) {
+            Type *t = deduce_lambda_return(p, body->block.stmts[i]);
+            if (t) return t;
+        }
+        /* No return at all: body falls off the end → void
+         * (§8.1.5.4/4). Only at outermost block — nested blocks
+         * without returns just don't contribute. */
+        return NULL;
+    case ND_IF:
+        {
+            Type *t = deduce_lambda_return(p, body->if_.then_);
+            if (t) return t;
+            return deduce_lambda_return(p, body->if_.else_);
+        }
+    default:
+        return NULL;
+    }
+}
+
 static Node *primary_expr(Parser *p) {
     Token *tok = parser_peek(p);
 
@@ -352,12 +580,13 @@ static Node *primary_expr(Parser *p) {
                 while (!parser_at(p, TK_ARROW) &&
                        !parser_at(p, TK_LBRACE) && !parser_at_eof(p))
                     parser_advance(p);
+                Type *ret_ty = NULL;
                 if (parser_consume(p, TK_ARROW)) {
                     /* Trailing return type — parse_type_specifiers +
                      * an abstract declarator. Use the same machinery as
                      * function returns. */
                     DeclSpec rspec = parse_type_specifiers(p);
-                    Type *ret_ty = rspec.type;
+                    ret_ty = rspec.type;
                     /* Honor pointer/reference qualifiers in the
                      * trailing-return — '-> int*' / '-> T&'. */
                     while (parser_consume(p, TK_STAR)) {
@@ -370,8 +599,17 @@ static Node *primary_expr(Parser *p) {
                         rt->base = ret_ty;
                         ret_ty = rt;
                     }
-                    if (ret_ty && parser_at(p, TK_LBRACE)) {
+                }
+                /* Auto-return deduction (§8.1.5.4/4) when '->' was
+                 * omitted: parse the body, then look at the first
+                 * return statement. NULL return means we couldn't
+                 * deduce from the parser-side cheap shapes (literal,
+                 * scope-resolved ident) and fall back to skip-and-
+                 * discard. */
+                if (parser_at(p, TK_LBRACE)) {
                         Node *body = parse_compound_stmt(p);
+                        if (!ret_ty) ret_ty = deduce_lambda_return(p, body);
+                        if (ret_ty) {
                         /* Synthesize a unique name token. The arena
                          * holds the buffer; tokens reference it. */
                         char buf[32];
@@ -412,9 +650,58 @@ static Node *primary_expr(Parser *p) {
                         Node *closure_cdef = NULL;
                         Type *closure_type = NULL;
                         if (ncaptures > 0 || default_kind != 0) {
-                            bool ok = (default_kind == 0);
+                            bool ok = true;
+                            /* For [this]: the captured entity is the
+                             * implicit object parameter of the
+                             * enclosing non-static member function.
+                             * §8.1.5.2/8 [expr.prim.lambda.capture] —
+                             * type of the corresponding closure data
+                             * member is "pointer to the class type of
+                             * the enclosing function". Walk the
+                             * region chain for REGION_CLASS to find
+                             * it. */
+                            Type *enclosing_class = NULL;
+                            for (DeclarativeRegion *r = p->region;
+                                 r; r = r->enclosing) {
+                                if (r->kind == REGION_CLASS &&
+                                    r->owner_type) {
+                                    enclosing_class = r->owner_type;
+                                    break;
+                                }
+                            }
+                            /* Default captures '[&]' / '[=]' —
+                             * §8.1.5.2/7,/8 specify implicit captures
+                             * for every odr-used local/parameter and
+                             * (for class-member refs) *this. Walk the
+                             * parsed body to enumerate them — by now
+                             * parse_compound_stmt has popped its
+                             * REGION_BLOCK so internal lambda-body
+                             * decls won't be picked up by lookup. */
+                            if (default_kind != 0) {
+                                CaptureWalkCtx ctx;
+                                ctx.captures     = &captures;
+                                ctx.ncaptures    = &ncaptures;
+                                ctx.ccap         = &ccap;
+                                ctx.default_kind = default_kind;
+                                ctx.has_this     = false;
+                                /* Seed has_this from any explicit
+                                 * '[this]' the user wrote alongside
+                                 * the default capture. */
+                                for (int i = 0; i < ncaptures; i++)
+                                    if (captures[i].is_this) {
+                                        ctx.has_this = true; break;
+                                    }
+                                default_capture_walk(p, body, &ctx);
+                            }
                             for (int i = 0; ok && i < ncaptures; i++) {
-                                if (captures[i].is_this) { ok = false; break; }
+                                if (captures[i].is_this) {
+                                    if (!enclosing_class) {
+                                        ok = false; break;
+                                    }
+                                    captures[i].resolved_type =
+                                        enclosing_class;
+                                    continue;
+                                }
                                 Token *cn = captures[i].name;
                                 Declaration *d = lookup_unqualified(p,
                                     cn->loc, cn->len);
@@ -459,15 +746,37 @@ static Node *primary_expr(Parser *p) {
                                 sizeof(*mems) * ncaptures);
                             for (int i = 0; i < ncaptures; i++) {
                                 Type *mty;
-                                if (captures[i].by_ref) {
+                                Token *mname;
+                                if (captures[i].is_this) {
+                                    /* §8.1.5.2/8: closure stores
+                                     * 'pointer to enclosing class';
+                                     * member name is '__this' (the
+                                     * leading '__' makes it
+                                     * implementation-reserved per
+                                     * ISO §7.1.3, so it can't shadow
+                                     * a user member). */
                                     mty = new_type(p, TY_PTR);
                                     mty->base = captures[i].resolved_type;
+                                    Token *tn = arena_alloc(p->arena,
+                                        sizeof(*tn));
+                                    memset(tn, 0, sizeof(*tn));
+                                    tn->kind = TK_IDENT;
+                                    tn->loc  = "__this";
+                                    tn->len  = 6;
+                                    tn->file = tok->file;
+                                    tn->line = tok->line;
+                                    tn->col  = tok->col;
+                                    mname = tn;
+                                } else if (captures[i].by_ref) {
+                                    mty = new_type(p, TY_PTR);
+                                    mty->base = captures[i].resolved_type;
+                                    mname = captures[i].name;
                                 } else {
                                     mty = captures[i].resolved_type;
+                                    mname = captures[i].name;
                                 }
-                                Node *m = new_node(p, ND_VAR_DECL,
-                                    captures[i].name);
-                                m->var_decl.name = captures[i].name;
+                                Node *m = new_node(p, ND_VAR_DECL, mname);
+                                m->var_decl.name = mname;
                                 m->var_decl.ty   = mty;
                                 m->var_decl.init = NULL;
                                 mems[i] = m;
