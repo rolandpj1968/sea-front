@@ -319,6 +319,7 @@ static bool emit_pointer_to_array_declarator(Type *ty, Token *name);
 static void emit_mangled_class_tag(Type *class_type);
 static void emit_stmt(Node *n);
 static int collect_call_arg_types(Node **args, int nargs, Type ***out_types);
+static Node *func_param_node(Node *m, int k);
 static int resolve_overload(Type *class_type, Token *name, bool is_ctor,
                              Type **arg_types, int nargs,
                              bool receiver_is_const,
@@ -847,16 +848,18 @@ static void hoist_emit_decl(Node *call, bool in_shortcircuit) {
         emit_type(call->resolved_type);
         fprintf(stdout, " %s;\n", name);
         emit_indent();
+        Node *resolved_ctor = NULL;
+        int np = 0;
         {
             Type **at = NULL;
             int na = collect_call_arg_types(call->call.args,
                                              call->call.nargs, &at);
             Type **pty = NULL;
-            int np = resolve_overload(call->resolved_type, /*name=*/NULL,
-                                       /*is_ctor=*/true,
-                                       at, na,
-                                       /*receiver_is_const=*/false,
-                                       &pty, /*out_best=*/NULL);
+            np = resolve_overload(call->resolved_type, /*name=*/NULL,
+                                   /*is_ctor=*/true,
+                                   at, na,
+                                   /*receiver_is_const=*/false,
+                                   &pty, /*out_best=*/&resolved_ctor);
             if (np < 0) {
                 /* No matching ctor — skip ctor call. For plain C
                  * structs whose has_default_ctor was transitively
@@ -870,6 +873,16 @@ static void hoist_emit_decl(Node *call, bool in_shortcircuit) {
         for (int i = 0; i < call->call.nargs; i++) {
             fputs(", ", stdout);
             emit_expr(call->call.args[i]);
+        }
+        /* Default-arg injection — N4659 §11.3.6 [dcl.fct.default].
+         * When the resolved overload has more params than the call
+         * supplied, fill the trailing slots from the corresponding
+         * param.default_value expressions. */
+        for (int i = call->call.nargs; i < np; i++) {
+            Node *p = func_param_node(resolved_ctor, i);
+            if (!p || !p->param.default_value) break;  /* shouldn't happen */
+            fputs(", ", stdout);
+            emit_expr(p->param.default_value);
         }
         fputs(");\n", stdout);
     } else {
@@ -1940,15 +1953,49 @@ static int score_type_pair(Type *pt, Type *at) {
 /* Match a single candidate member against a call's arg types.
  * Returns -1 if nparams ≠ nargs (hard reject); otherwise a positive
  * score where higher = better fit. */
+/* Return the kth param Node of a function-shaped declaration,
+ * or NULL if unavailable. ND_FUNC_DEF stores params on func.params;
+ * ND_VAR_DECL with TY_FUNC stores them on var_decl.fn_params (with
+ * the typedef-decay form var_decl.ty->params being Type-only).
+ * Used by overload-resolution viability and by call-site emit to
+ * read out param.default_value for default-arg expansion (N4659
+ * §11.3.6 [dcl.fct.default]). */
+static Node *func_param_node(Node *m, int k) {
+    if (!m) return NULL;
+    if (m->kind == ND_FUNC_DEF) {
+        if (k < 0 || k >= m->func.nparams) return NULL;
+        return m->func.params[k];
+    }
+    if (m->kind == ND_VAR_DECL) {
+        if (k < 0 || k >= m->var_decl.fn_nparams) return NULL;
+        return m->var_decl.fn_params ? m->var_decl.fn_params[k] : NULL;
+    }
+    return NULL;
+}
+
 static int overload_match_score(Node *m, Type **arg_types, int nargs) {
     bool is_def = m->kind == ND_FUNC_DEF;
     int nparams = is_def ? m->func.nparams : m->var_decl.ty->nparams;
-    if (nparams != nargs) return -1;
+    /* N4659 §16.3.1.4 [over.match.viable]/2: a candidate is viable
+     * when the number of arguments equals the number of params, OR
+     * when nargs < nparams and every excess param has a default
+     * argument. Excess args (nargs > nparams) are non-viable. */
+    if (nparams < nargs) return -1;
+    if (nparams > nargs) {
+        for (int k = nargs; k < nparams; k++) {
+            Node *p = func_param_node(m, k);
+            if (!p || !p->param.default_value) return -1;
+        }
+    }
+    /* Score over the user-supplied args only — extras are matched
+     * by "default exists" above and contribute nothing to the score
+     * (so a function exact-matched on N args wins over one matched
+     * on N args + M defaulted, all else equal). */
     int score = 0;
-    for (int k = 0; k < nparams && k < 64; k++) {
+    for (int k = 0; k < nargs && k < 64; k++) {
         Type *pt = is_def ? m->func.params[k]->param.ty
                           : m->var_decl.ty->params[k];
-        Type *at = arg_types && k < nargs ? arg_types[k] : NULL;
+        Type *at = arg_types ? arg_types[k] : NULL;
         score += score_type_pair(pt, at);
     }
     return score;
@@ -6387,11 +6434,12 @@ static void emit_stmt(Node *n) {
                     int na = collect_call_arg_types(n->var_decl.ctor_args,
                                                      n->var_decl.ctor_nargs, &at);
                     Type **pty = NULL;
+                    Node *resolved_ctor = NULL;
                     int np = resolve_overload(n->var_decl.ty, /*name=*/NULL,
                                                /*is_ctor=*/true,
                                                at, na,
                                                /*receiver_is_const=*/false,
-                                               &pty, /*out_best=*/NULL);
+                                               &pty, &resolved_ctor);
                     if (np < 0)
                         die_no_overload(n->var_decl.ty, NULL, na,
                                          "direct-init ctor call");
@@ -6402,6 +6450,15 @@ static void emit_stmt(Node *n) {
                         fputs(", ", stdout);
                         emit_arg_for_param(n->var_decl.ctor_args[i],
                                             i < np ? pty[i] : NULL);
+                    }
+                    /* Default-arg expansion — N4659 §11.3.6
+                     * [dcl.fct.default]. Trailing params unsupplied
+                     * by the call site fill from param.default_value. */
+                    for (int i = n->var_decl.ctor_nargs; i < np; i++) {
+                        Node *p = func_param_node(resolved_ctor, i);
+                        if (!p || !p->param.default_value) break;
+                        fputs(", ", stdout);
+                        emit_expr(p->param.default_value);
                     }
                     fputs(");\n", stdout);
                 }
