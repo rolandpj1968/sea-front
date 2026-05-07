@@ -1989,9 +1989,6 @@ static int score_type_pair(Type *pt, Type *at) {
     return 0;
 }
 
-/* Match a single candidate member against a call's arg types.
- * Returns -1 if nparams ≠ nargs (hard reject); otherwise a positive
- * score where higher = better fit. */
 static void emit_default_args_tail(Node *resolved_callee, int nargs, int np,
                                     Type **pty) {
     if (!resolved_callee) return;
@@ -2039,6 +2036,13 @@ static Node *func_param_node(Node *m, int k) {
     return NULL;
 }
 
+/* Match a single candidate member against a call's arg types.
+ * Returns -1 if the candidate is non-viable, else a positive score
+ * where higher = better fit. Viability per N4659 §16.3.1.4
+ * [over.match.viable]/2: nparams equals nargs, OR nparams > nargs
+ * and every excess param has a default. Score is over the user-
+ * supplied args only — defaults contribute nothing, so an exact
+ * match wins over a defaults-padded match all else equal. */
 static int overload_match_score(Node *m, Type **arg_types, int nargs) {
     bool is_def = m->kind == ND_FUNC_DEF;
     int nparams = is_def ? m->func.nparams : m->var_decl.ty->nparams;
@@ -5438,13 +5442,17 @@ static void emit_expr(Node *n) {
         return;
     }
     case ND_THROW:
-        /* Phase 2 slice 1 placeholder: the throw-expression is parsed
-         * but its lowering hasn't shipped yet (see docs/exceptions.md).
-         * Emit a zero so the surrounding C stays well-formed; throw
-         * paths that get exercised at runtime are silent miscompiles
-         * until slice 3 (real TLS-state set + goto cleanup) lands.
-         * Matches prior behaviour from when 'throw' parsed as
-         * ND_NULLPTR. TODO(seafront#eh-throw-lowering). */
+        /* Throw at non-statement-position (inside a ternary branch,
+         * function-call argument, etc.). Real throw-lowering only
+         * fires from emit_stmt's ND_EXPR_STMT case where __SF_THROW_PRIM
+         * + goto are valid as a statement; in expression position
+         * we'd need a GNU statement-expression to bundle the state-
+         * set + goto + value, which sea-front doesn't take on (cproc
+         * portability). Emit a zero placeholder so the surrounding C
+         * stays well-formed; runtime semantics for these throws are
+         * skipped — the throw is silently dropped. Real-world
+         * incidence is rare; libcpp / gcc 14 don't hit this path.
+         * TODO(seafront#eh-throw-in-expr-position) per docs/exceptions.md. */
         fputs("0 /* throw */", stdout);
         return;
     default:
@@ -8656,9 +8664,12 @@ methods_phase:;
      * mangled method addresses; ctors install '&instance' into the
      * object's __sf_vptr field, and call sites dispatch through it.
      *
-     * First-slice limitation: virtual destructors aren't yet given
-     * a vtable slot — they'd require slot-routing for the dtor wrapper
-     * which we'll add when we tackle delete-through-base. */
+     * Limitation: virtual destructors don't get a vtable slot —
+     * delete-through-base is the use-case that needs them, and
+     * sea-front doesn't yet route through the dtor wrapper. The
+     * vtable-instance loop further down skips ND_FUNC_DEF and
+     * ND_VAR_DECL members tagged is_destructor.
+     * TODO(seafront#virt-dtor-slot). */
     if (class_type && class_type->has_virtual_methods && any_virtual_has_body) {
         /* The struct definition. */
         fputs("struct ", stdout);
@@ -8672,7 +8683,9 @@ methods_phase:;
             bool is_virt_decl = (m->kind == ND_VAR_DECL && m->var_decl.is_virtual &&
                                  m->var_decl.ty && m->var_decl.ty->kind == TY_FUNC);
             if (!is_virt_funcdef && !is_virt_decl) continue;
-            /* Skip virtual destructors for the first slice (see above). */
+            /* Virtual dtors don't get a vtable slot — see the
+             * TODO(seafront#virt-dtor-slot) note on the vtable struct
+             * comment above. */
             if (is_virt_funcdef && m->func.is_destructor) continue;
             if (is_virt_decl && m->var_decl.is_destructor) continue;
 

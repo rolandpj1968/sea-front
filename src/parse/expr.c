@@ -1149,16 +1149,6 @@ static Node *primary_expr(Parser *p) {
         return new_node(p, ND_BOOL_LIT, name_tok);  /* opaque bool */
     }
 
-    /* Identifier / qualified-id — N4659 §8.1.4 [expr.prim.id]
-     *   id-expression: unqualified-id | qualified-id
-     *   qualified-id: nested-name-specifier template(opt) unqualified-id
-     *   nested-name-specifier: :: | type-name :: | namespace-name :: | ...
-     *
-     * Also handles global scope: ::foo
-     *
-     * N4659 §17.2/3 [temp.names] — Rule 4: template-name followed by
-     * < opens a template-argument-list.
-     */
     /* throw-expression — N4659 §8.17 [expr.throw]
      *   throw assignment-expression(opt)
      * Yields a void prvalue. The operand (when present) is captured
@@ -1206,6 +1196,15 @@ static Node *primary_expr(Parser *p) {
         return node;
     }
 
+    /* Identifier / qualified-id — N4659 §8.1.4 [expr.prim.id]
+     *   id-expression: unqualified-id | qualified-id
+     *   qualified-id: nested-name-specifier template(opt) unqualified-id
+     *   nested-name-specifier: :: | type-name :: | namespace-name :: | ...
+     *
+     * Also handles global scope: ::foo
+     *
+     * N4659 §17.2/3 [temp.names] — Rule 4: template-name followed by
+     * < opens a template-argument-list. */
     if (tok->kind == TK_IDENT || tok->kind == TK_SCOPE) {
         bool global_scope = false;
         Vec parts = vec_new(p->arena);
