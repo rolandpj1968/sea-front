@@ -3553,35 +3553,43 @@ void template_instantiate(Node *tu, Arena *arena) {
 }
 
 /*
- * Recursively walk all types in the AST and patch any TY_STRUCT with
- * a template_id_node whose key matches an entry in the dedup set.
+ * Return the canonical Type* for `ty` per N4659 §17.4 [temp.type]/1
+ * (template-id type equivalence: two template-ids name the same type
+ * iff template name + argument list are equivalent).
+ *
+ * For TY_STRUCT/TY_UNION with a template_id_node, look up the
+ * instantiated Type in the dedup set and return that pointer. Every
+ * use-site of vec<int> resolves to the same Type object.
+ *
+ * For compound types (TY_PTR, TY_FUNC, ...), recurse into bases and
+ * replace them in place; the compound wrapper itself stays per-site
+ * but its inner template-id Type is canonicalised. Two separately-
+ * parsed `vec<int>*` end up as two TY_PTR Types whose base is the
+ * SAME canonical TY_STRUCT, which is enough for type identity at the
+ * template-id level.
+ *
+ * If no canonical entry exists (e.g. the template-id failed to
+ * instantiate) returns the original Type unchanged.
  */
-static void patch_type(Type *ty, DedupSet *ds, Arena *arena) {
-    if (!ty) return;
-    /* Recurse into compound types */
+static Type *canonicalize_type(Type *ty, DedupSet *ds, Arena *arena) {
+    (void)arena;
+    if (!ty) return NULL;
     switch (ty->kind) {
     case TY_PTR: case TY_REF: case TY_RVALREF: case TY_ARRAY:
-        patch_type(ty->base, ds, arena);
-        return;
+        ty->base = canonicalize_type(ty->base, ds, arena);
+        return ty;
     case TY_FUNC:
-        patch_type(ty->ret, ds, arena);
+        ty->ret = canonicalize_type(ty->ret, ds, arena);
         for (int i = 0; i < ty->nparams; i++)
-            patch_type(ty->params[i], ds, arena);
-        return;
+            ty->params[i] = canonicalize_type(ty->params[i], ds, arena);
+        return ty;
     default: break;
     }
-    if (ty->kind != TY_STRUCT && ty->kind != TY_UNION) return;
-    if (!ty->template_id_node) return;
-    if (ty->class_region) return;  /* already patched */
-    /* already patched */
-    /* Build key and look up */
+    if (ty->kind != TY_STRUCT && ty->kind != TY_UNION) return ty;
+    if (!ty->template_id_node) return ty;
     Node *tid = ty->template_id_node;
-    if (tid->kind != ND_TEMPLATE_ID || !tid->template_id.name)
-        return;
-    /* We need to build the same key that the dedup set uses.
-     * Reconstruct the SubstMap from the template definition. */
+    if (tid->kind != ND_TEMPLATE_ID || !tid->template_id.name) return ty;
     Token *tname = tid->template_id.name;
-    /* Simple key: just use template name + arg types */
     char key[MAX_DEDUP_KEY];
     int pos = 0;
     if (tname && pos + tname->len < MAX_DEDUP_KEY) {
@@ -3596,51 +3604,60 @@ static void patch_type(Type *ty, DedupSet *ds, Arena *arena) {
         pos = type_to_key(arg_ty, key, pos, MAX_DEDUP_KEY);
         key[pos++] = '\0';
     }
-    Type *existing = dedup_find(ds, key, pos);
-    if (existing) {
-        ty->template_args    = existing->template_args;
-        ty->n_template_args  = existing->n_template_args;
-        ty->class_region     = existing->class_region;
-        ty->class_def        = existing->class_def;
-        ty->has_dtor         = existing->has_dtor;
-        ty->has_default_ctor = existing->has_default_ctor;
-    }
+    Type *canonical = dedup_find(ds, key, pos);
+    return canonical ? canonical : ty;
+}
+
+static void canonicalize_region_decls(DeclarativeRegion *r,
+                                       DedupSet *ds, Arena *arena) {
+    if (!r) return;
+    for (int i = 0; i < REGION_HASH_SIZE; i++)
+        for (Declaration *d = r->buckets[i]; d; d = d->next)
+            d->type = canonicalize_type(d->type, ds, arena);
 }
 
 static void patch_node_types(Node *n, DedupSet *ds, Arena *arena) {
     if (!n) return;
+    /* Every Node has a sema-filled resolved_type; canonicalise it
+     * so the type identity of N4659 §17.4 [temp.type]/1 holds across
+     * every reference to a given template-id. */
+    n->resolved_type = canonicalize_type(n->resolved_type, ds, arena);
     switch (n->kind) {
     case ND_VAR_DECL: case ND_TYPEDEF:
-        patch_type(n->var_decl.ty, ds, arena);
+        n->var_decl.ty = canonicalize_type(n->var_decl.ty, ds, arena);
         patch_node_types(n->var_decl.init, ds, arena);
         break;
     case ND_PARAM:
-        patch_type(n->param.ty, ds, arena);
+        n->param.ty = canonicalize_type(n->param.ty, ds, arena);
         break;
     case ND_FUNC_DEF: case ND_FUNC_DECL:
-        patch_type(n->func.ret_ty, ds, arena);
+        n->func.ret_ty = canonicalize_type(n->func.ret_ty, ds, arena);
+        canonicalize_region_decls(n->func.param_scope, ds, arena);
         for (int i = 0; i < n->func.nparams; i++)
             patch_node_types(n->func.params[i], ds, arena);
         patch_node_types(n->func.body, ds, arena);
         break;
     case ND_CLASS_DEF:
+        if (n->class_def.ty)
+            canonicalize_region_decls(n->class_def.ty->class_region, ds, arena);
         for (int i = 0; i < n->class_def.nmembers; i++)
             patch_node_types(n->class_def.members[i], ds, arena);
         break;
     case ND_BLOCK:
+        canonicalize_region_decls(n->block.scope, ds, arena);
         for (int i = 0; i < n->block.nstmts; i++)
             patch_node_types(n->block.stmts[i], ds, arena);
         break;
     case ND_CAST:
-        patch_type(n->cast.ty, ds, arena);
+        n->cast.ty = canonicalize_type(n->cast.ty, ds, arena);
         patch_node_types(n->cast.operand, ds, arena);
         break;
     case ND_SIZEOF:
-        patch_type(n->sizeof_.ty, ds, arena);
+        n->sizeof_.ty = canonicalize_type(n->sizeof_.ty, ds, arena);
         patch_node_types(n->sizeof_.expr, ds, arena);
         break;
     case ND_ALIGNOF:
-        patch_type(n->alignof_.ty, ds, arena);
+        n->alignof_.ty = canonicalize_type(n->alignof_.ty, ds, arena);
         break;
     case ND_BINARY: case ND_ASSIGN: case ND_COMMA:
         patch_node_types(n->binary.lhs, ds, arena);
