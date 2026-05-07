@@ -196,6 +196,13 @@ static void emit_close_brace(void) {
 typedef enum CleanupKind {
     CL_VAR,
     CL_LOOP,
+    /* Try-block landing pad — N4659 §18.1 [except.pre]. Pushed
+     * before emitting the try-body so a throw inside lowers to a
+     * goto into the handler-dispatch sequence (label_id) instead
+     * of falling through to the function epilogue. The dispatch
+     * sequence is emitted right after the body and pops the entry
+     * before its own handlers run. See docs/exceptions.md. */
+    CL_TRY,
 } CleanupKind;
 
 typedef struct CleanupEntry {
@@ -244,6 +251,34 @@ static int find_cont_target_from(int top) {
 static int return_target(void) { return find_return_target_from(g_cf.nlive); }
 static int break_target(void)  { return find_break_target_from(g_cf.nlive); }
 static int cont_target(void)   { return find_cont_target_from(g_cf.nlive); }
+
+/* For ND_THROW: walk outward until the first CL_VAR (its dtor must
+ * fire) or CL_TRY (its handler dispatches). Skip CL_LOOP markers —
+ * a loop boundary is irrelevant to throw propagation. The
+ * difference from return_target() is that a CL_TRY counts as a
+ * throw target. Returns label_id, or -1 to mean "jump straight to
+ * __SF_epilogue" (uncaught throw exits via the function epilogue,
+ * propagating __SF_unwind = THROW to the caller for slice 5).
+ *
+ * The 'in_try' out-parameter (when non-NULL) indicates whether the
+ * matched entry is a CL_TRY — useful for emit-side decisions like
+ * "do not run dtors, jump straight to dispatch". For slice 4 the
+ * caller currently ignores this distinction since dtor integration
+ * with try-blocks is deferred. */
+static int find_throw_target_from(int top, bool *in_try) {
+    if (in_try) *in_try = false;
+    for (int i = top - 1; i >= 0; i--) {
+        if (g_cf.live[i].kind == CL_VAR) return g_cf.live[i].label_id;
+        if (g_cf.live[i].kind == CL_TRY) {
+            if (in_try) *in_try = true;
+            return g_cf.live[i].label_id;
+        }
+    }
+    return -1;
+}
+static int throw_target(void) {
+    return find_throw_target_from(g_cf.nlive, NULL);
+}
 
 /* Track emitted enum bodies by their enum_tokens pointer.
  *
@@ -6081,11 +6116,17 @@ static void emit_stmt(Node *n) {
          * catch is handling. */
         if (n->expr_stmt.expr && n->expr_stmt.expr->kind == ND_THROW) {
             Node *thr = n->expr_stmt.expr;
-            int target = return_target();
+            bool in_try = false;
+            int target = find_throw_target_from(g_cf.nlive, &in_try);
             char buf[32];
             const char *lbl;
             if (target >= 0) {
-                snprintf(buf, sizeof(buf), "__SF_cleanup_%d", target);
+                /* CL_TRY's label is the catch-dispatch entry; CL_VAR's
+                 * is the dtor cleanup. Prefix matches the kind so the
+                 * goto resolves to the right emitted label. */
+                snprintf(buf, sizeof(buf),
+                         in_try ? "__SF_try_%d_handler" : "__SF_cleanup_%d",
+                         target);
                 lbl = buf;
             } else {
                 lbl = "__SF_epilogue";
@@ -6943,18 +6984,112 @@ static void emit_stmt(Node *n) {
             fputs("continue;\n", stdout);
         }
         return;
-    case ND_TRY:
-        /* Phase 2 slice 1 placeholder: try-blocks are parsed but the
-         * landing-pad lowering (TLS-state dispatch, catch-type match)
-         * hasn't shipped yet — see docs/exceptions.md. Emit just the
-         * try-body and drop the catches so any non-throwing path
-         * still compiles correctly. Throws inside the body lower to
-         * a literal 0 (see emit_expr ND_THROW); a throw never
-         * reaches the dropped handlers, so user code that exercises
-         * exception paths silently miscompiles until slice 4 wires
-         * real catch dispatch. TODO(seafront#eh-try-lowering). */
+    case ND_TRY: {
+        /* try-block landing pad — N4659 §18 [except], lowering per
+         * docs/exceptions.md. Slice 4: handler dispatch by primitive
+         * type-id pointer compare and catch-all. Class-type catches
+         * with inheritance walking land in slice 5 / phase 5 (RTTI).
+         *
+         * Emit shape (id is unique per try-block):
+         *   { try-body
+         *     goto __SF_try_<id>_after;       // body completed normally
+         *   __SF_try_<id>_handler:            // body THREW (jumped here
+         *                                     // from __SF_THROW_PRIM)
+         *     if (exc_type == &typeinfo_T1) { bind T1, clear state, body }
+         *     else if (catch_all)            { clear state, body }
+         *     else { goto outer_throw; }     // re-propagate
+         *   __SF_try_<id>_after: ; }
+         *
+         * Cleanup-chain integration with CL_VAR locals inside the
+         * try-body is deferred — slice 4 only handles bare
+         * try-blocks without dtor-bearing locals. */
+        int id = g_cf.next_label_id++;
+        fputs("{\n", stdout);
+        g_indent++;
+
+        /* Push CL_TRY so a throw inside the body finds this handler
+         * label via find_throw_target_from. */
+        if (g_cf.nlive < CLEANUP_LIVE_MAX) {
+            g_cf.live[g_cf.nlive].kind = CL_TRY;
+            g_cf.live[g_cf.nlive].label_id = id;
+            g_cf.live[g_cf.nlive].cont_label_id = 0;
+            g_cf.live[g_cf.nlive].var_decl = NULL;
+            g_cf.nlive++;
+        }
         if (n->try_.body) emit_stmt(n->try_.body);
+        if (g_cf.nlive > 0 && g_cf.live[g_cf.nlive - 1].kind == CL_TRY)
+            g_cf.nlive--;
+
+        /* Body completed without throw — skip handlers. */
+        emit_indent();
+        fprintf(stdout, "goto __SF_try_%d_after;\n", id);
+
+        /* Handler-dispatch entry. */
+        fprintf(stdout, "__SF_try_%d_handler:\n", id);
+        for (int i = 0; i < n->try_.nhandlers; i++) {
+            Node *h = n->try_.handlers[i];
+            emit_indent();
+            if (h->handler.is_catch_all) {
+                fputs("if (1) {\n", stdout);
+            } else {
+                /* Slice 4: only int (and primitives keyed to the same
+                 * single typeinfo) match. Real per-type matching ships
+                 * with class-type throws. */
+                fputs("if (__sf_exc_state.exc_type == &__sf_typeinfo_int) {\n",
+                      stdout);
+            }
+            g_indent++;
+            /* Bind the caught name (if any) to the in-flight payload.
+             * For primitives the payload was stashed via uintptr_t
+             * cast in __SF_THROW_PRIM; reverse the cast here. */
+            if (!h->handler.is_catch_all && h->handler.param &&
+                h->handler.param->param.name) {
+                Token *nm = h->handler.param->param.name;
+                emit_indent();
+                emit_type(h->handler.param->param.ty);
+                fprintf(stdout, " %.*s = ", nm->len, nm->loc);
+                fputs("(", stdout);
+                emit_type(h->handler.param->param.ty);
+                fputs(")(uintptr_t)__sf_exc_state.exc_obj;\n", stdout);
+            }
+            /* Mark exception caught — clears the unwind state so
+             * surrounding chain emissions don't re-propagate. */
+            emit_indent();
+            fputs("__SF_unwind = __SF_UNWIND_NONE;\n", stdout);
+            /* Handler body. */
+            if (h->handler.body) emit_stmt(h->handler.body);
+            emit_indent();
+            fprintf(stdout, "goto __SF_try_%d_after;\n", id);
+            g_indent--;
+            emit_indent();
+            fputs("}\n", stdout);
+        }
+        /* No handler matched — re-propagate by chaining outward. */
+        {
+            int outer = throw_target();
+            char buf[32];
+            const char *lbl;
+            if (outer >= 0) {
+                bool outer_in_try = false;
+                /* Walk again with the same logic to determine prefix. */
+                find_throw_target_from(g_cf.nlive, &outer_in_try);
+                snprintf(buf, sizeof(buf),
+                         outer_in_try ? "__SF_try_%d_handler"
+                                      : "__SF_cleanup_%d",
+                         outer);
+                lbl = buf;
+            } else {
+                lbl = "__SF_epilogue";
+            }
+            emit_indent();
+            fprintf(stdout, "goto %s;\n", lbl);
+        }
+        fprintf(stdout, "__SF_try_%d_after: ;\n", id);
+        g_indent--;
+        emit_indent();
+        fputs("}\n", stdout);
         return;
+    }
     default:
         fputs("/* stmt */;\n", stdout);
         return;
