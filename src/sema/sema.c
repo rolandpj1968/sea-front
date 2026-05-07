@@ -1211,8 +1211,12 @@ static void visit_subscript(Sema *s, Node *n) {
  * TODO(seafront#over-match-ics): add promotion/conversion tiers. */
 enum {
     ICS_EXACT        = 0,
-    ICS_PTR_SAME_TAG = 1,  /* T* ↔ T* where T's tag matches (same classes) */
-    ICS_INTEGER_CONV = 2,  /* int↔long, signed↔unsigned, etc. — N4659
+    ICS_QUAL_CONV    = 1,  /* qualification conversion — N4659 §7.5
+                              [conv.qual]: T* → const T* (etc.) is
+                              implicit but ranks below an exact match
+                              per §16.3.3.2 [over.ics.rank]. */
+    ICS_PTR_SAME_TAG = 2,  /* T* ↔ T* where T's tag matches (same classes) */
+    ICS_INTEGER_CONV = 3,  /* int↔long, signed↔unsigned, etc. — N4659
                               §7.8 [conv.integral] standard conversion */
     ICS_INCOMPATIBLE = 100,
 };
@@ -1257,7 +1261,27 @@ static int ics_rank(Type *param, Type *arg) {
         if (!p || !a) return ICS_INCOMPATIBLE;
         return ics_rank(p, a);
     }
-    if (types_equivalent(param, arg)) return ICS_EXACT;
+    if (types_equivalent(param, arg)) {
+        /* types_equivalent ignores cv-qualifiers on the pointee
+         * (TY_STRUCT / fundamental types compare by tag/kind only).
+         * Per N4659 §7.5 [conv.qual] / §16.3.3.2 [over.ics.rank], a
+         * pointer-to-T → pointer-to-const-T is a qualification
+         * conversion — implicit but ranked below an exact match;
+         * the reverse direction is *not* implicit. Distinguish
+         * those four cases at the pointee level so two overloads
+         * differing only in const-qualification on the pointee
+         * (e.g. `f(T*)` vs `f(const T*)`) get separate scores when
+         * the call passes a `T*`. */
+        if ((param->kind == TY_PTR || param->kind == TY_REF ||
+             param->kind == TY_RVALREF) &&
+            param->base && arg->base) {
+            bool p_const = param->base->is_const;
+            bool a_const = arg->base->is_const;
+            if (p_const && !a_const) return ICS_QUAL_CONV;
+            if (!p_const && a_const) return ICS_INCOMPATIBLE;
+        }
+        return ICS_EXACT;
+    }
     /* Null pointer constant — N4659 §4.10/1 [conv.ptr]: a null
      * pointer constant converts to ANY pointer type. We model nullptr
      * / NULL / __null as TY_PTR(TY_VOID) in visit_nullptr; treat that
