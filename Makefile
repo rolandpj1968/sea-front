@@ -64,6 +64,9 @@ test: $(LEX_TEST_TARGET) $(TARGET) $(MCPP)
 	@if [ -x tests/test_libstdcxx_headers.sh ] && [ -d /usr/include/c++/13 ]; then \
 	    ./tests/test_libstdcxx_headers.sh $(TARGET) $(MCPP); \
 	fi
+	@if [ -x tests/test_gcc_standalone.sh ]; then \
+	    ./tests/test_gcc_standalone.sh $(TARGET) $(MCPP); \
+	fi
 
 # Smoke tests against GCC/Clang test suites — not gated (has expected failures).
 # Tracks progress toward the ultimate bootstrap goal.

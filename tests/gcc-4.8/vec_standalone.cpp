@@ -20,7 +20,15 @@ extern "C" {
 #define gcc_unreachable() abort()
 #define ATTRIBUTE_UNUSED
 
-// Stub the statistics / ggc deps  
+// Stub the statistics / ggc deps. ALL stat-tracking macros are
+// empty so signatures and calls line up: vec.h declares the alloc
+// hooks like 'reserve(..., bool CXX_MEM_STAT_INFO)' and the calls
+// site them with 'PASS_MEM_STAT' as a trailing-arg macro. Real
+// gcc 4.8 expands both consistently to ',__FILE__, __LINE__,
+// __FUNCTION__'; we keep both empty here. The hardcoded
+// register_overhead / release_overhead decls below were tweaked
+// to match the 1-arg / 0-arg call shape that follows.
+#define GATHER_STATISTICS 0
 #define CXX_MEM_STAT_INFO
 #define MEM_STAT_DECL
 #define ALONE_MEM_STAT_DECL
@@ -251,7 +259,11 @@ struct vec_prefix
 	     compilers that have stricter notions of PODness for types.  */
 
   /* Memory allocation support routines in vec.c.  */
-  void register_overhead (size_t, const char *, int, const char *);
+  // Stat-tracking hooks — real gcc takes (size_t, const char *,
+  // int, const char *) of __FILE__/__LINE__/__FUNCTION__ via
+  // CXX_MEM_STAT_INFO. With that macro empty here the calls boil
+  // down to a single size_t (and zero args for release).
+  void register_overhead (size_t);
   void release_overhead (void);
   static unsigned calculate_allocation (vec_prefix *, unsigned, bool);
 
