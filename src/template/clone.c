@@ -287,10 +287,23 @@ Type *subst_type(Type *ty, SubstMap *map, Arena *arena) {
     }
     case TY_ARRAY: {
         Type *sub = subst_type(ty->base, map, arena);
-        if (sub == ty->base) return ty;
+        /* The array bound itself may be a dependent expression
+         * (NTTP used as size: 'T arr[NUM]' where NUM is a non-type
+         * template parameter). clone_node walks the expression tree
+         * and substitutes ND_IDENT 'NUM' → its bound literal value
+         * via the TT-binding machinery (see ND_IDENT case in
+         * clone_node). N4659 §11.3.4/1 [dcl.array]. Without this,
+         * the cloned array type still references the unsubstituted
+         * NTTP name and the emitted C has 'T arr[NUM_EMBEDDED]'
+         * with NUM_EMBEDDED undeclared at TU scope. */
+        Node *sub_size = ty->array_size_expr
+                         ? clone_node(ty->array_size_expr, map, arena)
+                         : NULL;
+        if (sub == ty->base && sub_size == ty->array_size_expr) return ty;
         Type *copy = arena_alloc(arena, sizeof(Type));
         *copy = *ty;
         copy->base = sub;
+        copy->array_size_expr = sub_size;
         return copy;
     }
     case TY_FUNC: {

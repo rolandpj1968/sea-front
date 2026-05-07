@@ -764,6 +764,21 @@ parse_suffixes:
                             vec_push(&param_types, param_decl->var_decl.ty);
                         }
 
+                        /* C-style variadic ellipsis WITHOUT a leading
+                         * comma — N4659 §A.6 [gram.dcl]
+                         * parameter-declaration-clause:
+                         *   parameter-declaration-list ...opt
+                         * The no-comma form ('f(int x...)') is legal
+                         * but rare in modern C++ except libstdc++
+                         * <new>'s std::launder overload-pruning that
+                         * uses 'template<class... A> launder(R(*)(A......))'
+                         * = pack-expansion of A then variadic '...'
+                         * with no comma between. */
+                        if (parser_consume(p, TK_ELLIPSIS)) {
+                            variadic = true;
+                            break;
+                        }
+
                         if (!parser_consume(p, TK_COMMA))
                             break;
 
@@ -915,6 +930,8 @@ parse_suffixes:
                         vec_push(&params, param_decl);
                         vec_push(&param_types, param_decl->var_decl.ty);
                     }
+                    /* No-comma variadic — see sibling paramlist parser. */
+                    if (parser_consume(p, TK_ELLIPSIS)) { variadic = true; break; }
                     if (!parser_consume(p, TK_COMMA)) break;
                     if (parser_at(p, TK_ELLIPSIS)) { parser_advance(p); variadic = true; break; }
                 }
