@@ -6386,6 +6386,38 @@ static void emit_fwd_decl_methods_only(Node *n);
  * handles per-statement hoisting itself — just delegate.
  * Pattern: gcc 4.8 cgraphunit.c assemble_thunk 'if (this_adjusting)
  * vargs.quick_push(thunk_adjust(...));'. */
+/* Emit a condition expression in a Boolean context (if/while/for/?:).
+ *
+ * N4659 §7.3 [conv]/3 + §16.3.1.6 [over.match.copy]/2: if the
+ * expression's type is a class type, contextual conversion to bool
+ * invokes a user-defined `operator bool()` (or other matching
+ * conversion function). Sea-front parses the conversion function as
+ * a method named "operator"; we look it up in the class scope and
+ * emit a method call that yields a scalar.
+ *
+ * If no conversion function is reachable (or the expression isn't a
+ * class type), emit the expression as-is — cc handles bool / int /
+ * pointer naturally. */
+static void emit_bool_context_expr(Node *expr) {
+    if (!expr) return;
+    Type *t = expr->resolved_type;
+    if (ty_is_ref(t)) t = t->base;
+    if (t && (t->kind == TY_STRUCT || t->kind == TY_UNION) &&
+        t->tag && t->class_region) {
+        Declaration *opd = lookup_in_scope(t->class_region, "operator", 8);
+        if (opd && opd->type && opd->type->kind == TY_FUNC) {
+            Token op_tok = { .kind = TK_IDENT, .loc = "operator", .len = 8 };
+            bool mc = method_is_const(t, &op_tok);
+            mangle_class_method_cv(t, &op_tok, NULL, 0, mc);
+            fputs("(&(", stdout);
+            emit_expr(expr);
+            fputs("))", stdout);
+            return;
+        }
+    }
+    emit_expr(expr);
+}
+
 static void emit_if_body_with_hoist(Node *body) {
     if (!body) { fputs(";\n", stdout); return; }
     if (body->kind == ND_BLOCK) { emit_stmt(body); return; }
@@ -6828,7 +6860,16 @@ static void emit_stmt(Node *n) {
             emit_var_decl_inner(n->if_.cond);
             fputs(";\n", stdout);
             emit_indent();
-            fprintf(stdout, "if (%.*s) ", nm->len, nm->loc);
+            /* Build a synthetic ND_IDENT so emit_bool_context_expr
+             * can decide whether to invoke `operator bool` based on
+             * the declared variable's type. */
+            Node ident_stub = {0};
+            ident_stub.kind = ND_IDENT;
+            ident_stub.ident.name = nm;
+            ident_stub.resolved_type = n->if_.cond->var_decl.ty;
+            fputs("if (", stdout);
+            emit_bool_context_expr(&ident_stub);
+            fputs(") ", stdout);
             emit_if_body_with_hoist(n->if_.then_);
             if (n->if_.else_) {
                 emit_indent();
@@ -6841,7 +6882,7 @@ static void emit_stmt(Node *n) {
             return;
         }
         fputs("if (", stdout);
-        emit_expr(n->if_.cond);
+        emit_bool_context_expr(n->if_.cond);
         fputs(") ", stdout);
         emit_if_body_with_hoist(n->if_.then_);
         if (n->if_.else_) {
