@@ -7281,12 +7281,27 @@ static void emit_ctor_member_inits(Node *func) {
      * once construction is *complete*. We approximate by setting the
      * vptr at the *start* of the ctor (after base ctors so it
      * overrides any vptr the base installed, before member inits
-     * and the user body). */
+     * and the user body).
+     *
+     * Skip for extern-only polymorphic classes — see
+     * docs/mangling.md "System-class interop". When all virtuals
+     * live in a system library (libstdc++.so for std::exception),
+     * the vtable instance is never emitted, so installing a vptr
+     * pointing at it would reference an undeclared symbol. */
     if (cdef->class_def.ty && cdef->class_def.ty->has_virtual_methods) {
-        emit_indent();
-        fputs("this->__sf_vptr = &", stdout);
-        mangle_class_vtable_instance(cdef->class_def.ty);
-        fputs(";\n", stdout);
+        bool any_body = false;
+        for (int i = 0; i < cdef->class_def.nmembers; i++) {
+            Node *m = cdef->class_def.members[i];
+            if (m && m->kind == ND_FUNC_DEF && m->func.is_virtual) {
+                any_body = true; break;
+            }
+        }
+        if (any_body) {
+            emit_indent();
+            fputs("this->__sf_vptr = &", stdout);
+            mangle_class_vtable_instance(cdef->class_def.ty);
+            fputs(";\n", stdout);
+        }
     }
     for (int i = 0; i < cdef->class_def.nmembers; i++) {
         Node *m = cdef->class_def.members[i];
@@ -7958,6 +7973,22 @@ static void emit_class_def(Node *n) {
      * the struct definition + method forward declarations. In
      * PHASE_METHODS, skip the struct (already emitted) and emit
      * only method bodies, vtable, synthesized ctors/dtors. */
+    /* Extern-only polymorphic check — used in BOTH phases (struct
+     * emit gates the vptr field; methods phase gates the vtable
+     * struct and instance). Compute up here so PHASE_METHODS sees
+     * a defined value past the goto below. See docs/mangling.md
+     * "System-class interop" for the rationale. */
+    bool any_virtual_has_body = false;
+    if (class_type && class_type->has_virtual_methods) {
+        for (int i = 0; i < n->class_def.nmembers; i++) {
+            Node *m = n->class_def.members[i];
+            if (m && m->kind == ND_FUNC_DEF && m->func.is_virtual) {
+                any_virtual_has_body = true;
+                break;
+            }
+        }
+    }
+
     if (g_emit_phase == PHASE_METHODS) goto methods_phase;
 
     /* Skip if already emitted (dedup for dependency-driven emit). */
@@ -8032,7 +8063,7 @@ static void emit_class_def(Node *n) {
      * all method forward-declarations are out, so it can name them
      * in its function-pointer slots. */
     bool poly = class_type && class_type->has_virtual_methods;
-    if (poly) {
+    if (poly && any_virtual_has_body) {
         fputs("struct ", stdout);
         mangle_class_vtable_type(class_type);
         fputs(";\n", stdout);
@@ -8127,7 +8158,7 @@ static void emit_class_def(Node *n) {
         Type *base = class_base(class_type, b);
         if (base && base->has_virtual_methods) { has_poly_base = true; break; }
     }
-    if (poly && !has_poly_base) {
+    if (poly && !has_poly_base && any_virtual_has_body) {
         emit_indent();
         fputs("const struct ", stdout);
         mangle_class_vtable_type(class_type);
@@ -8436,6 +8467,33 @@ methods_phase:;
         }
     }
 
+    /* Extern-only polymorphic classes — see docs/mangling.md
+     * "System-class interop". A class declared polymorphic via
+     * 'virtual T fn();' but whose virtual methods all live in a
+     * system library (libstdc++.so for std::exception, std::bad_alloc,
+     * etc.) has no in-TU bodies for those virtuals. Emitting the
+     * vtable instance would reference symbols like
+     * 'sf__std__exception__what_p_void_pe_' that are never defined
+     * anywhere — cc fails with "undeclared here" before link.
+     *
+     * Skip-the-vtable: when no virtual member has an ND_FUNC_DEF
+     * (inline body), emit no vtable struct, no vtable instance, and
+     * no vptr field in the C struct layout. The class still appears
+     * as a regular struct — usable in catch clauses, member access
+     * for non-virtuals, and as an opaque type for pointers — just
+     * without dispatch. Aligned with the deferred design discussion
+     * in docs/mangling.md.
+     *
+     * SHORTCUT: this misses the case where a virtual is declared
+     * in the class body (ND_VAR_DECL) and defined out-of-class in
+     * the SAME TU (separate ND_FUNC_DEF). Those should keep their
+     * vtable. For libcpp/gcc-14 source the pattern doesn't appear
+     * — out-of-class virtual defs are rare; the common shape is
+     * either inline-in-class or only-in-system-library. Handle when
+     * a real source surfaces it. TODO(seafront#out-of-class-virt).
+     * The any_virtual_has_body flag is computed once near 'bool poly'
+     * above (so the vptr-field decision can also consult it). */
+
     /* Vtable struct + static instance — N4659 §13.3 [class.virtual].
      *
      * The struct has one function-pointer slot per virtual method,
@@ -8446,7 +8504,7 @@ methods_phase:;
      * First-slice limitation: virtual destructors aren't yet given
      * a vtable slot — they'd require slot-routing for the dtor wrapper
      * which we'll add when we tackle delete-through-base. */
-    if (class_type && class_type->has_virtual_methods) {
+    if (class_type && class_type->has_virtual_methods && any_virtual_has_body) {
         /* The struct definition. */
         fputs("struct ", stdout);
         mangle_class_vtable_type(class_type);
@@ -8511,10 +8569,26 @@ methods_phase:;
             if (is_virt_decl && m->var_decl.is_destructor) continue;
             Token *mname = is_virt_funcdef ? m->func.name : m->var_decl.name;
             emit_indent();
-            {
+            /* Slot points at an in-TU body (ND_FUNC_DEF) — emit the
+             * mangled name. For declaration-only virtuals (ND_VAR_DECL,
+             * including pure virtuals 'virtual T fn() = 0' which we
+             * don't separately track) emit NULL: the slot stays in
+             * place to keep the vtable layout stable for derived
+             * classes, and a dispatched call would NULL-deref (which
+             * matches Itanium's __cxa_pure_virtual semantics — call
+             * to pure virtual is undefined).
+             *
+             * SHORTCUT: doesn't search for an out-of-class ND_FUNC_DEF
+             * in the same TU (e.g. 'void Foo::fn() { ... }' at file
+             * scope). When that pattern is needed, replace the bare
+             * 'is_virt_funcdef' check with a TU-walk for matching
+             * out-of-class definition. TODO(seafront#out-of-class-virt). */
+            if (is_virt_funcdef) {
                 Type **pty = NULL;
                 int np = collect_func_param_types(m, &pty);
                 mangle_class_method(class_type, mname, pty, np);
+            } else {
+                fputs("0", stdout);
             }
             fputs(",\n", stdout);
         }
@@ -8633,8 +8707,10 @@ methods_phase:;
             fputs(");\n", stdout);
         }
         /* Install vptr next for polymorphic classes — see the
-         * matching emit_ctor_member_inits path for the rationale. */
-        if (class_type->has_virtual_methods) {
+         * matching emit_ctor_member_inits path for the rationale.
+         * Skip for extern-only polymorphic classes (no in-TU virtual
+         * body): the vtable instance isn't emitted. */
+        if (class_type->has_virtual_methods && any_virtual_has_body) {
             emit_indent();
             fputs("this->__sf_vptr = &", stdout);
             mangle_class_vtable_instance(class_type);

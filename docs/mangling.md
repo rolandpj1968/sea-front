@@ -269,3 +269,106 @@ chosen at the expense of the other.
 
 The encoding rules are *negotiable*. The plugin shape is the
 load-bearing decision.
+
+## System-class interop (deferred design)
+
+When sea-front compiles source that includes libstdc++ / libc++
+headers — gcc 14 libcpp/, libstdc++'s `<cstdlib>` chain, etc. — it
+sees polymorphic system classes (`std::exception`, `std::bad_alloc`,
+`std::runtime_error`, …). Their virtual method bodies live in the
+system shared library, **not** in the TU we're compiling.
+
+This raises a question the mangling-plugin shape was always meant to
+defer: *do we mangle calls into those classes' virtuals using our own
+scheme (which the linker can't resolve against `libstdc++.so`) or
+using Itanium (which it can)?*
+
+### Why not "obvious answer = Itanium"
+
+The Itanium C++ ABI is the de-facto cross-compiler ABI on every
+platform sea-front targets, and our mangler vtable is exactly the
+hook for plugging in an Itanium scheme. The hooks are in place; the
+algorithm is real work but bounded — substitutions (`S_`, `S0_`...),
+std-namespace abbreviations (`Sa`, `Ss`, `Sd`, `Si`, `So`),
+nested-name encoding (`N...E`), special-function tags (`C1`/`C2`/`C3`
+for ctors, `D0`/`D1`/`D2` for dtors), CV/ref-qualifiers, virtual
+thunks. Several hundred lines of careful code; doable.
+
+The **real** cost is the inconsistency. Itanium-compat for vtables
+alone is a one-way bridge:
+
+- We can call into libstdc++ — good.
+- We **cannot catch what libstdc++ throws** (sea-front EH stays
+  TLS-polling private per `docs/exceptions.md`; libstdc++ throws
+  Itanium-shaped objects via `_Unwind_RaiseException`).
+- We **cannot query libstdc++'s `type_info`** (different layout).
+- We **cannot let libstdc++ catch what we throw**.
+
+Picking up Itanium for vtables only opens the slippery slope: "OK,
+type_info next? exception_ptr next? full unwind ABI?" Each step is
+small but the cumulative direction conflicts with the deliberate
+"sea-front exceptions / type_info / unwind protocol are private"
+stance.
+
+### Why not trampoline stubs
+
+The other mechanically-feasible path: per-system-class C++ shims
+that bridge sea-front mangling to Itanium symbols. e.g. ship an
+`__sf_libstdcxx_shim.cc` that hand-writes:
+
+```cpp
+extern "C" const char *
+sf__std__exception__what_p_void_pe_(const std::exception *self)
+{ return self->what(); }
+```
+
+This works at link time without any new mangler. But it scales
+poorly — every system class user code touches needs a hand-written
+shim, and "user code that includes libstdc++" is most C++ code.
+Doesn't generalise.
+
+### The right long-term answer
+
+Compile our own libstdc++ (or libc++) **through sea-front itself**,
+producing a sea-front-mangled stdlib that user code links against.
+gcc 14's `libstdc++-v3/` and LLVM's `libcxx/` are both pure-C++
+source distributions designed to be re-built — they're conceptually
+within sea-front's reach. The output is a `libsf_stdc++.so` whose
+symbols use `sf__std__...` names, and a sea-front-compiled binary
+links against that.
+
+This aligns with the **bootstrappable** instinct: sea-front sits in
+a chain of "build everything from source," and its standard library
+should be no exception. It's a major slice — not a today thing — but
+it's the answer that doesn't require taking on Itanium ABI
+compatibility at all.
+
+### Current pragmatic stance: skip-the-vtable
+
+Until we either pick "build our own stdlib" or change our minds on
+Itanium, the working compromise is: **emit no vtable for polymorphic
+classes whose virtual methods are all extern-only** (no in-TU body
+for any virtual). Loses dispatch on system types, which is fine
+because the source we compile rarely dispatches through them — they
+typically just appear in catch clauses or as opaque return types.
+
+The alternative — emit vtables with extern declarations for the
+missing methods — would compile (cc-only pipelines pass) but
+link-fail. Skip-the-vtable is the cleaner move: nothing references
+a symbol that doesn't exist anywhere.
+
+### When to revisit
+
+Two triggers should re-open this discussion:
+
+1. **A real link-against-libstdc++ build** is wanted (someone wants
+   to run a sea-front-compiled binary). Then we either pick
+   trampoline shims for whatever subset is needed, or commit to the
+   Itanium plugin, or to the "compile our own stdlib" track.
+2. **User source actually dispatches through a system class** (e.g.
+   calls `e.what()` on a caught `std::exception &`). Today's
+   skip-the-vtable means that call wouldn't compile; we'd need at
+   least the Itanium plugin to make it work.
+
+When either lands, this section gets the design pivot it deserves —
+not a rushed half-step.
