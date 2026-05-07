@@ -3426,6 +3426,27 @@ static void emit_expr(Node *n) {
                 return;
             }
         }
+        /* Brace-init-list as RHS of assignment to a struct: lower to a
+         * C99 compound literal so the construct is a real expression
+         * the assignment can consume. N4659 §11.6.4 [dcl.init.list]
+         * permits `obj = {a, b, c}`; C requires `obj = (T){a, b, c}`
+         * (C11 §6.5.2.5). */
+        if (n->binary.op == TK_ASSIGN && n->binary.rhs &&
+            n->binary.rhs->kind == ND_INIT_LIST && n->binary.lhs &&
+            n->binary.lhs->resolved_type) {
+            Type *lt = n->binary.lhs->resolved_type;
+            if (ty_is_ref(lt)) lt = lt->base;
+            if (lt && (lt->kind == TY_STRUCT || lt->kind == TY_UNION)) {
+                fputc('(', stdout);
+                emit_expr(n->binary.lhs);
+                fputs(" = (", stdout);
+                emit_type(lt);
+                fputc(')', stdout);
+                emit_expr(n->binary.rhs);
+                fputc(')', stdout);
+                return;
+            }
+        }
         fputc('(', stdout);
         emit_expr(n->binary.lhs);
         fprintf(stdout, " %s ", binop_str(n->binary.op));
