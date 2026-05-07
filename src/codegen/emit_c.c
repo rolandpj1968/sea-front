@@ -320,6 +320,16 @@ static void emit_mangled_class_tag(Type *class_type);
 static void emit_stmt(Node *n);
 static int collect_call_arg_types(Node **args, int nargs, Type ***out_types);
 static Node *func_param_node(Node *m, int k);
+/* After a call site has emitted nargs user-supplied arguments,
+ * fill any trailing param slots [nargs, np) from the resolved
+ * callee's param.default_value expressions. N4659 §11.3.6
+ * [dcl.fct.default]. Each emit prepends ", " — caller has
+ * already emitted at least one arg or the bare callee. The pty
+ * array (when non-NULL) provides param Types for ref-adaptation;
+ * pass NULL when types aren't readily available — defaults are
+ * usually simple values (NULL, 0, false) that need no adaptation. */
+static void emit_default_args_tail(Node *resolved_callee, int nargs, int np,
+                                    Type **pty);
 static int resolve_overload(Type *class_type, Token *name, bool is_ctor,
                              Type **arg_types, int nargs,
                              bool receiver_is_const,
@@ -850,11 +860,11 @@ static void hoist_emit_decl(Node *call, bool in_shortcircuit) {
         emit_indent();
         Node *resolved_ctor = NULL;
         int np = 0;
+        Type **pty = NULL;
         {
             Type **at = NULL;
             int na = collect_call_arg_types(call->call.args,
                                              call->call.nargs, &at);
-            Type **pty = NULL;
             np = resolve_overload(call->resolved_type, /*name=*/NULL,
                                    /*is_ctor=*/true,
                                    at, na,
@@ -874,16 +884,7 @@ static void hoist_emit_decl(Node *call, bool in_shortcircuit) {
             fputs(", ", stdout);
             emit_expr(call->call.args[i]);
         }
-        /* Default-arg injection — N4659 §11.3.6 [dcl.fct.default].
-         * When the resolved overload has more params than the call
-         * supplied, fill the trailing slots from the corresponding
-         * param.default_value expressions. */
-        for (int i = call->call.nargs; i < np; i++) {
-            Node *p = func_param_node(resolved_ctor, i);
-            if (!p || !p->param.default_value) break;  /* shouldn't happen */
-            fputs(", ", stdout);
-            emit_expr(p->param.default_value);
-        }
+        emit_default_args_tail(resolved_ctor, call->call.nargs, np, pty);
         fputs(");\n", stdout);
     } else {
         /* Function call returning a class — direct copy form.
@@ -1953,6 +1954,18 @@ static int score_type_pair(Type *pt, Type *at) {
 /* Match a single candidate member against a call's arg types.
  * Returns -1 if nparams ≠ nargs (hard reject); otherwise a positive
  * score where higher = better fit. */
+static void emit_default_args_tail(Node *resolved_callee, int nargs, int np,
+                                    Type **pty) {
+    if (!resolved_callee) return;
+    for (int i = nargs; i < np; i++) {
+        Node *p = func_param_node(resolved_callee, i);
+        if (!p || !p->param.default_value) break;
+        fputs(", ", stdout);
+        emit_arg_for_param(p->param.default_value,
+                            pty && i < np ? pty[i] : NULL);
+    }
+}
+
 /* Return the kth param Node of a function-shaped declaration,
  * or NULL if unavailable. ND_FUNC_DEF stores params on func.params;
  * ND_VAR_DECL with TY_FUNC stores them on var_decl.fn_params (with
@@ -4013,6 +4026,23 @@ static void emit_expr(Node *n) {
                             : (fb_pty && i < fb_np ? fb_pty[i] : NULL);
                         emit_arg_for_param(n->call.args[i], pty);
                     }
+                    /* Default-arg expansion via callee_ft->param_defaults
+                     * (TY_FUNC's parse-time-captured defaults). The
+                     * Node-based helper isn't available here — this
+                     * path doesn't carry a resolved-callee Node. N4659
+                     * §11.3.6 [dcl.fct.default]. With nargs==0 the first
+                     * default must NOT be preceded by ", " (we just
+                     * opened the arg list). */
+                    if (callee_ft && callee_ft->kind == TY_FUNC &&
+                        callee_ft->param_defaults &&
+                        callee_ft->nparams > n->call.nargs) {
+                        for (int i = n->call.nargs; i < callee_ft->nparams; i++) {
+                            Node *def = callee_ft->param_defaults[i];
+                            if (!def) break;
+                            if (i > 0) fputs(", ", stdout);
+                            emit_arg_for_param(def, callee_ft->params[i]);
+                        }
+                    }
                     fputc(')', stdout);
                     return;
                 }
@@ -4140,6 +4170,24 @@ static void emit_expr(Node *n) {
                                         (call_pty && i < call_np)
                                             ? call_pty[i] : NULL);
                 }
+                /* Default-arg expansion — N4659 §11.3.6 [dcl.fct.default].
+                 * For static fn with zero user args, the wrote_receiver
+                 * is false; the helper still prepends ", " unconditionally,
+                 * so handle the special case: for static fns with nargs==0,
+                 * the first default needs no comma. emit_default_args_tail
+                 * doesn't know that — patch around it by emitting the
+                 * first default manually. */
+                if (n->call.nargs == 0 && !wrote_receiver) {
+                    Node *p = func_param_node(winner, 0);
+                    if (p && p->param.default_value && call_np > 0) {
+                        emit_arg_for_param(p->param.default_value,
+                                            call_pty ? call_pty[0] : NULL);
+                        emit_default_args_tail(winner, 1, call_np, call_pty);
+                    }
+                } else {
+                    emit_default_args_tail(winner, n->call.nargs,
+                                            call_np, call_pty);
+                }
                 fputc(')', stdout);
                 return;
             }
@@ -4149,6 +4197,10 @@ static void emit_expr(Node *n) {
                                     (call_pty && i < call_np)
                                         ? call_pty[i] : NULL);
             }
+            /* TODO(seafront#default-args-elsewhere): this fallthrough
+             * path doesn't carry a resolved-callee Node into scope —
+             * adding default-arg expansion here needs threading the
+             * resolved Node out of the upstream lookup. */
             fputc(')', stdout);
             return;
         }
@@ -4527,40 +4579,21 @@ static void emit_expr(Node *n) {
                     emit_addrof_for_this(obj);
                 }
                 after_base_this_emit:;
-                /* Default-argument injection for method calls. Reach
-                 * the method's TY_FUNC through the winner node to pull
-                 * its param_defaults. N4659 §11.3.6 [dcl.fct.default].
-                 * Pattern: gcc 4.8 gimplify.c 'stack.reserve(8)' where
-                 * vec::reserve(unsigned, bool exact = false). */
-                Type *win_fty = NULL;
-                if (winner_method) {
-                    if (winner_method->kind == ND_VAR_DECL &&
-                        winner_method->var_decl.ty &&
-                        winner_method->var_decl.ty->kind == TY_FUNC)
-                        win_fty = winner_method->var_decl.ty;
-                    /* ND_FUNC_DEF has no single TY_FUNC, but we can
-                     * recover param_defaults from the method's
-                     * recorded TY_FUNC when in-class. Skipped here —
-                     * defaults are typically on declarations, not
-                     * OOL definitions. */
-                }
-                int total = n->call.nargs;
-                if (win_fty && win_fty->param_defaults &&
-                    win_fty->nparams > n->call.nargs) {
-                    bool all_tail = true;
-                    for (int i = n->call.nargs; i < win_fty->nparams; i++)
-                        if (!win_fty->param_defaults[i]) { all_tail = false; break; }
-                    if (all_tail) total = win_fty->nparams;
-                }
-                for (int i = 0; i < total; i++) {
+                /* User-supplied args, then default-arg expansion via
+                 * the unified helper. Pulls defaults from the winner
+                 * Node's params (ND_FUNC_DEF or ND_VAR_DECL with
+                 * fn_params), unifying what previously lived as two
+                 * separate paths (the param_defaults-on-Type form and
+                 * a never-fired ND_FUNC_DEF branch). N4659 §11.3.6
+                 * [dcl.fct.default]. */
+                for (int i = 0; i < n->call.nargs; i++) {
                     fputs(", ", stdout);
-                    Node *arg = (i < n->call.nargs)
-                        ? n->call.args[i]
-                        : win_fty->param_defaults[i];
-                    emit_arg_for_param(arg,
+                    emit_arg_for_param(n->call.args[i],
                                         (call_pty && i < call_np)
                                             ? call_pty[i] : NULL);
                 }
+                emit_default_args_tail(winner_method, n->call.nargs,
+                                        call_np, call_pty);
                 fputc(')', stdout);
                 if (ref_ret && !cur_returns_ref) fputc(')', stdout);
                 return;
@@ -6454,12 +6487,8 @@ static void emit_stmt(Node *n) {
                     /* Default-arg expansion — N4659 §11.3.6
                      * [dcl.fct.default]. Trailing params unsupplied
                      * by the call site fill from param.default_value. */
-                    for (int i = n->var_decl.ctor_nargs; i < np; i++) {
-                        Node *p = func_param_node(resolved_ctor, i);
-                        if (!p || !p->param.default_value) break;
-                        fputs(", ", stdout);
-                        emit_expr(p->param.default_value);
-                    }
+                    emit_default_args_tail(resolved_ctor,
+                                           n->var_decl.ctor_nargs, np, pty);
                     fputs(");\n", stdout);
                 }
             }
