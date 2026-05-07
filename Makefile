@@ -23,6 +23,13 @@ LEX_TEST_SRCS = src/util.c src/arena.c src/lex/tokenize.c src/lex/unicode.c
 LEX_TEST_OBJS = $(patsubst src/%.c,$(BUILDDIR)/%.o,$(LEX_TEST_SRCS))
 LEX_TEST_TARGET = $(BUILDDIR)/test_lex
 
+# Itanium-mangling unit test — links the mangling objects only, no
+# parser. The driver constructs Types inline and exercises the
+# itan_* entry points; output is diffed against the expected file
+# AND cross-checked against `g++` via tests/test_mangle_itanium.sh.
+ITAN_TEST_OBJS = $(BUILDDIR)/codegen/mangle.o $(BUILDDIR)/codegen/mangle_itanium.o
+ITAN_TEST_TARGET = $(BUILDDIR)/test_mangle_itanium
+
 # Vendored mcpp preprocessor
 MCPP_SRCS = main.c directive.c eval.c expand.c support.c system.c mbchar.c
 MCPP_OBJS = $(patsubst %.c,$(BUILDDIR)/mcpp/%.o,$(MCPP_SRCS))
@@ -48,6 +55,13 @@ $(LEX_TEST_TARGET): $(BUILDDIR)/test_lex.o $(LEX_TEST_OBJS)
 $(BUILDDIR)/test_lex.o: tests/test_lex.c $(HDR) | $(BUILDDIR)
 	$(CC) $(CFLAGS) -I src -c -o $@ $<
 
+# Itanium mangling unit test
+$(ITAN_TEST_TARGET): $(BUILDDIR)/test_mangle_itanium.o $(ITAN_TEST_OBJS)
+	$(CC) $(CFLAGS) -o $@ $^
+
+$(BUILDDIR)/test_mangle_itanium.o: tests/test_mangle_itanium.c $(HDR) $(PARSE_HDR) | $(BUILDDIR)
+	$(CC) $(CFLAGS) -I src -c -o $@ $<
+
 # Pattern rules for source compilation
 $(BUILDDIR)/%.o: src/%.c $(HDR) $(PARSE_HDR) | $(BUILDDIR)/lex $(BUILDDIR)/parse $(BUILDDIR)/sema $(BUILDDIR)/codegen $(BUILDDIR)/template
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -56,8 +70,9 @@ $(BUILDDIR) $(BUILDDIR)/lex $(BUILDDIR)/parse $(BUILDDIR)/sema $(BUILDDIR)/codeg
 	mkdir -p $@
 
 # Core tests — must all pass (gated).
-test: $(LEX_TEST_TARGET) $(TARGET) $(MCPP)
+test: $(LEX_TEST_TARGET) $(ITAN_TEST_TARGET) $(TARGET) $(MCPP)
 	./$(LEX_TEST_TARGET)
+	@if [ -x tests/test_mangle_itanium.sh ]; then ./tests/test_mangle_itanium.sh; fi
 	@if [ -x tests/test.sh ]; then ./tests/test.sh $(TARGET); fi
 	@if [ -x tests/test_parse.sh ]; then ./tests/test_parse.sh $(TARGET); fi
 	@if [ -x tests/test_emit_c.sh ]; then ./tests/test_emit_c.sh $(TARGET); fi
