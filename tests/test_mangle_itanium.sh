@@ -55,6 +55,9 @@ m_global_T_foo_const|struct T { void foo() const; }; void T::foo() const {}|_ZNK
 m_std_T_foo_void|namespace std { struct T { void foo(); }; void T::foo() {} }|_ZNSt1T3fooEv
 m_ns_T_foo_void|namespace ns { struct T { void foo(); }; void T::foo() {} }|_ZN2ns1T3fooEv
 m_global_T_foo_T_ptr_T_ptr|struct T { void foo(T*, T*); }; void T::foo(T*, T*) {}|_ZN1T3fooEPS_S0_
+m_global_T_foo_constT_ptr_x2_T_ptr|struct T { void foo(const T*, const T*, T*); }; void T::foo(const T*, const T*, T*) {}|_ZN1T3fooEPKS_S1_PS_
+m_global_T_foo_Tp_Tpp_Tp_Tpp|struct T { void foo(T*, T**, T*, T**); }; void T::foo(T*, T**, T*, T**) {}|_ZN1T3fooEPS_PS0_S0_S1_
+m_global_T_foo_ip_Tp_ip_Tp_ip|struct T { void foo(int*, T*, int*, T*, int*); }; void T::foo(int*, T*, int*, T*, int*) {}|_ZN1T3fooEPiPS_S0_S1_S0_
 '
 
 # Helpers

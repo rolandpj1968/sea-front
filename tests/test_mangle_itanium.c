@@ -232,5 +232,44 @@ int main(void) {
             &t_class_T_global, &tok_foo, p, 2, false);
     }
 
+    /* ---------- Stage 3-style fixtures: deeper sub chains -------- */
+    {
+        /* `void T::foo(const T*, const T*, T*)` — first const-T then
+         * const-T* should be pushed; second const-T* subs; the bare
+         * T* doesn't because it differs in cv. */
+        Type t_const_T = { .kind = TY_STRUCT, .tag = &tok_T,
+                            .class_region = &reg_class_T_global,
+                            .is_const = true };
+        Type t_cT_ptr  = { .kind = TY_PTR, .base = &t_const_T };
+        Type t_cT_ptr2 = { .kind = TY_PTR, .base = &t_const_T };
+        Type t_T_ptr  = { .kind = TY_PTR, .base = &t_class_T_global };
+        Type *p[] = { &t_cT_ptr, &t_cT_ptr2, &t_T_ptr };
+        run_fixture_method("m_global_T_foo_constT_ptr_x2_T_ptr",
+            &t_class_T_global, &tok_foo, p, 3, false);
+    }
+    {
+        /* `void T::foo(T*, T**, T*, T**)` — exercises pushing both
+         * T* and T**, then back-referencing each. */
+        Type t_T_ptr      = { .kind = TY_PTR, .base = &t_class_T_global };
+        Type t_T_ptr_2    = { .kind = TY_PTR, .base = &t_class_T_global };
+        Type t_T_pp       = { .kind = TY_PTR, .base = &t_T_ptr };
+        Type t_T_pp_2     = { .kind = TY_PTR, .base = &t_T_ptr };
+        Type *p[] = { &t_T_ptr, &t_T_pp, &t_T_ptr_2, &t_T_pp_2 };
+        run_fixture_method("m_global_T_foo_Tp_Tpp_Tp_Tpp",
+            &t_class_T_global, &tok_foo, p, 4, false);
+    }
+    {
+        /* Deep-chain: `void T::foo(int*, T*, int*, T*, int*)` —
+         * separately tracks `int*` and `T*` subs through interleaving. */
+        Type t_T_ptr   = { .kind = TY_PTR, .base = &t_class_T_global };
+        Type t_T_ptr_2 = { .kind = TY_PTR, .base = &t_class_T_global };
+        Type t_ip   = { .kind = TY_PTR, .base = &t_int };
+        Type t_ip_2 = { .kind = TY_PTR, .base = &t_int };
+        Type t_ip_3 = { .kind = TY_PTR, .base = &t_int };
+        Type *p[] = { &t_ip, &t_T_ptr, &t_ip_2, &t_T_ptr_2, &t_ip_3 };
+        run_fixture_method("m_global_T_foo_ip_Tp_ip_Tp_ip",
+            &t_class_T_global, &tok_foo, p, 5, false);
+    }
+
     return 0;
 }

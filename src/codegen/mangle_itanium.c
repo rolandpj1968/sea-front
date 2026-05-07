@@ -374,6 +374,26 @@ static void emit_type(ItanCtx *c, Type *ty) {
     }
     case TY_STRUCT: case TY_UNION: case TY_ENUM:
         if (ctx_try_emit_sub(c, ty)) return;
+        if (ty->is_const || ty->is_volatile) {
+            /* `const T` mangles as `K1T` (and `K1T` is itself a sub
+             * candidate, distinct from the bare `1T`). Itanium ABI
+             * §5.1.5 + §5.1.6.5: emit cv wrapper, recurse on the
+             * unqualified form (which is its own sub candidate),
+             * then push the qualified form. The unqualified form
+             * is staged in a static slot keyed by depth so its
+             * address remains stable for sub-table lookups within
+             * the symbol. */
+            emit_qual_wrapper(c, ty);
+            static Type unq_buf[ITAN_MAX_SUBS];
+            int slot = c->nsubs;  /* roughly per recursion depth */
+            if (slot < 0 || slot >= ITAN_MAX_SUBS) slot = 0;
+            unq_buf[slot] = *ty;
+            unq_buf[slot].is_const = false;
+            unq_buf[slot].is_volatile = false;
+            emit_type(c, &unq_buf[slot]);
+            ctx_push(c, ty);
+            return;
+        }
         emit_class_or_enum_name(c, ty);
         ctx_push(c, ty);
         return;
