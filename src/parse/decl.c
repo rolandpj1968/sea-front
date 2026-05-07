@@ -2097,9 +2097,31 @@ Node *parse_top_level_decl(Parser *p) {
             parser_advance(p);
         }
         parser_expect(p, TK_SEMI);
-        if (last_name)
-            region_declare(p, last_name->loc, last_name->len,
-                           ENTITY_TYPE, /*type=*/NULL);
+        if (last_name) {
+            /* Forward the underlying type from the source declaration
+             * when it's reachable via unqualified lookup from the
+             * current scope (which walks outward through enclosing
+             * scopes — covers 'using ::ldiv_t;' inside namespace std,
+             * the libstdc++ <cstdlib> shape). Without forwarding,
+             * Declaration.type stays NULL and parse_type_specifiers
+             * later falls back to TY_INT for the alias, breaking any
+             * function that uses the aliased type as a return type
+             * or parameter type ('inline ldiv_t div(long, long);').
+             *
+             * Falls back to the type-NULL registration when the
+             * source isn't visible through unqualified lookup
+             * (qualified namespace paths we don't fully model). The
+             * downstream type-NULL fallback still produces something
+             * — just opaque, not the actual structure. */
+            Declaration *src = lookup_unqualified(p, last_name->loc,
+                                                   last_name->len);
+            Type *fwd = (src && src->type) ? src->type : NULL;
+            EntityKind ek = (src && (src->entity == ENTITY_TAG ||
+                                     src->entity == ENTITY_TYPE ||
+                                     src->entity == ENTITY_TEMPLATE))
+                            ? src->entity : ENTITY_TYPE;
+            region_declare(p, last_name->loc, last_name->len, ek, fwd);
+        }
         (void)tok;
         return NULL;
     }
