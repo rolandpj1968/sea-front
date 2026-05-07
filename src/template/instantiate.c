@@ -1768,19 +1768,42 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
                 continue;
             }
             /* Non-type template parameter — N4659 §17.1/4 [temp.param].
-             * The arg is an expression; for the function-pointer NTTP
-             * shape, that's an ND_IDENT naming a function. Bind the
-             * param name to the identifier so the cloned body's
-             * references get rewritten via clone.c's ND_IDENT name-
-             * substitution. Piggybacks on the TT-param machinery
-             * (subst_map_add_tt) — both shapes are "name → Token"
-             * bindings; the binding kind is implicit at the use site
-             * (TT names appear in ND_QUALIFIED parts[0]; NTTP names
-             * appear in bare ND_IDENT positions). */
+             * The arg is an expression. Two flavors are common:
+             *   - ND_IDENT naming a function/object (function-pointer
+             *     NTTP shape used by gcc 4.8 vec.h xcallocator).
+             *   - Literal: ND_NUM, ND_BOOL_LIT, ND_CHAR, ND_NULLPTR
+             *     (libstdc++ <type_traits> integral_constant pattern —
+             *     'integral_constant<bool, true>' has V=true).
+             * Both bind the param name to a single Token so clone.c's
+             * ND_IDENT handler can substitute references in the cloned
+             * body. For literals, clone.c morphs the cloned ND_IDENT
+             * into the corresponding literal NodeKind. */
             if (i < nargs) {
                 Node *a = template_id->template_id.args[i];
-                if (a && a->kind == ND_IDENT && a->ident.name)
-                    subst_map_add_tt(&map, pname, a->ident.name);
+                Token *bound_tok = NULL;
+                if (a) {
+                    switch (a->kind) {
+                    case ND_IDENT:
+                        bound_tok = a->ident.name;
+                        break;
+                    case ND_NUM:
+                    case ND_FNUM:
+                    case ND_BOOL_LIT:
+                    case ND_NULLPTR:
+                        bound_tok = a->tok;
+                        break;
+                    case ND_CHAR:
+                        bound_tok = a->chr.tok;
+                        break;
+                    case ND_STR:
+                        bound_tok = a->str.tok;
+                        break;
+                    default:
+                        break;
+                    }
+                }
+                if (bound_tok)
+                    subst_map_add_tt(&map, pname, bound_tok);
             }
         }
     }

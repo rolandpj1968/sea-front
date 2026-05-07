@@ -404,11 +404,48 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
             Token *bound = subst_map_lookup_tt(map,
                 c->ident.name->loc, c->ident.name->len);
             if (bound) {
-                c->ident.name = bound;
-                /* Clear cached resolution — the rewritten name maps
-                 * to a different decl which sema will re-resolve. */
-                c->ident.resolved_decl = NULL;
-                c->resolved_type = NULL;
+                /* Literal-valued NTTPs ('integral_constant<bool,true>'):
+                 * the bound token's kind reveals what kind of value
+                 * was passed. Morph the cloned node into the matching
+                 * literal NodeKind so downstream sema/emit treats it
+                 * as a constant, not as an ident lookup that would
+                 * fail (e.g. resolving 'V' → 'true' as ND_IDENT would
+                 * try to look up 'true' as a name). */
+                NodeKind lit_kind = ND_IDENT;
+                switch (bound->kind) {
+                case TK_NUM:        lit_kind = ND_NUM;      break;
+                case TK_FNUM:       lit_kind = ND_FNUM;     break;
+                case TK_KW_TRUE:
+                case TK_KW_FALSE:   lit_kind = ND_BOOL_LIT; break;
+                case TK_KW_NULLPTR: lit_kind = ND_NULLPTR;  break;
+                case TK_CHAR:       lit_kind = ND_CHAR;     break;
+                case TK_STR:        lit_kind = ND_STR;      break;
+                default: break;
+                }
+                if (lit_kind != ND_IDENT) {
+                    c->kind = lit_kind;
+                    c->tok = bound;
+                    /* Variant-data shapes for literals: most read
+                     * c->tok directly (NUM/BOOL/NULLPTR). CHAR/STR
+                     * keep the token in their own variant struct,
+                     * so populate that too. FNUM stores a parsed
+                     * double we don't compute here — emit_c falls
+                     * back to '%g' on fnum.fval=0 which is wrong,
+                     * but float NTTPs are vanishingly rare so the
+                     * correct path is gated until we hit one. */
+                    if (lit_kind == ND_CHAR)
+                        c->chr.tok = bound;
+                    else if (lit_kind == ND_STR) {
+                        c->str.tok = bound;
+                        c->str.ntoks = 1;
+                    }
+                } else {
+                    c->ident.name = bound;
+                    /* Clear cached resolution — the rewritten name maps
+                     * to a different decl which sema will re-resolve. */
+                    c->ident.resolved_decl = NULL;
+                    c->resolved_type = NULL;
+                }
             }
         }
         break;
