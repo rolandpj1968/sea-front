@@ -1422,6 +1422,190 @@ static Type *type_arg_from_node(Node *arg) {
     return NULL;
 }
 
+/* Walk an arbitrary AST subtree (TU, namespace ND_BLOCK, or
+ * ND_CLASS_DEF body) looking for an ND_CLASS_DEF whose tag matches
+ * `class_name`. Returns the class def node, or NULL. Symmetric with
+ * find_enum_tag_in_tu_walk in emit_c — kept local to instantiate.c
+ * since it's only consumed by the NTTP-from-static-const resolver
+ * below. */
+static Node *find_class_def_walk(Node *n, Token *class_name) {
+    if (!n || !class_name) return NULL;
+    switch (n->kind) {
+    case ND_CLASS_DEF: {
+        Token *tag = n->class_def.tag;
+        if (tag && tag->len == class_name->len &&
+            memcmp(tag->loc, class_name->loc, class_name->len) == 0)
+            return n;
+        for (int i = 0; i < n->class_def.nmembers; i++) {
+            Node *r = find_class_def_walk(n->class_def.members[i], class_name);
+            if (r) return r;
+        }
+        return NULL;
+    }
+    case ND_TRANSLATION_UNIT:
+        for (int i = 0; i < n->tu.ndecls; i++) {
+            Node *r = find_class_def_walk(n->tu.decls[i], class_name);
+            if (r) return r;
+        }
+        return NULL;
+    case ND_BLOCK:
+        for (int i = 0; i < n->block.nstmts; i++) {
+            Node *r = find_class_def_walk(n->block.stmts[i], class_name);
+            if (r) return r;
+        }
+        return NULL;
+    case ND_TEMPLATE_DECL:
+        return find_class_def_walk(n->template_decl.decl, class_name);
+    default:
+        return NULL;
+    }
+}
+
+/* Wrapper around template_arg_to_arg_type that ALSO resolves
+ * ident/qualified-ref NTTPs to their initializer literal — see
+ * nttp_ident_to_literal_tok below. Used at the inst_ty
+ * template_args build sites so the mangled tag carries the literal
+ * value rather than 'unknown'.
+ *
+ * Note: forward-declares nttp_ident_to_literal_tok which is the
+ * sibling helper defined below. C ordering: the two helpers
+ * cross-reference, so one needs a forward decl. */
+static Token *nttp_ident_to_literal_tok(Node *tu, Node *arg);
+static Type *template_arg_to_arg_type_resolved(Node *arg, Arena *arena, Node *tu) {
+    Type *t = template_arg_to_arg_type(arg, arena);
+    if (t) return t;
+    Token *lit = nttp_ident_to_literal_tok(tu, arg);
+    if (!lit) return NULL;
+    Type *out = arena_alloc(arena, sizeof(Type));
+    memset(out, 0, sizeof(Type));
+    out->kind = TY_NTTP_VALUE;
+    out->tag  = lit;
+    return out;
+}
+
+/* Resolve an NTTP arg that's an identifier reference (ND_IDENT or
+ * ND_QUALIFIED) to the literal token of its initializer, when the
+ * referent is a class static-const integer member. Returns NULL
+ * when the arg isn't an ident/qualified or the referent isn't
+ * a known constant.
+ *
+ * Real-world hit: gcc 14 libcpp/include/rich-location.h
+ *   class rich_location {
+ *     static const int STATICALLY_ALLOCATED_RANGES = 3;
+ *     semi_embedded_vec<location_range, STATICALLY_ALLOCATED_RANGES> ...;
+ *   };
+ * Without this resolution the NTTP is treated as opaque, the
+ * mangled tag carries 'unknown' instead of '3', and the cloned
+ * template body's array bound stays as the unsubstituted ident
+ * which is undeclared at TU scope.
+ *
+ * Resolution paths:
+ *   - ND_IDENT: use ident.resolved_decl (set by sema_run before
+ *     instantiation) to find the home class, then walk its
+ *     class_def for the matching member.
+ *   - ND_QUALIFIED: parts = [ClassName, MemberName] — look up the
+ *     class via the TU walker and walk its members.
+ *
+ * The integer constant must literally appear as the initializer
+ * — sea-front has no constexpr evaluator, so '= N+1' won't fold.
+ * Standard alignment (TODO seafront#nttp-constexpr-fold): hook in
+ * a constexpr evaluator when one exists. */
+/* Look in `cdef`'s member list for a static-const data member named
+ * `member_name`. Returns its initializer's literal token if it's a
+ * recognised constant kind; NULL otherwise. */
+static Token *find_const_init_in_class(Node *cdef, Token *member_name) {
+    if (!cdef || cdef->kind != ND_CLASS_DEF || !member_name) return NULL;
+    for (int i = 0; i < cdef->class_def.nmembers; i++) {
+        Node *m = cdef->class_def.members[i];
+        if (!m || m->kind != ND_VAR_DECL) continue;
+        Token *nm = m->var_decl.name;
+        if (!nm) continue;
+        if (nm->len != member_name->len ||
+            memcmp(nm->loc, member_name->loc, member_name->len) != 0)
+            continue;
+        Node *init = m->var_decl.init;
+        if (!init) return NULL;
+        switch (init->kind) {
+        case ND_NUM:
+        case ND_FNUM:
+        case ND_BOOL_LIT:
+        case ND_NULLPTR:
+            return init->tok;
+        case ND_CHAR:
+            return init->chr.tok;
+        default:
+            return NULL;
+        }
+    }
+    return NULL;
+}
+
+/* Walk the TU recursively looking for any class with a static-const
+ * member of `member_name`. Used as a fallback when an ND_IDENT NTTP
+ * arg has no resolved_decl (sema doesn't currently walk template-id
+ * arg expressions). Returns the first match — relies on the member
+ * name being distinctive (the gcc 14 STATICALLY_ALLOCATED_RANGES
+ * pattern). Standard alignment (TODO seafront#nttp-scope-aware):
+ * threading the enclosing class context through the instantiation
+ * pipeline lets us avoid the TU walk and disambiguate correctly. */
+static Token *find_const_init_in_tu_walk(Node *n, Token *member_name) {
+    if (!n) return NULL;
+    switch (n->kind) {
+    case ND_CLASS_DEF: {
+        Token *t = find_const_init_in_class(n, member_name);
+        if (t) return t;
+        for (int i = 0; i < n->class_def.nmembers; i++) {
+            t = find_const_init_in_tu_walk(n->class_def.members[i], member_name);
+            if (t) return t;
+        }
+        return NULL;
+    }
+    case ND_TRANSLATION_UNIT:
+        for (int i = 0; i < n->tu.ndecls; i++) {
+            Token *t = find_const_init_in_tu_walk(n->tu.decls[i], member_name);
+            if (t) return t;
+        }
+        return NULL;
+    case ND_BLOCK:
+        for (int i = 0; i < n->block.nstmts; i++) {
+            Token *t = find_const_init_in_tu_walk(n->block.stmts[i], member_name);
+            if (t) return t;
+        }
+        return NULL;
+    case ND_TEMPLATE_DECL:
+        return find_const_init_in_tu_walk(n->template_decl.decl, member_name);
+    default:
+        return NULL;
+    }
+}
+
+static Token *nttp_ident_to_literal_tok(Node *tu, Node *arg) {
+    if (!tu || !arg) return NULL;
+    if (arg->kind == ND_IDENT && arg->ident.name) {
+        /* Resolved-decl path (preferred when sema set it) */
+        Declaration *d = arg->ident.resolved_decl;
+        if (d && d->is_static_member && d->home && d->home->owner_type) {
+            Node *cdef = find_class_def_walk(tu, d->home->owner_type->tag);
+            Token *t = find_const_init_in_class(cdef, arg->ident.name);
+            if (t) return t;
+        }
+        /* Fallback TU-walk by member name only — for ND_IDENT inside
+         * template-id args where sema hasn't populated resolved_decl
+         * (the visit() path doesn't enter template-id arg
+         * expressions). Best-effort. */
+        return find_const_init_in_tu_walk(tu, arg->ident.name);
+    }
+    if (arg->kind == ND_QUALIFIED &&
+        arg->qualified.nparts >= 2 && arg->qualified.parts) {
+        Token *class_name  = arg->qualified.parts[0];
+        Token *member_name = arg->qualified.parts[arg->qualified.nparts - 1];
+        if (!class_name || !member_name) return NULL;
+        Node *cdef = find_class_def_walk(tu, class_name);
+        return find_const_init_in_class(cdef, member_name);
+    }
+    return NULL;
+}
+
 /*
  * Unify two template-id argument lists. Each arg is an ND_VAR_DECL
  * whose var_decl.ty is the type. TY_DEPENDENT positions on either
@@ -1795,7 +1979,16 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
             if (i < nargs) {
                 Node *a = template_id->template_id.args[i];
                 Token *bound_tok = NULL;
-                if (a) {
+                /* Static-const-int member (ND_IDENT or ND_QUALIFIED
+                 * referring to one) — resolve to its initializer
+                 * literal so the cloned body sees the value, not the
+                 * unsubstituted ident. Tried first because for
+                 * ND_IDENT the legacy fallback would bind to the
+                 * ident's own name, which works only for the
+                 * function-pointer NTTP shape (gcc 4.8 vec.h
+                 * xcallocator), not for value NTTPs. */
+                bound_tok = nttp_ident_to_literal_tok(tu, a);
+                if (!bound_tok && a) {
                     switch (a->kind) {
                     case ND_IDENT:
                         bound_tok = a->ident.name;
@@ -1839,8 +2032,8 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
             inst_ty->template_args = arena_alloc(arena, n * sizeof(Type *));
             inst_ty->n_template_args = n;
             for (int i = 0; i < n; i++)
-                inst_ty->template_args[i] = template_arg_to_arg_type(
-                    template_id->template_id.args[i], arena);
+                inst_ty->template_args[i] = template_arg_to_arg_type_resolved(
+                    template_id->template_id.args[i], arena, tu);
         }
         /* Default-args expansion: when the usage has fewer args than
          * the inner template's params, fill the rest from the map.
@@ -1855,8 +2048,8 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
                 new_n * sizeof(Type *));
             inst_ty->n_template_args = new_n;
             for (int i = 0; i < n; i++)
-                inst_ty->template_args[i] = template_arg_to_arg_type(
-                    template_id->template_id.args[i], arena);
+                inst_ty->template_args[i] = template_arg_to_arg_type_resolved(
+                    template_id->template_id.args[i], arena, tu);
             for (int i = n; i < new_n; i++) {
                 int mi = outer_nparams + i;
                 inst_ty->template_args[i] = (mi < map.nentries)
@@ -2707,7 +2900,8 @@ void template_instantiate(Node *tu, Arena *arena) {
         int total_args = na > tmp_map.nentries ? na : tmp_map.nentries;
         for (int i = 0; i < total_args; i++) {
             Type *arg_ty = (i < na) ?
-                template_arg_to_arg_type(req->template_id->template_id.args[i], arena) :
+                template_arg_to_arg_type_resolved(
+                    req->template_id->template_id.args[i], arena, tu) :
                 (i < tmp_map.nentries ? tmp_map.entries[i].concrete_type : NULL);
             key_len = type_to_key(arg_ty, key, key_len, MAX_DEDUP_KEY);
             key[key_len++] = '\0';

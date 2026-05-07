@@ -1019,6 +1019,30 @@ DeclSpec parse_type_specifiers(Parser *p) {
                 return result;
             }
         }
+        /* Opaque-tag fallback: the trailing name didn't resolve to a
+         * type but the qualified-id is otherwise valid syntax. Two
+         * cases land here:
+         *   (a) Genuinely unknown trailing name (sea-front's lookup
+         *       missed it — e.g. inherited typedefs we don't yet
+         *       model). Treat as opaque type so downstream emit can
+         *       still produce something.
+         *   (b) Trailing name resolves to a NON-type entity
+         *       (variable, enumerator, function) — so the qualified
+         *       id is NOT a type-id, it's a value-expression. The
+         *       opaque-type fallback would silently accept it as a
+         *       type and break later (e.g. 'Cfg::N' as a template
+         *       NTTP arg gets misclassified as 'struct N' instead of
+         *       a constant-expression). For (b), return NULL so the
+         *       caller's tentative parse fails and re-tries as an
+         *       expression. N4659 §17.3/2 [temp.arg] gives type-id
+         *       priority but only when the construct is parseable AS
+         *       a type-id; a value reference isn't. */
+        if (resolved &&
+            resolved->entity != ENTITY_TYPE &&
+            resolved->entity != ENTITY_TAG &&
+            resolved->entity != ENTITY_TEMPLATE) {
+            return result;  /* type stays NULL → caller treats as not-a-type */
+        }
         Type *ty = new_type(p, TY_STRUCT);  /* opaque — sema resolves */
         ty->is_const = is_const;
         ty->is_volatile = is_volatile;
