@@ -11,7 +11,7 @@
  *       attribute-specifier-seq(opt) iteration-statement     (§9.5)
  *       attribute-specifier-seq(opt) jump-statement          (§9.6)
  *       declaration-statement           (§9.7)
- *       try-block                        (§9.7 — NOT YET, no exceptions)
+ *       try-block                        (§18.1 [except.pre])
  *
  * Attributes (§10.6 [dcl.attr]) are PARSED but DISCARDED — we call
  * parser_skip_cxx_attributes / parser_skip_gnu_attributes at the
@@ -454,6 +454,82 @@ static Node *parse_return_stmt(Parser *p) {
 }
 
 /*
+ * handler — N4659 §18.1 [except.pre], §18.3 [except.handle]
+ *   handler:
+ *       catch ( exception-declaration ) compound-statement
+ *   exception-declaration:
+ *       attribute-specifier-seq(opt) type-specifier-seq declarator
+ *       attribute-specifier-seq(opt) type-specifier-seq abstract-declarator(opt)
+ *       ...
+ *
+ * Per §18.3/16, the declarative region of the catch parameter is
+ * the handler itself — the name shall not be visible outside.
+ * We push a REGION_BLOCK before parsing the param so
+ * region_declare lands the name in handler-local scope; the
+ * compound-statement that follows pushes its own (nested) block
+ * region so the body's local declarations don't collide with the
+ * param.
+ */
+static Node *parse_handler(Parser *p) {
+    Token *tok = parser_expect(p, TK_KW_CATCH);
+    parser_expect(p, TK_LPAREN);
+
+    Node *handler = new_node(p, ND_HANDLER, tok);
+
+    region_push(p, REGION_BLOCK, /*name=*/NULL);
+    handler->handler.scope = p->region;
+
+    if (parser_consume(p, TK_ELLIPSIS)) {
+        handler->handler.is_catch_all = true;
+        handler->handler.param = NULL;
+    } else {
+        Type *base = parse_type_specifiers(p).type;
+        Node *param = base ? parse_declarator(p, base) : NULL;
+        if (param) {
+            param->kind = ND_PARAM;
+            if (param->param.name)
+                region_declare(p, param->param.name->loc,
+                               param->param.name->len, ENTITY_VARIABLE,
+                               param->param.ty);
+        }
+        handler->handler.param = param;
+        handler->handler.is_catch_all = false;
+    }
+
+    parser_expect(p, TK_RPAREN);
+
+    handler->handler.body = parse_compound_stmt(p);
+
+    region_pop(p);
+    return handler;
+}
+
+/*
+ * try-block — N4659 §18.1 [except.pre]
+ *   try compound-statement handler-seq
+ *   handler-seq: handler handler-seq(opt)
+ *
+ * §18.1/2: a handler-seq is one or more handlers; the grammar
+ * already enforces "at least one catch" via parser_expect on the
+ * first iteration of the catch loop (the loop runs at least once
+ * because the next token after the try-body must be 'catch' for
+ * a well-formed try-block).
+ */
+static Node *parse_try_stmt(Parser *p) {
+    Token *tok = parser_expect(p, TK_KW_TRY);
+    Node *node = new_node(p, ND_TRY, tok);
+    node->try_.body = parse_compound_stmt(p);
+
+    Vec handlers = vec_new(p->arena);
+    do {
+        vec_push(&handlers, parse_handler(p));
+    } while (parser_at(p, TK_KW_CATCH));
+    node->try_.handlers = (Node **)handlers.data;
+    node->try_.nhandlers = handlers.len;
+    return node;
+}
+
+/*
  * statement — N4659 §9 [stmt.stmt]
  *
  * Dispatches on the current token to the appropriate sub-parser.
@@ -477,6 +553,10 @@ Node *parse_stmt(Parser *p) {
 
     /* jump-statements — §9.6 */
     case TK_KW_RETURN:      return parse_return_stmt(p);
+
+    /* try-block — §18.1 [except.pre]. Lowering per
+     * docs/exceptions.md (TLS-polling). */
+    case TK_KW_TRY:         return parse_try_stmt(p);
 
     case TK_KW_BREAK:
         parser_advance(p);

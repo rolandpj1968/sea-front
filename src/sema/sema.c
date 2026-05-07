@@ -2078,6 +2078,26 @@ static void visit(Sema *s, Node *n) {
          * C member access which is invalid for non-fptr fields). */
         visit(s, n->label.stmt);
         break;
+    /* Exception handling — N4659 §18 [except]. Sema work for
+     * Phase 2 of EH lowering (docs/exceptions.md) is currently a
+     * walk-children pass — the heavy work (catch-type registration,
+     * rethrow-outside-handler diagnostics, noexcept inference)
+     * lands in later slices. */
+    case ND_TRY:
+        visit(s, n->try_.body);
+        for (int i = 0; i < n->try_.nhandlers; i++)
+            visit(s, n->try_.handlers[i]);
+        break;
+    case ND_HANDLER: {
+        DeclarativeRegion *saved = s->cur_scope;
+        if (n->handler.scope) s->cur_scope = n->handler.scope;
+        visit(s, n->handler.body);
+        s->cur_scope = saved;
+        break;
+    }
+    case ND_THROW:
+        if (n->throw_.operand) visit(s, n->throw_.operand);
+        break;
     case ND_INIT_LIST:
         /* Braced initializer — N4659 §11.6.4 [dcl.init.list]. Walk
          * each element so subscript/method dispatch lowering can see
@@ -2393,6 +2413,21 @@ static void canonicalize_walk_node(Node *n, TmplIdx *idx, Arena *arena) {
         canonicalize_walk_node(n->ternary.cond, idx, arena);
         canonicalize_walk_node(n->ternary.then_, idx, arena);
         canonicalize_walk_node(n->ternary.else_, idx, arena);
+        break;
+    /* Exception handling — recurse into bodies so template-ids
+     * nested inside try-bodies, handler-bodies, or throw operands
+     * (e.g. 'throw vec<int>{};') get canonicalised. */
+    case ND_TRY:
+        canonicalize_walk_node(n->try_.body, idx, arena);
+        for (int i = 0; i < n->try_.nhandlers; i++)
+            canonicalize_walk_node(n->try_.handlers[i], idx, arena);
+        break;
+    case ND_HANDLER:
+        if (n->handler.param) canonicalize_walk_node(n->handler.param, idx, arena);
+        canonicalize_walk_node(n->handler.body, idx, arena);
+        break;
+    case ND_THROW:
+        if (n->throw_.operand) canonicalize_walk_node(n->throw_.operand, idx, arena);
         break;
     default: break;
     }

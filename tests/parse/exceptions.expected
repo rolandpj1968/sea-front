@@ -1,0 +1,14 @@
+(translation-unit
+  (func-def int "main" (params)
+    (block
+      (try (block
+          (throw (num 42)))
+        (catch (param int "x") (block
+            (return (ident "x"))))
+        (catch ... (block
+            (return (- (num 1))))))
+      (try (block
+          (throw (num 7)))
+        (catch (param int) (block
+            (throw ;rethrow))))
+      (return (num 0)))))

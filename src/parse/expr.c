@@ -1146,16 +1146,25 @@ static Node *primary_expr(Parser *p) {
      */
     /* throw-expression — N4659 §8.17 [expr.throw]
      *   throw assignment-expression(opt)
-     * Yields a void prvalue. We parse and discard the operand. */
+     * Yields a void prvalue. The operand (when present) is captured
+     * on the ND_THROW node so codegen can lower into a copy-construct
+     * + TLS-state set per docs/exceptions.md. A bare 'throw;' is a
+     * re-throw of the currently-handled exception; legality outside
+     * a catch is sema's concern. */
     if (tok->kind == TK_KW_THROW) {
         parser_advance(p);
-        /* Operand is optional — 'throw;' alone is a re-throw. */
+        Node *thr = new_node(p, ND_THROW, tok);
         if (parser_peek(p)->kind != TK_SEMI &&
             parser_peek(p)->kind != TK_RPAREN &&
             parser_peek(p)->kind != TK_COMMA &&
-            parser_peek(p)->kind != TK_RBRACE)
-            unary_expr(p);  /* parse, discard */
-        return new_node(p, ND_NULLPTR, tok);
+            parser_peek(p)->kind != TK_RBRACE) {
+            thr->throw_.operand = unary_expr(p);
+            thr->throw_.is_rethrow = false;
+        } else {
+            thr->throw_.operand = NULL;
+            thr->throw_.is_rethrow = true;
+        }
+        return thr;
     }
 
     /* Bare 'operator OP' as an id-expression — N4659 §16.5 [over.oper].

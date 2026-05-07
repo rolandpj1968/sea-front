@@ -150,6 +150,20 @@ typedef enum {
     ND_EXPR_STMT,       /* expression-statement — N4659 §9.2 [stmt.expr] */
     ND_NULL_STMT,       /* empty statement (bare ;) — N4659 §9.2 [stmt.expr] */
 
+    /* -- Exception handling — N4659 §18 [except], grammar in §A.5
+     * (try-block) and §A.4 (throw-expression). Sea-front lowers these
+     * to TLS-polling — see docs/exceptions.md for the full design. */
+    ND_TRY,             /* try-block — §18.1 [except.pre]
+                         *   try compound-statement handler-seq */
+    ND_HANDLER,         /* handler — §18.1 [except.pre]
+                         *   catch ( exception-declaration ) compound-statement
+                         * exception-declaration is either a parameter (T name)
+                         * or '...' (catch-all). */
+    ND_THROW,           /* throw-expression — §8.17 [expr.throw]
+                         *   throw assignment-expression(opt)
+                         * 'throw;' (no operand) is a re-throw of the
+                         * currently-handled exception (UB outside a catch). */
+
     /* -- Declarations --
      * N4659 §10 [dcl.dcl]
      * C++20 adds: module-declaration, concept-definition,
@@ -579,6 +593,41 @@ struct Node {
             Token *label;
             Node *stmt;
         } label;
+
+        /* ND_TRY — N4659 §18.1 [except.pre]
+         *   try compound-statement handler-seq
+         * body is the ND_BLOCK following 'try'; handlers is the
+         * non-empty list of ND_HANDLER nodes following it. Lowering
+         * is in docs/exceptions.md (TLS-polling). */
+        struct {
+            Node *body;
+            Node **handlers;
+            int   nhandlers;
+        } try_;
+
+        /* ND_HANDLER — N4659 §18.1 [except.pre]
+         *   catch ( exception-declaration ) compound-statement
+         * exception-declaration is either a parameter declaration
+         * with caught type and (optional) name, or the ellipsis
+         * 'catch (...)'. param is NULL when is_catch_all is true.
+         * scope holds the catch-parameter region (sema-side) so the
+         * caught name is visible in body but not outside.
+         * §18.3 [except.handle] specifies match rules. */
+        struct {
+            Node *param;          /* ND_PARAM, or NULL for catch(...) */
+            Node *body;           /* ND_BLOCK */
+            bool  is_catch_all;
+            DeclarativeRegion *scope;
+        } handler;
+
+        /* ND_THROW — N4659 §8.17 [expr.throw]
+         *   throw assignment-expression(opt)
+         * Yields a void prvalue. operand is NULL for a bare 'throw;'
+         * (re-throw). Codegen lowers per docs/exceptions.md. */
+        struct {
+            Node *operand;
+            bool  is_rethrow;
+        } throw_;
 
         /* ND_VAR_DECL — N4659 §10 [dcl.dcl], §11 [dcl.decl]
          * A simple-declaration: decl-specifier-seq declarator(opt) = init(opt)

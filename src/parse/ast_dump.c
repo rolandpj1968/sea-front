@@ -274,6 +274,42 @@ static void dump(Node *node, int depth) {
         printf("(null-stmt)");
         break;
 
+    case ND_TRY:
+        printf("(try");
+        printf(" ");
+        dump(node->try_.body, depth + 1);
+        for (int i = 0; i < node->try_.nhandlers; i++) {
+            printf("\n");
+            indent(depth + 1);
+            dump(node->try_.handlers[i], depth + 1);
+        }
+        printf(")");
+        break;
+
+    case ND_HANDLER:
+        printf("(catch");
+        if (node->handler.is_catch_all) {
+            printf(" ...");
+        } else if (node->handler.param) {
+            printf(" ");
+            dump(node->handler.param, depth + 1);
+        }
+        printf(" ");
+        dump(node->handler.body, depth + 1);
+        printf(")");
+        break;
+
+    case ND_THROW:
+        printf("(throw");
+        if (node->throw_.is_rethrow) {
+            printf(" ;rethrow");
+        } else if (node->throw_.operand) {
+            printf(" ");
+            dump(node->throw_.operand, depth + 1);
+        }
+        printf(")");
+        break;
+
     case ND_IF:
         printf("(if ");
         if (node->if_.init) {

@@ -5163,6 +5163,16 @@ static void emit_expr(Node *n) {
             fputc('0', stdout);
         return;
     }
+    case ND_THROW:
+        /* Phase 2 slice 1 placeholder: the throw-expression is parsed
+         * but its lowering hasn't shipped yet (see docs/exceptions.md).
+         * Emit a zero so the surrounding C stays well-formed; throw
+         * paths that get exercised at runtime are silent miscompiles
+         * until slice 3 (real TLS-state set + goto cleanup) lands.
+         * Matches prior behaviour from when 'throw' parsed as
+         * ND_NULLPTR. TODO(seafront#eh-throw-lowering). */
+        fputs("0 /* throw */", stdout);
+        return;
     default:
         /* Silent-discard placeholder is a trap: the surrounding C
          * stays parseable (e.g. a comment-shaped placeholder
@@ -6885,6 +6895,18 @@ static void emit_stmt(Node *n) {
         } else {
             fputs("continue;\n", stdout);
         }
+        return;
+    case ND_TRY:
+        /* Phase 2 slice 1 placeholder: try-blocks are parsed but the
+         * landing-pad lowering (TLS-state dispatch, catch-type match)
+         * hasn't shipped yet — see docs/exceptions.md. Emit just the
+         * try-body and drop the catches so any non-throwing path
+         * still compiles correctly. Throws inside the body lower to
+         * a literal 0 (see emit_expr ND_THROW); a throw never
+         * reaches the dropped handlers, so user code that exercises
+         * exception paths silently miscompiles until slice 4 wires
+         * real catch dispatch. TODO(seafront#eh-try-lowering). */
+        if (n->try_.body) emit_stmt(n->try_.body);
         return;
     default:
         fputs("/* stmt */;\n", stdout);
