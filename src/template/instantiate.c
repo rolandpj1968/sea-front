@@ -1074,11 +1074,9 @@ static void collect_from_node(InstCollector *col, Node *n) {
             if (tid->template_id.nargs > 0) {
                 syn->template_args = arena_alloc(col->arena,
                     tid->template_id.nargs * sizeof(Type *));
-                for (int i = 0; i < tid->template_id.nargs; i++) {
-                    Node *arg = tid->template_id.args[i];
-                    syn->template_args[i] = (arg && arg->kind == ND_VAR_DECL)
-                        ? arg->var_decl.ty : NULL;
-                }
+                for (int i = 0; i < tid->template_id.nargs; i++)
+                    syn->template_args[i] = template_arg_to_arg_type(
+                        tid->template_id.args[i], col->arena);
             }
             collect_from_type(col, syn);
         } else if (n->qualified.resolved_class_type &&
@@ -1174,6 +1172,19 @@ static int type_to_key(Type *ty, char *buf, int pos, int max) {
                 pos = type_to_key(ty->template_args[i], buf, pos, max);
             buf[pos++] = '>';
         }
+        break;
+    /* Literal-valued NTTP placeholder — encode the literal text into
+     * the dedup key so 'integral_constant<int,42>' and
+     * '<int,99>' produce distinct keys. Without this, distinct NTTP
+     * values dedup to a single instantiation and the surviving one
+     * wins in the C output (correct symbol but wrong VALUE for the
+     * other use-sites). */
+    case TY_NTTP_VALUE:
+        if (ty->tag)
+            pos += snprintf(buf+pos, max-pos, "N%.*s",
+                            ty->tag->len, ty->tag->loc);
+        else
+            pos += snprintf(buf+pos, max-pos, "N?");
         break;
     default:
         pos += snprintf(buf+pos, max-pos, "?");
@@ -1399,7 +1410,10 @@ static void dedup_add(DedupSet *ds, const char *key, int key_len, Type *ty) {
  * Extract a concrete Type from a template argument node.
  * Type arguments are stored as ND_VAR_DECL with ty set and name=NULL
  * by parse_template_id (type.c). Expression arguments (non-type
- * template params) return NULL — not yet supported.
+ * template params) return NULL — not yet supported here. The
+ * mangling-aware variant (template_arg_to_arg_type, parse.h) also
+ * handles literal NTTPs; use that for sites that build the
+ * Type::template_args[] slot consumed by the mangler.
  */
 static Type *type_arg_from_node(Node *arg) {
     if (!arg) return NULL;
@@ -1825,8 +1839,8 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
             inst_ty->template_args = arena_alloc(arena, n * sizeof(Type *));
             inst_ty->n_template_args = n;
             for (int i = 0; i < n; i++)
-                inst_ty->template_args[i] =
-                    type_arg_from_node(template_id->template_id.args[i]);
+                inst_ty->template_args[i] = template_arg_to_arg_type(
+                    template_id->template_id.args[i], arena);
         }
         /* Default-args expansion: when the usage has fewer args than
          * the inner template's params, fill the rest from the map.
@@ -1841,8 +1855,8 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
                 new_n * sizeof(Type *));
             inst_ty->n_template_args = new_n;
             for (int i = 0; i < n; i++)
-                inst_ty->template_args[i] =
-                    type_arg_from_node(template_id->template_id.args[i]);
+                inst_ty->template_args[i] = template_arg_to_arg_type(
+                    template_id->template_id.args[i], arena);
             for (int i = n; i < new_n; i++) {
                 int mi = outer_nparams + i;
                 inst_ty->template_args[i] = (mi < map.nentries)
@@ -2685,11 +2699,15 @@ void template_instantiate(Node *tu, Arena *arena) {
                 key[key_len++] = '\0';
             }
         }
-        /* Include all usage args (explicit + defaults from map) */
+        /* Include all usage args (explicit + defaults from map). Use
+         * the mangling-aware arg-to-type helper so literal NTTPs
+         * differentiate the dedup key — without this, two
+         * 'integral_constant<int,42>' and '<int,99>' instantiations
+         * key identically and the second collapses onto the first. */
         int total_args = na > tmp_map.nentries ? na : tmp_map.nentries;
         for (int i = 0; i < total_args; i++) {
             Type *arg_ty = (i < na) ?
-                type_arg_from_node(req->template_id->template_id.args[i]) :
+                template_arg_to_arg_type(req->template_id->template_id.args[i], arena) :
                 (i < tmp_map.nentries ? tmp_map.entries[i].concrete_type : NULL);
             key_len = type_to_key(arg_ty, key, key_len, MAX_DEDUP_KEY);
             key[key_len++] = '\0';

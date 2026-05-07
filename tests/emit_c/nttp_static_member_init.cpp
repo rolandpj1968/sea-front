@@ -3,21 +3,17 @@
 // static data-member initializer — N4659 §17.1/4 [temp.param] +
 // §17.7.1 [temp.inst]. The libstdc++ <type_traits> 'integral_constant'
 // pattern: a class template parameterised on (typename T, T V) with a
-// 'static const T value = V;' member. When the template is
-// instantiated with concrete (T, V), the cloned class body must
-// substitute V → its concrete value in the initializer.
+// 'static const T value = V;' member.
 //
-// Single int instantiation here: this test exercises the value-
-// substitution mechanism (clone.c morphs ND_IDENT 'V' into ND_NUM
-// '42'). Verified through the qualifier path (Class::value) — the
-// ND_QUALIFIED rewrite is in static_member_qualified.cpp.
+// Two distinct NTTP values are instantiated below. The mangled tag
+// must include the literal value (TY_NTTP_VALUE encoding) so each
+// gets its own C symbol. Without that, both instantiations would
+// collide on the same 'sf__integral_constant_t_int_unknown_te_' and
+// the second emission would overwrite the first.
 //
-// TODO(seafront#nttp-mangling): two distinct NTTP values currently
-// collide on the same mangled symbol ('integral_constant<int,42>'
-// and 'integral_constant<int,99>' both emit
-// 'sf__integral_constant_t_int_unknown_te_'). Encoding the NTTP
-// value into the mangled tag is a follow-up slice; until then,
-// only one instantiation per (T, NTTP-position) is safe.
+// Verified through the qualifier path (Class::value); the
+// ND_QUALIFIED static-member rewrite is exercised in
+// static_member_qualified.cpp.
 
 template<typename T, T V>
 struct integral_constant {
@@ -26,7 +22,13 @@ struct integral_constant {
 };
 
 typedef integral_constant<int, 42> answer;
+typedef integral_constant<int, 99> not_answer;
+typedef integral_constant<bool, true>  yes;
+typedef integral_constant<bool, false> no;
 
 int main() {
-    return answer::value;
+    int sum = 0;
+    if (yes::value) sum += answer::value;        // +42
+    if (no::value)  sum += not_answer::value;    // skipped
+    return sum;
 }

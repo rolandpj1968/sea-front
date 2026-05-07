@@ -1244,11 +1244,9 @@ DeclSpec parse_type_specifiers(Parser *p) {
                     ty->n_template_args = tid->template_id.nargs;
                     ty->template_args = arena_alloc(p->arena,
                         tid->template_id.nargs * sizeof(Type *));
-                    for (int i = 0; i < tid->template_id.nargs; i++) {
-                        Node *arg = tid->template_id.args[i];
-                        ty->template_args[i] = (arg && arg->kind == ND_VAR_DECL)
-                            ? arg->var_decl.ty : NULL;
-                    }
+                    for (int i = 0; i < tid->template_id.nargs; i++)
+                        ty->template_args[i] = template_arg_to_arg_type(
+                            tid->template_id.args[i], p->arena);
                 }
                 result.type = ty; return result;
             }
@@ -1907,6 +1905,14 @@ bool types_equivalent(Type *a, Type *b) {
         return true;
     case TY_FUNC:
         return false;
+    /* NTTP literal-value placeholder (mangling-only) — equivalent
+     * iff both tag tokens spell the same literal text. Without this
+     * branch, the default arm would compare only is_const/sign flags
+     * and report '<int,42>' equivalent to '<int,99>'. */
+    case TY_NTTP_VALUE:
+        if (!a->tag || !b->tag) return a->tag == b->tag;
+        if (a->tag->len != b->tag->len) return false;
+        return memcmp(a->tag->loc, b->tag->loc, a->tag->len) == 0;
     default:
         return a->is_unsigned == b->is_unsigned &&
                a->is_const    == b->is_const &&
@@ -1922,6 +1928,35 @@ Node *find_class_def_in_tu(Node *tu, Type *class_ty) {
         if (types_equivalent(d->class_def.ty, class_ty)) return d;
     }
     return NULL;
+}
+
+Type *template_arg_to_arg_type(Node *arg, Arena *arena) {
+    if (!arg) return NULL;
+    if (arg->kind == ND_VAR_DECL && arg->var_decl.ty)
+        return arg->var_decl.ty;
+    Token *lit_tok = NULL;
+    switch (arg->kind) {
+    case ND_NUM:
+    case ND_FNUM:
+    case ND_BOOL_LIT:
+    case ND_NULLPTR:
+        lit_tok = arg->tok;
+        break;
+    case ND_CHAR:
+        lit_tok = arg->chr.tok;
+        break;
+    case ND_STR:
+        lit_tok = arg->str.tok;
+        break;
+    default:
+        break;
+    }
+    if (!lit_tok) return NULL;
+    Type *t = arena_alloc(arena, sizeof(Type));
+    memset(t, 0, sizeof(Type));
+    t->kind = TY_NTTP_VALUE;
+    t->tag  = lit_tok;
+    return t;
 }
 
 Type *func_type_from_func_def(Arena *arena, Node *fn) {

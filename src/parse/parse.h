@@ -945,6 +945,16 @@ typedef enum {
      * During instantiation, subst_type replaces TY_DEPENDENT nodes
      * with concrete types from the substitution map. */
     TY_DEPENDENT,
+
+    /* Mangling-only placeholder for a literal-valued non-type
+     * template parameter argument — N4659 §17.1/4 [temp.param].
+     * 'integral_constant<int, 42>' has '42' in the second arg slot;
+     * we synthesize a TY_NTTP_VALUE with tag pointing at the literal
+     * token so mangle_class_tag can render the value into the
+     * mangled tag (sf__integral_constant_t_int_42_te_) and distinct
+     * NTTP values produce distinct C symbols. Never appears outside
+     * Type::template_args[]; sema/codegen treat it as opaque. */
+    TY_NTTP_VALUE,
 } TypeKind;
 
 struct Type {
@@ -1634,6 +1644,19 @@ Node *find_class_def_in_tu(Node *tu, Type *class_ty);
  * member-template instantiation publishing the substituted signature).
  * Returns NULL for non-function inputs. */
 Type *func_type_from_func_def(Arena *arena, Node *fn);
+
+/* Map a template-argument node to a Type suitable for storage in
+ * Type::template_args[] — the slot the mangler and type-equivalence
+ * machinery consult to differentiate instantiations. Type arguments
+ * (ND_VAR_DECL with var_decl.ty set) pass through; literal-valued
+ * NTTPs (ND_NUM, ND_BOOL_LIT, ND_CHAR, ND_FNUM, ND_NULLPTR, ND_STR)
+ * synthesise a TY_NTTP_VALUE placeholder whose tag holds the literal
+ * token. Returns NULL for argument shapes the mangler doesn't yet
+ * encode. Shared between parse-time type construction (type.c) and
+ * the template instantiation pipeline (instantiate.c) so both
+ * agree on what 'integral_constant<int,42>' and '<int,99>' look like
+ * for dedup, equivalence, and mangling. */
+Type *template_arg_to_arg_type(Node *arg, Arena *arena);
 
 /* Check if current token starts a declaration (type-specifier keyword
  * or, with name lookup, a user-defined type-name) */

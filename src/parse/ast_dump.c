@@ -105,6 +105,10 @@ static void dump_type(Type *ty) {
         printf("dependent");
         if (ty->tag) printf(" %.*s", ty->tag->len, ty->tag->loc);
         return;
+    case TY_NTTP_VALUE:
+        printf("nttp-value");
+        if (ty->tag) printf(" %.*s", ty->tag->len, ty->tag->loc);
+        return;
     }
 }
 

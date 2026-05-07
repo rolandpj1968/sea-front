@@ -205,6 +205,29 @@ void emit_type_for_mangle(Type *ty) {
         if (ty->tag) fprintf(stdout, "%.*s", ty->tag->len, ty->tag->loc);
         else fputs("dep", stdout);
         return;
+    /* Literal-valued NTTP placeholder (instantiate.c synthesizes
+     * these from ND_NUM / ND_BOOL_LIT / etc. arg nodes). The tag
+     * holds the literal token. Render character-by-character with
+     * non-symbol-friendly chars replaced by '_'. Common shapes —
+     * positive integer literals, 'true' / 'false', 'nullptr' — pass
+     * through unchanged. Less common shapes (char literals, string
+     * literals, signed-via-unary) get a deterministic but lossy
+     * encoding; collisions surface at link time as duplicate
+     * symbols, not as silent miscompiles.
+     * TODO(seafront#nttp-mangling-full): proper Itanium-style
+     * encoding (positive integer 'L<value>E', etc.). */
+    case TY_NTTP_VALUE:
+        if (ty->tag && ty->tag->len > 0) {
+            for (int i = 0; i < ty->tag->len; i++) {
+                unsigned char c = (unsigned char)ty->tag->loc[i];
+                bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                          (c >= '0' && c <= '9') || c == '_';
+                fputc(ok ? c : '_', stdout);
+            }
+        } else {
+            fputs("nttp_unknown", stdout);
+        }
+        return;
     default:
         fputs("unknown", stdout);
         return;
@@ -295,6 +318,18 @@ int mangle_type_to_buf(Type *ty, char *buf, int pos, int max) {
             return pos;
         }
         return append_str(buf, pos, max, "dep");
+    /* See emit_type_for_mangle for the encoding rationale. */
+    case TY_NTTP_VALUE:
+        if (ty->tag && ty->tag->len > 0) {
+            for (int i = 0; i < ty->tag->len && pos < max - 1; i++) {
+                unsigned char c = (unsigned char)ty->tag->loc[i];
+                bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                          (c >= '0' && c <= '9') || c == '_';
+                buf[pos++] = ok ? (char)c : '_';
+            }
+            return pos;
+        }
+        return append_str(buf, pos, max, "nttp_unknown");
     default:
         return append_str(buf, pos, max, "unknown");
     }
