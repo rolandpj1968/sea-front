@@ -355,6 +355,21 @@ static Type *deduce_lambda_return(Parser *p, Node *body) {
 static Node *primary_expr(Parser *p) {
     Token *tok = parser_peek(p);
 
+    /* GNU '__extension__' marker — non-standard no-op that disables
+     * pedantic warnings in g++ for the immediately-following
+     * expression. Common in glibc/libiberty macros (XOBNEW,
+     * __ASSERT_FUNCTION) and in libstdc++ headers. Consume and
+     * recurse: the expression that follows is parsed normally.
+     * Sea-front emits it elided (same effect — cc doesn't warn for
+     * extensions we already lower correctly). */
+    while (tok->kind == TK_IDENT && tok->len == 13 &&
+           memcmp(tok->loc, "__extension__", 13) == 0 &&
+           !(parser_peek_ahead(p, 1)->kind == TK_LPAREN &&
+             parser_peek_ahead(p, 2)->kind == TK_LBRACE)) {
+        parser_advance(p);
+        tok = parser_peek(p);
+    }
+
     /* GCC statement-expression — '__extension__ ({ stmts; expr; })'
      * or bare '({ ... })'. Non-standard. Captured as a raw token
      * range; codegen re-emits the extension verbatim for gcc.

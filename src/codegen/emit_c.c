@@ -8038,6 +8038,50 @@ static void emit_class_def(Node *n) {
         fputs(";\n", stdout);
     }
 
+    /* Member-scope anonymous enums — N4659 §10.2 [dcl.enum]:
+     * 'class C { enum {A, B, M_HWM}; T arr[M_HWM]; };' declares
+     * A, B, M_HWM in the class scope. C has no class-scope
+     * enumerators, but our struct emission references them in array
+     * bounds and field initializers. Hoist the anonymous enum to TU
+     * scope BEFORE the struct so the constants resolve. Real-world
+     * hit: gcc 14 libcpp/internal.h's per-class M_* sentinel.
+     *
+     * Conditional hoist: libstdc++ <type_traits> uses many structs
+     * each with 'enum { __value = N };' as a trait constant —
+     * resolved by sema, never referenced in the C output, and
+     * hoisting all of them would collide on '__value'. So only
+     * hoist when a subsequent class member actually uses the enum
+     * (array bound expression containing a non-literal identifier).
+     * Named class-scope enums and 'enum class' don't take this path
+     * — named enums emit their own TU-scope body via top-level
+     * emit; scoped enums use the ND_QUALIFIED enum-class rewrite. */
+    for (int i = 0; i < n->class_def.nmembers; i++) {
+        Node *m = n->class_def.members[i];
+        if (!m || m->kind != ND_VAR_DECL) continue;
+        Type *mty = m->var_decl.ty;
+        if (!mty || mty->kind != TY_ENUM) continue;
+        if (m->var_decl.name) continue;            /* named: 'enum E e;' */
+        if (mty->tag) continue;                     /* named enum tag */
+        if (!mty->enum_tokens || mty->enum_ntokens <= 0) continue;
+        if (enum_body_already_emitted(mty->enum_tokens)) continue;
+        bool referenced = false;
+        for (int j = i + 1; j < n->class_def.nmembers && !referenced; j++) {
+            Node *m2 = n->class_def.members[j];
+            if (!m2 || m2->kind != ND_VAR_DECL) continue;
+            Type *t = m2->var_decl.ty;
+            while (t && t->kind == TY_ARRAY) {
+                if (t->array_size_expr) referenced = true;
+                t = t->base;
+            }
+        }
+        if (!referenced) continue;
+        mark_enum_body_emitted(mty->enum_tokens);
+        mty->codegen_emitted = true;
+        fputs("enum { ", stdout);
+        emit_enum_body(mty);
+        fputs(" };\n", stdout);
+    }
+
     fputs((class_type && class_type->kind == TY_UNION) ? "union " : "struct ",
           stdout);
     if (class_type)
