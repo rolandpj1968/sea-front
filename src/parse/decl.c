@@ -2116,10 +2116,19 @@ Node *parse_top_level_decl(Parser *p) {
             Declaration *src = lookup_unqualified(p, last_name->loc,
                                                    last_name->len);
             Type *fwd = (src && src->type) ? src->type : NULL;
-            EntityKind ek = (src && (src->entity == ENTITY_TAG ||
-                                     src->entity == ENTITY_TYPE ||
-                                     src->entity == ENTITY_TEMPLATE))
-                            ? src->entity : ENTITY_TYPE;
+            /* Preserve the source's entity kind exactly. Misclassifying
+             * a function ('using ::free' inside namespace std) as
+             * ENTITY_TYPE breaks the stmt-vs-decl disambiguation —
+             * 'free(table)' parses as a cast or function declaration
+             * instead of a call. The earlier ENTITY_TYPE-fallback
+             * default was a band-aid for the typedef case (ldiv_t)
+             * that's now handled by the type-forwarding above; with
+             * the actual type carried over, the entity stays correct.
+             * Fall back to ENTITY_TYPE only when the source is not
+             * found at all (qualified namespace lookups we don't
+             * model fully), since downstream parser shortcuts treat
+             * unknown idents in type position as opaque type-names. */
+            EntityKind ek = src ? src->entity : ENTITY_TYPE;
             region_declare(p, last_name->loc, last_name->len, ek, fwd);
         }
         (void)tok;
