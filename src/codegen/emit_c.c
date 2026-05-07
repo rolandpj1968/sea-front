@@ -5100,6 +5100,42 @@ static void emit_expr(Node *n) {
             fprintf(stdout, "%.*s", nm->len, nm->loc);
             return;
         }
+        /* Static data-member ref: 'Class::magic' — the trailing
+         * unqualified-id names a static data member. N4659 §9.4.2
+         * [class.static.data]: static data members lower to TU-scope
+         * 'sf__<class>__<name>' (see codegen sibling rewrites in
+         * emit_ident implicit-this and ND_MEMBER). Mirror the lookup
+         * shape used for static-method calls (ND_CALL above): prefer
+         * sema-populated resolved_class_type (carries template-args
+         * for typedef aliases), otherwise probe by tag from parts[0]. */
+        if (n->qualified.nparts >= 2 && n->qualified.parts) {
+            Token *class_tok = n->qualified.parts[0];
+            Token *mem_tok   = n->qualified.parts[n->qualified.nparts - 1];
+            Type  *probe = NULL;
+            if (n->qualified.resolved_class_type) {
+                Node *cdef = find_class_def_by_tag_args(n->qualified.resolved_class_type);
+                if (!cdef)
+                    cdef = find_class_def_by_tag_only(n->qualified.resolved_class_type);
+                probe = (cdef && cdef->class_def.ty) ? cdef->class_def.ty
+                                                     : n->qualified.resolved_class_type;
+            } else if (class_tok) {
+                Type stub = {0};
+                stub.kind = TY_STRUCT;
+                stub.tag  = class_tok;
+                Node *cdef = find_class_def_by_tag_only(&stub);
+                if (cdef && cdef->class_def.ty) probe = cdef->class_def.ty;
+            }
+            if (probe && probe->class_region && mem_tok) {
+                Declaration *sd = region_lookup_own(probe->class_region,
+                                                     mem_tok->loc, mem_tok->len);
+                if (sd && sd->is_static_member) {
+                    mangle_class_tag(probe);
+                    fputs("__", stdout);
+                    emit_token_text(mem_tok);
+                    return;
+                }
+            }
+        }
         /* Class-qualified non-call uses (e.g. 'Foo::bar' as a function-
          * pointer value, 'Foo::CONSTANT'). Bare-emit the joined name —
          * sema usually resolves these via resolved_class_type for
