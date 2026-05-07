@@ -69,7 +69,9 @@ The `NodeKind` enum is grouped by category in `parse.h`:
 | Postfix | ND_CALL, ND_MEMBER, ND_SUBSCRIPT | |
 | Type-bearing expr | ND_CAST, ND_SIZEOF, ND_ALIGNOF, ND_OFFSETOF, ND_VA_ARG | Carry a `Type *` slot |
 | GCC extension | ND_STMT_EXPR, ND_OFFSETOF, ND_VA_ARG | Re-emitted verbatim for gcc |
-| Statement | ND_BLOCK, ND_RETURN, ND_IF, ND_WHILE, ND_DO, ND_FOR, ND_SWITCH, ND_CASE, ND_DEFAULT, ND_BREAK, ND_CONTINUE, ND_GOTO, ND_LABEL, ND_EXPR_STMT, ND_NULL_STMT | |
+| Statement | ND_BLOCK, ND_RETURN, ND_IF, ND_WHILE, ND_DO, ND_FOR, ND_RANGE_FOR, ND_SWITCH, ND_CASE, ND_DEFAULT, ND_BREAK, ND_CONTINUE, ND_GOTO, ND_LABEL, ND_EXPR_STMT, ND_NULL_STMT | |
+| Exception handling | ND_TRY, ND_HANDLER, ND_THROW | TLS-polling lowering — see `docs/exceptions.md` |
+| C++11 lambda | ND_LAMBDA | Captureless lambdas decay to function pointer; capturing lambdas synthesise a closure struct + a free function whose first param is the closure pointer |
 | Declaration | ND_VAR_DECL, ND_FUNC_DEF, ND_FUNC_DECL, ND_PARAM, ND_TYPEDEF, ND_FRIEND | |
 | Class | ND_CLASS_DEF, ND_ACCESS_SPEC | |
 | Template | ND_TEMPLATE_DECL, ND_TEMPLATE_ID | The instantiation pass clones from these |
@@ -97,6 +99,7 @@ The `NodeKind` enum is grouped by category in `parse.h`:
 | TY_STRUCT, TY_UNION | `tag`, `class_region`, `class_def`, `template_args[]`, plus a handful of has-* flags driving codegen |
 | TY_ENUM | `tag` plus a raw token range for the enumerator body — re-emitted verbatim |
 | TY_DEPENDENT | Template parameter placeholder; substituted during instantiation |
+| TY_NTTP_VALUE | Mangling-only placeholder for a literal-valued non-type template argument (e.g. `<int, 42>`). `tag` points at the literal token. Never appears outside `Type::template_args[]`; sema/codegen treat as opaque. |
 
 Cv-qualifiers (`is_const`, `is_volatile`, `is_unsigned`) live on the type
 struct itself. For pointers, `is_const` means *the pointer is const* (`T *

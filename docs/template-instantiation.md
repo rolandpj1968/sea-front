@@ -55,6 +55,12 @@ the rest of the pipeline.
 | Nested / transitive instantiation | Yes |
 | Deduplication across reachable uses | Yes |
 | Template argument deduction (basic) | Yes — for the gcc 4.8 patterns |
+| Non-type template parameter (NTTP) literal substitution | Yes — `<int, 42>`, `<bool, true>`, `<typename T, T V>` integral_constant pattern |
+| NTTP value mangled into the instantiation tag | Yes — `_t_int_42_te_` (so `<int,42>` and `<int,99>` are distinct symbols) |
+| NTTP from a class static-const-int identifier | Yes — `<T, Cfg::N>` and bare `<T, N>` from inside the class |
+| NTTP as array bound in the cloned body | Yes |
+| Lambdas inside template bodies | Yes — instantiated per substitution, scope-qualified symbol names |
+| Statement-expressions in template bodies (`__extension__ ({...})`) | Yes — clone walks into the block |
 | Partial specialization | Not yet |
 | SFINAE / `enable_if` | Not yet |
 | Variadic templates | Not yet (out of scope for the C++03 bootstrap) |

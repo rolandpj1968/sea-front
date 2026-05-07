@@ -1,9 +1,11 @@
 # C++ Exception Lowering to C
 
-Status: **design only**, not yet implemented. Current behavior:
-`try` / `catch` / `throw` parse but lower to `abort()` (trap-and-die).
-This document describes the long-term implementation for full C++
-exception support.
+Status: **Phase 2 implemented** (correctness, no elision). Primitive
+throws + try/catch landing pads + cross-function propagation via
+TLS-polling all ship and pass tests. Phases 3+ (`extern "C"`
+elision, full `noexcept` inference, RTTI for catch-by-base,
+`std::exception_ptr`) are deferred. The phased roadmap below tracks
+what's done and what's not.
 
 The bootstrap target (gcc 4.8) was built with `-fno-exceptions` and
 needs none of this. Most of the complexity below exists to support

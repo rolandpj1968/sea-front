@@ -229,6 +229,36 @@ static struct sf__Foo__vtable_t sf__Foo__vtable = {
 Constructors install the vptr first thing in the body. Virtual calls
 emit as `(obj)->__sf_vptr->method(obj, ...)` instead of a direct call.
 
+**Extern-only polymorphic classes** — declared polymorphic in a
+header but with all virtual method bodies in a system library
+(`std::exception`, `std::bad_alloc`, `range_label`, …). Sea-front
+emits no vtable struct, no vtable instance, and no vptr field for
+these — the slot would reference symbols that don't exist anywhere
+sea-front emits. The class is still usable in catch-clauses, member
+access for non-virtuals, and as an opaque pointee. The longer
+discussion is in `docs/mangling.md` "System-class interop".
+
+Per-slot fallback inside the vtable instance: a virtual member that's
+a declaration (`ND_VAR_DECL`) — including pure virtuals like
+`virtual T fn() = 0;` — emits `0` (NULL) in its slot rather than a
+reference to a missing definition. Layout stays stable for derived
+classes; a NULL-deref on dispatch matches Itanium's
+`__cxa_pure_virtual` semantics.
+
+### Exception handling
+
+Sea-front lowers `try` / `catch` / `throw` via TLS-polling — the
+existing `__SF_unwind` goto-chain machinery extended with an
+`__SF_UNWIND_THROW` state and a thread-local
+`__sf_exception_state { state, exc_obj, exc_type, exc_dtor }` that
+survives across function calls. Phase 2 (correctness) is shipped:
+primitive throws + try/catch landing pads + cross-function
+propagation. Phase 3+ (`extern "C"` elision, full `noexcept`
+inference, RTTI for catch-by-base, `std::exception_ptr`) are
+deferred. Compile with `-fno-exceptions` to bypass entirely (the
+gcc 4.8 bootstrap target does this). Full design + roadmap in
+`docs/exceptions.md`.
+
 ### References (`T&` and `T&&`)
 
 References lower to pointers, but the AST keeps them as `TY_REF` /
@@ -355,12 +385,34 @@ if (__SF_cond_5) doit();
 
 ### Default arguments
 
-Captured per-parameter at parse time, stored in `Type.param_defaults[]`
-on the function type. At each call site, if the call passes fewer
-arguments than the function has parameters, the missing args are
-emitted from the parameter defaults. Free-function and method calls
-both supported. Defaults from a forward declaration are merged into
-the definition's Type by `region_declare_in`.
+Captured per-parameter at parse time. Two storage paths feed two
+emit paths:
+
+  - `param.default_value` on each `ND_PARAM` Node (preferred). The
+    `func_param_node` helper pulls the kth param Node from either
+    `ND_FUNC_DEF.func.params[]` or `ND_VAR_DECL.var_decl.fn_params[]`,
+    and `emit_default_args_tail` reads its `default_value` for emit.
+    Used by ctor calls (direct-init + as-rvalue), member calls,
+    and qualified static calls — sites where the resolved callee
+    Node is in scope.
+  - `Type.param_defaults[]` on `TY_FUNC` (legacy / Type-only).
+    Used by the qualified-id call fallthrough and some free-function
+    paths where only the function type is reachable, not the Node.
+
+Both paths participate in `overload_match_score`'s viability rule
+(N4659 §16.3.1.4 [over.match.viable]/2): a candidate is viable when
+nargs equals nparams OR when nargs < nparams and every excess param
+has a default. Score is over the user-supplied args only, so an
+exact-arg-count match wins over a defaults-padded match all else
+equal.
+
+Defaults from a forward declaration are merged into the definition's
+Type by `region_declare_in` so the call-site lookup sees them.
+
+`emit_default_args_tail` and the qualified-id-fallthrough path both
+hard-fail on inconsistencies — silently emitting fewer args than the
+callee declares is the silent-miscompile pattern we explicitly avoid
+(cf. `die_no_overload`).
 
 ### `vNULL` and other gcc idioms
 

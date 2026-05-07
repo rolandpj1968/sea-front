@@ -1,9 +1,12 @@
 # Name Mangling Design
 
-Status: **design only**, not yet implemented. To be tackled immediately
-before whichever slice first requires it (multi-overload ctors,
-template instantiation lowering, or operator overloading — whichever
-comes first).
+Status: **implemented** with the human-readable scheme described below;
+the plugin shape is in place so an Itanium scheme can be added without
+re-architecting. Recent additions: NTTP literal-value encoding into the
+instantiation tag (so `<int,42>` and `<int,99>` produce distinct
+symbols), per-class typeinfo placeholder for primitive-typed throws.
+The "System-class interop (deferred design)" section near the end
+captures the open question of how to call into libstdc++ symbols.
 
 ## Goal
 

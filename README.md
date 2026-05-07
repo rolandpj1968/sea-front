@@ -60,23 +60,27 @@ See [Trusted Bootstrap Design](docs/trusted-bootstrap-design.md).
 
 | Component | Status |
 |-----------|--------|
-| Lexer | Complete — handles all C++17 tokens, string prefixes, raw strings, digraphs |
+| Lexer | Complete — all C++17 tokens, string prefixes, raw strings, digraphs |
 | Parser | Complete — full C++17 grammar, recursive descent, tentative parsing |
 | Name Lookup | Complete — declarative regions, unqualified/qualified, using-directives |
-| Sema | First slice — type propagation, member resolution, implicit `this`, operator overload return types |
-| Template Instantiation | Working — class + function templates, member templates, deduction, dedup, transitive deps |
-| C Codegen | Working — structs, vtables, ctors/dtors, scope cleanup, name mangling, temp materialization |
+| Sema | Working — type propagation, member resolution, implicit `this`, operator-overload return types, C++11 `auto` deduction, default-arg expansion, using-declaration type forwarding |
+| Template Instantiation | Working — class + function templates, member templates, deduction, dedup, transitive deps, NTTP literal-value substitution + mangling, lambdas under template substitution, statement-expressions in template bodies |
+| C Codegen | Working — structs, vtables, ctors/dtors, scope cleanup, name mangling, temp materialization, range-for, lambdas (capturing + non-capturing), inline variables, scoped enums, anonymous-enum array bounds, static class data members lowered to TU-scope |
+| Exceptions (Phase 2) | Working — try / catch / throw of primitive types, cross-function propagation via TLS-polling per `docs/exceptions.md`. Class-type throws + dtor-on-unwind + RTTI-based catch-by-base land in later phases. Compile with `-fno-exceptions` to bypass entirely (the gcc 4.8 bootstrap target). |
 | Standard Library | 80/80 libstdc++ headers parse and emit through `--emit-c` |
 
 ### Test Suite
 
 - 144 lexer unit tests
-- 42 parser integration tests
-- 301 emit-c end-to-end tests (C++ in → C out → compile → execute → verify)
+- 43 parser integration tests
+- 348 emit-c end-to-end tests (C++ in → C out → compile → execute → verify)
 - 4 multi-TU deduplication tests
 - 28/28 gated + 52/52 stretch libstdc++ header smoke tests
+- 2 gcc-standalone tests
 - gcc 4.8 source: 403 of 404 .o files in cc1plus rebuild compile clean
   through cc1plus-built-by-sea-front
+- gcc 14 libcpp/ source: 5 of 16 .cc files transpile + compile cleanly
+  (informational; gcc 14 isn't a Stage A target)
 
 ## Bootstrap milestone (Stage A, gcc 4.8)
 
@@ -150,8 +154,10 @@ make CXX=./scripts/sea-front-cc CXX_FOR_BUILD=g++ ...
 |----------|-------------|
 | [Grammar Evolution](docs/grammar-evolution.md) | C++17 → C++20 → C++23 grammar changes |
 | [Disambiguation Rules](docs/disambiguation-rules.md) | Audit of C++ parsing ambiguities |
-| [Mangling](docs/mangling.md) | Name mangling framework (human-readable + Itanium) |
+| [Mangling](docs/mangling.md) | Name mangling framework (human-readable + Itanium); system-class interop discussion |
 | [Inline & Dedup](docs/inline_and_dedup.md) | Multi-TU deduplication strategy |
+| [Exceptions](docs/exceptions.md) | TLS-polling EH lowering, phased roadmap |
+| [RTTI](docs/rtti.md) | `type_info` layout, `dynamic_cast` lowering (design only) |
 | [Coding Standards](docs/coding-standards.md) | Project coding conventions |
 
 ### Implementation pipeline (in execution order)
@@ -177,20 +183,35 @@ the transpiler's output quality. Each emitted C definition includes a
 - **Full C++17 grammar** with proper disambiguation and C++20/23 change annotations
 - **AST-level template instantiation** — clone + substitute, not token replay
 - **Pragmatic semantic subsetting** — enough to compile GCC (C++14) then Clang (C++17)
-- **No exceptions, no RTTI needed** — both targets compile with `-fno-exceptions -fno-rtti`
 - **Goto-chain destructor cleanup** — O(N) code, zero runtime overhead, correct by construction
+- **TLS-polling exceptions** — extends the goto-chain machinery with an
+  `__SF_UNWIND_THROW` state; portable ISO C, no setjmp/longjmp, no DWARF
+  unwind tables. See [docs/exceptions.md](docs/exceptions.md). The gcc 4.8
+  bootstrap target is built with `-fno-exceptions -fno-rtti` and skips the
+  EH machinery entirely.
 
 ## Known Gaps
 
 - Partial template specialization — full specialization works
 - SFINAE / `enable_if` — not yet supported
-- Lambdas — parsed but not transpiled
-- `auto` / `decltype` deduction — parsed but not resolved
+- `decltype` deduction — parsed but not resolved (`auto` works)
 - ADL in dependent contexts (template instantiation lookup is a partial
   Phase-1/Phase-2 implementation)
 - Variadic templates (out of scope for the C++03 bootstrap target)
-- A handful of `SHORTCUT`-tagged narrow lowerings (vNULL, arg-type mangling
-  fallback for unresolved qualified calls) — greppable, each cited
+- Exception handling — Phase 2 (polling lowering) shipped; phases 3+
+  (`extern "C"` elision, full `noexcept` inference, RTTI for
+  catch-by-base, `std::exception_ptr`) per
+  [docs/exceptions.md](docs/exceptions.md) are deferred.
+- System-class interop — code that includes libstdc++/libc++ headers
+  sees polymorphic system classes (`std::exception` family) whose
+  vtable bodies live in the runtime library. Sea-front skips emitting
+  vtables for these; calls into their virtual methods don't link
+  against `libstdc++.so` (sea-front's mangling is private). See
+  [docs/mangling.md](docs/mangling.md) "System-class interop" — the
+  long-term answer is to compile our own libstdc++ through sea-front.
+- A handful of `SHORTCUT`-tagged narrow lowerings (vNULL, arg-type
+  mangling fallback for unresolved qualified calls) — greppable, each
+  cited.
 
 ## License
 
