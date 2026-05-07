@@ -337,7 +337,12 @@ static void visit_ident(Sema *s, Node *n) {
     bool member_type = d->home && d->home->kind == REGION_CLASS;
     if ((!already_typed || member_type) && d->type)
         n->resolved_type = d->type;
-    if (member_type)
+    /* Enumerators declared at class scope (N4659 §10.2 [dcl.enum]) are
+     * named constants, not data members — `this->ENUMERATOR` is wrong;
+     * the bare name is the value. Same applies to nested types and
+     * static data members; static handling is downstream in emit. */
+    if (member_type && d->entity != ENTITY_ENUMERATOR &&
+        d->entity != ENTITY_TYPE && d->entity != ENTITY_TAG)
         n->ident.implicit_this = true;
     /* Phase 1: mark dependent — N4659 §17.7 [temp.res] */
     if (type_is_dependent(n->resolved_type))
