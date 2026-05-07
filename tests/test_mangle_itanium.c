@@ -123,6 +123,25 @@ static void run_fixture_method(const char *label, Type *cls, Token *m,
     putchar('\n');
 }
 
+static void run_fixture_ctor(const char *label, Type *cls,
+                              Type **params, int np) {
+    printf("%s: ", label);
+    mangle_class_ctor(cls, params, np);
+    putchar('\n');
+}
+
+static void run_fixture_dtor(const char *label, Type *cls) {
+    printf("%s: ", label);
+    mangle_class_dtor(cls);
+    putchar('\n');
+}
+
+static void run_fixture_dtor_body(const char *label, Type *cls) {
+    printf("%s: ", label);
+    mangle_class_dtor_body(cls);
+    putchar('\n');
+}
+
 int main(void) {
     g_mangle_kind = MANGLE_ITANIUM;
     wire_regions();
@@ -270,6 +289,15 @@ int main(void) {
         run_fixture_method("m_global_T_foo_ip_Tp_ip_Tp_ip",
             &t_class_T_global, &tok_foo, p, 5, false);
     }
+
+    /* ---------- Stage 5 fixtures: ctors / dtors ---------- */
+    run_fixture_ctor("c_global_T_void", &t_class_T_global, NULL, 0);
+    run_fixture_ctor("c_global_T_int",  &t_class_T_global,
+                      (Type*[]){ &t_int }, 1);
+    run_fixture_ctor("c_std_T_void", &t_class_T_std, NULL, 0);
+    run_fixture_dtor("d_global_T",     &t_class_T_global);
+    run_fixture_dtor("d_std_T",        &t_class_T_std);
+    run_fixture_dtor_body("db_global_T", &t_class_T_global);
 
     return 0;
 }

@@ -471,19 +471,12 @@ void itan_mangle_class_tag(Type *class_type) {
     abort();
 }
 
-/* Method mangling — Itanium ABI §5.1.4 [mangle.entity-name].
- * Shape: _Z N <cv?> <prefix> <method-name> E <params>
- * where <cv> is K (const) and/or V (volatile) on the implicit object
- * parameter (§5.1.5.2 [mangle.member-fn]). */
-void itan_mangle_class_method_cv(Type *class_type, Token *method_name,
-                                  Type **param_types, int nparams,
-                                  bool is_const) {
-    ItanCtx ctx;
-    ctx_reset(&ctx);
+/* Emit the leading `_Z N <cv?>` and the prefix walk
+ * (namespace chain + class), pushing each prefix Type onto the sub
+ * table per §5.1.6.5. The terminal (method name, ctor/dtor marker)
+ * is written by the caller. */
+static void emit_prefix_open(ItanCtx *ctx, Type *class_type, bool is_const) {
     fputs("_Z", stdout);
-
-    /* Build prefix from namespace chain + class. The class always
-     * adds at least one nesting level, so we always emit N...E. */
     NsChain chain;
     collect_namespace_chain(class_type, &chain);
 
@@ -499,49 +492,98 @@ void itan_mangle_class_method_cv(Type *class_type, Token *method_name,
         fputs("St", stdout);
         start = 1;
     }
-
-    /* Emit namespace prefixes, pushing each. */
     for (int i = start; i < chain.n; i++) {
         Type *slot = &g_ns_prefix_slots[i];
         slot->kind = TY_STRUCT;
         slot->tag  = outer[i];
         emit_source_name(outer[i]);
-        ctx_push(&ctx, slot);
+        ctx_push(ctx, slot);
     }
-    /* Class as the next prefix step — push it so the same class
-     * appearing in a parameter type later back-refs. */
     emit_source_name(class_type->tag);
-    ctx_push(&ctx, class_type);
+    ctx_push(ctx, class_type);
+}
 
-    /* Method name (the unqualified terminal). Itanium has special
-     * encodings for ctors/dtors/operators (Stages 4-5); a regular
-     * method is just <source-name>. */
-    emit_source_name(method_name);
+/* Close the nested-name with E and emit the parameter type list. */
+static void emit_params_close(ItanCtx *ctx,
+                               Type **param_types, int nparams) {
     fputc('E', stdout);
-
-    /* Parameter type list — substitution table CONTINUES from the
-     * prefix walk (the class Type at top of stack can be back-
-     * referenced if it appears in a param type). */
     if (nparams == 0) {
         fputc('v', stdout);
     } else {
         for (int i = 0; i < nparams; i++)
-            emit_type(&ctx, normalize_param(param_types[i], i));
+            emit_type(ctx, normalize_param(param_types[i], i));
     }
 }
 
+/* Method mangling — Itanium ABI §5.1.4 [mangle.entity-name].
+ * Shape: _Z N <cv?> <prefix> <method-name> E <params>
+ * where <cv> is K (const) and/or V (volatile) on the implicit object
+ * parameter (§5.1.5.2 [mangle.member-fn]). */
+void itan_mangle_class_method_cv(Type *class_type, Token *method_name,
+                                  Type **param_types, int nparams,
+                                  bool is_const) {
+    ItanCtx ctx;
+    ctx_reset(&ctx);
+    emit_prefix_open(&ctx, class_type, is_const);
+    emit_source_name(method_name);
+    emit_params_close(&ctx, param_types, nparams);
+}
+
+/* Constructor — Itanium ABI §5.1.4.3 [mangle.ctor-and-dtor-name].
+ *
+ * Itanium distinguishes three ctor variants:
+ *   C1 — complete-object constructor (used at every '`T t;`' site).
+ *   C2 — base-object constructor (used for base subobjects in
+ *        derivation, with virtual-base init handled by C1 callers).
+ *   C3 — allocating constructor (heap-new with combined alloc+init).
+ *
+ * Sea-front's lowering emits ONE ctor symbol per source-level ctor
+ * declaration; both definition and call must use the same variant.
+ * Pick C1 (complete object) since that's what '`T t;`' callers
+ * expect. Cross-link with gcc-compiled callers that emit a C2 base-
+ * subobject reference (only happens with inheritance traversed
+ * across compilers) won't resolve — documented limitation; revisit
+ * when sea-front gains explicit C1/C2 distinction. */
 void itan_mangle_class_ctor(Type *class_type,
                              Type **param_types, int nparams) {
-    (void)class_type; (void)param_types; (void)nparams;
-    itan_unimpl("mangle_class_ctor (Stage 5)");
+    ItanCtx ctx;
+    ctx_reset(&ctx);
+    emit_prefix_open(&ctx, class_type, /*is_const=*/false);
+    fputs("C1", stdout);
+    emit_params_close(&ctx, param_types, nparams);
 }
 
+/* Destructor wrapper — sea-front's `Class__dtor` runs the user's
+ * body and then chains member-subobject destructors. That matches
+ * Itanium D1 (complete-object destructor) semantics for our level
+ * of abstraction (no virtual bases). §5.1.4.3 [mangle.ctor-and-
+ * dtor-name].
+ *
+ * Dtors take no parameters per the C++ language, so the param list
+ * is always 'v'. */
 void itan_mangle_class_dtor(Type *class_type) {
-    (void)class_type; itan_unimpl("mangle_class_dtor (Stage 5)");
+    ItanCtx ctx;
+    ctx_reset(&ctx);
+    emit_prefix_open(&ctx, class_type, /*is_const=*/false);
+    fputs("D1", stdout);
+    emit_params_close(&ctx, NULL, 0);
 }
 
+/* Destructor body — sea-front-specific concept. The 'body' in our
+ * lowering is just the user-written destructor source, with no
+ * member-subobject chain. The closest Itanium concept is D2 (base-
+ * object destructor) which excludes virtual-base destruction; for
+ * our no-virtual-bases regime D1 and D2 produce the same output,
+ * so emitting D2 here keeps the symbol Itanium-shaped without
+ * colliding with the D1 wrapper. Caveat: a libstdc++ caller that
+ * expects D2 to include member dtors would diverge — sea-front's
+ * D2 is purely the user body. */
 void itan_mangle_class_dtor_body(Type *class_type) {
-    (void)class_type; itan_unimpl("mangle_class_dtor_body (Stage 5)");
+    ItanCtx ctx;
+    ctx_reset(&ctx);
+    emit_prefix_open(&ctx, class_type, /*is_const=*/false);
+    fputs("D2", stdout);
+    emit_params_close(&ctx, NULL, 0);
 }
 
 /* Vtable entries — also no longer dispatched. Same flagging-only

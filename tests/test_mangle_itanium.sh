@@ -60,6 +60,18 @@ m_global_T_foo_Tp_Tpp_Tp_Tpp|struct T { void foo(T*, T**, T*, T**); }; void T::f
 m_global_T_foo_ip_Tp_ip_Tp_ip|struct T { void foo(int*, T*, int*, T*, int*); }; void T::foo(int*, T*, int*, T*, int*) {}|_ZN1T3fooEPiPS_S0_S1_S0_
 '
 
+# Ctor/dtor fixtures — match against the C1 (complete-object ctor)
+# and D1 (complete-object dtor) symbols gcc emits for `T t;` callers.
+# Also picks up D2 to verify dtor_body parity.
+CDS='
+c_global_T_void|struct T { T(); }; T::T(){}|_ZN1TC1Ev
+c_global_T_int|struct T { T(int); }; T::T(int){}|_ZN1TC1Ei
+c_std_T_void|namespace std { struct T { T(); }; T::T(){} }|_ZNSt1TC1Ev
+d_global_T|struct T { ~T(); }; T::~T(){}|_ZN1TD1Ev
+d_std_T|namespace std { struct T { ~T(); }; T::~T(){} }|_ZNSt1TD1Ev
+db_global_T|struct T { ~T(); }; T::~T(){}|_ZN1TD2Ev
+'
+
 # Helpers
 extract_after_1f() {
     # _Z1fXXXX → XXXX
@@ -113,6 +125,27 @@ echo "$WHOLE" | grep . | while IFS='|' read -r label cpp expected; do
         echo "  cpp:      $cpp"
         echo "  gcc:      $sym"
         echo "  expected: $expected"
+    fi
+done
+
+# Ctor/dtor — gcc emits both C1/C2 and D1/D2. We grep for the
+# specific expected symbol so the parity check confirms it shows up.
+echo "$CDS" | grep . | while IFS='|' read -r label cpp expected; do
+    [ -z "$label" ] && continue
+    src="$TMPDIR/$label.cpp"
+    obj="$TMPDIR/$label.o"
+    printf '%s\n' "$cpp" > "$src"
+    if ! g++ -c -fno-rtti -fno-exceptions -w -o "$obj" "$src" 2>"$TMPDIR/$label.err"; then
+        echo "test_mangle_itanium: g++ failed for '$label':"
+        cat "$TMPDIR/$label.err"
+        continue
+    fi
+    if ! nm "$obj" | grep -q "[WT] $expected\$"; then
+        echo "test_mangle_itanium: ctor/dtor missing for '$label':"
+        echo "  cpp:      $cpp"
+        echo "  expected: $expected"
+        echo "  available:"
+        nm "$obj" | grep "_Z" | sed 's/^/    /'
     fi
 done
 # Note: subshell modifications to `failed` don't propagate; rely on

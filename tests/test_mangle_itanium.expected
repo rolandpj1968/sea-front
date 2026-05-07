@@ -39,3 +39,9 @@ m_global_T_foo_T_ptr_T_ptr: _ZN1T3fooEPS_S0_
 m_global_T_foo_constT_ptr_x2_T_ptr: _ZN1T3fooEPKS_S1_PS_
 m_global_T_foo_Tp_Tpp_Tp_Tpp: _ZN1T3fooEPS_PS0_S0_S1_
 m_global_T_foo_ip_Tp_ip_Tp_ip: _ZN1T3fooEPiPS_S0_S1_S0_
+c_global_T_void: _ZN1TC1Ev
+c_global_T_int: _ZN1TC1Ei
+c_std_T_void: _ZNSt1TC1Ev
+d_global_T: _ZN1TD1Ev
+d_std_T: _ZNSt1TD1Ev
+db_global_T: _ZN1TD2Ev
