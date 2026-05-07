@@ -430,6 +430,39 @@ static void emit_type(ItanCtx *c, Type *ty) {
         emit_class_or_enum_name(c, ty);
         ctx_push(c, ty);
         return;
+    case TY_NTTP_VALUE: {
+        /* Non-type template parameter literal — Itanium ABI §5.1.6.7
+         * [mangle.template-id]: <expr-primary> ::= L <type> <value> E.
+         * Sea-front stashes the literal source text in `tag`. We
+         * detect a small set of common shapes (positive/negative
+         * integer literal, true/false, nullptr) and emit the
+         * matching Itanium form. Unrecognised shapes fall through
+         * to a placeholder — collisions there surface at link time. */
+        if (!ty->tag || ty->tag->len == 0) {
+            fputs("Li0E", stdout);
+            return;
+        }
+        const char *s = ty->tag->loc;
+        int n = ty->tag->len;
+        if (n == 4 && memcmp(s, "true", 4) == 0)  { fputs("Lb1E", stdout); return; }
+        if (n == 5 && memcmp(s, "false", 5) == 0) { fputs("Lb0E", stdout); return; }
+        if (n == 7 && memcmp(s, "nullptr", 7) == 0) { fputs("LDnE", stdout); return; }
+        bool neg = (n > 0 && s[0] == '-');
+        int start = neg ? 1 : 0;
+        bool all_digits = (n > start);
+        for (int i = start; i < n && all_digits; i++)
+            if (!(s[i] >= '0' && s[i] <= '9')) all_digits = false;
+        if (all_digits) {
+            fputs("Li", stdout);
+            if (neg) fputc('n', stdout);
+            for (int i = start; i < n; i++) fputc(s[i], stdout);
+            fputc('E', stdout);
+            return;
+        }
+        /* Last-resort placeholder. */
+        fputs("Li0E", stdout);
+        return;
+    }
     case TY_DEPENDENT:
         /* Template-parameter-dependent type — should be substituted
          * away before reaching mangling. If we see one here it's a

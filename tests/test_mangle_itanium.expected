@@ -44,6 +44,10 @@ p_vec_int: 3vecIiE
 p_vec_int_x2: 3vecIiES0_
 p_vec_int_dbl_int: 3vecIiES_IdES0_
 p_vec_int_ptr: P3vecIiE
+p_ic_int_42: 2icIiLi42EE
+p_ic_int_neg7: 2icIiLin7EE
+p_b_true: 1bILb1EE
+p_b_false: 1bILb0EE
 c_global_T_void: _ZN1TC1Ev
 c_global_T_int: _ZN1TC1Ei
 c_std_T_void: _ZNSt1TC1Ev

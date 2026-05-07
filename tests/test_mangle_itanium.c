@@ -333,6 +333,62 @@ int main(void) {
         run_fixture_params("p_vec_int_ptr", p4, 1);
     }
 
+    /* NTTP literals — `ic<int, 42>`, `ic<int, -7>`, `b<true>`. */
+    {
+        static char tok_text_ic[] = "ic";
+        static Token tok_ic = { .kind = TK_IDENT, .loc = tok_text_ic, .len = 2 };
+        static DeclarativeRegion reg_class_ic = { .kind = REGION_CLASS };
+        reg_class_ic.enclosing = &reg_global;
+
+        static char tok_text_42[] = "42";
+        static char tok_text_neg7[] = "-7";
+        static Token tok_42  = { .kind = TK_NUM, .loc = tok_text_42,   .len = 2 };
+        static Token tok_neg7 = { .kind = TK_NUM, .loc = tok_text_neg7, .len = 2 };
+        static Type t_nttp_42  = { .kind = TY_NTTP_VALUE, .tag = &tok_42 };
+        static Type t_nttp_neg7 = { .kind = TY_NTTP_VALUE, .tag = &tok_neg7 };
+        static Type t_int_arg = { .kind = TY_INT };
+        static Type *ic_42_args[]  = { &t_int_arg, &t_nttp_42 };
+        static Type *ic_neg_args[] = { &t_int_arg, &t_nttp_neg7 };
+        static Type t_ic_42  = { .kind = TY_STRUCT, .tag = &tok_ic,
+                                  .template_args = ic_42_args,
+                                  .n_template_args = 2,
+                                  .class_region = &reg_class_ic };
+        static Type t_ic_neg = { .kind = TY_STRUCT, .tag = &tok_ic,
+                                  .template_args = ic_neg_args,
+                                  .n_template_args = 2,
+                                  .class_region = &reg_class_ic };
+        Type *p_ic42[]  = { &t_ic_42 };
+        Type *p_icneg[] = { &t_ic_neg };
+        run_fixture_params("p_ic_int_42", p_ic42, 1);
+        run_fixture_params("p_ic_int_neg7", p_icneg, 1);
+
+        static char tok_text_b[] = "b";
+        static Token tok_b = { .kind = TK_IDENT, .loc = tok_text_b, .len = 1 };
+        static DeclarativeRegion reg_class_b = { .kind = REGION_CLASS };
+        reg_class_b.enclosing = &reg_global;
+
+        static char tok_text_true[]  = "true";
+        static char tok_text_false[] = "false";
+        static Token tok_true  = { .kind = TK_KW_TRUE,  .loc = tok_text_true,  .len = 4 };
+        static Token tok_false = { .kind = TK_KW_FALSE, .loc = tok_text_false, .len = 5 };
+        static Type t_nttp_true  = { .kind = TY_NTTP_VALUE, .tag = &tok_true };
+        static Type t_nttp_false = { .kind = TY_NTTP_VALUE, .tag = &tok_false };
+        static Type *b_true_args[]  = { &t_nttp_true };
+        static Type *b_false_args[] = { &t_nttp_false };
+        static Type t_b_true  = { .kind = TY_STRUCT, .tag = &tok_b,
+                                   .template_args = b_true_args,
+                                   .n_template_args = 1,
+                                   .class_region = &reg_class_b };
+        static Type t_b_false = { .kind = TY_STRUCT, .tag = &tok_b,
+                                   .template_args = b_false_args,
+                                   .n_template_args = 1,
+                                   .class_region = &reg_class_b };
+        Type *p_btrue[]  = { &t_b_true };
+        Type *p_bfalse[] = { &t_b_false };
+        run_fixture_params("p_b_true",  p_btrue,  1);
+        run_fixture_params("p_b_false", p_bfalse, 1);
+    }
+
     /* ---------- Stage 5 fixtures: ctors / dtors ---------- */
     run_fixture_ctor("c_global_T_void", &t_class_T_global, NULL, 0);
     run_fixture_ctor("c_global_T_int",  &t_class_T_global,

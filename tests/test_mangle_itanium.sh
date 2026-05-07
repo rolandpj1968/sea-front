@@ -48,6 +48,10 @@ p_vec_int|vec<int>|3vecIiE
 p_vec_int_x2|vec<int>, vec<int>|3vecIiES0_
 p_vec_int_dbl_int|vec<int>, vec<double>, vec<int>|3vecIiES_IdES0_
 p_vec_int_ptr|vec<int>*|P3vecIiE
+p_ic_int_42|ic<int, 42>|2icIiLi42EE
+p_ic_int_neg7|ic<int, -7>|2icIiLin7EE
+p_b_true|b<true>|1bILb1EE
+p_b_false|b<false>|1bILb0EE
 '
 
 # Whole-symbol fixtures — sea-front emitted `_Z…`, gcc-via-source
@@ -90,13 +94,21 @@ echo "$PAIRS" | grep . | while IFS='|' read -r label cpp expected; do
     if [ -z "$cpp" ]; then
         printf 'void f(){}\n' > "$src"
     else
-        # Prefix template declaration when the cpp uses `vec<…>` so
-        # gcc has the type. Cheap detection — fixtures only use vec.
+        # Prefix template declarations when the fixture uses one.
+        prelude=""
         if printf '%s' "$cpp" | grep -q 'vec<'; then
-            printf 'template<typename T> struct vec {};\nvoid f(%s){}\n' "$cpp" > "$src"
-        else
-            printf 'void f(%s){}\n' "$cpp" > "$src"
+            prelude="$prelude
+template<typename T> struct vec {};"
         fi
+        if printf '%s' "$cpp" | grep -q 'ic<'; then
+            prelude="$prelude
+template<typename T, T V> struct ic {};"
+        fi
+        if printf '%s' "$cpp" | grep -q 'b<'; then
+            prelude="$prelude
+template<bool B> struct b {};"
+        fi
+        printf '%s\nvoid f(%s){}\n' "$prelude" "$cpp" > "$src"
     fi
     if ! g++ -c -fno-rtti -fno-exceptions -w -o "$obj" "$src" 2>"$TMPDIR/$label.err"; then
         echo "test_mangle_itanium: g++ failed to compile fixture '$label':"
