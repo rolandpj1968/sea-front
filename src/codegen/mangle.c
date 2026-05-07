@@ -247,9 +247,13 @@ static int append_str(char *buf, int pos, int max, const char *s) {
     while (*s && pos < max - 1) buf[pos++] = *s++;
     return pos;
 }
+/* The buffered variants (mangle_*_to_buf) are sea-front-internal —
+ * used as opaque keys for dedup of template instantiations. They
+ * never become emitted symbols, so they always use the human
+ * encoding regardless of g_mangle_kind. Keeping them human-only
+ * also avoids burdening the Itanium impl with substitution-table
+ * state across these internal-use paths. */
 int mangle_type_to_buf(Type *ty, char *buf, int pos, int max) {
-    if (g_mangle_kind == MANGLE_ITANIUM)
-        return itan_mangle_type_to_buf(ty, buf, pos, max);
     if (!ty) return append_str(buf, pos, max, "unknown");
     if (ty->is_const)    pos = append_str(buf, pos, max, "const_");
     if (ty->is_volatile) pos = append_str(buf, pos, max, "volatile_");
@@ -370,8 +374,13 @@ static void emit_class_close(void) {
 /* High-level helpers                                                 */
 /* ------------------------------------------------------------------ */
 
+/* C struct tags are TU-local C identifiers, not linker symbols, so
+ * the Itanium ABI has no opinion on them. Always emit the human
+ * form regardless of g_mangle_kind — keeps grep-friendly disassembly
+ * under --mangling=itanium. The C struct's mangled-name symbols
+ * (methods, ctors, dtors) are emitted by the helpers below which DO
+ * dispatch. */
 void mangle_class_tag(Type *class_type) {
-    if (g_mangle_kind == MANGLE_ITANIUM) { itan_mangle_class_tag(class_type); return; }
     emit_class_open(class_type);
     emit_class_close();
 }
@@ -426,8 +435,6 @@ void mangle_param_suffix(Type **param_types, int nparams) {
  * to be patched every time a new C++ distinction appears. */
 int mangle_param_suffix_to_buf(Type **param_types, int nparams,
                                 char *buf, int pos, int max) {
-    if (g_mangle_kind == MANGLE_ITANIUM)
-        return itan_mangle_param_suffix_to_buf(param_types, nparams, buf, pos, max);
     int n = snprintf(buf + pos, (size_t)(max - pos), "_p_");
     if (n > 0) pos += n;
     if (nparams == 0) {
@@ -496,15 +503,16 @@ void mangle_class_dtor_body(Type *class_type) {
     emit_class_close();
 }
 
+/* Vtable type and instance — same TU-local-C-identifier story as
+ * mangle_class_tag. The Itanium vtable-symbol shape (`_ZTV<class>`)
+ * is a separate slice (see project_itanium_mangling_slice.md). */
 void mangle_class_vtable_type(Type *class_type) {
-    if (g_mangle_kind == MANGLE_ITANIUM) { itan_mangle_class_vtable_type(class_type); return; }
     emit_class_open(class_type);
     fputs("__vtable", stdout);
     emit_class_close();
 }
 
 void mangle_class_vtable_instance(Type *class_type) {
-    if (g_mangle_kind == MANGLE_ITANIUM) { itan_mangle_class_vtable_instance(class_type); return; }
     emit_class_open(class_type);
     fputs("__vtable_instance", stdout);
     emit_class_close();

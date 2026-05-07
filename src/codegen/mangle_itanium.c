@@ -461,18 +461,14 @@ static void itan_unimpl(const char *what) {
     abort();
 }
 
+/* mangle_class_tag is no longer dispatched — see mangle.c comment.
+ * Kept here as an unreachable abort to flag any future call site
+ * that does end up dispatching, so the divergence isn't silent. */
 void itan_mangle_class_tag(Type *class_type) {
-    /* C struct tags are TU-local C identifiers, not linker symbols.
-     * Itanium has no opinion on them — sea-front keeps the human-
-     * readable form for grep-friendly disassembly even under
-     * --mangling=itanium. The shape `sf__<scope>__<name>` is a
-     * plausible C identifier and doesn't collide with Itanium-
-     * mangled symbols (which start with `_Z`). */
-    extern Mangler g_mangler_human;
-    Mangler *saved = g_mangler;
-    g_mangler = &g_mangler_human;
-    mangle_class_tag(class_type);  /* re-enters with HUMAN dispatch */
-    g_mangler = saved;
+    (void)class_type;
+    fputs("sea-front internal error: itan_mangle_class_tag is "
+          "unreachable; see src/codegen/mangle.c\n", stderr);
+    abort();
 }
 
 /* Method mangling — Itanium ABI §5.1.4 [mangle.entity-name].
@@ -548,12 +544,20 @@ void itan_mangle_class_dtor_body(Type *class_type) {
     (void)class_type; itan_unimpl("mangle_class_dtor_body (Stage 5)");
 }
 
+/* Vtable entries — also no longer dispatched. Same flagging-only
+ * abort to surface any unexpected call. */
 void itan_mangle_class_vtable_type(Type *class_type) {
-    (void)class_type; itan_unimpl("mangle_class_vtable_type (deferred slice)");
+    (void)class_type;
+    fputs("sea-front internal error: itan_mangle_class_vtable_type "
+          "is unreachable; see src/codegen/mangle.c\n", stderr);
+    abort();
 }
 
 void itan_mangle_class_vtable_instance(Type *class_type) {
-    (void)class_type; itan_unimpl("mangle_class_vtable_instance (deferred slice)");
+    (void)class_type;
+    fputs("sea-front internal error: itan_mangle_class_vtable_instance "
+          "is unreachable; see src/codegen/mangle.c\n", stderr);
+    abort();
 }
 
 /* Single-type encoding — used at template-arg-list sites in emit_c.
