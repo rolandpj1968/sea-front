@@ -651,7 +651,8 @@ parse_suffixes:
             case TK_KW_SIGNED: case TK_KW_UNSIGNED:
             case TK_KW_WCHAR_T: case TK_KW_CHAR16_T: case TK_KW_CHAR32_T:
             case TK_KW_CONST: case TK_KW_VOLATILE:
-            case TK_KW_STRUCT: case TK_KW_UNION: case TK_KW_ENUM:
+            case TK_KW_STRUCT: case TK_KW_CLASS:
+            case TK_KW_UNION: case TK_KW_ENUM:
             case TK_KW_AUTO: case TK_KW_TYPENAME: case TK_KW_DECLTYPE:
             /* Storage-class specifiers — N4659 §10.1.1 [dcl.stc].
              * 'register' is the most common in pre-C++17 headers
