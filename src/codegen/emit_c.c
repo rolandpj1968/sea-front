@@ -1773,6 +1773,24 @@ static void emit_storage_flags_for_def(int flags) {
     emit_storage_flags_impl(flags, /*for_definition=*/true);
 }
 
+/* Variable storage flags + constexpr lowering — §10.1.5 [dcl.constexpr].
+ * A 'constexpr' variable is implicitly const (§10.1.5/9). At namespace
+ * scope, that gives internal linkage in C++ (§3.5/3) — sea-front
+ * approximates this by also emitting 'static' so multi-TU header
+ * inclusions don't multi-define. For block-scope vars the implicit
+ * 'static' is harmless (init-once, same observable value). */
+static void emit_var_storage_flags(int flags) {
+    if (flags & DECL_CONSTEXPR) {
+        if (!(flags & DECL_STATIC)) fputs("static ", stdout);
+        fputs("const ", stdout);
+        /* Strip CONSTEXPR (we just emitted its effect) and the
+         * normal emitter handles any other flags (e.g. extern, but
+         * that'd be an error with constexpr — leave to the user). */
+        flags &= ~DECL_CONSTEXPR;
+    }
+    emit_storage_flags(flags);
+}
+
 /* Collect the parameter types of a function AST node (ND_FUNC_DEF
  * or ND_VAR_DECL with TY_FUNC) into a fresh Type* array so the
  * mangling helpers can encode them as a signature suffix.
@@ -6042,7 +6060,7 @@ static void emit_stmt(Node *n) {
          * each call into an uninitialized auto whose stack-garbage
          * value bypassed the init guard, leaving codes.iterators NULL
          * → segfault. */
-        emit_storage_flags(n->var_decl.storage_flags);
+        emit_var_storage_flags(n->var_decl.storage_flags);
         emit_var_decl_inner(n);
         fputs(";\n", stdout);
         /* Direct-init 'T x(args)' lowers to a ctor call right
@@ -7362,7 +7380,14 @@ static void emit_func_def(Node *n) {
     Node *saved_lam = g_current_lambda_fn;
     g_current_func_ret_ty = n->func.ret_ty;
     if (n->func.is_lambda_fn) g_current_lambda_fn = n;
-    emit_storage_flags_for_def(n->func.storage_flags);
+    /* §10.1.5/1 [dcl.constexpr]: a constexpr function is implicitly
+     * inline. Sea-front doesn't enforce constexpr's restrictions
+     * (compile-time evaluability) — we lower as plain runtime code
+     * — but the inline implication is what the multi-TU dedup needs
+     * for header-defined constexpr fns. */
+    int sf = n->func.storage_flags;
+    if (sf & DECL_CONSTEXPR) sf |= DECL_INLINE;
+    emit_storage_flags_for_def(sf);
     emit_free_func_header(n->func.ret_ty, n->func.name,
                           n->func.params, n->func.nparams, n->func.is_variadic);
     fputc(' ', stdout);
@@ -8266,7 +8291,11 @@ static void emit_top_level(Node *n) {
                                            n->var_decl.ty->nparams))
                 return;
             emit_source_comment(n->tok);
-            emit_storage_flags(n->var_decl.storage_flags);
+            {
+                int sf = n->var_decl.storage_flags;
+                if (sf & DECL_CONSTEXPR) sf |= DECL_INLINE;
+                emit_storage_flags(sf & ~DECL_CONSTEXPR);
+            }
             Type *fty = n->var_decl.ty;
             /* Function returning a function pointer requires
              * declarator-interleaving (N4659 §11.3):
@@ -8387,7 +8416,7 @@ static void emit_top_level(Node *n) {
                 g_emit_phase = saved_phase;
             }
         }
-        emit_storage_flags(n->var_decl.storage_flags);
+        emit_var_storage_flags(n->var_decl.storage_flags);
         emit_var_decl_inner(n);
         fputs(";\n", stdout);
         return;
@@ -8627,7 +8656,11 @@ static void emit_fwd_decl_methods_only(Node *n) {
             emit_method_signature(n, n->func.class_type, ool_inline);
             fputs(";\n", stdout);
         } else if (n->func.name && n->func.body) {
-            emit_storage_flags_for_def(n->func.storage_flags);
+            /* constexpr fns are implicitly inline (§10.1.5/1) — the
+             * forward decl needs to match the def's linkage. */
+            int sf = n->func.storage_flags;
+            if (sf & DECL_CONSTEXPR) sf |= DECL_INLINE;
+            emit_storage_flags_for_def(sf);
             emit_free_func_header(n->func.ret_ty, n->func.name,
                                   n->func.params, n->func.nparams,
                                   n->func.is_variadic);
