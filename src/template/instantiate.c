@@ -43,39 +43,20 @@ struct TmplRegistry {
 
 /* hash_name is declared in parse.h and defined in lookup.c. */
 
-/* Instantiation array cap — sized so realistic gcc 4.8 / libstdc++
- * workloads stay well under. opts.c (the heaviest-template TU in
- * the gcc tree) requires ~4500 across all rounds; the original
- * 4096 was too low and silently corrupted state via the end-of-
- * round merge (fixed in 2a7fca4). 32K leaves plenty of headroom
- * (just 256KB of pointers — negligible).
+/* Push a freshly-instantiated node into all_instantiated and bump
+ * ninst_this_round in lockstep.
  *
- * If this fires, sea-front aborts loudly. Either bump the cap or
- * make the array growable. TODO(seafront#inst-cap): grow via a
- * chunked arena-backed vector so it's never a cap. */
-enum { MAX_INST = 32768 };
-
-/* Push a freshly-instantiated node into all_instantiated[] and
- * bump ninst_this_round in lockstep. Aborts on cap overflow.
- *
- * Both counters MUST move together — the end-of-round merge
- * computes 'all_instantiated[total_inst - ninst_this_round ..
- * total_inst]'. If the bumps drift (e.g. ninst_this_round++
- * outside the cap-check), the start index goes negative and the
- * merge reads pre-buffer garbage into tu->tu.decls. (Bug fixed in
- * 2a7fca4.) */
-static void inst_push(Node **arr, int *total_inst,
-                      int *ninst_this_round,
+ * The end-of-round merge computes
+ *   all_instantiated.data[arr->len - ninst_this_round .. arr->len]
+ * If the bumps drift (e.g. ninst_this_round++ outside this helper),
+ * the start index goes negative and the merge reads pre-buffer
+ * garbage into tu->tu.decls. Bug fixed in 2a7fca4 — keep them
+ * coupled here. The 'what' arg is preserved for grep-ability of
+ * historical "instantiation cap exceeded" diagnostics. */
+static void inst_push(Vec *arr, int *ninst_this_round,
                       Node *node, const char *what) {
-    if (*total_inst >= MAX_INST) {
-        fprintf(stderr,
-            "sea-front: template instantiation cap (%d) exceeded "
-            "while pushing %s — see MAX_INST in instantiate.c. "
-            "Dropping past the cap is unsafe (would silently lose "
-            "definitions); aborting.\n", MAX_INST, what);
-        abort();
-    }
-    arr[(*total_inst)++] = node;
+    (void)what;
+    vec_push(arr, node);
     (*ninst_this_round)++;
 }
 
@@ -90,125 +71,121 @@ static void inst_push(Node **arr, int *total_inst,
  * Order: closure first (struct visible before fn that takes a
  * pointer to it), then the lambda fn, then by caller convention the
  * surrounding instantiated decl. */
-static void collect_inner_lambdas_in_node(Node *n, Node **arr,
-                                           int *total_inst,
+static void collect_inner_lambdas_in_node(Node *n, Vec *arr,
                                            int *ninst_this_round);
-static void collect_inner_lambdas(Node *n, Node **arr,
-                                   int *total_inst,
+static void collect_inner_lambdas(Node *n, Vec *arr,
                                    int *ninst_this_round) {
     if (!n) return;
     if (n->kind == ND_LAMBDA) {
         if (n->lambda.closure_type && n->lambda.closure_type->class_def)
-            inst_push(arr, total_inst, ninst_this_round,
+            inst_push(arr, ninst_this_round,
                       n->lambda.closure_type->class_def,
                       "instantiated lambda closure");
         if (n->lambda.func_def)
-            inst_push(arr, total_inst, ninst_this_round,
+            inst_push(arr, ninst_this_round,
                       n->lambda.func_def,
                       "instantiated lambda fn");
         /* Lambda body may itself contain nested lambdas — recurse. */
         if (n->lambda.func_def && n->lambda.func_def->func.body)
             collect_inner_lambdas(n->lambda.func_def->func.body, arr,
-                                   total_inst, ninst_this_round);
+                                   ninst_this_round);
         return;
     }
-    collect_inner_lambdas_in_node(n, arr, total_inst, ninst_this_round);
+    collect_inner_lambdas_in_node(n, arr, ninst_this_round);
 }
-static void collect_inner_lambdas_in_node(Node *n, Node **arr,
-                                           int *total_inst,
+static void collect_inner_lambdas_in_node(Node *n, Vec *arr,
                                            int *ninst_this_round) {
     if (!n) return;
     switch (n->kind) {
     case ND_FUNC_DEF: case ND_FUNC_DECL:
         for (int i = 0; i < n->func.nparams; i++)
-            collect_inner_lambdas(n->func.params[i], arr, total_inst,
-                                   ninst_this_round);
-        collect_inner_lambdas(n->func.body, arr, total_inst, ninst_this_round);
+            collect_inner_lambdas(n->func.params[i], arr, ninst_this_round);
+        collect_inner_lambdas(n->func.body, arr, ninst_this_round);
         break;
     case ND_CLASS_DEF:
         for (int i = 0; i < n->class_def.nmembers; i++)
-            collect_inner_lambdas(n->class_def.members[i], arr, total_inst,
+            collect_inner_lambdas(n->class_def.members[i], arr,
                                    ninst_this_round);
         break;
     case ND_BLOCK:
         for (int i = 0; i < n->block.nstmts; i++)
-            collect_inner_lambdas(n->block.stmts[i], arr, total_inst,
+            collect_inner_lambdas(n->block.stmts[i], arr,
                                    ninst_this_round);
         break;
     case ND_VAR_DECL: case ND_PARAM:
-        collect_inner_lambdas(n->var_decl.init, arr, total_inst, ninst_this_round);
+        collect_inner_lambdas(n->var_decl.init, arr, ninst_this_round);
         break;
     case ND_RETURN:
-        collect_inner_lambdas(n->ret.expr, arr, total_inst, ninst_this_round);
+        collect_inner_lambdas(n->ret.expr, arr, ninst_this_round);
         break;
     case ND_EXPR_STMT:
-        collect_inner_lambdas(n->expr_stmt.expr, arr, total_inst, ninst_this_round);
+        collect_inner_lambdas(n->expr_stmt.expr, arr, ninst_this_round);
         break;
     case ND_IF:
-        collect_inner_lambdas(n->if_.cond,  arr, total_inst, ninst_this_round);
-        collect_inner_lambdas(n->if_.then_, arr, total_inst, ninst_this_round);
-        collect_inner_lambdas(n->if_.else_, arr, total_inst, ninst_this_round);
+        collect_inner_lambdas(n->if_.cond,  arr, ninst_this_round);
+        collect_inner_lambdas(n->if_.then_, arr, ninst_this_round);
+        collect_inner_lambdas(n->if_.else_, arr, ninst_this_round);
         break;
     case ND_WHILE: case ND_DO:
-        collect_inner_lambdas(n->while_.cond, arr, total_inst, ninst_this_round);
-        collect_inner_lambdas(n->while_.body, arr, total_inst, ninst_this_round);
+        collect_inner_lambdas(n->while_.cond, arr, ninst_this_round);
+        collect_inner_lambdas(n->while_.body, arr, ninst_this_round);
         break;
     case ND_FOR:
-        collect_inner_lambdas(n->for_.init, arr, total_inst, ninst_this_round);
-        collect_inner_lambdas(n->for_.cond, arr, total_inst, ninst_this_round);
-        collect_inner_lambdas(n->for_.inc,  arr, total_inst, ninst_this_round);
-        collect_inner_lambdas(n->for_.body, arr, total_inst, ninst_this_round);
+        collect_inner_lambdas(n->for_.init, arr, ninst_this_round);
+        collect_inner_lambdas(n->for_.cond, arr, ninst_this_round);
+        collect_inner_lambdas(n->for_.inc,  arr, ninst_this_round);
+        collect_inner_lambdas(n->for_.body, arr, ninst_this_round);
         break;
     case ND_RANGE_FOR:
-        collect_inner_lambdas(n->range_for.decl,  arr, total_inst, ninst_this_round);
-        collect_inner_lambdas(n->range_for.range, arr, total_inst, ninst_this_round);
-        collect_inner_lambdas(n->range_for.body,  arr, total_inst, ninst_this_round);
+        collect_inner_lambdas(n->range_for.decl,  arr, ninst_this_round);
+        collect_inner_lambdas(n->range_for.range, arr, ninst_this_round);
+        collect_inner_lambdas(n->range_for.body,  arr, ninst_this_round);
         break;
     case ND_SWITCH:
-        collect_inner_lambdas(n->switch_.init, arr, total_inst, ninst_this_round);
-        collect_inner_lambdas(n->switch_.expr, arr, total_inst, ninst_this_round);
-        collect_inner_lambdas(n->switch_.body, arr, total_inst, ninst_this_round);
+        collect_inner_lambdas(n->switch_.init, arr, ninst_this_round);
+        collect_inner_lambdas(n->switch_.expr, arr, ninst_this_round);
+        collect_inner_lambdas(n->switch_.body, arr, ninst_this_round);
         break;
     case ND_CASE:
-        collect_inner_lambdas(n->case_.expr, arr, total_inst, ninst_this_round);
-        collect_inner_lambdas(n->case_.stmt, arr, total_inst, ninst_this_round);
+        collect_inner_lambdas(n->case_.expr, arr, ninst_this_round);
+        collect_inner_lambdas(n->case_.stmt, arr, ninst_this_round);
         break;
     case ND_DEFAULT:
-        collect_inner_lambdas(n->default_.stmt, arr, total_inst, ninst_this_round);
+        collect_inner_lambdas(n->default_.stmt, arr, ninst_this_round);
         break;
     case ND_LABEL:
-        collect_inner_lambdas(n->label.stmt, arr, total_inst, ninst_this_round);
+        collect_inner_lambdas(n->label.stmt, arr, ninst_this_round);
         break;
     case ND_CALL:
-        collect_inner_lambdas(n->call.callee, arr, total_inst, ninst_this_round);
+        collect_inner_lambdas(n->call.callee, arr, ninst_this_round);
         for (int i = 0; i < n->call.nargs; i++)
-            collect_inner_lambdas(n->call.args[i], arr, total_inst, ninst_this_round);
+            collect_inner_lambdas(n->call.args[i], arr, ninst_this_round);
         break;
     case ND_BINARY: case ND_ASSIGN: case ND_COMMA:
-        collect_inner_lambdas(n->binary.lhs, arr, total_inst, ninst_this_round);
-        collect_inner_lambdas(n->binary.rhs, arr, total_inst, ninst_this_round);
+        collect_inner_lambdas(n->binary.lhs, arr, ninst_this_round);
+        collect_inner_lambdas(n->binary.rhs, arr, ninst_this_round);
         break;
     case ND_UNARY: case ND_POSTFIX:
-        collect_inner_lambdas(n->unary.operand, arr, total_inst, ninst_this_round);
+        collect_inner_lambdas(n->unary.operand, arr, ninst_this_round);
         break;
     case ND_TERNARY:
-        collect_inner_lambdas(n->ternary.cond,  arr, total_inst, ninst_this_round);
-        collect_inner_lambdas(n->ternary.then_, arr, total_inst, ninst_this_round);
-        collect_inner_lambdas(n->ternary.else_, arr, total_inst, ninst_this_round);
+        collect_inner_lambdas(n->ternary.cond,  arr, ninst_this_round);
+        collect_inner_lambdas(n->ternary.then_, arr, ninst_this_round);
+        collect_inner_lambdas(n->ternary.else_, arr, ninst_this_round);
         break;
     case ND_MEMBER:
-        collect_inner_lambdas(n->member.obj, arr, total_inst, ninst_this_round);
+        collect_inner_lambdas(n->member.obj, arr, ninst_this_round);
         break;
     case ND_SUBSCRIPT:
-        collect_inner_lambdas(n->subscript.base, arr, total_inst, ninst_this_round);
-        collect_inner_lambdas(n->subscript.index, arr, total_inst, ninst_this_round);
+        collect_inner_lambdas(n->subscript.base, arr, ninst_this_round);
+        collect_inner_lambdas(n->subscript.index, arr, ninst_this_round);
         break;
     case ND_CAST:
-        collect_inner_lambdas(n->cast.operand, arr, total_inst, ninst_this_round);
+        collect_inner_lambdas(n->cast.operand, arr, ninst_this_round);
         break;
     case ND_INIT_LIST:
         for (int i = 0; i < n->init_list.nelems; i++)
-            collect_inner_lambdas(n->init_list.elems[i], arr, total_inst, ninst_this_round);
+            collect_inner_lambdas(n->init_list.elems[i], arr, ninst_this_round);
         break;
     default:
         /* Leaf or non-recursive — no children to walk. */
@@ -1598,10 +1575,8 @@ static bool ool_method_matches(Node *method, Type *target_class) {
  * applicable) the qualifier template-id unifies with the target.
  * Collects into 'out' array, returns count.
  */
-static int find_ool_methods(Node *tu, Type *class_type,
-                             Node **out, int max) {
-    int count = 0;
-    if (!tu || !class_type || !class_type->tag) return 0;
+static void find_ool_methods(Node *tu, Type *class_type, Vec *out) {
+    if (!tu || !class_type || !class_type->tag) return;
     for (int i = 0; i < tu->tu.ndecls; i++) {
         Node *n = tu->tu.decls[i];
         if (!n) continue;
@@ -1610,16 +1585,15 @@ static int find_ool_methods(Node *tu, Type *class_type,
             for (int j = 0; j < n->block.nstmts; j++) {
                 Node *m = n->block.stmts[j];
                 if (!m || m->kind != ND_TEMPLATE_DECL) continue;
-                if (ool_method_matches(m, class_type) && count < max)
-                    out[count++] = m;
+                if (ool_method_matches(m, class_type))
+                    vec_push(out, m);
             }
             continue;
         }
         if (n->kind != ND_TEMPLATE_DECL) continue;
-        if (ool_method_matches(n, class_type) && count < max)
-            out[count++] = n;
+        if (ool_method_matches(n, class_type))
+            vec_push(out, n);
     }
-    return count;
 }
 
 /* Build a TY_FUNC from an ND_FUNC_DEF/ND_FUNC_DECL's params + ret_ty.
@@ -1954,15 +1928,13 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
             Type *orig_class_type = inner->kind == ND_CLASS_DEF ?
                 inner->class_def.ty : NULL;
             if (orig_class_type) {
-                enum { MAX_OOL = 64 };
-                Node *ool[MAX_OOL];
-                int nool = find_ool_methods(tu, orig_class_type,
-                                             ool, MAX_OOL);
-                if (nool > 0) {
-                    *extra_out = arena_alloc(arena, nool * sizeof(Node *));
+                Vec ool = vec_new(arena);
+                find_ool_methods(tu, orig_class_type, &ool);
+                if (ool.len > 0) {
+                    *extra_out = arena_alloc(arena, ool.len * sizeof(Node *));
                     *nextra = 0;
-                    for (int k = 0; k < nool; k++) {
-                        Node *method_tmpl = ool[k];
+                    for (int k = 0; k < ool.len; k++) {
+                        Node *method_tmpl = (Node *)ool.data[k];
                         Node *method_inner = method_tmpl->template_decl.decl;
                         Node *method_cloned = clone_node(method_inner,
                                                           &map, arena);
@@ -2157,10 +2129,12 @@ void template_instantiate(Node *tu, Arena *arena) {
     DedupSet ds = {0};
     ds.arena = arena;
 
-    /* Total instantiated across all iterations. MAX_INST + the
-     * inst_push helper are at file scope; see comments there. */
-    int total_inst = 0;
-    Node **all_instantiated = arena_alloc(arena, MAX_INST * sizeof(Node *));
+    /* All instantiated decls across all iterations — arena-backed
+     * Vec so there's no fixed cap (the previous MAX_INST=32K array
+     * had to be bumped each time a new instantiation pattern leaked
+     * extra nodes per template, e.g. the closure+fn pair from
+     * lambda-in-template). inst_push pushes here. */
+    Vec all_instantiated = vec_new(arena);
 
     /* Worklist iteration: each pass walks ONLY entries new since
      * the previous pass. The previous design re-walked all of
@@ -2195,10 +2169,10 @@ void template_instantiate(Node *tu, Arena *arena) {
     col.reg = &reg;
     for (int i = n_walked_decls; i < tu->tu.ndecls; i++)
         collect_from_node(&col, tu->tu.decls[i]);
-    for (int i = n_walked_inst; i < total_inst; i++)
-        collect_from_node(&col, all_instantiated[i]);
+    for (int i = n_walked_inst; i < all_instantiated.len; i++)
+        collect_from_node(&col, ((Node*)all_instantiated.data[i]));
     n_walked_decls = tu->tu.ndecls;
-    n_walked_inst  = total_inst;
+    n_walked_inst  = all_instantiated.len;
     if (col.count == 0 && col.member_count == 0) break;
 
     /* Phase 3a: member template instantiations FIRST — they're
@@ -2567,9 +2541,8 @@ void template_instantiate(Node *tu, Arena *arena) {
                 cloned, enc, arena);
         }
 
-        collect_inner_lambdas(cloned, all_instantiated, &total_inst,
-                               &ninst_this_round);
-        inst_push(all_instantiated, &total_inst, &ninst_this_round,
+        collect_inner_lambdas(cloned, &all_instantiated, &ninst_this_round);
+        inst_push(&all_instantiated, &ninst_this_round,
                   cloned, "member-template instantiation");
     }
 
@@ -2909,9 +2882,8 @@ void template_instantiate(Node *tu, Arena *arena) {
                         sema_visit_node(m, arena);
                 }
             }
-            collect_inner_lambdas(inst, all_instantiated, &total_inst,
-                                   &ninst_this_round);
-            inst_push(all_instantiated, &total_inst, &ninst_this_round,
+            collect_inner_lambdas(inst, &all_instantiated, &ninst_this_round);
+            inst_push(&all_instantiated, &ninst_this_round,
                       inst, "class/function template instantiation");
             /* (trace removed) */
             /* For class instantiations: dedup_add unconditionally so
@@ -2965,9 +2937,8 @@ void template_instantiate(Node *tu, Arena *arena) {
                 Node *em = extra_methods[e];
                 if (em && (em->kind == ND_FUNC_DEF || em->kind == ND_FUNC_DECL))
                     sema_visit_node(em, arena);
-                collect_inner_lambdas(em, all_instantiated, &total_inst,
-                                       &ninst_this_round);
-                inst_push(all_instantiated, &total_inst, &ninst_this_round,
+                collect_inner_lambdas(em, &all_instantiated, &ninst_this_round);
+                inst_push(&all_instantiated, &ninst_this_round,
                           em, "OOL extra method");
             }
         }
@@ -3013,14 +2984,14 @@ void template_instantiate(Node *tu, Arena *arena) {
                 insert_pos = i + 1;
         }
         int old_n = tu->tu.ndecls;
-        int new_n = old_n + total_inst;
-        if (total_inst > 0) {
+        int new_n = old_n + all_instantiated.len;
+        if (all_instantiated.len > 0) {
             Node **new_decls = arena_alloc(arena, new_n * sizeof(Node *));
             int idx = 0;
             for (int i = 0; i < insert_pos && i < old_n; i++)
                 new_decls[idx++] = tu->tu.decls[i];
-            for (int i = 0; i < total_inst; i++)
-                new_decls[idx++] = all_instantiated[i];
+            for (int i = 0; i < all_instantiated.len; i++)
+                new_decls[idx++] = ((Node*)all_instantiated.data[i]);
             for (int i = insert_pos; i < old_n; i++)
                 new_decls[idx++] = tu->tu.decls[i];
             tu->tu.decls  = new_decls;
@@ -3043,8 +3014,8 @@ void template_instantiate(Node *tu, Arena *arena) {
      * too. N4659 §13.1 [class.derived]. */
     Node *all_class_defs[1024];
     int n_all_class_defs = 0;
-    for (int i = 0; i < total_inst; i++) {
-        Node *inst = all_instantiated[i];
+    for (int i = 0; i < all_instantiated.len; i++) {
+        Node *inst = ((Node*)all_instantiated.data[i]);
         if (inst && inst->kind == ND_CLASS_DEF &&
             n_all_class_defs < (int)(sizeof(all_class_defs)/sizeof(all_class_defs[0])))
             all_class_defs[n_all_class_defs++] = inst;
@@ -3139,8 +3110,8 @@ void template_instantiate(Node *tu, Arena *arena) {
      * The base-type patching above handles inheritance. This pass
      * handles composition (by-pointer and by-value members) and
      * method bodies. */
-    for (int i = 0; i < total_inst; i++) {
-        Node *inst = all_instantiated[i];
+    for (int i = 0; i < all_instantiated.len; i++) {
+        Node *inst = ((Node*)all_instantiated.data[i]);
         if (!inst || inst->kind != ND_CLASS_DEF) continue;
         for (int mi = 0; mi < inst->class_def.nmembers; mi++) {
             Node *m = inst->class_def.members[mi];
@@ -3204,14 +3175,14 @@ void template_instantiate(Node *tu, Arena *arena) {
      *
      * We use a simple bubble-sort-like pass: move items forward if
      * they have no unresolved dependencies. Repeat until stable. */
-    for (int pass = 0; pass < total_inst; pass++) {
+    for (int pass = 0; pass < all_instantiated.len; pass++) {
         bool changed = false;
-        for (int i = 0; i < total_inst; i++) {
-            Node *a = all_instantiated[i];
+        for (int i = 0; i < all_instantiated.len; i++) {
+            Node *a = ((Node*)all_instantiated.data[i]);
             if (!a || a->kind != ND_CLASS_DEF || !a->class_def.ty) continue;
             /* Find any later class def that A depends on */
-            for (int j = i + 1; j < total_inst; j++) {
-                Node *b = all_instantiated[j];
+            for (int j = i + 1; j < all_instantiated.len; j++) {
+                Node *b = ((Node*)all_instantiated.data[j]);
                 if (!b || b->kind != ND_CLASS_DEF || !b->class_def.ty) continue;
                 Type *bty = b->class_def.ty;
             /* Check if A contains B as a by-value member.
@@ -3241,10 +3212,10 @@ void template_instantiate(Node *tu, Arena *arena) {
             }
             if (a_needs_b) {
                 /* Move B to just before A by shifting elements */
-                Node *save = all_instantiated[j];
+                void *save = all_instantiated.data[j];
                 for (int k = j; k > i; k--)
-                    all_instantiated[k] = all_instantiated[k - 1];
-                all_instantiated[i] = save;
+                    all_instantiated.data[k] = all_instantiated.data[k - 1];
+                all_instantiated.data[i] = save;
                 changed = true;
                 break;  /* restart inner loop for A's new position */
             }
@@ -3265,8 +3236,8 @@ void template_instantiate(Node *tu, Arena *arena) {
             Node *d = tu->tu.decls[i];
             /* Skip instantiated decls when finding position */
             bool is_inst = false;
-            for (int j = 0; j < total_inst; j++) {
-                if (d == all_instantiated[j]) { is_inst = true; break; }
+            for (int j = 0; j < all_instantiated.len; j++) {
+                if (d == ((Node*)all_instantiated.data[j])) { is_inst = true; break; }
             }
             if (is_inst) continue;
             if (d && (d->kind == ND_CLASS_DEF || d->kind == ND_BLOCK))
@@ -3283,35 +3254,35 @@ void template_instantiate(Node *tu, Arena *arena) {
         int user_n = 0;
         for (int i = 0; i < old_n; i++) {
             bool is_inst = false;
-            for (int j = 0; j < total_inst; j++) {
-                if (tu->tu.decls[i] == all_instantiated[j]) {
+            for (int j = 0; j < all_instantiated.len; j++) {
+                if (tu->tu.decls[i] == ((Node*)all_instantiated.data[j])) {
                     is_inst = true; break;
                 }
             }
             if (!is_inst) user_n++;
         }
-        int new_n = total_inst + user_n;
+        int new_n = all_instantiated.len + user_n;
         Node **new_decls = arena_alloc(arena, new_n * sizeof(Node *));
         int idx = 0;
         /* User decls before insert point */
         for (int i = 0; i < old_n; i++) {
             if (idx == insert_pos) {
                 /* Insert instantiations here */
-                for (int j = 0; j < total_inst; j++)
-                    new_decls[idx++] = all_instantiated[j];
+                for (int j = 0; j < all_instantiated.len; j++)
+                    new_decls[idx++] = ((Node*)all_instantiated.data[j]);
             }
             bool is_inst = false;
-            for (int j = 0; j < total_inst; j++) {
-                if (tu->tu.decls[i] == all_instantiated[j]) {
+            for (int j = 0; j < all_instantiated.len; j++) {
+                if (tu->tu.decls[i] == ((Node*)all_instantiated.data[j])) {
                     is_inst = true; break;
                 }
             }
             if (!is_inst) new_decls[idx++] = tu->tu.decls[i];
         }
         /* If insert_pos >= user_n, append at end */
-        if (idx == new_n - total_inst) {
-            for (int j = 0; j < total_inst; j++)
-                new_decls[idx++] = all_instantiated[j];
+        if (idx == new_n - all_instantiated.len) {
+            for (int j = 0; j < all_instantiated.len; j++)
+                new_decls[idx++] = ((Node*)all_instantiated.data[j]);
         }
         tu->tu.decls = new_decls;
         tu->tu.ndecls = new_n;
