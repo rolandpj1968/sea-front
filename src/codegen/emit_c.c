@@ -752,8 +752,29 @@ static void emit_source_comment(Token *tok) {
  * is a possible future refinement. */
 
 static bool is_class_temp_call(Node *n) {
-    if (!n || n->kind != ND_CALL || !n->resolved_type ||
-        n->resolved_type->kind != TY_STRUCT || n->codegen_temp_name)
+    if (!n || n->kind != ND_CALL || n->codegen_temp_name) return false;
+    /* Self-class value-construction inside the same class body —
+     * 'static T factory() { return T(args); }'. Sema's lookup of T
+     * inside T's class scope can resolve to one of the ctors
+     * (entity=VARIABLE, return-type void) instead of the class tag,
+     * giving a TY_VOID resolved_type that the regular
+     * resolved_type->kind==TY_STRUCT check below rejects. The call
+     * IS a class-temp construction; force-recognise it via the
+     * callee-name == enclosing-class-tag match. Real-world hit:
+     * gcc 14 libcpp/include/rich-location.h's label_text class with
+     * static borrow() / take() factories returning 'label_text(...)'.
+     * N4659 §6.4.1 [basic.lookup.unqual] really wants type-names to
+     * win this lookup, but our lookup doesn't do that ordering yet
+     * — patch up at codegen instead.
+     * TODO(seafront#class-name-lookup): fix sema's lookup ordering
+     * so 'T(args)' inside T's body resolves to T-the-tag rather than
+     * one of T's ctors. Then this codegen patch becomes redundant. */
+    if (g_current_method_class && g_current_method_class->tag &&
+        n->call.callee && n->call.callee->kind == ND_IDENT &&
+        n->call.callee->ident.name &&
+        tokens_equal(n->call.callee->ident.name, g_current_method_class->tag))
+        return true;
+    if (!n->resolved_type || n->resolved_type->kind != TY_STRUCT)
         return false;
     /* Standard case: class-typed call with non-trivial dtor needs
      * hoisting so the dtor fires at the right scope. */
@@ -847,15 +868,32 @@ static void hoist_emit_decl(Node *call, bool in_shortcircuit) {
      * because Foo(args) isn't a function call in C — there's no
      * symbol named 'Foo' (only the mangled sf__Foo__ctor). */
     bool is_ctor_call = false;
+    Type *ctor_class_type = call->resolved_type;
     if (call->call.callee && call->call.callee->kind == ND_IDENT) {
         Declaration *d = call->call.callee->ident.resolved_decl;
         if (d && (d->entity == ENTITY_TYPE || d->entity == ENTITY_TAG))
             is_ctor_call = true;
+        /* Self-class value-construction inside the same class —
+         * sema's lookup may have resolved the callee to a ctor
+         * (entity=VARIABLE, return-type void), so the entity check
+         * above misses it. The is_class_temp_call gate already
+         * promoted this to a hoist; mirror the recognition here so
+         * we emit as ctor call (not as 'void temp;' followed by a
+         * void function call). Type comes from the enclosing class.
+         * See is_class_temp_call's comment for the libcpp pattern. */
+        if (!is_ctor_call && g_current_method_class &&
+            g_current_method_class->tag &&
+            call->call.callee->ident.name &&
+            tokens_equal(call->call.callee->ident.name,
+                         g_current_method_class->tag)) {
+            is_ctor_call = true;
+            ctor_class_type = g_current_method_class;
+        }
     }
 
     if (is_ctor_call) {
         emit_indent();
-        emit_type(call->resolved_type);
+        emit_type(ctor_class_type);
         fprintf(stdout, " %s;\n", name);
         emit_indent();
         Node *resolved_ctor = NULL;
@@ -865,7 +903,7 @@ static void hoist_emit_decl(Node *call, bool in_shortcircuit) {
             Type **at = NULL;
             int na = collect_call_arg_types(call->call.args,
                                              call->call.nargs, &at);
-            np = resolve_overload(call->resolved_type, /*name=*/NULL,
+            np = resolve_overload(ctor_class_type, /*name=*/NULL,
                                    /*is_ctor=*/true,
                                    at, na,
                                    /*receiver_is_const=*/false,
@@ -877,7 +915,7 @@ static void hoist_emit_decl(Node *call, bool in_shortcircuit) {
                  * zero-fill from '{0}' covers it). */
                 goto hoist_done;
             }
-            mangle_class_ctor(call->resolved_type, pty, np);
+            mangle_class_ctor(ctor_class_type, pty, np);
         }
         fprintf(stdout, "(&%s", name);
         for (int i = 0; i < call->call.nargs; i++) {
