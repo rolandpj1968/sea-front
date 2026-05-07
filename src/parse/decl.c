@@ -1011,11 +1011,7 @@ parse_suffixes:
      * therefore requires applying [B] first (inner) then [A] (outer)
      * so the outer wrap's size is A. Reading dims left-to-right
      * collects them in source order; we then wrap right-to-left.
-     *
-     * Previously this loop applied dims as it read them, producing
-     * 'T[B][A]' (dims swapped) — silently miscompiled gcc 4.8 tree.c's
-     * 'tree_contains_struct[MAX_TREE_CODES][64]' to '[64][MAX_TREE_CODES]'
-     * so indexed writes overran the array into adjacent globals.
+     * N4659 §11.3.4 [dcl.array].
      */
 #define MAX_ARRAY_DIMS 8
     int  dim_lens[MAX_ARRAY_DIMS];

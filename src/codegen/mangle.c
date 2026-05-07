@@ -132,10 +132,9 @@ static void emit_namespace_chain(Type *class_type) {
  * template argument list. For the human scheme, this produces
  * the type's C-like name (int, double, struct tag, etc.).
  * Exposed in mangle.h so emit_c.c's template-id-suffix path
- * (qualified template-call sites) can defer to the same encoder
- * — previously had its own (incomplete) type-encode switch that
- * emitted TY_PTR as just 'ptr' without recursing into the base,
- * losing T's type for any pointer-typed template arg. */
+ * (qualified template-call sites) defers to the same encoder —
+ * keeps mangling at qualified call sites in lockstep with class-
+ * tag and param-suffix mangling. */
 void emit_type_for_mangle(Type *ty) {
     if (g_mangle_kind == MANGLE_ITANIUM) { itan_emit_type_for_mangle(ty); return; }
     if (!ty) { fputs("unknown", stdout); return; }

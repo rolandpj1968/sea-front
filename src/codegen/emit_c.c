@@ -654,21 +654,20 @@ static void emit_template_id_suffix(Node *tid) {
         Node *arg = tid->template_id.args[i];
         Type *ty = (arg && arg->kind == ND_VAR_DECL) ? arg->var_decl.ty : NULL;
         /* Defer to mangle.c's canonical encoder so this stays in
-         * lockstep with the class-tag and param-suffix encodings.
-         * Previously this site had its own switch that emitted
-         * TY_PTR as just 'ptr' without recursing into the base —
-         * losing T's type for any pointer template arg, producing
-         * 'sf__vec_t_ptr_..._te_' instead of 'sf__vec_t_rtx_def_ptr_
-         * ..._te_' at qualified template-call sites. */
+         * lockstep with the class-tag and param-suffix encodings:
+         * each Type maps to one mangled spelling regardless of which
+         * call site emits it. */
         emit_type_for_mangle(ty);
     }
     fputs("_te_", stdout);
 }
 
 /* Shared diagnostic for the "no matching overload" case. We fail
- * loudly rather than fall through to arg-type mangling — the prior
- * silent fallback would emit a symbol that doesn't resolve at link
- * time, which we've repeatedly diagnosed as a poor tradeoff. */
+ * loudly rather than fall through to arg-type mangling: a fallback
+ * that emits a best-guess symbol turns a sema-stage gap into a
+ * link-time mystery, where the missing-symbol error tells you
+ * nothing about which call site couldn't be resolved. Aborting
+ * here puts the diagnostic at the right layer. */
 static void die_no_overload(Type *class_type, Token *name, int nargs,
                              const char *where) {
     fprintf(stderr,
@@ -1830,14 +1829,11 @@ static void emit_storage_flags_impl(int flags, bool for_definition) {
      * not linked into the small gen-tools; libstdc++ c++config.h
      * inline '__terminate' calls 'terminate' — same story).
      *
-     * Previously this path emitted '__attribute__((weak))' which
-     * kept the body in every .o and forced the linker to resolve
-     * those bodies' external refs even when the function was unused.
-     * 'static inline' relies on per-TU dead-code elimination instead.
-     * Cross-TU dedup is trivial: each TU has its own private copy,
-     * no external symbol → no possibility of multi-definition.
-     * N4659 §10.1.6 [dcl.inline] / GNU 'extern inline' / C99 inline
-     * all permit this lowering for inline functions. */
+     * Cross-TU dedup is trivial under static inline: each TU has
+     * its own private copy, no external symbol → no possibility of
+     * multi-definition. N4659 §10.1.6 [dcl.inline] / GNU 'extern
+     * inline' / C99 inline all permit this lowering for inline
+     * functions. */
     /* 'extern inline' definition: GNU 'gnu_inline' semantics — the
      * inline body is a hint; an extern OOL strong definition lives
      * elsewhere (usually in a separate .c file / library). gmp.h's
@@ -9589,18 +9585,13 @@ static void emit_prelude(void) {
      * which matters when a header-defined inline calls a function
      * that isn't linked into THIS executable (e.g. gcc 4.8's
      * dump_bitmap inline calls bitmap_print which lives in libbackend
-     * but isn't linked into the small gen-tools).
+     * but isn't linked into the small gen-tools). Per-TU dead-code
+     * elimination drops the unused body; the call site never resolves
+     * the unused-target's external refs.
      *
-     * Previously this was '__attribute__((weak))', which kept the
-     * body in every .o and made the linker resolve those bodies'
-     * external refs even when the function was unused — failing
-     * the build on undefined symbols that nobody actually reached.
-     * 'static inline' relies on per-TU dead-code elimination instead,
-     * which the C compiler does for free.
-     *
-     * Cross-TU dedup still works: if two TUs both call the same
-     * inline, each has its own static copy — no link-time symbol
-     * collision because there's no external symbol. See
+     * Cross-TU dedup is automatic: two TUs that both call the same
+     * inline each get their own static copy — no link-time collision
+     * because there is no external symbol. See
      * docs/inline_and_dedup.md for the full trade-off analysis. */
     fputs("#define __SF_INLINE static inline\n", stdout);
     fputs("\n", stdout);

@@ -3173,19 +3173,17 @@ void template_instantiate(Node *tu, Arena *arena) {
             collect_inner_lambdas(inst, &all_instantiated, &ninst_this_round);
             inst_push(&all_instantiated, &ninst_this_round,
                       inst, "class/function template instantiation");
-            /* (trace removed) */
             /* For class instantiations: dedup_add unconditionally so
              * a subsequent request for the same (name, args) finds
-             * the existing entry and short-circuits. Previously the
-             * dedup_add was nested inside the usage_type != NULL
-             * guard, so class-template instantiations requested via
-             * a constructor call (ND_CALL callee=ND_TEMPLATE_ID, which
-             * sets usage_type=NULL) didn't register — and a later
-             * type-position request for the same class instantiated
-             * AGAIN, producing duplicate ND_CLASS_DEFs and ultimately
-             * duplicate method definitions at link time. Pattern:
-             * gcc 4.8 ipa-cp.c with vec<ipa_agg_jf_item> constructed
-             * functionally AND used in type position. */
+             * the existing entry and short-circuits. The check must
+             * not be gated on usage_type != NULL — a class-template
+             * instantiation requested via a constructor call (ND_CALL
+             * callee=ND_TEMPLATE_ID, which sets usage_type=NULL) still
+             * needs a dedup entry so a later type-position request
+             * for the same class hits the existing instantiation
+             * rather than producing a duplicate ND_CLASS_DEF.
+             * N4659 §17.4 [temp.type]: same template-id names one
+             * type. */
             if (inst->kind == ND_CLASS_DEF && inst->class_def.ty) {
                 Type *inst_ty = inst->class_def.ty;
                 if (req->usage_type) {
