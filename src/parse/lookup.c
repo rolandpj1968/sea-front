@@ -597,9 +597,25 @@ DeclarativeRegion *region_build_class(Node *class_def, Type *owner,
             fty->ret = m->func.ret_ty;
             mtype = fty;
         }
-        if (mname && mname->kind == TK_IDENT)
-            region_declare_raw(cr, arena, mname->loc, mname->len,
-                                ENTITY_VARIABLE, mtype);
+        if (mname && mname->kind == TK_IDENT) {
+            Declaration *d = region_declare_raw(cr, arena, mname->loc,
+                                                 mname->len,
+                                                 ENTITY_VARIABLE, mtype);
+            /* Stash the storage-class on the Declaration so emit can
+             * tell static data members apart from instance members
+             * (§10.1.1/4) and rewrite references through the TU-scope
+             * mangled symbol. Both data and method members can be
+             * static — the var_decl/func storage_flags live on the
+             * respective union arms. */
+            if (d) {
+                int sf = 0;
+                if (m->kind == ND_VAR_DECL || m->kind == ND_TYPEDEF)
+                    sf = m->var_decl.storage_flags;
+                else if (m->kind == ND_FUNC_DEF || m->kind == ND_FUNC_DECL)
+                    sf = m->func.storage_flags;
+                d->is_static_member = (sf & DECL_STATIC) != 0;
+            }
+        }
     }
     return cr;
 }

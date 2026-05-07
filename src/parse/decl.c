@@ -1847,6 +1847,16 @@ Node *parse_declaration(Parser *p) {
         if (rd) {
             rd->asm_name = decl->var_decl.asm_name;
             rd->c_linkage = (p->extern_c_depth > 0);
+            /* §10.1.1/4 [dcl.stc]: static class-member flag — emit
+             * uses it to rewrite member references through the
+             * 'sf__<class>__<name>' TU-scope symbol. */
+            /* spec.flags carries DECL_STATIC at this point —
+             * decl->var_decl.storage_flags isn't OR'd in until below
+             * (the multi-declarator path) or later for the single-
+             * decl trailing block, so consult spec.flags directly. */
+            if (p->region && p->region->kind == REGION_CLASS &&
+                (spec.flags & DECL_STATIC))
+                rd->is_static_member = true;
         }
     }
 

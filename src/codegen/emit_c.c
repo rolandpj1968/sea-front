@@ -2953,6 +2953,18 @@ static void emit_expr(Node *n) {
             return;
         }
         if (n->ident.implicit_this && !g_current_method_is_static) {
+            /* Static data members (§10.1.1/4 [dcl.stc]) lower to a
+             * TU-scope variable 'sf__<class>__<name>', not a struct
+             * field — emit the mangled name directly, no 'this->'
+             * prefix. */
+            Declaration *sd = n->ident.resolved_decl;
+            if (sd && sd->is_static_member && sd->home &&
+                sd->home->owner_type) {
+                mangle_class_tag(sd->home->owner_type);
+                fputs("__", stdout);
+                emit_token_text(n->ident.name);
+                return;
+            }
             /* Inside a capturing lambda with '[this]' (§8.1.5.2/8),
              * implicit-this references go through the closure's
              * '__this' member instead of the lambda's non-existent
@@ -4837,6 +4849,23 @@ static void emit_expr(Node *n) {
         if (obj_ty && obj_ty->kind == TY_PTR) obj_ty = obj_ty->base;
         if (ty_is_ref(obj_ty)) obj_ty = obj_ty->base;
         Token *mem = n->member.member;
+        /* Static member access (§10.1.1/4): 's.x' or 's->x' where
+         * 'x' is a static data member lowers directly to the TU-
+         * scope mangled symbol 'sf__<class>__x' — no obj traversal,
+         * the obj is just used for type lookup here.
+         * Note: this also applies to qualified static-member
+         * function refs ('Class::static_method'), but those go
+         * through ND_QUALIFIED, not ND_MEMBER. */
+        if (obj_ty && obj_ty->class_region && mem) {
+            Declaration *sd = region_lookup_own(obj_ty->class_region,
+                                                 mem->loc, mem->len);
+            if (sd && sd->is_static_member) {
+                mangle_class_tag(obj_ty);
+                fputs("__", stdout);
+                emit_token_text(mem);
+                return;
+            }
+        }
         /* Pick the access operator. Source-level '.' must become '->'
          * when the operand has been lowered to a pointer in our C —
          * either an actual pointer (TY_PTR) or a reference parameter
@@ -7702,6 +7731,14 @@ static void emit_class_def(Node *n) {
     for (int i = 0; i < n->class_def.nmembers; i++) {
         Node *m = n->class_def.members[i];
         if (!m) continue;
+        /* §10.1.1/4 [dcl.stc]: static data members are not part of
+         * instance layout — emit at TU scope below, not here. Static
+         * member functions still go through the method emission
+         * loop further down. */
+        if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
+            m->var_decl.ty->kind != TY_FUNC &&
+            (m->var_decl.storage_flags & DECL_STATIC))
+            continue;
         /* Flat blocks from comma-separated declarations:
          * 'size_t precision, char_precision;' → ND_BLOCK(is_flat)
          * containing individual ND_VAR_DECLs. Flatten them. */
@@ -7710,6 +7747,7 @@ static void emit_class_def(Node *n) {
                 Node *s = m->block.stmts[j];
                 if (!s || s->kind != ND_VAR_DECL) continue;
                 if (s->var_decl.ty && s->var_decl.ty->kind == TY_FUNC) continue;
+                if (s->var_decl.storage_flags & DECL_STATIC) continue;
                 emit_indent();
                 emit_var_decl_inner(s);
                 fputs(";\n", stdout);
@@ -7761,6 +7799,35 @@ static void emit_class_def(Node *n) {
     }
     g_indent--;
     fputs("};\n", stdout);
+
+    /* Static data members — §10.1.1/4 [dcl.stc]. Skipped from the
+     * struct body above; emit them here as TU-scope variables with
+     * mangled name 'sf__<class>__<member>'. The in-class init for
+     * a const/constexpr static integral data member (§9.4.2) is
+     * the definition — emit it as 'static const T sf__C__x = init;'
+     * so multi-TU header inclusion doesn't multi-define. Member
+     * functions are forward-declared by the loop further down. */
+    for (int i = 0; i < n->class_def.nmembers; i++) {
+        Node *m = n->class_def.members[i];
+        if (!m || m->kind != ND_VAR_DECL) continue;
+        if (!m->var_decl.ty || m->var_decl.ty->kind == TY_FUNC) continue;
+        if (!(m->var_decl.storage_flags & DECL_STATIC)) continue;
+        if (!m->var_decl.name) continue;
+        emit_source_comment(m->tok);
+        fputs("static ", stdout);
+        if (m->var_decl.ty && !m->var_decl.ty->is_const)
+            fputs("const ", stdout);
+        emit_type(m->var_decl.ty);
+        fputc(' ', stdout);
+        mangle_class_tag(class_type);
+        fputs("__", stdout);
+        emit_token_text(m->var_decl.name);
+        if (m->var_decl.init) {
+            fputs(" = ", stdout);
+            emit_expr(m->var_decl.init);
+        }
+        fputs(";\n", stdout);
+    }
 
     /* Forward-declare every method first, so they can call each
      * other regardless of source order inside the class body, and so

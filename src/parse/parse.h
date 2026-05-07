@@ -1177,6 +1177,14 @@ struct Declaration {
      * mix linkages — e.g. <cmath> has 'extern "C" double acos(double)'
      * and 'extern "C++" inline float acos(float)' for the same name. */
     bool         c_linkage;
+    /* True for class-member declarations marked 'static' — N4659
+     * §10.1.1/4 [dcl.stc]. Sea-front lowers static data members
+     * to TU-scope variables ('sf__<class>__<name>') outside the C
+     * struct body, since C has no in-struct member initializers
+     * and no static fields. emit_ident / emit_member_access /
+     * emit_qualified consult this flag to rewrite the access from
+     * 'obj.x' / 'this->x' / 'Class::x' to the TU-scope symbol. */
+    bool         is_static_member;
     Declaration *next;      /* hash chain within the declarative region */
 };
 
