@@ -1874,6 +1874,12 @@ Node *parse_declaration(Parser *p) {
             if (p->region && p->region->kind == REGION_CLASS &&
                 (spec.flags & DECL_STATIC))
                 rd->is_static_member = true;
+            /* §10.1.1/8 [dcl.stc] — mutable on a class data member.
+             * Emit casts away const at write sites that go through
+             * a const path so cc doesn't reject the assignment. */
+            if (p->region && p->region->kind == REGION_CLASS &&
+                (spec.flags & DECL_MUTABLE))
+                rd->is_mutable = true;
         }
     }
 

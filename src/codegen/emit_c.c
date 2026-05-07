@@ -3337,6 +3337,60 @@ static void emit_expr(Node *n) {
                 return;
             }
         }
+        /* mutable class data member — N4659 §10.1.1/8 [dcl.stc].
+         * C has no mutable, so cast away constness at the write site
+         * by emitting `*(T*)&<lhs> = rhs`. Fires for plain '=' when:
+         *   - LHS is `this->mut_field` (ident with implicit_this), or
+         *   - LHS is `obj.mut_field` / `obj->mut_field`, or
+         *   - LHS is a chain `obj.mutable_field.regular_field` —
+         *     mutable anywhere in the receiver chain authorises the
+         *     cast at the leaf. */
+        if (n->binary.op == TK_ASSIGN && n->binary.lhs) {
+            Type *leaf_ty = NULL;
+            bool found_mut = false;
+            Node *lhs = n->binary.lhs;
+            if (lhs->kind == ND_IDENT && lhs->ident.implicit_this &&
+                lhs->ident.resolved_decl &&
+                lhs->ident.resolved_decl->is_mutable) {
+                found_mut = true;
+                leaf_ty = lhs->ident.resolved_decl->type;
+            } else if (lhs->kind == ND_MEMBER) {
+                /* Walk the chain; check leaf + any ancestor field. */
+                Node *cur = lhs;
+                while (cur && cur->kind == ND_MEMBER) {
+                    Type *ot = cur->member.obj ? cur->member.obj->resolved_type : NULL;
+                    if (ot && ot->kind == TY_PTR) ot = ot->base;
+                    if (ot && (ot->kind == TY_REF || ot->kind == TY_RVALREF))
+                        ot = ot->base;
+                    Declaration *fd = (ot && ot->class_region && cur->member.member) ?
+                        lookup_in_scope(ot->class_region,
+                                        cur->member.member->loc,
+                                        cur->member.member->len) : NULL;
+                    if (fd && fd->is_mutable) {
+                        found_mut = true;
+                        if (cur == lhs && fd->type) leaf_ty = fd->type;
+                        break;
+                    }
+                    cur = cur->member.obj;
+                }
+                if (!leaf_ty) leaf_ty = lhs->resolved_type;
+                /* Also check this->… reaching a mutable via implicit_this. */
+                if (!found_mut && cur && cur->kind == ND_IDENT &&
+                    cur->ident.implicit_this && cur->ident.resolved_decl &&
+                    cur->ident.resolved_decl->is_mutable)
+                    found_mut = true;
+            }
+            if (found_mut && leaf_ty) {
+                fputs("(*(", stdout);
+                emit_type(leaf_ty);
+                fputs("*)&(", stdout);
+                emit_expr(n->binary.lhs);
+                fputs(") = ", stdout);
+                emit_expr(n->binary.rhs);
+                fputs(")", stdout);
+                return;
+            }
+        }
         fputc('(', stdout);
         emit_expr(n->binary.lhs);
         fprintf(stdout, " %s ", binop_str(n->binary.op));

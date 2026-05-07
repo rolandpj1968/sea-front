@@ -1244,6 +1244,10 @@ struct Declaration {
      * emit_qualified consult this flag to rewrite the access from
      * 'obj.x' / 'this->x' / 'Class::x' to the TU-scope symbol. */
     bool         is_static_member;
+    /* True for class-member declarations marked 'mutable' — N4659
+     * §10.1.1/8 [dcl.stc]. C has no mutable, so emit casts away
+     * constness at the assignment site. */
+    bool         is_mutable;
     Declaration *next;      /* hash chain within the declarative region */
 };
 
