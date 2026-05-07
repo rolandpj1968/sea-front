@@ -1005,10 +1005,32 @@ static Node *primary_expr(Parser *p) {
          * '(' / '{' that follows is the init expression-list, NOT a
          * pointer or array suffix on the type. */
         Type *ty = parse_type_specifiers(p).type;
-        TokenKind open  = parser_at(p, TK_LBRACE) ? TK_LBRACE : TK_LPAREN;
-        TokenKind close = (open == TK_LBRACE)     ? TK_RBRACE : TK_RPAREN;
-        parser_expect(p, open);
-        parser_skip_balanced(p, open, close);
+        if (parser_at(p, TK_LPAREN)) {
+            /* N4659 §8.2.3/1 [expr.type.conv]: a simple-type-specifier
+             * followed by '(expression)' is a unary explicit type
+             * conversion equivalent to (T)(expression). Capture the
+             * operand so emit can render the conversion. The multi-
+             * argument form '(a,b,...)' is a constructor call (valid
+             * only for class types per §8.2.3/2); the empty form '()'
+             * is value-initialization (§8.2.3/3). Both fall through
+             * to the skip-balanced + NULL-operand shortcut — the
+             * conservative path that doesn't model construction. */
+            parser_advance(p); /* '(' */
+            Node *inner = NULL;
+            if (!parser_at(p, TK_RPAREN)) {
+                inner = parse_assign_expr(p);
+                if (!parser_at(p, TK_RPAREN)) {
+                    parser_skip_to_matching_rparen(p);
+                    return new_cast_node(p, ty, /*operand=*/NULL, tok);
+                }
+            }
+            parser_expect(p, TK_RPAREN);
+            return new_cast_node(p, ty, inner, tok);
+        }
+        /* Braced-init T{...} — N4659 §8.2.3/1 alternative form. We
+         * don't model the init-list; skip the body and emit a stub. */
+        parser_expect(p, TK_LBRACE);
+        parser_skip_balanced(p, TK_LBRACE, TK_RBRACE);
         return new_cast_node(p, ty, /*operand=*/NULL, tok);
     }
 

@@ -50,7 +50,7 @@
     (var-decl int "v")
     (func-def bool "eq" (params (param (ref const struct H) "o"))
       (block
-        (return (== (cast bool (null)) (cast bool (null)))))))
+        (return (== (cast bool (* (& (ident "v")))) (cast bool (. (ident "o") "v")))))))
   (class-def "Inh"
     (func-def void "f" (params (param int "i"))
       (block
