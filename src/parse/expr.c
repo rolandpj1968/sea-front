@@ -247,22 +247,80 @@ static Node *primary_expr(Parser *p) {
         /* lambda-expression — N4659 §8.1.5 [expr.prim.lambda]
          *   lambda-introducer lambda-declarator(opt) compound-statement
          *   lambda-introducer: [ lambda-capture(opt) ]
+         *   lambda-capture: capture-default | capture-list
+         *                 | capture-default ',' capture-list
          *
          * Captureless lambdas with an explicit trailing return type
-         * are LOWERED — the body becomes a synthesized static-inline
-         * function '__sf_lambda_<N>' at TU scope and the lambda
-         * expression evaluates to that function's name (decays to a
-         * fn pointer per C/C++ rules).
-         *
-         * Capturing lambdas and lambdas with deduced return type
-         * (no '->' trailing return) fall back to the legacy
-         * skip-and-discard path that returns an opaque ND_NULLPTR
-         * placeholder. Real auto-return deduction is the followup.
+         * lower to a synthesised free function '__sf_lambda_<N>' at
+         * TU scope; the expression evaluates to that name (decays to
+         * a fn pointer per §8.1.5/2). Capturing lambdas additionally
+         * synthesise a closure TY_STRUCT and return ND_LAMBDA — sema
+         * fills in the closure's members from the captures and adds
+         * a __self pointer parameter to the function. Init-captures
+         * (C++14 [var = expr]) still fall back to skip-and-discard.
          */
         ParseState saved = parser_save(p);
         parser_advance(p);  /* consume [ */
-        bool captureless = parser_consume(p, TK_RBRACKET);
-        if (captureless && parser_consume(p, TK_LPAREN)) {
+
+        /* Parse capture-list. Anything unexpected → restore + fallback. */
+        Capture *captures = NULL;
+        int      ncaptures = 0, ccap = 0;
+        int      default_kind = 0;  /* 0=none, 1=[&], 2=[=] */
+        bool     captures_ok = true;
+
+        /* capture-default: '&' or '=' followed by ',' or ']' */
+        if (parser_at(p, TK_AMP) &&
+            (parser_peek_ahead(p, 1)->kind == TK_RBRACKET ||
+             parser_peek_ahead(p, 1)->kind == TK_COMMA)) {
+            parser_advance(p);
+            default_kind = 1;
+            parser_consume(p, TK_COMMA);
+        } else if (parser_at(p, TK_ASSIGN) &&
+                   (parser_peek_ahead(p, 1)->kind == TK_RBRACKET ||
+                    parser_peek_ahead(p, 1)->kind == TK_COMMA)) {
+            parser_advance(p);
+            default_kind = 2;
+            parser_consume(p, TK_COMMA);
+        }
+
+        /* capture-list: simple-capture (',' simple-capture)*
+         * simple-capture: identifier | '&' identifier | 'this' */
+        while (captures_ok && !parser_at(p, TK_RBRACKET)) {
+            bool   by_ref  = false;
+            bool   is_this = false;
+            Token *cname   = NULL;
+            if (parser_consume(p, TK_AMP)) by_ref = true;
+            if (parser_consume(p, TK_KW_THIS)) {
+                is_this = true;
+                by_ref  = true;
+            } else if (parser_at(p, TK_IDENT)) {
+                cname = parser_peek(p);
+                parser_advance(p);
+            } else {
+                captures_ok = false;
+                break;
+            }
+            /* Init-capture [var = expr] (C++14) — defer; bail to fallback. */
+            if (parser_at(p, TK_ASSIGN)) {
+                captures_ok = false;
+                break;
+            }
+            if (ncaptures == ccap) {
+                ccap = ccap ? ccap * 2 : 4;
+                Capture *nc = arena_alloc(p->arena, sizeof(*nc) * ccap);
+                if (captures) memcpy(nc, captures, sizeof(*nc) * ncaptures);
+                captures = nc;
+            }
+            memset(&captures[ncaptures], 0, sizeof(Capture));
+            captures[ncaptures].name    = cname;
+            captures[ncaptures].by_ref  = by_ref;
+            captures[ncaptures].is_this = is_this;
+            ncaptures++;
+            if (!parser_consume(p, TK_COMMA)) break;
+        }
+
+        if (captures_ok && parser_consume(p, TK_RBRACKET) &&
+            parser_consume(p, TK_LPAREN)) {
             /* Parse param list inline — small reimplementation of the
              * loop in decl.c; lambdas have no default args, no
              * variadic, no class-scoped param-name shadowing concerns. */
@@ -362,10 +420,30 @@ static Node *primary_expr(Parser *p) {
                         }
                         Type *fty = new_func_type(p, ret_ty, pt,
                                                    nparams, false);
-                        Node *ref = new_node(p, ND_IDENT, name_tok);
-                        ref->ident.name = name_tok;
-                        ref->resolved_type = fty;
-                        return ref;
+                        if (ncaptures == 0 && default_kind == 0) {
+                            /* Captureless: lambda-expression decays
+                             * directly to a fn pointer (§8.1.5/6).
+                             * Return ND_IDENT naming the synthesised
+                             * fn — auto deduction does the decay. */
+                            Node *ref = new_node(p, ND_IDENT, name_tok);
+                            ref->ident.name     = name_tok;
+                            ref->resolved_type  = fty;
+                            return ref;
+                        }
+                        /* Capturing: return ND_LAMBDA. Sema (later)
+                         * builds closure_type from captures, prepends
+                         * a __self param to fd, and rewrites body
+                         * references to captured names. Emit produces
+                         * a struct rvalue at this expression position
+                         * and rewrites calls to dispatch through fd. */
+                        Node *lam = new_node(p, ND_LAMBDA, tok);
+                        lam->lambda.func_def     = fd;
+                        lam->lambda.captures     = captures;
+                        lam->lambda.ncaptures    = ncaptures;
+                        lam->lambda.default_kind = default_kind;
+                        lam->lambda.closure_type = NULL;
+                        lam->lambda.closure_tag  = NULL;
+                        return lam;
                     }
                 }
             }

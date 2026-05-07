@@ -35,6 +35,22 @@ typedef struct MemInit {
     int           nargs;
 } MemInit;
 
+/* Lambda capture — N4659 §8.1.5.2 [expr.prim.lambda.capture].
+ * One entry per capture in the lambda-introducer. Defaults [&] / [=]
+ * are recorded on the lambda node's default_kind and the implied
+ * captures are populated by sema's body walk (odr-use analysis).
+ * 'name' is the captured variable; for [this] it is NULL and is_this
+ * is true. by_ref is true for '&name' (and is forced for is_this).
+ * resolved_decl / resolved_type are filled by sema when the name is
+ * bound to an entity in the enclosing scope. */
+typedef struct Capture {
+    struct Token *name;          /* NULL when is_this */
+    bool          by_ref;        /* '&' before name; always true for is_this */
+    bool          is_this;       /* [this] capture */
+    Declaration  *resolved_decl; /* sema-set */
+    struct Type  *resolved_type; /* sema-set: type of captured variable */
+} Capture;
+
 typedef enum {
     /* -- Expressions --
      * N4659 §8 [expr]
@@ -56,6 +72,13 @@ typedef enum {
     ND_NULLPTR,         /* nullptr — N4659 §5.13.7 [lex.nullptr]
                          * Type is std::nullptr_t (§21.2.4), distinct from int 0.
                          * C++20/23: unchanged. */
+    ND_LAMBDA,          /* lambda-expression — N4659 §8.1.5 [expr.prim.lambda].
+                         * Captureless: lambda.func_def is the synthesised free
+                         * function; lambda.closure_type is NULL; the expression
+                         * decays to a function pointer.
+                         * Capturing: lambda.func_def takes a closure-pointer first
+                         * param; lambda.closure_type is the synthesised TY_STRUCT.
+                         * Emit produces a struct-initializer at this position. */
 
     ND_BINARY,          /* binary op — N4659 §8.5-§8.15 [expr.mul through expr.log.or]
                          * C++20: adds <=> at §8.10 [expr.spaceship] */
@@ -700,6 +723,23 @@ struct Node {
             int body_end_pos;
             DeclarativeRegion *deferred_class_region;  /* class scope to push at replay */
         } func;
+
+        /* ND_LAMBDA — N4659 §8.1.5 [expr.prim.lambda].
+         * Synthesised at parse time. The captureless case still produces
+         * a TY_FUNC-typed expression that decays to a function pointer
+         * (closure_type == NULL, ncaptures == 0); the capturing case
+         * produces a struct rvalue of closure_type with one member per
+         * capture (T for by-value, T* for by-ref, this-class* for
+         * [this]). func_def is the synthesised __sf_lambda_<...>
+         * function, hoisted to TU scope at translation-unit assembly. */
+        struct {
+            Node           *func_def;       /* the synthesised ND_FUNC_DEF */
+            struct Capture *captures;       /* parsed capture list */
+            int             ncaptures;
+            int             default_kind;   /* 0=none, 1=by-ref [&], 2=by-val [=] */
+            Type           *closure_type;   /* TY_STRUCT for the closure, NULL if captureless */
+            Token          *closure_tag;    /* the closure type's tag token */
+        } lambda;
 
         /* ND_PARAM — N4659 §11.3.5 [dcl.fct]
          * parameter-declaration: decl-specifier-seq declarator
