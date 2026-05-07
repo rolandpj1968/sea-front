@@ -1279,6 +1279,16 @@ static bool subtree_has_cleanups(Node *n) {
     case ND_COMMA:
         return subtree_has_cleanups(n->comma.lhs) ||
                subtree_has_cleanups(n->comma.rhs);
+    /* Exception machinery — a function containing a 'throw' or a
+     * 'try' needs the __SF_unwind / __SF_retval / __SF_epilogue
+     * prologue scaffolding because the throw sets __SF_unwind and
+     * jumps to the epilogue (which may chain through dtor labels)
+     * — N4659 §18 [except] + docs/exceptions.md. Without this, the
+     * function emits no prologue and the goto target does not exist. */
+    case ND_THROW:
+        return true;
+    case ND_TRY:
+        return true;
     default:
         return false;
     }
@@ -6055,6 +6065,43 @@ static void emit_stmt(Node *n) {
         }
         return;
     case ND_EXPR_STMT:
+        /* Throw-expression at statement position lowers via the
+         * __SF_THROW_PRIM macro: stash payload + type-id, set
+         * __SF_unwind = __SF_UNWIND_THROW, goto innermost cleanup
+         * (mirrors how ND_RETURN lowers via __SF_RETURN). N4659
+         * §18 [except] + docs/exceptions.md. ISO C: no statement
+         * expressions, so we only handle throw at this position
+         * — throws inside ternary / call args / etc. still fall
+         * through to the emit_expr placeholder for now.
+         *
+         * Slice 3 supports only int operands; class-type throws
+         * land later. Bare 'throw;' (rethrow) sets state and
+         * jumps without re-stashing — the existing slot still
+         * carries the in-flight exception that the surrounding
+         * catch is handling. */
+        if (n->expr_stmt.expr && n->expr_stmt.expr->kind == ND_THROW) {
+            Node *thr = n->expr_stmt.expr;
+            int target = return_target();
+            char buf[32];
+            const char *lbl;
+            if (target >= 0) {
+                snprintf(buf, sizeof(buf), "__SF_cleanup_%d", target);
+                lbl = buf;
+            } else {
+                lbl = "__SF_epilogue";
+            }
+            if (thr->throw_.is_rethrow) {
+                fprintf(stdout,
+                        "do { __SF_unwind = __SF_UNWIND_THROW; "
+                        "goto %s; } while (0);\n",
+                        lbl);
+            } else {
+                fputs("__SF_THROW_PRIM(", stdout);
+                emit_expr(thr->throw_.operand);
+                fprintf(stdout, ", &__sf_typeinfo_int, %s);\n", lbl);
+            }
+            return;
+        }
         if (n->expr_stmt.expr)
             emit_expr(n->expr_stmt.expr);
         fputs(";\n", stdout);
@@ -8733,6 +8780,27 @@ static void emit_prelude(void) {
     fputs("#else\n", stdout);
     fputs("static struct __sf_exception_state __sf_exc_state;\n", stdout);
     fputs("#endif\n", stdout);
+    /* Per-primitive type_info — pointer-compared at catch-dispatch
+     * (slice 4). Only the primitives we actually throw need a slot;
+     * a single 'int' instance is sufficient for slice 3 since
+     * unmatched throws aren't caught yet. Future slices will emit
+     * one per primitive type encountered as a throw operand. */
+    fputs("static const struct __sf_type_info __sf_typeinfo_int = "
+          "{ \"int\", 0, 0, 0 };\n",
+          stdout);
+    /* __SF_THROW_PRIM — set the TLS exception state and jump to
+     * the innermost cleanup label, mirroring __SF_RETURN's shape.
+     * For primitive integral throws the value fits in a pointer-
+     * width slot via uintptr_t cast; class-type throws will land in
+     * a later slice with a heap allocation. The exc_dtor slot is
+     * NULL because primitives have no destructor. */
+    fputs("#define __SF_THROW_PRIM(val, ti, lbl) "
+          "do { __sf_exc_state.exc_obj = (void *)(uintptr_t)(val); "
+          "__sf_exc_state.exc_type = (ti); "
+          "__sf_exc_state.exc_dtor = 0; "
+          "__SF_unwind = __SF_UNWIND_THROW; "
+          "goto lbl; } while (0)\n",
+          stdout);
     /* __SF_INLINE — multi-TU dedup for inline-eligible functions
      * (in-class methods, synthesized ctor/dtor wrappers, dtor body
      * functions, eventually template instantiations).
