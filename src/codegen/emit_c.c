@@ -1773,21 +1773,28 @@ static void emit_storage_flags_for_def(int flags) {
     emit_storage_flags_impl(flags, /*for_definition=*/true);
 }
 
-/* Variable storage flags + constexpr lowering — §10.1.5 [dcl.constexpr].
- * A 'constexpr' variable is implicitly const (§10.1.5/9). At namespace
- * scope, that gives internal linkage in C++ (§3.5/3) — sea-front
- * approximates this by also emitting 'static' so multi-TU header
- * inclusions don't multi-define. For block-scope vars the implicit
- * 'static' is harmless (init-once, same observable value). */
+/* Variable storage flags + constexpr/inline lowering — §10.1.5
+ * [dcl.constexpr] + §10.1.6 [dcl.inline]. C has no inline / constexpr
+ * on variables, so:
+ *   - constexpr (§10.1.5/9 implies const) → 'static const'.
+ *   - inline variables (C++17 §10.1.6/7 — same multi-TU dedup
+ *     guarantees as inline functions) → 'static'. The C output
+ *     gets a per-TU private copy, no external symbol; multiple
+ *     TUs including the same header don't link-collide.
+ * Both implications also subsume 'static' if it wasn't already
+ * spelled. The block-scope cases (locals) get 'static' as well —
+ * harmless for true constants (init-once, same value) and the
+ * common idiom for inline-vars-as-locals doesn't actually exist. */
 static void emit_var_storage_flags(int flags) {
-    if (flags & DECL_CONSTEXPR) {
-        if (!(flags & DECL_STATIC)) fputs("static ", stdout);
+    bool implies_static = (flags & (DECL_CONSTEXPR | DECL_INLINE)) != 0;
+    if (implies_static && !(flags & DECL_STATIC))
+        fputs("static ", stdout);
+    if (flags & DECL_CONSTEXPR)
         fputs("const ", stdout);
-        /* Strip CONSTEXPR (we just emitted its effect) and the
-         * normal emitter handles any other flags (e.g. extern, but
-         * that'd be an error with constexpr — leave to the user). */
-        flags &= ~DECL_CONSTEXPR;
-    }
+    /* Strip the C++-only spellings — emit_storage_flags would
+     * otherwise print 'inline'/etc. literally, which cc warns
+     * about on a variable and would multi-define across TUs. */
+    flags &= ~(DECL_CONSTEXPR | DECL_INLINE);
     emit_storage_flags(flags);
 }
 
