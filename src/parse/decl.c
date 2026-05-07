@@ -2043,20 +2043,36 @@ Node *parse_top_level_decl(Parser *p) {
             return new_typedef_node(p, ty, alias_name, tok);
         }
 
-        /* using-declaration: using Base::member; — §10.3.3 [namespace.udecl]
-         * SHORTCUT (ours, not the standard): we skip the body to ';'
-         * without registering the introduced name. The standard
-         * (§10.3.3/4) says the using-declaration introduces a name
-         * into the current declarative region, which sema needs for
-         * lookup of the introduced member. We get away with this
-         * because most uses in libstdc++ are pulling base-class
-         * members into a derived class — our base-class lookup walk
-         * already finds them.
-         * TODO(seafront#using-decl): introduce the name properly. */
-        /* Terminates: advances toward ; or EOF */
-        while (!parser_at(p, TK_SEMI) && !parser_at_eof(p))
+        /* using-declaration: using Base::member; — §10.3.3
+         * [namespace.udecl]/4: introduces 'member' as a synonym in
+         * the current declarative region, with the kind it has in
+         * Base.
+         *
+         * SHORTCUT (ours, not the standard): we walk the qualified-
+         * id, take the trailing identifier, and register it
+         * optimistically as ENTITY_TYPE in the current scope. This
+         * disambiguates downstream uses like
+         *   using __exception_ptr::exception_ptr;
+         *   void rethrow_exception(exception_ptr) ...
+         * — without the registration, 'exception_ptr' is not a
+         * known type-name and 'rethrow_exception(exception_ptr)'
+         * gets misparsed as a most-vexing-parse-style declaration.
+         *
+         * Wrong for using-decls that pull functions or variables —
+         * we'd register them as types — but those cases tend to
+         * resolve via the base-class member lookup walk anyway.
+         * TODO(seafront#using-decl-precise): do qualified lookup
+         * to learn the actual entity kind. */
+        Token *last_name = NULL;
+        if (parser_at(p, TK_IDENT)) last_name = parser_peek(p);
+        while (!parser_at(p, TK_SEMI) && !parser_at_eof(p)) {
+            if (parser_at(p, TK_IDENT)) last_name = parser_peek(p);
             parser_advance(p);
+        }
         parser_expect(p, TK_SEMI);
+        if (last_name)
+            region_declare(p, last_name->loc, last_name->len,
+                           ENTITY_TYPE, /*type=*/NULL);
         (void)tok;
         return NULL;
     }
