@@ -6586,7 +6586,23 @@ static void emit_stmt(Node *n) {
          * each call into an uninitialized auto whose stack-garbage
          * value bypassed the init guard, leaving codes.iterators NULL
          * → segfault. */
-        emit_var_storage_flags(n->var_decl.storage_flags);
+        {
+            /* `static const T name = expr;` at block scope is legal in
+             * C++ even when `expr` isn't a constant expression — N1570
+             * §6.7.9/4 disallows that in C. For a const value, dropping
+             * `static` is observably equivalent: the value is the same
+             * each call, only its storage location changes. */
+            int sf = n->var_decl.storage_flags;
+            bool is_static = (sf & DECL_STATIC) != 0;
+            bool is_const_ty = n->var_decl.ty && n->var_decl.ty->is_const;
+            Node *init = n->var_decl.init;
+            bool init_nonconst = init &&
+                (init->kind == ND_IDENT || init->kind == ND_MEMBER ||
+                 init->kind == ND_CALL  || init->kind == ND_SUBSCRIPT);
+            if (is_static && is_const_ty && init_nonconst)
+                sf &= ~DECL_STATIC;
+            emit_var_storage_flags(sf);
+        }
         emit_var_decl_inner(n);
         fputs(";\n", stdout);
         /* Direct-init 'T x(args)' lowers to a ctor call right
