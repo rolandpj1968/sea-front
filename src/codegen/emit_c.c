@@ -3347,15 +3347,26 @@ static void emit_expr(Node *n) {
          *     cast at the leaf. */
         if (n->binary.op == TK_ASSIGN && n->binary.lhs) {
             Type *leaf_ty = NULL;
-            bool found_mut = false;
+            bool need_cast = false;
             Node *lhs = n->binary.lhs;
+            /* A leaf field declared 'const T' (top-level const, e.g.
+             * `T *const m_field;`) cannot be assigned in C even from
+             * a constructor body — N4659 §15.6.2 [class.base.init]
+             * permits the in-class initializer in C++, but our C
+             * lowering of mem-initialisers becomes plain assignment.
+             * Emit the same cast trick used for mutable so cc accepts
+             * the ctor's writes to const fields. */
             if (lhs->kind == ND_IDENT && lhs->ident.implicit_this &&
-                lhs->ident.resolved_decl &&
-                lhs->ident.resolved_decl->is_mutable) {
-                found_mut = true;
-                leaf_ty = lhs->ident.resolved_decl->type;
+                lhs->ident.resolved_decl) {
+                Declaration *fd = lhs->ident.resolved_decl;
+                if (fd->is_mutable ||
+                    (fd->type && fd->type->is_const)) {
+                    need_cast = true;
+                    leaf_ty = fd->type;
+                }
             } else if (lhs->kind == ND_MEMBER) {
-                /* Walk the chain; check leaf + any ancestor field. */
+                /* Walk the chain; mutable anywhere or top-level const
+                 * on the leaf authorise the cast at the leaf. */
                 Node *cur = lhs;
                 while (cur && cur->kind == ND_MEMBER) {
                     Type *ot = cur->member.obj ? cur->member.obj->resolved_type : NULL;
@@ -3366,23 +3377,27 @@ static void emit_expr(Node *n) {
                         lookup_in_scope(ot->class_region,
                                         cur->member.member->loc,
                                         cur->member.member->len) : NULL;
-                    if (fd && fd->is_mutable) {
-                        found_mut = true;
+                    if (fd && (fd->is_mutable ||
+                               (cur == lhs && fd->type && fd->type->is_const))) {
+                        need_cast = true;
                         if (cur == lhs && fd->type) leaf_ty = fd->type;
                         break;
                     }
                     cur = cur->member.obj;
                 }
                 if (!leaf_ty) leaf_ty = lhs->resolved_type;
-                /* Also check this->… reaching a mutable via implicit_this. */
-                if (!found_mut && cur && cur->kind == ND_IDENT &&
+                if (!need_cast && cur && cur->kind == ND_IDENT &&
                     cur->ident.implicit_this && cur->ident.resolved_decl &&
                     cur->ident.resolved_decl->is_mutable)
-                    found_mut = true;
+                    need_cast = true;
             }
-            if (found_mut && leaf_ty) {
+            if (need_cast && leaf_ty) {
+                /* Strip top-level const so the cast target is
+                 * assignable after deref. */
+                Type stripped = *leaf_ty;
+                stripped.is_const = false;
                 fputs("(*(", stdout);
-                emit_type(leaf_ty);
+                emit_type(&stripped);
                 fputs("*)&(", stdout);
                 emit_expr(n->binary.lhs);
                 fputs(") = ", stdout);
@@ -7623,10 +7638,38 @@ static void emit_ctor_mem_init_one(Node *func, Node *m) {
              * are left default-initialized (= uninitialized) per C
              * semantics. */
             if (found && found->nargs >= 1) {
+                /* N4659 §15.6.2 [class.base.init]/9: a mem-initializer
+                 * initialises (not assigns to) the named member, which
+                 * is why C++ permits initialising a const data member
+                 * via the mem-init list. Our C lowering becomes plain
+                 * assignment, which cc rejects for top-level-const
+                 * fields. Cast away const at the LHS — same shape as
+                 * the mutable/const handling in ND_ASSIGN. */
+                bool need_cast = mty->is_const;
                 emit_indent();
-                fprintf(stdout, "this->%.*s = ",
-                        m->var_decl.name->len, m->var_decl.name->loc);
+                if (need_cast) {
+                    /* Strip the top-level const from the cast type
+                     * itself: (T const*) preserves outer const so
+                     * deref still yields const T; we want (T*) so
+                     * the assignment target is non-const. */
+                    Type stripped = *mty;
+                    stripped.is_const = false;
+                    fputs("*(", stdout); emit_type(&stripped);
+                    fprintf(stdout, "*)&this->%.*s = ",
+                            m->var_decl.name->len, m->var_decl.name->loc);
+                } else {
+                    fprintf(stdout, "this->%.*s = ",
+                            m->var_decl.name->len, m->var_decl.name->loc);
+                }
+                /* Reference field (lowered to T*): the RHS pointer
+                 * goes in directly; suppress the ND_IDENT ref-param
+                 * auto-deref that would emit (*policy). N4659 §11.3.2
+                 * [dcl.ref]/4 — references must be initialised; we
+                 * model that by storing the pointer. */
+                bool saved = g_suppress_ref_deref;
+                if (ty_is_ref(mty)) g_suppress_ref_deref = true;
                 emit_expr(found->args[0]);
+                g_suppress_ref_deref = saved;
                 fputs(";\n", stdout);
             }
         }
