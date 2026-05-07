@@ -6132,8 +6132,13 @@ static void emit_stmt(Node *n) {
                 lbl = "__SF_epilogue";
             }
             if (thr->throw_.is_rethrow) {
+                /* Bare 'throw;' inside a catch — re-propagate the
+                 * currently-handled exception. The TLS slot still
+                 * holds it (catch-clear runs only on fall-through
+                 * out of the handler body). */
                 fprintf(stdout,
-                        "do { __SF_unwind = __SF_UNWIND_THROW; "
+                        "do { __sf_exc_state.state = __SF_UNWIND_THROW; "
+                        "__SF_unwind = __SF_UNWIND_THROW; "
                         "goto %s; } while (0);\n",
                         lbl);
             } else {
@@ -6146,6 +6151,31 @@ static void emit_stmt(Node *n) {
         if (n->expr_stmt.expr)
             emit_expr(n->expr_stmt.expr);
         fputs(";\n", stdout);
+        /* Phase 2 slice 5: cross-function throw propagation. After
+         * any potentially-throwing statement, check the unwind
+         * state and chain to the innermost handler / cleanup label.
+         * Conservatively emitted whenever the function has the
+         * unwind machinery — most expr-stmts contain a call which
+         * could itself throw, and even a non-call statement is a
+         * cheap branch to skip. The noexcept-inference phase
+         * (phase 3+ per docs/exceptions.md) trims this back to
+         * call sites whose callee is provably-throwing. */
+        if (g_cf.func_has_cleanups) {
+            bool in_try = false;
+            int target = find_throw_target_from(g_cf.nlive, &in_try);
+            char buf[32];
+            const char *lbl;
+            if (target >= 0) {
+                snprintf(buf, sizeof(buf),
+                         in_try ? "__SF_try_%d_handler" : "__SF_cleanup_%d",
+                         target);
+                lbl = buf;
+            } else {
+                lbl = "__SF_epilogue";
+            }
+            emit_indent();
+            fprintf(stdout, "__SF_CHAIN_THROW(%s);\n", lbl);
+        }
         return;
     case ND_NULL_STMT:
         fputs(";\n", stdout);
@@ -7052,10 +7082,14 @@ static void emit_stmt(Node *n) {
                 emit_type(h->handler.param->param.ty);
                 fputs(")(uintptr_t)__sf_exc_state.exc_obj;\n", stdout);
             }
-            /* Mark exception caught — clears the unwind state so
-             * surrounding chain emissions don't re-propagate. */
+            /* Mark exception caught — clear BOTH the function-local
+             * __SF_unwind and the TLS __sf_exc_state.state so
+             * surrounding chain emissions don't re-propagate and a
+             * subsequent call doesn't see stale THROW state. */
             emit_indent();
             fputs("__SF_unwind = __SF_UNWIND_NONE;\n", stdout);
+            emit_indent();
+            fputs("__sf_exc_state.state = __SF_UNWIND_NONE;\n", stdout);
             /* Handler body. */
             if (h->handler.body) emit_stmt(h->handler.body);
             emit_indent();
@@ -8862,8 +8896,16 @@ static void emit_prelude(void) {
     fputs("#define __SF_CHAIN_CONT(lbl) "
           "do { if (__SF_unwind == __SF_UNWIND_CONT)   goto lbl; } while (0)\n",
           stdout);
+    /* __SF_CHAIN_THROW reads the TLS slot, not the function-local
+     * __SF_unwind. The other CHAIN macros above are intra-function
+     * (return/break/cont don't cross call boundaries), but
+     * exception propagation must survive a function call: the
+     * callee's local __SF_unwind is invisible to the caller, so the
+     * cross-function handshake rides on __sf_exc_state.state.
+     * __SF_THROW_PRIM keeps both in sync. */
     fputs("#define __SF_CHAIN_THROW(lbl) "
-          "do { if (__SF_unwind == __SF_UNWIND_THROW)  goto lbl; } while (0)\n",
+          "do { if (__sf_exc_state.state == __SF_UNWIND_THROW) goto lbl; } "
+          "while (0)\n",
           stdout);
 
     /* Exception-handling runtime — see docs/exceptions.md (TLS
@@ -8933,6 +8975,7 @@ static void emit_prelude(void) {
           "do { __sf_exc_state.exc_obj = (void *)(uintptr_t)(val); "
           "__sf_exc_state.exc_type = (ti); "
           "__sf_exc_state.exc_dtor = 0; "
+          "__sf_exc_state.state = __SF_UNWIND_THROW; "
           "__SF_unwind = __SF_UNWIND_THROW; "
           "goto lbl; } while (0)\n",
           stdout);
