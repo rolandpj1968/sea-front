@@ -92,6 +92,13 @@ static bool g_current_method_is_static = false;
  * resolution / const-qualification). */
 static Node *g_tu = NULL;
 
+/* Active lambda function — N4659 §8.1.5 [expr.prim.lambda]. Set by
+ * emit_func_def for capturing-lambda function bodies (func.is_lambda_fn).
+ * emit_ident consults g_current_lambda_fn->func.captures and rewrites
+ * matching identifiers to '__self->name' (by-value) or '*__self->name'
+ * (by-ref). NULL outside lambda bodies. */
+static Node *g_current_lambda_fn = NULL;
+
 /* Reference-parameter tracking — N4659 §11.3.2 [dcl.ref].
  * C has no references; we lower T& to T* in the C signature.
  * When the body uses a ref-param as a value, codegen must deref it.
@@ -2831,6 +2838,35 @@ static void emit_expr(Node *n) {
     case ND_NULLPTR:
         fputs("((void*)0)", stdout);
         return;
+    case ND_LAMBDA: {
+        /* Capturing lambda — N4659 §8.1.5 [expr.prim.lambda]. The
+         * lambda-expression is a struct rvalue of the closure type,
+         * built as a C99 compound literal (§6.5.2.5) with one element
+         * per capture. By-value captures emit the source identifier;
+         * by-ref captures emit '&ident' (closure member is T*).
+         *
+         * Captureless lambdas don't reach this case — the parser
+         * returns ND_IDENT for them so they decay to a fn pointer. */
+        Type *cty = n->lambda.closure_type;
+        fputs("(struct ", stdout);
+        if (cty) mangle_class_tag(cty);
+        fputs("){", stdout);
+        for (int i = 0; i < n->lambda.ncaptures; i++) {
+            Capture *c = &n->lambda.captures[i];
+            if (i > 0) fputs(", ", stdout);
+            if (c->is_this) {
+                /* [this] capture — closure stores Class*. Emit 'this'. */
+                fputs("this", stdout);
+            } else if (c->by_ref) {
+                fputc('&', stdout);
+                fprintf(stdout, "%.*s", c->name->len, c->name->loc);
+            } else {
+                fprintf(stdout, "%.*s", c->name->len, c->name->loc);
+            }
+        }
+        fputc('}', stdout);
+        return;
+    }
     case ND_STR:
         /* Emit the whole adjacent-string run. C also concatenates
          * adjacent string literals (C99 §6.4.5/4), so emitting them
@@ -2843,6 +2879,31 @@ static void emit_expr(Node *n) {
         }
         return;
     case ND_IDENT:
+        /* Lambda capture rewrite — N4659 §8.1.5 [expr.prim.lambda].
+         * Inside a capturing-lambda body (g_current_lambda_fn set), an
+         * identifier whose name matches a capture is emitted as access
+         * through the closure pointer: '__self->x' for a by-value
+         * capture, '(*__self->x)' for by-ref (closure stores T*).
+         * The closure's __self parameter itself is emitted as-is. */
+        if (g_current_lambda_fn && n->ident.name) {
+            Token *nm = n->ident.name;
+            for (int i = 0; i < g_current_lambda_fn->func.ncaptures; i++) {
+                Capture *c = &g_current_lambda_fn->func.captures[i];
+                if (!c->name) continue;
+                if (c->name->len == nm->len &&
+                    memcmp(c->name->loc, nm->loc, nm->len) == 0) {
+                    if (c->by_ref) {
+                        fputs("(*__self->", stdout);
+                        fprintf(stdout, "%.*s", nm->len, nm->loc);
+                        fputs(")", stdout);
+                    } else {
+                        fputs("__self->", stdout);
+                        fprintf(stdout, "%.*s", nm->len, nm->loc);
+                    }
+                    return;
+                }
+            }
+        }
         /* SHORTCUT (ours, not the standard): gcc vec.h defines
          * 'extern vnull vNULL;' with a template conversion operator
          * (N4659 §16.3.2 [class.conv.fct]). In C there are no
@@ -3225,6 +3286,48 @@ static void emit_expr(Node *n) {
         if (n->codegen_temp_name) {
             fputs(n->codegen_temp_name, stdout);
             return;
+        }
+        /* Capturing-lambda call — N4659 §8.1.5/2 [expr.prim.lambda].
+         * The callee's resolved_type is a closure TY_STRUCT carrying
+         * a back-pointer to its synthesised __sf_lambda_<N> function
+         * (Type.lambda_fn). Dispatch as 'lambda_fn(&closure, args)'.
+         * Checked before the generic operator() dispatch so closure
+         * types short-circuit out without overload resolution. */
+        {
+            Node *cc = n->call.callee;
+            Type *ct = cc ? cc->resolved_type : NULL;
+            if (ty_is_ref(ct)) ct = ct->base;
+            if (ct && ct->kind == TY_STRUCT && ct->lambda_fn) {
+                Node *lf = ct->lambda_fn;
+                /* Match the def-site mangled name. The lambda fn has a
+                 * struct-pointer __self param so the free-fn overload
+                 * detection adds a '_p_..._pe_' suffix at the def site;
+                 * emit_free_func_symbol with the same params produces
+                 * the same bytes here. Lambda fns are bounded to
+                 * FFSIG_MAX_PARAMS in practice — overflow falls back
+                 * to bare-name emit (same shape as captureless). */
+                Type *pty[16];
+                int   np = lf->func.nparams;
+                if (np > 16) np = 0;
+                for (int i = 0; i < np; i++)
+                    pty[i] = lf->func.params[i]->param.ty;
+                emit_free_func_symbol(lf->func.name, NULL,
+                                       /*c_linkage=*/false, pty, np);
+                fputc('(', stdout);
+                if (is_addressable_lvalue(cc)) {
+                    emit_addrof_for_this(cc);
+                } else {
+                    fputs("&(", stdout);
+                    emit_expr(cc);
+                    fputc(')', stdout);
+                }
+                for (int i = 0; i < n->call.nargs; i++) {
+                    fputs(", ", stdout);
+                    emit_expr(n->call.args[i]);
+                }
+                fputc(')', stdout);
+                return;
+            }
         }
         /* 'obj(args)' where obj is a class value with operator() →
          * dispatch to the class's operator() method. N4659 §16.5
@@ -7221,13 +7324,16 @@ static void emit_func_def(Node *n) {
     emit_source_comment(n->tok);
     cf_begin_function(n);
     Type *saved_ret = g_current_func_ret_ty;
+    Node *saved_lam = g_current_lambda_fn;
     g_current_func_ret_ty = n->func.ret_ty;
+    if (n->func.is_lambda_fn) g_current_lambda_fn = n;
     emit_storage_flags_for_def(n->func.storage_flags);
     emit_free_func_header(n->func.ret_ty, n->func.name,
                           n->func.params, n->func.nparams, n->func.is_variadic);
     fputc(' ', stdout);
     emit_func_body(n);
     g_current_func_ret_ty = saved_ret;
+    g_current_lambda_fn   = saved_lam;
 }
 
 /* Compute the mangled suffix for an operator method from its token.

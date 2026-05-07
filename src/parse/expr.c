@@ -390,27 +390,140 @@ static Node *primary_expr(Parser *p) {
                         fd->func.nparams = nparams;
                         fd->func.body = body;
                         fd->func.body_start_pos = -1;
-                        /* Push to parser's lambda list — appended to
-                         * the TU at translation-unit assembly. */
-                        if (p->lambda_count == p->lambda_cap) {
+                        /* Captureless: lambda-expression decays
+                         * directly to a fn pointer (§8.1.5/6).
+                         * Return ND_IDENT naming the synthesised
+                         * fn — auto deduction does the decay.
+                         *
+                         * Capturing: build the closure ND_CLASS_DEF
+                         * (struct holding T for by-value captures,
+                         * T* for by-ref) and a __self parameter at
+                         * fd->func.params[0]; the lambda-expression
+                         * is then a struct rvalue of the closure
+                         * type. Default captures '[&]'/'[=]' and
+                         * '[this]' need a body walk / class context
+                         * not yet wired; bail to the skip+discard
+                         * fallback when we hit them. */
+                        Node *closure_cdef = NULL;
+                        Type *closure_type = NULL;
+                        if (ncaptures > 0 || default_kind != 0) {
+                            bool ok = (default_kind == 0);
+                            for (int i = 0; ok && i < ncaptures; i++) {
+                                if (captures[i].is_this) { ok = false; break; }
+                                Token *cn = captures[i].name;
+                                Declaration *d = lookup_unqualified(p,
+                                    cn->loc, cn->len);
+                                if (!d || !d->type) { ok = false; break; }
+                                captures[i].resolved_decl = d;
+                                captures[i].resolved_type = d->type;
+                            }
+                            if (!ok) {
+                                /* Drop the synthesised fd on the floor
+                                 * and emit a placeholder; caller will
+                                 * see ND_NULLPTR same as legacy. */
+                                return new_node(p, ND_NULLPTR, tok);
+                            }
+                            /* Synthesise closure tag '__sf_closure_<N>'
+                             * sharing N with the lambda fn so the pair
+                             * reads naturally in --emit-c output. */
+                            char cbuf[40];
+                            int  cn_len = snprintf(cbuf, sizeof(cbuf),
+                                "__sf_closure_%d", p->lambda_count);
+                            char *cstr = arena_alloc(p->arena, cn_len + 1);
+                            memcpy(cstr, cbuf, cn_len);
+                            cstr[cn_len] = '\0';
+                            Token *ctag = arena_alloc(p->arena, sizeof(*ctag));
+                            memset(ctag, 0, sizeof(*ctag));
+                            ctag->kind = TK_IDENT;
+                            ctag->loc  = cstr;
+                            ctag->len  = cn_len;
+                            ctag->file = tok->file;
+                            ctag->line = tok->line;
+                            ctag->col  = tok->col;
+                            closure_type      = new_type(p, TY_STRUCT);
+                            closure_type->tag = ctag;
+                            /* Member ND_VAR_DECLs — one per capture. */
+                            Node **mems = arena_alloc(p->arena,
+                                sizeof(*mems) * ncaptures);
+                            for (int i = 0; i < ncaptures; i++) {
+                                Type *mty;
+                                if (captures[i].by_ref) {
+                                    mty = new_type(p, TY_PTR);
+                                    mty->base = captures[i].resolved_type;
+                                } else {
+                                    mty = captures[i].resolved_type;
+                                }
+                                Node *m = new_node(p, ND_VAR_DECL,
+                                    captures[i].name);
+                                m->var_decl.name = captures[i].name;
+                                m->var_decl.ty   = mty;
+                                m->var_decl.init = NULL;
+                                mems[i] = m;
+                            }
+                            closure_cdef = new_class_def_node(p, ctag,
+                                mems, ncaptures, tok);
+                            closure_cdef->class_def.ty = closure_type;
+                            closure_type->class_def    = closure_cdef;
+                            closure_type->lambda_fn    = fd;
+                            fd->func.is_lambda_fn         = true;
+                            fd->func.closure_struct_type  = closure_type;
+                            fd->func.captures             = captures;
+                            fd->func.ncaptures            = ncaptures;
+                            /* Prepend __self parameter (closure*). */
+                            Type *self_ptr = new_type(p, TY_PTR);
+                            self_ptr->base = closure_type;
+                            Token *sn = arena_alloc(p->arena, sizeof(*sn));
+                            memset(sn, 0, sizeof(*sn));
+                            sn->kind = TK_IDENT;
+                            sn->loc  = "__self";
+                            sn->len  = 6;
+                            sn->file = tok->file;
+                            sn->line = tok->line;
+                            sn->col  = tok->col;
+                            Node *sp = new_node(p, ND_PARAM, tok);
+                            sp->kind        = ND_PARAM;
+                            sp->param.name  = sn;
+                            sp->param.ty    = self_ptr;
+                            Node **np = arena_alloc(p->arena,
+                                sizeof(*np) * (nparams + 1));
+                            np[0] = sp;
+                            for (int i = 0; i < nparams; i++)
+                                np[i + 1] = params[i];
+                            fd->func.params  = np;
+                            fd->func.nparams = nparams + 1;
+                        }
+                        /* Hoist closure (if any) and lambda fn to TU
+                         * top — closure first so its struct is visible
+                         * before the function that takes a pointer to
+                         * it. */
+                        int needed = closure_cdef ? 2 : 1;
+                        if (p->lambda_count + needed > p->lambda_cap) {
                             int ncap = p->lambda_cap ? p->lambda_cap * 2 : 8;
+                            while (p->lambda_count + needed > ncap) ncap *= 2;
                             Node **n2 = arena_alloc(p->arena,
                                 sizeof(*n2) * ncap);
                             if (p->lambda_decls)
                                 memcpy(n2, p->lambda_decls,
                                        sizeof(*n2) * p->lambda_count);
                             p->lambda_decls = n2;
-                            p->lambda_cap = ncap;
+                            p->lambda_cap   = ncap;
                         }
+                        if (closure_cdef)
+                            p->lambda_decls[p->lambda_count++] = closure_cdef;
                         p->lambda_decls[p->lambda_count++] = fd;
-                        /* Build a TY_FUNC for the lambda so the
-                         * lambda-expression's resolved_type is set at
-                         * parse time. Avoids needing the synthesized
-                         * function name to be visible in any
-                         * declarative region for sema lookup —
-                         * skipping that lets us keep the lambda parser
-                         * scope-free. Auto deduction then handles the
-                         * function-to-pointer decay. */
+                        if (closure_type) {
+                            Node *lam = new_node(p, ND_LAMBDA, tok);
+                            lam->lambda.func_def     = fd;
+                            lam->lambda.captures     = captures;
+                            lam->lambda.ncaptures    = ncaptures;
+                            lam->lambda.default_kind = default_kind;
+                            lam->lambda.closure_type = closure_type;
+                            lam->lambda.closure_tag  = closure_type->tag;
+                            lam->resolved_type       = closure_type;
+                            return lam;
+                        }
+                        /* Captureless: as before, return ND_IDENT
+                         * with TY_FUNC for fn-pointer decay. */
                         Type **pt = NULL;
                         if (nparams > 0) {
                             pt = arena_alloc(p->arena,
@@ -420,30 +533,10 @@ static Node *primary_expr(Parser *p) {
                         }
                         Type *fty = new_func_type(p, ret_ty, pt,
                                                    nparams, false);
-                        if (ncaptures == 0 && default_kind == 0) {
-                            /* Captureless: lambda-expression decays
-                             * directly to a fn pointer (§8.1.5/6).
-                             * Return ND_IDENT naming the synthesised
-                             * fn — auto deduction does the decay. */
-                            Node *ref = new_node(p, ND_IDENT, name_tok);
-                            ref->ident.name     = name_tok;
-                            ref->resolved_type  = fty;
-                            return ref;
-                        }
-                        /* Capturing: return ND_LAMBDA. Sema (later)
-                         * builds closure_type from captures, prepends
-                         * a __self param to fd, and rewrites body
-                         * references to captured names. Emit produces
-                         * a struct rvalue at this expression position
-                         * and rewrites calls to dispatch through fd. */
-                        Node *lam = new_node(p, ND_LAMBDA, tok);
-                        lam->lambda.func_def     = fd;
-                        lam->lambda.captures     = captures;
-                        lam->lambda.ncaptures    = ncaptures;
-                        lam->lambda.default_kind = default_kind;
-                        lam->lambda.closure_type = NULL;
-                        lam->lambda.closure_tag  = NULL;
-                        return lam;
+                        Node *ref = new_node(p, ND_IDENT, name_tok);
+                        ref->ident.name     = name_tok;
+                        ref->resolved_type  = fty;
+                        return ref;
                     }
                 }
             }

@@ -722,6 +722,18 @@ struct Node {
             int body_start_pos;
             int body_end_pos;
             DeclarativeRegion *deferred_class_region;  /* class scope to push at replay */
+            /* Lambda lowering — N4659 §8.1.5 [expr.prim.lambda].
+             * Captureless lambdas use the existing path (this fn is
+             * just a normal free function). For capturing lambdas, the
+             * parser sets is_lambda_fn = true, prepends a __self
+             * parameter (a pointer to closure_struct_type) at index 0
+             * of params[], and emit looks at captures on the back-
+             * pointed ND_LAMBDA expression to translate captured-name
+             * references in the body to '__self->name' / '*__self->name'. */
+            bool             is_lambda_fn;
+            Type            *closure_struct_type;  /* the closure TY_STRUCT, NULL otherwise */
+            struct Capture  *captures;             /* same array as on the ND_LAMBDA */
+            int              ncaptures;
         } func;
 
         /* ND_LAMBDA — N4659 §8.1.5 [expr.prim.lambda].
@@ -1046,6 +1058,15 @@ struct Type {
      * emitting out-of-class ctor/dtor definitions whose body needs
      * to chain into member ctors. NULL for forward-declared types. */
     Node *class_def;
+
+    /* Lambda closure marker — N4659 §8.1.5 [expr.prim.lambda].
+     * For closure TY_STRUCTs synthesised at lambda parse time,
+     * lambda_fn points to the synthesised __sf_lambda_<N> ND_FUNC_DEF
+     * whose first parameter is a pointer to this closure type. ND_CALL
+     * with a callee whose resolved_type is a closure (lambda_fn != NULL)
+     * dispatches via 'lambda_fn(&closure, args)'. NULL for non-closure
+     * struct types. */
+    Node *lambda_fn;
 
     /* Template instantiation metadata.
      *
