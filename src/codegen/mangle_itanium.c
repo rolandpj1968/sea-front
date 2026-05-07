@@ -198,6 +198,61 @@ static bool try_emit_prefix_sub(ItanCtx *c, Type *ty) {
  * slot per namespace level. */
 static Type g_ns_prefix_slots[ITAN_MAX_NS];
 
+static void emit_type(ItanCtx *c, Type *ty);
+
+/* Stable storage for "bare name" Type slots — a template-id like
+ * `vec<int>` pushes both the bare name `vec` (n_template_args=0)
+ * and the full template-id (n_template_args=1) as distinct
+ * substitution candidates per Itanium ABI §5.1.6.7 [mangle.template-
+ * id]. The bare-name Type needs a stable pointer for the structural-
+ * eq lookup; one slot per static buffer entry suffices since each
+ * call only pushes one bare-name. */
+static Type g_bare_name_slots[ITAN_MAX_SUBS];
+
+/* Emit the template-arg list `I<args>E` and the bare-name push that
+ * precedes it. Caller has already emitted the source-name. */
+static void emit_template_args(ItanCtx *c, Type *ty) {
+    /* Push the bare-name Type (same tag, NO template args) so a
+     * future template-id with the same name but different args
+     * reuses S_ for the prefix. §5.1.6.5. */
+    int slot = c->nsubs;
+    if (slot >= 0 && slot < ITAN_MAX_SUBS) {
+        g_bare_name_slots[slot] = *ty;
+        g_bare_name_slots[slot].n_template_args = 0;
+        g_bare_name_slots[slot].template_args   = NULL;
+        ctx_push(c, &g_bare_name_slots[slot]);
+    }
+    fputc('I', stdout);
+    for (int i = 0; i < ty->n_template_args; i++)
+        emit_type(c, ty->template_args[i]);
+    fputc('E', stdout);
+    /* The full template-id is itself a sub candidate; caller pushes
+     * the original ty after returning. */
+}
+
+/* Emit the unqualified part of a class/union/enum name — source-
+ * name, plus template-args if the type carries them.
+ *
+ * For template-id types, the BARE NAME (n_template_args=0) is its
+ * own substitution candidate per §5.1.6.5. If a previous template-id
+ * with the same name already pushed the bare name, emit a back-
+ * reference instead of re-emitting the source-name. Pattern from
+ * Itanium ABI §5.1.6.7: `vec<int>, vec<double>` mangles as
+ * `3vecIiES_IdE` — the second occurrence uses S_ for the `vec` prefix. */
+static void emit_unqualified_name(ItanCtx *c, Type *ty) {
+    if (ty->n_template_args > 0) {
+        /* Synthesize the bare-name view for sub lookup. */
+        Type bare = *ty;
+        bare.n_template_args = 0;
+        bare.template_args   = NULL;
+        if (!ctx_try_emit_sub(c, &bare))
+            emit_source_name(ty->tag);
+        emit_template_args(c, ty);
+    } else {
+        emit_source_name(ty->tag);
+    }
+}
+
 /* Emit the full TY_STRUCT/UNION/ENUM name, with nested-name wrapping
  * if there are namespace qualifiers. Pushes intermediate prefixes
  * onto the sub table per §5.1.6.5 so future references back-ref. */
@@ -205,54 +260,36 @@ static void emit_class_or_enum_name(ItanCtx *c, Type *ty) {
     NsChain chain;
     collect_namespace_chain(ty, &chain);
 
-    /* Outermost first (chain is innermost-first; iterate reversed). */
-    /* Reverse into out_outer for clarity. */
     Token *outer[ITAN_MAX_NS];
     for (int i = 0; i < chain.n; i++)
         outer[i] = chain.names[chain.n - 1 - i];
 
     if (chain.n == 0) {
-        /* Unscoped — just <source-name>. §5.1.6.4. */
-        emit_source_name(ty->tag);
+        /* Unscoped — just <unqualified-name>. §5.1.6.4. */
+        emit_unqualified_name(c, ty);
         return;
     }
 
     /* Nested-name N...E. */
     fputc('N', stdout);
 
-    /* Walk outermost → innermost emitting each prefix. The first
-     * namespace gets the St shortcut if it's "std"; later prefixes
-     * just emit source-name. After each prefix is emitted, push a
-     * synthetic Type marker so future references can short-cut. */
     int start = 0;
     if (tok_is_std(outer[0])) {
         fputs("St", stdout);
-        /* St doesn't go on the sub table itself (standard subs are
-         * not added per §5.1.6.5). */
         start = 1;
     }
 
     for (int i = start; i < chain.n; i++) {
-        /* Try sub for the prefix-up-to-here. We use a synthetic
-         * Type slot keyed by the namespace token's loc; structural
-         * comparison would otherwise rebuild the same string. */
         Type *slot = &g_ns_prefix_slots[i];
         slot->kind = TY_STRUCT;
         slot->tag  = outer[i];
         if (try_emit_prefix_sub(c, slot)) {
-            /* Already in table — just shortcut and we're done with
-             * the namespace portion. Continue from i+1 for any
-             * deeper prefix. */
-            /* For Stage 2 we don't yet handle deeper prefixes
-             * after a sub hit; the simple case is "all of the
-             * namespace prefix back-refs to one slot". */
             start = i + 1;
-            /* Re-emit the source-names from start onwards. */
             for (int j = start; j < chain.n; j++) {
                 emit_source_name(outer[j]);
                 ctx_push(c, &g_ns_prefix_slots[j]);
             }
-            emit_source_name(ty->tag);
+            emit_unqualified_name(c, ty);
             fputc('E', stdout);
             return;
         }
@@ -260,11 +297,7 @@ static void emit_class_or_enum_name(ItanCtx *c, Type *ty) {
         ctx_push(c, slot);
     }
 
-    /* Class name as the unqualified terminal. Push the FULL class
-     * Type as a sub candidate. */
-    emit_source_name(ty->tag);
-    /* The class itself is pushed by the caller (emit_type's
-     * TY_STRUCT branch), not here, to keep the push-once invariant. */
+    emit_unqualified_name(c, ty);
     fputc('E', stdout);
 }
 

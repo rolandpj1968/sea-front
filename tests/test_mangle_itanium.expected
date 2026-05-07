@@ -39,6 +39,11 @@ m_global_T_foo_T_ptr_T_ptr: _ZN1T3fooEPS_S0_
 m_global_T_foo_constT_ptr_x2_T_ptr: _ZN1T3fooEPKS_S1_PS_
 m_global_T_foo_Tp_Tpp_Tp_Tpp: _ZN1T3fooEPS_PS0_S0_S1_
 m_global_T_foo_ip_Tp_ip_Tp_ip: _ZN1T3fooEPiPS_S0_S1_S0_
+class_vec_int: 3vecIiE
+p_vec_int: 3vecIiE
+p_vec_int_x2: 3vecIiES0_
+p_vec_int_dbl_int: 3vecIiES_IdES0_
+p_vec_int_ptr: P3vecIiE
 c_global_T_void: _ZN1TC1Ev
 c_global_T_int: _ZN1TC1Ei
 c_std_T_void: _ZNSt1TC1Ev

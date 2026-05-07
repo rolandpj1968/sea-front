@@ -44,6 +44,10 @@ p_int_ptr_ptr|int**|PPi
 p_int_ptr_x3_const_int_ptr|int*, int*, int*, const int*|PiS_S_PKi
 p_int_array5_decays|int[5]|Pi
 p_void||v
+p_vec_int|vec<int>|3vecIiE
+p_vec_int_x2|vec<int>, vec<int>|3vecIiES0_
+p_vec_int_dbl_int|vec<int>, vec<double>, vec<int>|3vecIiES_IdES0_
+p_vec_int_ptr|vec<int>*|P3vecIiE
 '
 
 # Whole-symbol fixtures — sea-front emitted `_Z…`, gcc-via-source
@@ -86,7 +90,13 @@ echo "$PAIRS" | grep . | while IFS='|' read -r label cpp expected; do
     if [ -z "$cpp" ]; then
         printf 'void f(){}\n' > "$src"
     else
-        printf 'void f(%s){}\n' "$cpp" > "$src"
+        # Prefix template declaration when the cpp uses `vec<…>` so
+        # gcc has the type. Cheap detection — fixtures only use vec.
+        if printf '%s' "$cpp" | grep -q 'vec<'; then
+            printf 'template<typename T> struct vec {};\nvoid f(%s){}\n' "$cpp" > "$src"
+        else
+            printf 'void f(%s){}\n' "$cpp" > "$src"
+        fi
     fi
     if ! g++ -c -fno-rtti -fno-exceptions -w -o "$obj" "$src" 2>"$TMPDIR/$label.err"; then
         echo "test_mangle_itanium: g++ failed to compile fixture '$label':"

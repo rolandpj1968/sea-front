@@ -290,6 +290,49 @@ int main(void) {
             &t_class_T_global, &tok_foo, p, 5, false);
     }
 
+    /* ---------- Stage 4 fixtures: template-id encoding ---------- */
+    {
+        /* `vec<int>` (global). Type carries n_template_args=1,
+         * template_args=[int]. Class scope is the global region. */
+        static char tok_text_vec[] = "vec";
+        static Token tok_vec = { .kind = TK_IDENT, .loc = tok_text_vec, .len = 3 };
+        static DeclarativeRegion reg_class_vec = { .kind = REGION_CLASS };
+        static Type t_vec_int_targ = { .kind = TY_INT };
+        static Type *vec_int_targs[] = { &t_vec_int_targ };
+        static Type t_vec_int = { .kind = TY_STRUCT, .tag = &tok_vec,
+                                   .template_args = vec_int_targs,
+                                   .n_template_args = 1 };
+        reg_class_vec.enclosing = &reg_global;
+        reg_class_vec.owner_type = &t_vec_int;
+        t_vec_int.class_region = &reg_class_vec;
+        run_fixture_type("class_vec_int", &t_vec_int);
+        Type *p1[] = { &t_vec_int };
+        run_fixture_params("p_vec_int", p1, 1);
+
+        /* `vec<int>, vec<int>` — second is sub. */
+        static Type t_vec_int2 = { .kind = TY_STRUCT, .tag = &tok_vec,
+                                    .template_args = vec_int_targs,
+                                    .n_template_args = 1,
+                                    .class_region = &reg_class_vec };
+        Type *p2[] = { &t_vec_int, &t_vec_int2 };
+        run_fixture_params("p_vec_int_x2", p2, 2);
+
+        /* `vec<int>, vec<double>, vec<int>` — distinct args. */
+        static Type t_double = { .kind = TY_DOUBLE };
+        static Type *vec_dbl_targs[] = { &t_double };
+        static Type t_vec_dbl = { .kind = TY_STRUCT, .tag = &tok_vec,
+                                   .template_args = vec_dbl_targs,
+                                   .n_template_args = 1,
+                                   .class_region = &reg_class_vec };
+        Type *p3[] = { &t_vec_int, &t_vec_dbl, &t_vec_int2 };
+        run_fixture_params("p_vec_int_dbl_int", p3, 3);
+
+        /* `vec<int>*` */
+        static Type t_vec_int_ptr = { .kind = TY_PTR, .base = &t_vec_int };
+        Type *p4[] = { &t_vec_int_ptr };
+        run_fixture_params("p_vec_int_ptr", p4, 1);
+    }
+
     /* ---------- Stage 5 fixtures: ctors / dtors ---------- */
     run_fixture_ctor("c_global_T_void", &t_class_T_global, NULL, 0);
     run_fixture_ctor("c_global_T_int",  &t_class_T_global,
