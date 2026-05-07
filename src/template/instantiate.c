@@ -1862,6 +1862,61 @@ static Type *build_func_type_from_node(Node *func, Arena *arena) {
  * The SubstMap is pre-seeded with Outer's param→arg bindings before
  * the inner head's bindings are added. N4659 §17.5.2 [temp.mem]/2.
  */
+/* Build the inst_ty's template_args array.
+ *
+ * Single source of truth for "what types fill an instantiated template
+ * type's template_args slot, and what does each slot know about
+ * itself." Two responsibilities, deliberately fused so neither can
+ * silently drift:
+ *
+ *   1. Per-position synthesis. For each `i` in [0, max(nargs, nparams)),
+ *      either take the usage arg (i < nargs) or the SubstMap default
+ *      (i in [nargs, nparams)).
+ *
+ *   2. NTTP type attribution. When a synthesized arg is TY_NTTP_VALUE,
+ *      stash the corresponding template parameter's declared type
+ *      (from `tmpl->template_decl.params[i]->param.ty`) onto the
+ *      arg's `nttp_decl_type` field. Mangling reads this directly so
+ *      it doesn't need to text-match the literal.
+ *
+ * Replaces the duplicate per-arg loops at the inst_ty build site;
+ * adding new attribution here keeps both the explicit-arg and
+ * default-arg paths in sync.
+ */
+static void build_inst_template_args(Type *inst_ty, Node *tmpl,
+                                      Node *template_id,
+                                      SubstMap *map, int outer_nparams,
+                                      Arena *arena, Node *tu) {
+    int nargs   = template_id->template_id.nargs;
+    int nparams = tmpl ? tmpl->template_decl.nparams : 0;
+    int n = nargs > nparams ? nargs : nparams;
+    if (n <= 0) return;
+
+    inst_ty->template_args = arena_alloc(arena, n * sizeof(Type *));
+    inst_ty->n_template_args = n;
+
+    for (int i = 0; i < n; i++) {
+        Type *t = NULL;
+        if (i < nargs) {
+            t = template_arg_to_arg_type_resolved(
+                template_id->template_id.args[i], arena, tu);
+        } else {
+            int mi = outer_nparams + i;
+            t = (mi < map->nentries) ? map->entries[mi].concrete_type
+                                      : NULL;
+        }
+        /* NTTP attribution — propagate the parameter's declared type
+         * onto the arg Type so mangling reads it from structured data. */
+        if (t && t->kind == TY_NTTP_VALUE && tmpl &&
+            i < tmpl->template_decl.nparams) {
+            Node *param = tmpl->template_decl.params[i];
+            if (param && param->kind == ND_PARAM && param->param.ty)
+                t->nttp_decl_type = param->param.ty;
+        }
+        inst_ty->template_args[i] = t;
+    }
+}
+
 static Node *instantiate_one(Node *tmpl, Node *template_id,
                               Arena *arena, Node *tu, TmplRegistry *reg,
                               Type *member_owner,
@@ -2047,36 +2102,13 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
         else
             inst_ty->kind = TY_STRUCT;
         inst_ty->tag = template_id->template_id.name;
-        /* Add template args early for mangling */
-        int n = template_id->template_id.nargs;
-        if (n > 0) {
-            inst_ty->template_args = arena_alloc(arena, n * sizeof(Type *));
-            inst_ty->n_template_args = n;
-            for (int i = 0; i < n; i++)
-                inst_ty->template_args[i] = template_arg_to_arg_type_resolved(
-                    template_id->template_id.args[i], arena, tu);
-        }
-        /* Default-args expansion: when the usage has fewer args than
-         * the inner template's params, fill the rest from the map.
-         * Skip the outer-seeded entries (they belong to the enclosing
-         * specialization's tag prefix, not this struct's own args).
-         * N4659 §17.6 [temp.arg] — default template args fill missing
-         * positions; outer params are NOT default args of the inner
-         * head. */
-        if (n < nparams) {
-            int new_n = nparams;
-            inst_ty->template_args = arena_alloc(arena,
-                new_n * sizeof(Type *));
-            inst_ty->n_template_args = new_n;
-            for (int i = 0; i < n; i++)
-                inst_ty->template_args[i] = template_arg_to_arg_type_resolved(
-                    template_id->template_id.args[i], arena, tu);
-            for (int i = n; i < new_n; i++) {
-                int mi = outer_nparams + i;
-                inst_ty->template_args[i] = (mi < map.nentries)
-                    ? map.entries[mi].concrete_type : NULL;
-            }
-        }
+        /* Build template_args. Filled to max(nargs, nparams) so default
+         * positions get their values from `map`. For each NTTP arg we
+         * also stash the parameter's declared type onto the resulting
+         * Type so the mangler emits Itanium L<type><value>E (or the
+         * human equivalent) from structured data, not text-matching. */
+        build_inst_template_args(inst_ty, tmpl, template_id,
+                                  &map, outer_nparams, arena, tu);
         /* Add the class name to the SubstMap so the injected-class-name
          * (bare 'Box' inside 'Box<T>' body) gets substituted to the
          * instantiated type during cloning. */

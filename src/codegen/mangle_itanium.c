@@ -433,34 +433,39 @@ static void emit_type(ItanCtx *c, Type *ty) {
     case TY_NTTP_VALUE: {
         /* Non-type template parameter literal — Itanium ABI §5.1.6.7
          * [mangle.template-id]: <expr-primary> ::= L <type> <value> E.
-         * Sea-front stashes the literal source text in `tag`. We
-         * detect a small set of common shapes (positive/negative
-         * integer literal, true/false, nullptr) and emit the
-         * matching Itanium form. Unrecognised shapes fall through
-         * to a placeholder — collisions there surface at link time. */
-        if (!ty->tag || ty->tag->len == 0) {
+         * The parameter's declared type was attached at instantiation
+         * time (see build_inst_template_args). Read it directly; no
+         * text-matching of the literal source. */
+        Type *dty = ty->nttp_decl_type;
+        const char *typecode = builtin_code(dty);
+        if (!typecode) {
+            /* Fallback when nttp_decl_type wasn't propagated — e.g.
+             * pointer-typed NTTPs (which currently aren't tracked).
+             * Emit `Li0E` to keep output Itanium-shaped; collisions
+             * surface at link time. */
             fputs("Li0E", stdout);
             return;
         }
-        const char *s = ty->tag->loc;
-        int n = ty->tag->len;
-        if (n == 4 && memcmp(s, "true", 4) == 0)  { fputs("Lb1E", stdout); return; }
-        if (n == 5 && memcmp(s, "false", 5) == 0) { fputs("Lb0E", stdout); return; }
-        if (n == 7 && memcmp(s, "nullptr", 7) == 0) { fputs("LDnE", stdout); return; }
-        bool neg = (n > 0 && s[0] == '-');
-        int start = neg ? 1 : 0;
-        bool all_digits = (n > start);
-        for (int i = start; i < n && all_digits; i++)
-            if (!(s[i] >= '0' && s[i] <= '9')) all_digits = false;
-        if (all_digits) {
-            fputs("Li", stdout);
-            if (neg) fputc('n', stdout);
+        const char *s = ty->tag ? ty->tag->loc : "";
+        int n = ty->tag ? ty->tag->len : 0;
+        fputc('L', stdout);
+        fputs(typecode, stdout);
+        if (dty && dty->kind == TY_BOOL) {
+            /* Source text is the C++ keyword `true` or `false`; map
+             * to 0/1 per Itanium ABI. Anything else (numeric literal
+             * coerced to bool — atypical) defaults to 1. */
+            if (n == 5 && memcmp(s, "false", 5) == 0)
+                fputc('0', stdout);
+            else
+                fputc('1', stdout);
+        } else {
+            /* Integer-typed NTTP — emit digits with `n` prefix for
+             * negative. Itanium ABI §5.1.6.7 [mangle.expr-primary]. */
+            int start = 0;
+            if (n > 0 && s[0] == '-') { fputc('n', stdout); start = 1; }
             for (int i = start; i < n; i++) fputc(s[i], stdout);
-            fputc('E', stdout);
-            return;
         }
-        /* Last-resort placeholder. */
-        fputs("Li0E", stdout);
+        fputc('E', stdout);
         return;
     }
     case TY_DEPENDENT:
@@ -516,16 +521,6 @@ static Type *normalize_param(Type *ty, int slot) {
 /* ------------------------------------------------------------------ */
 /* Public entry points                                                */
 /* ------------------------------------------------------------------ */
-
-/* The not-yet-implemented entries (Stages 2-5) keep aborting with
- * a clear message. */
-static void itan_unimpl(const char *what) {
-    fprintf(stderr,
-        "sea-front: --mangling=itanium not yet implemented (%s)\n"
-        "  See memory/project_itanium_mangling_slice.md for plan.\n",
-        what);
-    abort();
-}
 
 /* mangle_class_tag is no longer dispatched — see mangle.c comment.
  * Kept here as an unreachable abort to flag any future call site

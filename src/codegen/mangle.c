@@ -212,14 +212,12 @@ void emit_type_for_mangle(Type *ty) {
     /* Literal-valued NTTP placeholder (instantiate.c synthesizes
      * these from ND_NUM / ND_BOOL_LIT / etc. arg nodes). The tag
      * holds the literal token. Render character-by-character with
-     * non-symbol-friendly chars replaced by '_'. Common shapes —
-     * positive integer literals, 'true' / 'false', 'nullptr' — pass
-     * through unchanged. Less common shapes (char literals, string
-     * literals, signed-via-unary) get a deterministic but lossy
-     * encoding; collisions surface at link time as duplicate
-     * symbols, not as silent miscompiles.
-     * TODO(seafront#nttp-mangling-full): proper Itanium-style
-     * encoding (positive integer 'L<value>E', etc.). */
+     * non-symbol-friendly chars replaced by '_'. The human encoding
+     * doesn't need the parameter's declared type since it's
+     * grep-friendly text, not a structured ABI symbol — distinct
+     * literals already produce distinct identifiers. The Itanium
+     * path (mangle_itanium.c) reads ty->nttp_decl_type for the
+     * proper L<type><value>E encoding. */
     case TY_NTTP_VALUE:
         if (ty->tag && ty->tag->len > 0) {
             for (int i = 0; i < ty->tag->len; i++) {

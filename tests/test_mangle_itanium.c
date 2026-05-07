@@ -344,9 +344,11 @@ int main(void) {
         static char tok_text_neg7[] = "-7";
         static Token tok_42  = { .kind = TK_NUM, .loc = tok_text_42,   .len = 2 };
         static Token tok_neg7 = { .kind = TK_NUM, .loc = tok_text_neg7, .len = 2 };
-        static Type t_nttp_42  = { .kind = TY_NTTP_VALUE, .tag = &tok_42 };
-        static Type t_nttp_neg7 = { .kind = TY_NTTP_VALUE, .tag = &tok_neg7 };
         static Type t_int_arg = { .kind = TY_INT };
+        static Type t_nttp_42  = { .kind = TY_NTTP_VALUE, .tag = &tok_42,
+                                    .nttp_decl_type = &t_int_arg };
+        static Type t_nttp_neg7 = { .kind = TY_NTTP_VALUE, .tag = &tok_neg7,
+                                     .nttp_decl_type = &t_int_arg };
         static Type *ic_42_args[]  = { &t_int_arg, &t_nttp_42 };
         static Type *ic_neg_args[] = { &t_int_arg, &t_nttp_neg7 };
         static Type t_ic_42  = { .kind = TY_STRUCT, .tag = &tok_ic,
@@ -371,8 +373,11 @@ int main(void) {
         static char tok_text_false[] = "false";
         static Token tok_true  = { .kind = TK_KW_TRUE,  .loc = tok_text_true,  .len = 4 };
         static Token tok_false = { .kind = TK_KW_FALSE, .loc = tok_text_false, .len = 5 };
-        static Type t_nttp_true  = { .kind = TY_NTTP_VALUE, .tag = &tok_true };
-        static Type t_nttp_false = { .kind = TY_NTTP_VALUE, .tag = &tok_false };
+        static Type t_bool_arg = { .kind = TY_BOOL };
+        static Type t_nttp_true  = { .kind = TY_NTTP_VALUE, .tag = &tok_true,
+                                      .nttp_decl_type = &t_bool_arg };
+        static Type t_nttp_false = { .kind = TY_NTTP_VALUE, .tag = &tok_false,
+                                      .nttp_decl_type = &t_bool_arg };
         static Type *b_true_args[]  = { &t_nttp_true };
         static Type *b_false_args[] = { &t_nttp_false };
         static Type t_b_true  = { .kind = TY_STRUCT, .tag = &tok_b,

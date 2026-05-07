@@ -1143,6 +1143,20 @@ struct Type {
     Type **template_args;
     int    n_template_args;
 
+    /* TY_NTTP_VALUE: declared type of the non-type template parameter
+     * the literal binds to. Set when an instantiated template's args
+     * array is built — at that point the template definition's
+     * parameter list is in scope so the parameter's `.param.ty` can
+     * be propagated here. The mangler reads this to emit Itanium
+     * `L<type><value>E` (or the human equivalent) without inferring
+     * the type from the literal text.
+     *
+     * NULL on parse-time / collect-time TY_NTTP_VALUE Types (when no
+     * template definition is in scope yet). Such Types are replaced
+     * by canonical inst_ty entries via patch_all_types before
+     * mangling, so a NULL here at mangle time is a sea-front bug. */
+    Type *nttp_decl_type;
+
     /* TY_ENUM: enumerator body tokens for C emission.
      * enum_tokens points to the first token INSIDE the braces,
      * enum_ntokens is the count (NOT including '}'). Set during

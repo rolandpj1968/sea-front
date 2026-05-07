@@ -165,8 +165,5 @@ void itan_mangle_class_vtable_type(Type *class_type);
 void itan_mangle_class_vtable_instance(Type *class_type);
 void itan_emit_type_for_mangle(Type *ty);
 void itan_mangle_param_suffix(Type **param_types, int nparams);
-int itan_mangle_param_suffix_to_buf(Type **param_types, int nparams,
-                                     char *buf, int pos, int max);
-int itan_mangle_type_to_buf(Type *ty, char *buf, int pos, int max);
 
 #endif /* SF_CODEGEN_MANGLE_H */
