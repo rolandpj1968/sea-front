@@ -611,10 +611,29 @@ static Node *primary_expr(Parser *p) {
                         if (!ret_ty) ret_ty = deduce_lambda_return(p, body);
                         if (ret_ty) {
                         /* Synthesize a unique name token. The arena
-                         * holds the buffer; tokens reference it. */
-                        char buf[32];
-                        int n = snprintf(buf, sizeof(buf), "__sf_lambda_%d",
-                                         p->lambda_count);
+                         * holds the buffer; tokens reference it.
+                         *
+                         * Naming: '__sf_lambda_<enclosing>__<N>'
+                         * where <enclosing> is the immediately-
+                         * enclosing function's name (set by
+                         * parse_func_body) and <N> is per-enclosing-
+                         * function so adding a lambda elsewhere
+                         * doesn't shift this one's symbol. Outside
+                         * any function body (TU-scope initializer,
+                         * etc.) fall back to the global counter so
+                         * the symbol is still unique. */
+                        char buf[80];
+                        int  percount = p->cur_func_lambda_count;
+                        int  n;
+                        if (p->cur_func_name) {
+                            n = snprintf(buf, sizeof(buf),
+                                "__sf_lambda_%.*s__%d",
+                                p->cur_func_name->len,
+                                p->cur_func_name->loc, percount);
+                        } else {
+                            n = snprintf(buf, sizeof(buf),
+                                "__sf_lambda_%d", p->lambda_count);
+                        }
                         char *name_buf = arena_alloc(p->arena, n + 1);
                         memcpy(name_buf, buf, n);
                         name_buf[n] = '\0';
@@ -715,12 +734,20 @@ static Node *primary_expr(Parser *p) {
                                  * see ND_NULLPTR same as legacy. */
                                 return new_node(p, ND_NULLPTR, tok);
                             }
-                            /* Synthesise closure tag '__sf_closure_<N>'
-                             * sharing N with the lambda fn so the pair
-                             * reads naturally in --emit-c output. */
-                            char cbuf[40];
-                            int  cn_len = snprintf(cbuf, sizeof(cbuf),
-                                "__sf_closure_%d", p->lambda_count);
+                            /* Synthesise closure tag — pair with the
+                             * lambda fn name above so they read
+                             * naturally in --emit-c output. */
+                            char cbuf[80];
+                            int  cn_len;
+                            if (p->cur_func_name) {
+                                cn_len = snprintf(cbuf, sizeof(cbuf),
+                                    "__sf_closure_%.*s__%d",
+                                    p->cur_func_name->len,
+                                    p->cur_func_name->loc, percount);
+                            } else {
+                                cn_len = snprintf(cbuf, sizeof(cbuf),
+                                    "__sf_closure_%d", p->lambda_count);
+                            }
                             char *cstr = arena_alloc(p->arena, cn_len + 1);
                             memcpy(cstr, cbuf, cn_len);
                             cstr[cn_len] = '\0';
@@ -854,6 +881,12 @@ static Node *primary_expr(Parser *p) {
                                 p->lambda_decls[p->lambda_count++] = closure_cdef;
                             p->lambda_decls[p->lambda_count++] = fd;
                         }
+                        /* Bump the per-enclosing-fn counter so the
+                         * next lambda in this function gets a fresh
+                         * suffix. The global lambda_count was bumped
+                         * above (and is still used as a fallback when
+                         * cur_func_name is NULL). */
+                        if (p->cur_func_name) p->cur_func_lambda_count++;
                         if (closure_type) {
                             Node *lam = new_node(p, ND_LAMBDA, tok);
                             lam->lambda.func_def     = fd;

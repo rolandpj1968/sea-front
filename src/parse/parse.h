@@ -1318,6 +1318,16 @@ struct Parser {
     Node **lambda_decls;
     int lambda_count;
     int lambda_cap;
+    /* Per-enclosing-function counter and name for lambda-fn /
+     * closure-tag synthesis — N4659 §8.1.5 [expr.prim.lambda].
+     * Naming as '__sf_lambda_<enclosing>__<N>' keeps lambda symbols
+     * stable across edits to other functions (per-fn N doesn't
+     * shift) and self-documents the source location in --emit-c
+     * output. parse_func_body / parse_deferred_func_body save and
+     * set these around each function body. NULL/0 outside a
+     * function (top-level lambda in an initializer, etc.). */
+    Token *cur_func_name;
+    int    cur_func_lambda_count;
     bool split_shr;            /* true when a >> (TK_SHR) has been "split": the first >
                                 * was consumed, the second > is virtual. parser_peek()/
                                 * parser_at() return a synthetic TK_GT; parser_advance()

@@ -1123,6 +1123,14 @@ static void parse_func_body(Parser *p, Node *func) {
      * own REGION_BLOCK as a child. */
     region_push(p, REGION_PROTOTYPE, /*name=*/NULL);
     func->func.param_scope = p->region;
+    /* Lambda-naming context — see Parser.cur_func_name comment.
+     * Saved/restored across nested calls (parse_deferred_func_body,
+     * etc.) so lambda symbols pick up the immediately-enclosing
+     * function's name, not the outermost one. */
+    Token *saved_lam_name  = p->cur_func_name;
+    int    saved_lam_count = p->cur_func_lambda_count;
+    p->cur_func_name         = func->func.name;
+    p->cur_func_lambda_count = 0;
     for (int i = 0; i < func->func.nparams; i++) {
         Node *param = func->func.params[i];
         if (param->param.name)
@@ -1214,6 +1222,8 @@ static void parse_func_body(Parser *p, Node *func) {
 
     func->func.body = parse_compound_stmt(p);
     region_pop(p);  /* pop prototype scope */
+    p->cur_func_name         = saved_lam_name;
+    p->cur_func_lambda_count = saved_lam_count;
 }
 
 /*
