@@ -2840,13 +2840,17 @@ static void emit_expr(Node *n) {
         return;
     case ND_LAMBDA: {
         /* Capturing lambda — N4659 §8.1.5 [expr.prim.lambda]. The
-         * lambda-expression is a struct rvalue of the closure type,
-         * built as a C99 compound literal (§6.5.2.5) with one element
-         * per capture. By-value captures emit the source identifier;
-         * by-ref captures emit '&ident' (closure member is T*).
+         * lambda-expression evaluates to a value of the closure type
+         * (§8.1.5/2 — unique, unnamed non-union class), built here
+         * as a C99 compound literal (§6.5.2.5) with one initializer
+         * per capture per §8.1.5.2 [expr.prim.lambda.capture]: the
+         * source identifier for by-value, '&ident' for by-ref since
+         * the closure member is T*.
          *
          * Captureless lambdas don't reach this case — the parser
-         * returns ND_IDENT for them so they decay to a fn pointer. */
+         * returns ND_IDENT naming the synthesised fn directly so
+         * the §8.1.5/6 conversion-to-fn-pointer falls out of normal
+         * fn-to-ptr decay (no closure type emitted). */
         Type *cty = n->lambda.closure_type;
         fputs("(struct ", stdout);
         if (cty) mangle_class_tag(cty);
@@ -2879,12 +2883,15 @@ static void emit_expr(Node *n) {
         }
         return;
     case ND_IDENT:
-        /* Lambda capture rewrite — N4659 §8.1.5 [expr.prim.lambda].
-         * Inside a capturing-lambda body (g_current_lambda_fn set), an
-         * identifier whose name matches a capture is emitted as access
-         * through the closure pointer: '__self->x' for a by-value
-         * capture, '(*__self->x)' for by-ref (closure stores T*).
-         * The closure's __self parameter itself is emitted as-is. */
+        /* Lambda capture rewrite — N4659 §8.1.5.2 [expr.prim.lambda
+         * .capture]. Inside a capturing-lambda body
+         * (g_current_lambda_fn set), an identifier whose name matches
+         * a capture is emitted as access through the closure pointer:
+         * '__self->x' for a by-value capture (closure member is T —
+         * §8.1.5.2/15), '(*__self->x)' for by-ref (closure member is
+         * T*; the rebind models §8.1.5.2 reference-capture semantics
+         * in C, which has no native references). The closure's __self
+         * parameter itself is emitted as-is. */
         if (g_current_lambda_fn && n->ident.name) {
             Token *nm = n->ident.name;
             for (int i = 0; i < g_current_lambda_fn->func.ncaptures; i++) {
@@ -3287,9 +3294,12 @@ static void emit_expr(Node *n) {
             fputs(n->codegen_temp_name, stdout);
             return;
         }
-        /* Capturing-lambda call — N4659 §8.1.5/2 [expr.prim.lambda].
-         * The callee's resolved_type is a closure TY_STRUCT carrying
-         * a back-pointer to its synthesised __sf_lambda_<N> function
+        /* Capturing-lambda call — N4659 §8.1.5/3 [expr.prim.lambda].
+         * Invoking the closure invokes its function call operator;
+         * sea-front lowers that to a free fn taking the closure ptr
+         * as its first argument. The callee's resolved_type is a
+         * closure TY_STRUCT (§8.1.5/2) carrying a back-pointer to
+         * its synthesised __sf_lambda_<N> function
          * (Type.lambda_fn). Dispatch as 'lambda_fn(&closure, args)'.
          * Checked before the generic operator() dispatch so closure
          * types short-circuit out without overload resolution. */

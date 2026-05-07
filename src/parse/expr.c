@@ -252,12 +252,17 @@ static Node *primary_expr(Parser *p) {
          *
          * Captureless lambdas with an explicit trailing return type
          * lower to a synthesised free function '__sf_lambda_<N>' at
-         * TU scope; the expression evaluates to that name (decays to
-         * a fn pointer per §8.1.5/2). Capturing lambdas additionally
-         * synthesise a closure TY_STRUCT and return ND_LAMBDA — sema
-         * fills in the closure's members from the captures and adds
-         * a __self pointer parameter to the function. Init-captures
-         * (C++14 [var = expr]) still fall back to skip-and-discard.
+         * TU scope; the expression evaluates to that name and the
+         * closure has the §8.1.5/6 conversion to pointer-to-function
+         * (sea-front skips the intermediate closure type — there are
+         * no captures, so a bare ND_IDENT naming the fn is sound).
+         * Capturing lambdas: closure type per §8.1.5/2 (a unique,
+         * unnamed non-union class), members per §8.1.5.2 [expr.prim
+         * .lambda.capture]. Sema fills in the captured-var types
+         * (resolved against the enclosing scope) and the parser
+         * prepends a __self pointer parameter at index 0. Init-
+         * captures (C++14, [var = expr]) and '[this]' still fall
+         * back to skip-and-discard for now.
          */
         ParseState saved = parser_save(p);
         parser_advance(p);  /* consume [ */
@@ -442,7 +447,14 @@ static Node *primary_expr(Parser *p) {
                             ctag->col  = tok->col;
                             closure_type      = new_type(p, TY_STRUCT);
                             closure_type->tag = ctag;
-                            /* Member ND_VAR_DECLs — one per capture. */
+                            /* Member ND_VAR_DECLs — one per capture.
+                             * §8.1.5.2/12: by-value capture stores T
+                             * (a member with the captured entity's
+                             * referenced type); by-ref capture binds
+                             * the captured entity by reference. C has
+                             * no native references, so we model the
+                             * '&'-capture as T* and deref at access
+                             * (see emit_ident's lambda capture rewrite). */
                             Node **mems = arena_alloc(p->arena,
                                 sizeof(*mems) * ncaptures);
                             for (int i = 0; i < ncaptures; i++) {
