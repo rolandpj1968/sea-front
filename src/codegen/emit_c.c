@@ -3406,6 +3406,26 @@ static void emit_expr(Node *n) {
                 return;
             }
         }
+        /* Reference-returning function call used as lvalue —
+         * N4659 §6.10/4 [basic.lval]: a function call returning T& is
+         * an lvalue. Our C lowering emits the call as T*; the result
+         * site needs '*' to recover the lvalue for assignment. Without
+         * the wrap, `f() = x` and `f() += x` reach cc as `T* = ...`
+         * and fail "lvalue required as left operand of assignment".
+         * Already handled for method calls via mangle/emit-side ref
+         * tracking; this covers free-function ref-returns. */
+        {
+            Node *lhs = n->binary.lhs;
+            if (lhs && lhs->kind == ND_CALL && ty_is_ref(lhs->resolved_type) &&
+                !ty_is_ref(g_current_func_ret_ty)) {
+                fputs("((*", stdout);
+                emit_expr(lhs);
+                fprintf(stdout, ") %s ", binop_str(n->binary.op));
+                emit_expr(n->binary.rhs);
+                fputc(')', stdout);
+                return;
+            }
+        }
         fputc('(', stdout);
         emit_expr(n->binary.lhs);
         fprintf(stdout, " %s ", binop_str(n->binary.op));
