@@ -92,6 +92,9 @@ Mangler g_mangler_human = {
 
 Mangler *g_mangler = &g_mangler_human;
 
+/* Active scheme. CLI flag --mangling= sets this in main.c. */
+MangleKind g_mangle_kind = MANGLE_HUMAN;
+
 /* ------------------------------------------------------------------ */
 /* Framework — recursive walker that calls into the active vtable.    */
 /* ------------------------------------------------------------------ */
@@ -134,6 +137,7 @@ static void emit_namespace_chain(Type *class_type) {
  * emitted TY_PTR as just 'ptr' without recursing into the base,
  * losing T's type for any pointer-typed template arg. */
 void emit_type_for_mangle(Type *ty) {
+    if (g_mangle_kind == MANGLE_ITANIUM) { itan_emit_type_for_mangle(ty); return; }
     if (!ty) { fputs("unknown", stdout); return; }
     /* CV-qualifiers — N4659 §10.1.7.1 [dcl.type.cv].
      * Itanium encodes const as 'K', volatile as 'V'; we use
@@ -244,6 +248,8 @@ static int append_str(char *buf, int pos, int max, const char *s) {
     return pos;
 }
 int mangle_type_to_buf(Type *ty, char *buf, int pos, int max) {
+    if (g_mangle_kind == MANGLE_ITANIUM)
+        return itan_mangle_type_to_buf(ty, buf, pos, max);
     if (!ty) return append_str(buf, pos, max, "unknown");
     if (ty->is_const)    pos = append_str(buf, pos, max, "const_");
     if (ty->is_volatile) pos = append_str(buf, pos, max, "volatile_");
@@ -365,6 +371,7 @@ static void emit_class_close(void) {
 /* ------------------------------------------------------------------ */
 
 void mangle_class_tag(Type *class_type) {
+    if (g_mangle_kind == MANGLE_ITANIUM) { itan_mangle_class_tag(class_type); return; }
     emit_class_open(class_type);
     emit_class_close();
 }
@@ -397,6 +404,9 @@ static Type *strip_top_cv(Type *ty, int slot) {
 }
 
 void mangle_param_suffix(Type **param_types, int nparams) {
+    if (g_mangle_kind == MANGLE_ITANIUM) {
+        itan_mangle_param_suffix(param_types, nparams); return;
+    }
     fputs("_p_", stdout);
     if (nparams == 0) {
         fputs("void", stdout);
@@ -416,6 +426,8 @@ void mangle_param_suffix(Type **param_types, int nparams) {
  * to be patched every time a new C++ distinction appears. */
 int mangle_param_suffix_to_buf(Type **param_types, int nparams,
                                 char *buf, int pos, int max) {
+    if (g_mangle_kind == MANGLE_ITANIUM)
+        return itan_mangle_param_suffix_to_buf(param_types, nparams, buf, pos, max);
     int n = snprintf(buf + pos, (size_t)(max - pos), "_p_");
     if (n > 0) pos += n;
     if (nparams == 0) {
@@ -444,6 +456,11 @@ void mangle_class_method(Type *class_type, Token *method_name,
 void mangle_class_method_cv(Type *class_type, Token *method_name,
                              Type **param_types, int nparams,
                              bool is_const) {
+    if (g_mangle_kind == MANGLE_ITANIUM) {
+        itan_mangle_class_method_cv(class_type, method_name,
+                                     param_types, nparams, is_const);
+        return;
+    }
     emit_class_open(class_type);
     g_mangler->append_member(g_mangler, method_name);
     mangle_param_suffix(param_types, nparams);
@@ -456,6 +473,9 @@ void mangle_class_method_cv(Type *class_type, Token *method_name,
 
 void mangle_class_ctor(Type *class_type,
                         Type **param_types, int nparams) {
+    if (g_mangle_kind == MANGLE_ITANIUM) {
+        itan_mangle_class_ctor(class_type, param_types, nparams); return;
+    }
     emit_class_open(class_type);
     g_mangler->append_ctor(g_mangler);
     mangle_param_suffix(param_types, nparams);
@@ -463,28 +483,28 @@ void mangle_class_ctor(Type *class_type,
 }
 
 void mangle_class_dtor(Type *class_type) {
+    if (g_mangle_kind == MANGLE_ITANIUM) { itan_mangle_class_dtor(class_type); return; }
     emit_class_open(class_type);
     g_mangler->append_dtor(g_mangler);
     emit_class_close();
 }
 
 void mangle_class_dtor_body(Type *class_type) {
+    if (g_mangle_kind == MANGLE_ITANIUM) { itan_mangle_class_dtor_body(class_type); return; }
     emit_class_open(class_type);
     g_mangler->append_dtor_body(g_mangler);
     emit_class_close();
 }
 
 void mangle_class_vtable_type(Type *class_type) {
-    /* The vtable suffix is sea-front-specific (no Itanium analogue
-     * uses this exact form), so we hardcode the leaf rather than
-     * route through the vtable for now. When/if an Itanium scheme
-     * lands, it'll add proper vtable hooks. */
+    if (g_mangle_kind == MANGLE_ITANIUM) { itan_mangle_class_vtable_type(class_type); return; }
     emit_class_open(class_type);
     fputs("__vtable", stdout);
     emit_class_close();
 }
 
 void mangle_class_vtable_instance(Type *class_type) {
+    if (g_mangle_kind == MANGLE_ITANIUM) { itan_mangle_class_vtable_instance(class_type); return; }
     emit_class_open(class_type);
     fputs("__vtable_instance", stdout);
     emit_class_close();

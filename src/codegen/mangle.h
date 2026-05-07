@@ -20,6 +20,18 @@
 
 #include "../sea-front.h"
 
+/* Active scheme. Selected at codegen entry by the --mangling=… flag.
+ * MANGLE_HUMAN is the default sea-front-native readable scheme that
+ * has been the only choice to date; MANGLE_ITANIUM produces names
+ * matching the Itanium C++ ABI <https://itanium-cxx-abi.github.io/
+ * cxx-abi/abi.html#mangling> for interop with gcc/clang/libstdc++. */
+typedef enum {
+    MANGLE_HUMAN = 0,
+    MANGLE_ITANIUM = 1,
+} MangleKind;
+
+extern MangleKind g_mangle_kind;
+
 typedef struct Mangler Mangler;
 
 struct Mangler {
@@ -132,5 +144,29 @@ int mangle_param_suffix_to_buf(Type **param_types, int nparams,
  * elsewhere. C-safe: no '<', '>', or other illegal-in-identifier
  * characters. */
 int mangle_type_to_buf(Type *ty, char *buf, int pos, int max);
+
+/* ---------------------------------------------------------------- */
+/* Itanium C++ ABI implementations (src/codegen/mangle_itanium.c).  */
+/*                                                                  */
+/* One entry point per public mangle_* helper above. The dispatch   */
+/* in mangle.c selects between human and itanium based on           */
+/* g_mangle_kind. Each Itanium entry resets its per-symbol          */
+/* substitution table at the start.                                 */
+/* ---------------------------------------------------------------- */
+void itan_mangle_class_tag(Type *class_type);
+void itan_mangle_class_method_cv(Type *class_type, Token *method_name,
+                                  Type **param_types, int nparams,
+                                  bool is_const);
+void itan_mangle_class_ctor(Type *class_type,
+                             Type **param_types, int nparams);
+void itan_mangle_class_dtor(Type *class_type);
+void itan_mangle_class_dtor_body(Type *class_type);
+void itan_mangle_class_vtable_type(Type *class_type);
+void itan_mangle_class_vtable_instance(Type *class_type);
+void itan_emit_type_for_mangle(Type *ty);
+void itan_mangle_param_suffix(Type **param_types, int nparams);
+int itan_mangle_param_suffix_to_buf(Type **param_types, int nparams,
+                                     char *buf, int pos, int max);
+int itan_mangle_type_to_buf(Type *ty, char *buf, int pos, int max);
 
 #endif /* SF_CODEGEN_MANGLE_H */

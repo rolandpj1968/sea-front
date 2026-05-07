@@ -14,7 +14,8 @@ SRCS     = src/main.c src/util.c src/arena.c \
            src/template/instantiate.c \
            src/template/clone.c \
            src/codegen/emit_c.c \
-           src/codegen/mangle.c
+           src/codegen/mangle.c \
+           src/codegen/mangle_itanium.c
 OBJS     = $(patsubst src/%.c,$(BUILDDIR)/%.o,$(SRCS))
 
 # Lexer test (doesn't need parse objects)

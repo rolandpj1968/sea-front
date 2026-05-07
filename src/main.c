@@ -21,6 +21,7 @@
 #include "sema/sema.h"
 #include "template/instantiate.h"
 #include "codegen/emit_c.h"
+#include "codegen/mangle.h"
 
 static void dump_tokens(TokenArray ta) {
     for (int i = 0; i < ta.len && ta.tokens[i].kind != TK_EOF; i++) {
@@ -63,7 +64,8 @@ static void dump_tokens(TokenArray ta) {
 
 static void usage(void) {
     fprintf(stderr, "usage: sea-front [--dump-tokens] [--dump-ast] [--emit-c] [--no-lines]\n"
-                    "                 [--std=c++03|11|14|17|20|23] [--version] <file>\n");
+                    "                 [--std=c++03|11|14|17|20|23] [--mangling=human|itanium]\n"
+                    "                 [--version] <file>\n");
     exit(1);
 }
 
@@ -102,6 +104,10 @@ int main(int argc, char **argv) {
             std = CPP20;
         } else if (strcmp(argv[i], "--std=c++23") == 0) {
             std = CPP23;
+        } else if (strcmp(argv[i], "--mangling=human") == 0) {
+            g_mangle_kind = MANGLE_HUMAN;
+        } else if (strcmp(argv[i], "--mangling=itanium") == 0) {
+            g_mangle_kind = MANGLE_ITANIUM;
         } else if (argv[i][0] == '-') {
             error("unknown option: %s", argv[i]);
         } else {

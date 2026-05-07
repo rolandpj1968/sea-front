@@ -34,7 +34,8 @@ $CC $CFLAGS -o sea-front \
     src/template/instantiate.c \
     src/template/clone.c \
     src/codegen/emit_c.c \
-    src/codegen/mangle.c
+    src/codegen/mangle.c \
+    src/codegen/mangle_itanium.c
 
 echo "Built: sea-front"
 
