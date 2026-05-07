@@ -2236,6 +2236,42 @@ static Node *find_class_def_by_tag_args(Type *class_type) {
     return find_class_def_in_tu(g_tu, class_type);
 }
 
+/* True if any TY_ENUM in the TU has a tag whose spelling matches
+ * `name`. Walks namespaces (ND_BLOCK) and class bodies (ND_CLASS_DEF
+ * members) so an enum nested inside 'namespace bidi { enum class
+ * kind { ... }; }' is found. Used by the ND_QUALIFIED emit path
+ * to recognise scoped-enum member access ('kind::NONE'). */
+static bool find_enum_tag_in_tu_walk(Node *n, Token *name) {
+    if (!n || !name) return false;
+    switch (n->kind) {
+    case ND_VAR_DECL: {
+        Type *ty = n->var_decl.ty;
+        if (ty && ty->kind == TY_ENUM && ty->tag &&
+            ty->tag->len == name->len &&
+            memcmp(ty->tag->loc, name->loc, name->len) == 0)
+            return true;
+        return false;
+    }
+    case ND_TRANSLATION_UNIT:
+        for (int i = 0; i < n->tu.ndecls; i++)
+            if (find_enum_tag_in_tu_walk(n->tu.decls[i], name)) return true;
+        return false;
+    case ND_BLOCK:
+        for (int i = 0; i < n->block.nstmts; i++)
+            if (find_enum_tag_in_tu_walk(n->block.stmts[i], name)) return true;
+        return false;
+    case ND_CLASS_DEF:
+        for (int i = 0; i < n->class_def.nmembers; i++)
+            if (find_enum_tag_in_tu_walk(n->class_def.members[i], name)) return true;
+        return false;
+    default:
+        return false;
+    }
+}
+static bool find_enum_tag_in_tu(Node *tu, Token *name) {
+    return find_enum_tag_in_tu_walk(tu, name);
+}
+
 /* For plain (non-template) classes: walk the TU looking for the
  * ND_CLASS_DEF whose tag matches. Used as a fallback when a Type
  * copy lacks class_region/class_def (field-decl / typedef paths).
@@ -5181,14 +5217,58 @@ static void emit_expr(Node *n) {
                 }
             }
         }
-        /* Class-qualified non-call uses (e.g. 'Foo::bar' as a function-
-         * pointer value, 'Foo::CONSTANT'). Bare-emit the joined name —
-         * sema usually resolves these via resolved_class_type for
-         * compounds; for now fall through to abort if we hit something
-         * we don't recognise. TODO(seafront#qid-emit): general handler. */
+        /* Scoped-enum member access: 'kind::NONE' where 'kind' is an
+         * 'enum class' / 'enum struct'. N4659 §10.2/5 [dcl.enum]:
+         * scoped-enum enumerators are accessed via 'EnumName::value'
+         * only. Sea-front's parser registers enumerators in the
+         * enclosing scope (see type.c — sea-front doesn't yet model
+         * the scoped-enum lookup distinction). The C emit puts the
+         * enum body inline ('enum K { NONE, OTHER }') making the
+         * enumerators flat TU-scope C constants; so a bare emit of
+         * the trailing identifier resolves correctly without further
+         * machinery. Real-world hit: gcc 14 libcpp/lex.cc 'kind::NONE'.
+         * Standard alignment: TODO(seafront#scoped-enum-region): track
+         * enum-class scope in the parser and verify membership before
+         * emitting. */
+        if (n->qualified.nparts >= 2 && n->qualified.parts && g_tu) {
+            Token *class_tok = n->qualified.parts[0];
+            Token *mem_tok   = n->qualified.parts[n->qualified.nparts - 1];
+            if (class_tok && mem_tok &&
+                find_enum_tag_in_tu(g_tu, class_tok)) {
+                fprintf(stdout, "%.*s", mem_tok->len, mem_tok->loc);
+                return;
+            }
+        }
+        /* Namespace-qualified value access ('foo::x' where foo is a
+         * namespace). Sea-front flattens namespaces (C has none) so
+         * the variable lives at TU scope under its bare name. Emit
+         * the trailing identifier verbatim. Real-world hit: gcc 14
+         * libcpp/lex.cc 'bidi::utf8_start'.
+         *
+         * SHORTCUT (ours, not the standard): bare-emitting any
+         * 2+ part qualified-id we don't otherwise recognise.
+         * Standard alternative would be to verify parts[0] is a
+         * namespace tag via the namespace-region registry — but the
+         * registry isn't easily accessible from codegen and a
+         * mis-match here surfaces as a link error rather than a
+         * silent runtime miscompile, which is acceptable.
+         * TODO(seafront#qid-emit): track namespace tags in the
+         * codegen-side TU index so this branch can verify. */
+        if (n->qualified.nparts >= 2 && n->qualified.parts) {
+            Token *mem_tok = n->qualified.parts[n->qualified.nparts - 1];
+            if (mem_tok) {
+                fprintf(stdout, "%.*s", mem_tok->len, mem_tok->loc);
+                return;
+            }
+        }
         fprintf(stderr,
-                "emit_expr: unhandled ND_QUALIFIED nparts=%d global=%d\n",
+                "emit_expr: unhandled ND_QUALIFIED nparts=%d global=%d",
                 n->qualified.nparts, (int)n->qualified.global_scope);
+        for (int i = 0; i < n->qualified.nparts; i++) {
+            Token *t = n->qualified.parts[i];
+            fprintf(stderr, " '%.*s'", t ? t->len : 0, t ? t->loc : "");
+        }
+        fputc('\n', stderr);
         abort();
     case ND_TEMPLATE_ID: {
         /* Bare template-id 'Foo<args>' in expression position. Most
