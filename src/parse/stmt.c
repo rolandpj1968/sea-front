@@ -537,6 +537,15 @@ static Node *parse_try_stmt(Parser *p) {
  * here: if the token starts a type-specifier, it's a declaration.
  */
 Node *parse_stmt(Parser *p) {
+    /* attribute-specifier-seq(opt) before a statement — N4659 §9
+     * [stmt.stmt] grammar. Includes attributes before case / default
+     * labels (§9.1) and before any other statement form. C++20
+     * adds [[likely]] / [[unlikely]] before case (P0479R5). All
+     * attributes are non-semantic hints in standard C++ — accept
+     * and drop. See project_std_authenticity for why we don't
+     * dialect-gate this. */
+    parser_skip_cxx_attributes(p);
+    parser_skip_gnu_attributes(p);
     Token *tok = parser_peek(p);
 
     switch (tok->kind) {
