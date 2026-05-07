@@ -1959,7 +1959,22 @@ static void emit_default_args_tail(Node *resolved_callee, int nargs, int np,
     if (!resolved_callee) return;
     for (int i = nargs; i < np; i++) {
         Node *p = func_param_node(resolved_callee, i);
-        if (!p || !p->param.default_value) break;
+        if (!p || !p->param.default_value) {
+            /* Hard-fail: by the time we're here, overload_match_score
+             * has already verified that every param past nargs has a
+             * default — that's part of the candidate's viability under
+             * N4659 §16.3.1.4 [over.match.viable]/2. Reaching this
+             * branch means an internal inconsistency between
+             * resolution and emit. Silently emitting fewer args than
+             * the callee declares is the silent-miscompile pattern
+             * we're explicitly avoiding (cf. die_no_overload). */
+            fprintf(stderr,
+                "sea-front: internal error in default-arg expansion: "
+                "param %d/%d has no default but candidate was selected "
+                "as viable\n",
+                i, np);
+            abort();
+        }
         fputs(", ", stdout);
         emit_arg_for_param(p->param.default_value,
                             pty && i < np ? pty[i] : NULL);
@@ -4197,10 +4212,26 @@ static void emit_expr(Node *n) {
                                     (call_pty && i < call_np)
                                         ? call_pty[i] : NULL);
             }
-            /* TODO(seafront#default-args-elsewhere): this fallthrough
-             * path doesn't carry a resolved-callee Node into scope —
-             * adding default-arg expansion here needs threading the
-             * resolved Node out of the upstream lookup. */
+            /* Qualified-id call fallthrough — the path that runs when
+             * neither the static-method nor the member-method branch
+             * resolved to a winner Node. Today the resolved Node isn't
+             * threaded through here, so we can't expand defaults. If
+             * the upstream lookup found a callee with more params than
+             * the call supplied (call_np > nargs), silently emitting
+             * the short call is the latent silent-miscompile pattern
+             * the audit just exposed elsewhere. Hard-fail rather than
+             * miscompile. Fix is to thread the resolved Node out of
+             * the upstream lookup; until then we want to know when it
+             * matters. TODO(seafront#default-args-qid-fallthrough). */
+            if (call_np > n->call.nargs) {
+                fprintf(stderr,
+                    "sea-front: qualified-id call fallthrough emitted "
+                    "%d arg(s) for a callee with %d param(s); default-"
+                    "arg expansion not wired here. Add resolved-Node "
+                    "threading to fix.\n",
+                    n->call.nargs, call_np);
+                abort();
+            }
             fputc(')', stdout);
             return;
         }
