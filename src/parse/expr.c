@@ -495,22 +495,44 @@ static Node *primary_expr(Parser *p) {
                         /* Hoist closure (if any) and lambda fn to TU
                          * top — closure first so its struct is visible
                          * before the function that takes a pointer to
-                         * it. */
-                        int needed = closure_cdef ? 2 : 1;
-                        if (p->lambda_count + needed > p->lambda_cap) {
-                            int ncap = p->lambda_cap ? p->lambda_cap * 2 : 8;
-                            while (p->lambda_count + needed > ncap) ncap *= 2;
-                            Node **n2 = arena_alloc(p->arena,
-                                sizeof(*n2) * ncap);
-                            if (p->lambda_decls)
-                                memcpy(n2, p->lambda_decls,
-                                       sizeof(*n2) * p->lambda_count);
-                            p->lambda_decls = n2;
-                            p->lambda_cap   = ncap;
+                         * it.
+                         *
+                         * EXCEPTION: lambdas inside a template body
+                         * (any REGION_TEMPLATE on the enclosing chain)
+                         * carry TY_DEPENDENT through their captures /
+                         * return type / body. Hoisting them now would
+                         * leak unsubstituted types into TU-scope decls
+                         * the C compiler rejects, and a single hoisted
+                         * fn can't service multiple instantiations.
+                         * Defer: leave func_def + closure attached to
+                         * the ND_LAMBDA expression so the template-
+                         * instantiation clone pass walks them and
+                         * produces a fresh closure + fn per concrete
+                         * arg set. N4659 §17.6.4 [temp.point]. */
+                        bool in_template = false;
+                        for (DeclarativeRegion *r = p->region; r;
+                             r = r->enclosing) {
+                            if (r->kind == REGION_TEMPLATE) {
+                                in_template = true; break;
+                            }
                         }
-                        if (closure_cdef)
-                            p->lambda_decls[p->lambda_count++] = closure_cdef;
-                        p->lambda_decls[p->lambda_count++] = fd;
+                        if (!in_template) {
+                            int needed = closure_cdef ? 2 : 1;
+                            if (p->lambda_count + needed > p->lambda_cap) {
+                                int ncap = p->lambda_cap ? p->lambda_cap * 2 : 8;
+                                while (p->lambda_count + needed > ncap) ncap *= 2;
+                                Node **n2 = arena_alloc(p->arena,
+                                    sizeof(*n2) * ncap);
+                                if (p->lambda_decls)
+                                    memcpy(n2, p->lambda_decls,
+                                           sizeof(*n2) * p->lambda_count);
+                                p->lambda_decls = n2;
+                                p->lambda_cap   = ncap;
+                            }
+                            if (closure_cdef)
+                                p->lambda_decls[p->lambda_count++] = closure_cdef;
+                            p->lambda_decls[p->lambda_count++] = fd;
+                        }
                         if (closure_type) {
                             Node *lam = new_node(p, ND_LAMBDA, tok);
                             lam->lambda.func_def     = fd;

@@ -656,6 +656,17 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
         c->var_decl.init = clone_node(n->var_decl.init, map, arena);
         c->var_decl.ctor_args = clone_node_array(
             n->var_decl.ctor_args, n->var_decl.ctor_nargs, map, arena);
+        /* If the init was an ND_LAMBDA (capturing), the var's type
+         * was set at parse time to the original (template-context)
+         * closure TY_STRUCT. Cloning the lambda produced a fresh
+         * closure type with substituted member types and a unique
+         * tag — subst_type can't see that relationship since it
+         * walks a Type tree, not the Node graph. Re-bind the var
+         * to the cloned closure so its declared type matches the
+         * compound-literal init. */
+        if (c->var_decl.init && c->var_decl.init->kind == ND_LAMBDA &&
+            c->var_decl.init->lambda.closure_type)
+            c->var_decl.ty = c->var_decl.init->lambda.closure_type;
         break;
 
     case ND_FUNC_DEF:
@@ -733,6 +744,120 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
         c->friend_decl.decl = clone_node(n->friend_decl.decl, map, arena);
         break;
 
+    case ND_LAMBDA: {
+        /* Lambda inside a template body — N4659 §17.6.4 [temp.point].
+         * The parser leaves the synthesised closure ND_CLASS_DEF and
+         * lambda func_def attached (no TU-top hoist) for templates;
+         * each instantiation produces a fresh pair with substituted
+         * types. Naming uses a per-process counter so concurrent
+         * instantiations of distinct templates get distinct symbols.
+         *
+         * After this clone returns, the post-clone walker in
+         * instantiate.c collects the cloned closure ND_CLASS_DEF and
+         * lambda func_def from the cloned lambda nodes inside the
+         * cloned body and pushes them into all_instantiated[]. */
+        static int s_lambda_inst_counter = 0;
+        int        idx = ++s_lambda_inst_counter;
+
+        /* 1. Clone captures[] with resolved_type substituted. */
+        Capture *src_caps = n->lambda.captures;
+        int      ncap     = n->lambda.ncaptures;
+        Capture *new_caps = NULL;
+        if (ncap > 0) {
+            new_caps = arena_alloc(arena, ncap * sizeof(Capture));
+            for (int i = 0; i < ncap; i++) {
+                new_caps[i] = src_caps[i];
+                if (src_caps[i].resolved_type)
+                    new_caps[i].resolved_type =
+                        subst_type(src_caps[i].resolved_type, map, arena);
+            }
+        }
+
+        /* 2. Build a fresh closure TY_STRUCT with a unique tag. */
+        Token *src_tag = n->lambda.closure_tag;
+        char   tagbuf[80];
+        int    src_tlen = src_tag ? src_tag->len : 0;
+        const char *src_tloc = src_tag ? src_tag->loc : "__sf_closure";
+        int tlen = snprintf(tagbuf, sizeof(tagbuf), "%.*s_inst%d",
+                            src_tlen, src_tloc, idx);
+        char *tstr = arena_alloc(arena, tlen + 1);
+        memcpy(tstr, tagbuf, tlen);
+        tstr[tlen] = '\0';
+        Token *new_tag = arena_alloc(arena, sizeof(Token));
+        if (src_tag) *new_tag = *src_tag; else memset(new_tag, 0, sizeof(*new_tag));
+        new_tag->kind = TK_IDENT;
+        new_tag->loc  = tstr;
+        new_tag->len  = tlen;
+        Type *new_closure = arena_alloc(arena, sizeof(Type));
+        if (n->lambda.closure_type) *new_closure = *n->lambda.closure_type;
+        else memset(new_closure, 0, sizeof(*new_closure));
+        new_closure->kind = TY_STRUCT;
+        new_closure->tag  = new_tag;
+
+        /* 3. Clone the closure ND_CLASS_DEF (members get substituted). */
+        Node *src_cdef = n->lambda.closure_type
+                       ? n->lambda.closure_type->class_def : NULL;
+        Node *new_cdef = NULL;
+        if (src_cdef) {
+            new_cdef = clone_node(src_cdef, map, arena);
+            new_cdef->class_def.tag = new_tag;
+            new_cdef->class_def.ty  = new_closure;
+            new_closure->class_def  = new_cdef;
+        }
+
+        /* 4. Clone the lambda func_def. Reusing clone_node for
+         *    ND_FUNC_DEF substitutes the body, params, and ret_ty. */
+        Node *src_fd = n->lambda.func_def;
+        Node *new_fd = src_fd ? clone_node(src_fd, map, arena) : NULL;
+        if (new_fd) {
+            /* Rename so distinct instantiations don't collide.
+             * Suffix preserves the original counter for traceability. */
+            char fbuf[80];
+            int srcnl = src_fd->func.name ? src_fd->func.name->len : 0;
+            const char *srcnloc = src_fd->func.name
+                               ? src_fd->func.name->loc : "__sf_lambda";
+            int fnlen = snprintf(fbuf, sizeof(fbuf), "%.*s_inst%d",
+                                 srcnl, srcnloc, idx);
+            char *fstr = arena_alloc(arena, fnlen + 1);
+            memcpy(fstr, fbuf, fnlen);
+            fstr[fnlen] = '\0';
+            Token *new_fname = arena_alloc(arena, sizeof(Token));
+            if (src_fd->func.name) *new_fname = *src_fd->func.name;
+            else memset(new_fname, 0, sizeof(*new_fname));
+            new_fname->kind = TK_IDENT;
+            new_fname->loc  = fstr;
+            new_fname->len  = fnlen;
+            new_fd->func.name              = new_fname;
+            new_fd->func.is_lambda_fn      = true;
+            new_fd->func.closure_struct_type = new_closure;
+            new_fd->func.captures          = new_caps;
+            new_fd->func.ncaptures         = ncap;
+            /* The first param (__self) was cloned with subst_type,
+             * which sees it as TY_PTR(TY_STRUCT) where the struct may
+             * not be the substituted closure (subst_type doesn't know
+             * about lambdas). Override it to point at new_closure. */
+            if (new_fd->func.nparams > 0 && new_fd->func.params[0]) {
+                Type *pt = arena_alloc(arena, sizeof(Type));
+                memset(pt, 0, sizeof(*pt));
+                pt->kind = TY_PTR;
+                pt->base = new_closure;
+                new_fd->func.params[0]->param.ty = pt;
+            }
+            new_closure->lambda_fn = new_fd;
+        }
+
+        c->lambda.func_def     = new_fd;
+        c->lambda.captures     = new_caps;
+        c->lambda.ncaptures    = ncap;
+        c->lambda.default_kind = n->lambda.default_kind;
+        c->lambda.closure_type = new_closure;
+        c->lambda.closure_tag  = new_tag;
+        /* Note: the post-clone walker in instantiate.c will reach
+         * new_cdef and new_fd via this ND_LAMBDA and prepend them
+         * to all_instantiated[] before the surrounding decl. */
+        break;
+    }
+
     case ND_TRANSLATION_UNIT:
         c->tu = n->tu;
         /* Should not be cloned — top-level container */
@@ -751,9 +876,22 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
      * cloned ident/expr would lose it. Substituting through map
      * means a 'b' of declared type Box<T> in the template becomes
      * Box<int> on the clone, so codegen can match the instantiated
-     * class's methods for operator-overload rewrites. */
-    if (n->resolved_type)
-        c->resolved_type = subst_type(n->resolved_type, map, arena);
+     * class's methods for operator-overload rewrites.
+     *
+     * EXCEPTION: closure types (TY_STRUCT.lambda_fn != NULL) have
+     * a fresh per-instantiation tag/class_def/lambda_fn produced
+     * by the ND_LAMBDA clone case above. subst_type can't follow
+     * that Node-level relationship — it walks Type trees only —
+     * so substituting yields the OLD closure. Leave resolved_type
+     * NULL for these so sema's re-walk over the cloned body re-
+     * resolves the ident from its (also-cloned) declaration whose
+     * ty was correctly rebound. */
+    if (n->resolved_type) {
+        Type *rt = n->resolved_type;
+        bool is_closure = rt->kind == TY_STRUCT && rt->lambda_fn != NULL;
+        if (!is_closure)
+            c->resolved_type = subst_type(rt, map, arena);
+    }
 
     return c;
 }

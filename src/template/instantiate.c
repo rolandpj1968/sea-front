@@ -79,6 +79,143 @@ static void inst_push(Node **arr, int *total_inst,
     (*ninst_this_round)++;
 }
 
+/* Walk an instantiated decl's subtree for ND_LAMBDA nodes and push
+ * each cloned closure ND_CLASS_DEF + lambda func_def into
+ * all_instantiated[] BEFORE the surrounding decl. The clone pass
+ * (clone.c ND_LAMBDA case) leaves the lambda fn + closure attached
+ * to the cloned ND_LAMBDA when the lambda is inside a template body
+ * (parser also defers TU-top hoisting in the same case); this walker
+ * is what actually puts them into the emit list per instantiation.
+ *
+ * Order: closure first (struct visible before fn that takes a
+ * pointer to it), then the lambda fn, then by caller convention the
+ * surrounding instantiated decl. */
+static void collect_inner_lambdas_in_node(Node *n, Node **arr,
+                                           int *total_inst,
+                                           int *ninst_this_round);
+static void collect_inner_lambdas(Node *n, Node **arr,
+                                   int *total_inst,
+                                   int *ninst_this_round) {
+    if (!n) return;
+    if (n->kind == ND_LAMBDA) {
+        if (n->lambda.closure_type && n->lambda.closure_type->class_def)
+            inst_push(arr, total_inst, ninst_this_round,
+                      n->lambda.closure_type->class_def,
+                      "instantiated lambda closure");
+        if (n->lambda.func_def)
+            inst_push(arr, total_inst, ninst_this_round,
+                      n->lambda.func_def,
+                      "instantiated lambda fn");
+        /* Lambda body may itself contain nested lambdas — recurse. */
+        if (n->lambda.func_def && n->lambda.func_def->func.body)
+            collect_inner_lambdas(n->lambda.func_def->func.body, arr,
+                                   total_inst, ninst_this_round);
+        return;
+    }
+    collect_inner_lambdas_in_node(n, arr, total_inst, ninst_this_round);
+}
+static void collect_inner_lambdas_in_node(Node *n, Node **arr,
+                                           int *total_inst,
+                                           int *ninst_this_round) {
+    if (!n) return;
+    switch (n->kind) {
+    case ND_FUNC_DEF: case ND_FUNC_DECL:
+        for (int i = 0; i < n->func.nparams; i++)
+            collect_inner_lambdas(n->func.params[i], arr, total_inst,
+                                   ninst_this_round);
+        collect_inner_lambdas(n->func.body, arr, total_inst, ninst_this_round);
+        break;
+    case ND_CLASS_DEF:
+        for (int i = 0; i < n->class_def.nmembers; i++)
+            collect_inner_lambdas(n->class_def.members[i], arr, total_inst,
+                                   ninst_this_round);
+        break;
+    case ND_BLOCK:
+        for (int i = 0; i < n->block.nstmts; i++)
+            collect_inner_lambdas(n->block.stmts[i], arr, total_inst,
+                                   ninst_this_round);
+        break;
+    case ND_VAR_DECL: case ND_PARAM:
+        collect_inner_lambdas(n->var_decl.init, arr, total_inst, ninst_this_round);
+        break;
+    case ND_RETURN:
+        collect_inner_lambdas(n->ret.expr, arr, total_inst, ninst_this_round);
+        break;
+    case ND_EXPR_STMT:
+        collect_inner_lambdas(n->expr_stmt.expr, arr, total_inst, ninst_this_round);
+        break;
+    case ND_IF:
+        collect_inner_lambdas(n->if_.cond,  arr, total_inst, ninst_this_round);
+        collect_inner_lambdas(n->if_.then_, arr, total_inst, ninst_this_round);
+        collect_inner_lambdas(n->if_.else_, arr, total_inst, ninst_this_round);
+        break;
+    case ND_WHILE: case ND_DO:
+        collect_inner_lambdas(n->while_.cond, arr, total_inst, ninst_this_round);
+        collect_inner_lambdas(n->while_.body, arr, total_inst, ninst_this_round);
+        break;
+    case ND_FOR:
+        collect_inner_lambdas(n->for_.init, arr, total_inst, ninst_this_round);
+        collect_inner_lambdas(n->for_.cond, arr, total_inst, ninst_this_round);
+        collect_inner_lambdas(n->for_.inc,  arr, total_inst, ninst_this_round);
+        collect_inner_lambdas(n->for_.body, arr, total_inst, ninst_this_round);
+        break;
+    case ND_RANGE_FOR:
+        collect_inner_lambdas(n->range_for.decl,  arr, total_inst, ninst_this_round);
+        collect_inner_lambdas(n->range_for.range, arr, total_inst, ninst_this_round);
+        collect_inner_lambdas(n->range_for.body,  arr, total_inst, ninst_this_round);
+        break;
+    case ND_SWITCH:
+        collect_inner_lambdas(n->switch_.init, arr, total_inst, ninst_this_round);
+        collect_inner_lambdas(n->switch_.expr, arr, total_inst, ninst_this_round);
+        collect_inner_lambdas(n->switch_.body, arr, total_inst, ninst_this_round);
+        break;
+    case ND_CASE:
+        collect_inner_lambdas(n->case_.expr, arr, total_inst, ninst_this_round);
+        collect_inner_lambdas(n->case_.stmt, arr, total_inst, ninst_this_round);
+        break;
+    case ND_DEFAULT:
+        collect_inner_lambdas(n->default_.stmt, arr, total_inst, ninst_this_round);
+        break;
+    case ND_LABEL:
+        collect_inner_lambdas(n->label.stmt, arr, total_inst, ninst_this_round);
+        break;
+    case ND_CALL:
+        collect_inner_lambdas(n->call.callee, arr, total_inst, ninst_this_round);
+        for (int i = 0; i < n->call.nargs; i++)
+            collect_inner_lambdas(n->call.args[i], arr, total_inst, ninst_this_round);
+        break;
+    case ND_BINARY: case ND_ASSIGN: case ND_COMMA:
+        collect_inner_lambdas(n->binary.lhs, arr, total_inst, ninst_this_round);
+        collect_inner_lambdas(n->binary.rhs, arr, total_inst, ninst_this_round);
+        break;
+    case ND_UNARY: case ND_POSTFIX:
+        collect_inner_lambdas(n->unary.operand, arr, total_inst, ninst_this_round);
+        break;
+    case ND_TERNARY:
+        collect_inner_lambdas(n->ternary.cond,  arr, total_inst, ninst_this_round);
+        collect_inner_lambdas(n->ternary.then_, arr, total_inst, ninst_this_round);
+        collect_inner_lambdas(n->ternary.else_, arr, total_inst, ninst_this_round);
+        break;
+    case ND_MEMBER:
+        collect_inner_lambdas(n->member.obj, arr, total_inst, ninst_this_round);
+        break;
+    case ND_SUBSCRIPT:
+        collect_inner_lambdas(n->subscript.base, arr, total_inst, ninst_this_round);
+        collect_inner_lambdas(n->subscript.index, arr, total_inst, ninst_this_round);
+        break;
+    case ND_CAST:
+        collect_inner_lambdas(n->cast.operand, arr, total_inst, ninst_this_round);
+        break;
+    case ND_INIT_LIST:
+        for (int i = 0; i < n->init_list.nelems; i++)
+            collect_inner_lambdas(n->init_list.elems[i], arr, total_inst, ninst_this_round);
+        break;
+    default:
+        /* Leaf or non-recursive — no children to walk. */
+        break;
+    }
+}
+
 static void registry_add(TmplRegistry *reg, const char *name, int name_len,
                           Node *tmpl) {
     uint32_t idx = hash_name(name, name_len) % TMPL_REGISTRY_SIZE;
@@ -2430,6 +2567,8 @@ void template_instantiate(Node *tu, Arena *arena) {
                 cloned, enc, arena);
         }
 
+        collect_inner_lambdas(cloned, all_instantiated, &total_inst,
+                               &ninst_this_round);
         inst_push(all_instantiated, &total_inst, &ninst_this_round,
                   cloned, "member-template instantiation");
     }
@@ -2770,6 +2909,8 @@ void template_instantiate(Node *tu, Arena *arena) {
                         sema_visit_node(m, arena);
                 }
             }
+            collect_inner_lambdas(inst, all_instantiated, &total_inst,
+                                   &ninst_this_round);
             inst_push(all_instantiated, &total_inst, &ninst_this_round,
                       inst, "class/function template instantiation");
             /* (trace removed) */
@@ -2824,6 +2965,8 @@ void template_instantiate(Node *tu, Arena *arena) {
                 Node *em = extra_methods[e];
                 if (em && (em->kind == ND_FUNC_DEF || em->kind == ND_FUNC_DECL))
                     sema_visit_node(em, arena);
+                collect_inner_lambdas(em, all_instantiated, &total_inst,
+                                       &ninst_this_round);
                 inst_push(all_instantiated, &total_inst, &ninst_this_round,
                           em, "OOL extra method");
             }
