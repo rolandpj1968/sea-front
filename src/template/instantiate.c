@@ -808,14 +808,35 @@ static void collect_from_node(InstCollector *col, Node *n) {
         break;
     }
 
-    case ND_CLASS_DEF:
+    case ND_CLASS_DEF: {
+        /* Push class context so member declarations whose types use
+         * an unqualified member template (e.g. 'vec<const char *>
+         * targets;' inside class mkdeps where vec is a nested class
+         * template) resolve via the member-template registry, same
+         * as ND_FUNC_DEF below. N4659 §17.5.2 [temp.mem]/2 +
+         * §6.4.1/13 [basic.lookup.unqual]: an unqualified template-id
+         * inside a class body looks up the class scope.
+         *
+         * Without this, member-field types reference an instantiation
+         * sea-front never emits — cc errors with 'field has incomplete
+         * type' on the field decl. Real-world hit: gcc 14 libcpp's
+         * mkdeps with five member fields of type 'vec<...>'. */
+        Type *saved_class = col->cur_class;
+        Node *saved_class_tid = col->cur_class_tid;
+        if (n->class_def.ty) {
+            col->cur_class = n->class_def.ty;
+            col->cur_class_tid = NULL;
+        }
         for (int i = 0; i < n->class_def.nmembers; i++)
             collect_from_node(col, n->class_def.members[i]);
         /* Collect from base types — a template base like Base<T>
          * (substituted to Base<int>) needs to be instantiated too. */
         for (int i = 0; i < n->class_def.nbase_types; i++)
             collect_from_type(col, n->class_def.base_types[i]);
+        col->cur_class = saved_class;
+        col->cur_class_tid = saved_class_tid;
         break;
+    }
 
     case ND_TEMPLATE_DECL:
         /* Do NOT walk into template bodies during collection — their

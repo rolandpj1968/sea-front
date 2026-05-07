@@ -8191,6 +8191,25 @@ static void emit_class_def(Node *n) {
      * first. Pattern: gcc 4.8 tree-data-ref.h
      *   struct rdg_vertex { vec<data_reference_p> datarefs; ... };
      * where the vec instantiation's class_def isn't on this Type copy. */
+    /* Hoist nested class/struct definitions first — N4659 §12.1
+     * [class.name] permits classes nested in classes. C has no
+     * nested class scope, so sea-front emits each nested class at
+     * TU scope under a (potentially) qualified mangled tag. They
+     * must come BEFORE the enclosing class because that class may
+     * reference them by-value as field types (directly or via a
+     * template instantiation). Real-world hit: gcc 14 libcpp's
+     * mkdeps has a nested 'struct velt' used by 'vec<velt> vpath;'.
+     * Without this hoist, velt would be emitted at the first
+     * function-body local-variable use (via the inline-struct
+     * recovery in emit_stmt's ND_VAR_DECL case), too late for
+     * mkdeps' field type to be complete. */
+    for (int i = 0; i < n->class_def.nmembers; i++) {
+        Node *m = n->class_def.members[i];
+        if (!m || m->kind != ND_CLASS_DEF) continue;
+        Type *mty = m->class_def.ty;
+        if (mty && !mty->codegen_emitted)
+            emit_class_def(m);
+    }
     for (int i = 0; i < n->class_def.nmembers; i++) {
         Node *m = n->class_def.members[i];
         if (!m || m->kind != ND_VAR_DECL) continue;
