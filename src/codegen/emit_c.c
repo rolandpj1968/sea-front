@@ -4652,6 +4652,25 @@ static void emit_expr(Node *n) {
                                     callee->member.member, at, na, mc);
                                 call_np = na;
                                 call_pty = at;
+                            } else if (callee->resolved_type &&
+                                       callee->resolved_type->kind == TY_FUNC) {
+                                /* Non-template class with class_def
+                                 * unset — sema's member lookup left a
+                                 * TY_FUNC on callee->resolved_type
+                                 * carrying the method's declared param
+                                 * types. Use those for the mangle so
+                                 * the call site matches the forward-
+                                 * decl emit (which walked the same
+                                 * declaration). N4659 §16.3
+                                 * [over.match]. */
+                                Type *fty = callee->resolved_type;
+                                bool mc = method_is_const(method_class,
+                                    callee->member.member);
+                                mangle_class_method_cv(method_class,
+                                    callee->member.member,
+                                    fty->params, fty->nparams, mc);
+                                call_np = fty->nparams;
+                                call_pty = fty->params;
                             } else {
                                 is_method_call = false;
                                 goto plain_call;
