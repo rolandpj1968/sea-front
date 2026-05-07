@@ -211,14 +211,32 @@ void emit_type_for_mangle(Type *ty) {
         return;
     /* Literal-valued NTTP placeholder (instantiate.c synthesizes
      * these from ND_NUM / ND_BOOL_LIT / etc. arg nodes). The tag
-     * holds the literal token. Render character-by-character with
-     * non-symbol-friendly chars replaced by '_'. The human encoding
-     * doesn't need the parameter's declared type since it's
-     * grep-friendly text, not a structured ABI symbol — distinct
-     * literals already produce distinct identifiers. The Itanium
-     * path (mangle_itanium.c) reads ty->nttp_decl_type for the
-     * proper L<type><value>E encoding. */
+     * holds the literal token; the parameter's declared type is on
+     * `nttp_decl_type` (set during instantiation). Two NTTP slots
+     * with the same literal text but different declared types
+     * (`template<int N>` vs `template<long N>` with `<42>`) name
+     * different specialisations per N4659 §17.4 [temp.type] and
+     * must mangle distinctly. Encode the type as a small prefix
+     * before the literal text. The Itanium path
+     * (mangle_itanium.c) does the same dispatch via
+     * builtin_code(). */
     case TY_NTTP_VALUE:
+        if (ty->nttp_decl_type) {
+            switch (ty->nttp_decl_type->kind) {
+            case TY_BOOL:   fputs("bool_",   stdout); break;
+            case TY_CHAR:   fputs(ty->nttp_decl_type->is_unsigned
+                                  ? "uchar_" : "char_", stdout); break;
+            case TY_SHORT:  fputs(ty->nttp_decl_type->is_unsigned
+                                  ? "ushort_" : "short_", stdout); break;
+            case TY_INT:    fputs(ty->nttp_decl_type->is_unsigned
+                                  ? "uint_" : "int_", stdout); break;
+            case TY_LONG:   fputs(ty->nttp_decl_type->is_unsigned
+                                  ? "ulong_" : "long_", stdout); break;
+            case TY_LLONG:  fputs(ty->nttp_decl_type->is_unsigned
+                                  ? "ullong_" : "llong_", stdout); break;
+            default: break;
+            }
+        }
         if (ty->tag && ty->tag->len > 0) {
             for (int i = 0; i < ty->tag->len; i++) {
                 unsigned char c = (unsigned char)ty->tag->loc[i];
@@ -328,6 +346,22 @@ int mangle_type_to_buf(Type *ty, char *buf, int pos, int max) {
         return append_str(buf, pos, max, "dep");
     /* See emit_type_for_mangle for the encoding rationale. */
     case TY_NTTP_VALUE:
+        if (ty->nttp_decl_type) {
+            switch (ty->nttp_decl_type->kind) {
+            case TY_BOOL:   pos = append_str(buf, pos, max, "bool_");   break;
+            case TY_CHAR:   pos = append_str(buf, pos, max,
+                                ty->nttp_decl_type->is_unsigned ? "uchar_" : "char_");   break;
+            case TY_SHORT:  pos = append_str(buf, pos, max,
+                                ty->nttp_decl_type->is_unsigned ? "ushort_" : "short_"); break;
+            case TY_INT:    pos = append_str(buf, pos, max,
+                                ty->nttp_decl_type->is_unsigned ? "uint_" : "int_");     break;
+            case TY_LONG:   pos = append_str(buf, pos, max,
+                                ty->nttp_decl_type->is_unsigned ? "ulong_" : "long_");   break;
+            case TY_LLONG:  pos = append_str(buf, pos, max,
+                                ty->nttp_decl_type->is_unsigned ? "ullong_" : "llong_"); break;
+            default: break;
+            }
+        }
         if (ty->tag && ty->tag->len > 0) {
             for (int i = 0; i < ty->tag->len && pos < max - 1; i++) {
                 unsigned char c = (unsigned char)ty->tag->loc[i];
