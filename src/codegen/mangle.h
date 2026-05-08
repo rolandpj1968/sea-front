@@ -89,15 +89,13 @@ void mangle_class_tag(Type *class_type);
  * param_types / nparams describe the method's own parameters
  * (excluding the implicit 'this'). Pass NULL/0 for signature-less
  * contexts (e.g. forward references from templates where the
- * signature isn't available); the caller accepts the ambiguity. */
+ * signature isn't available); the caller accepts the ambiguity.
+ *
+ * is_const distinguishes const from non-const method overloads
+ * (N4659 §16.3.1/4). */
 void mangle_class_method(Type *class_type, Token *method_name,
-                          Type **param_types, int nparams);
-
-/* Like mangle_class_method but appends '_const' when is_const is true.
- * Distinguishes const from non-const method overloads (N4659 §16.3.1/4). */
-void mangle_class_method_cv(Type *class_type, Token *method_name,
-                             Type **param_types, int nparams,
-                             bool is_const);
+                          Type **param_types, int nparams,
+                          bool is_const);
 
 /* Constructor. Parameter-type suffix disambiguates overloads:
  *   vec()        → sf__vec__ctor_p_void_pe_
@@ -114,6 +112,75 @@ void mangle_class_dtor(Type *class_type);
 /* User dtor body (just the body the user wrote, no member chain):
  *   class vec → sf__vec__dtor_body */
 void mangle_class_dtor_body(Type *class_type);
+
+/* Operator method mangling. Sea-front emits the method symbol for
+ * an overloaded operator at multiple sites: the class's def, every
+ * call (binary expr → operator+, subscript → operator[], etc.), and
+ * the class's forward decls. All sites must produce the same symbol;
+ * this API is the single entry point so emit_c.c never picks per-
+ * scheme strings itself.
+ *
+ * OP_CONVERSION is handled separately because Itanium encodes it
+ * with the target type (`cv<T>`) rather than a fixed operator id —
+ * callers use mangle_class_conversion below. */
+typedef enum {
+    OP_PLUS,           /* + (binary or unary; nparams disambiguates) */
+    OP_MINUS,          /* - (binary or unary) */
+    OP_STAR,           /* * (binary mul or unary deref) */
+    OP_SLASH,          /* / */
+    OP_MOD,            /* % */
+    OP_AMP,            /* & (binary bitand or unary addr-of) */
+    OP_PIPE,           /* | */
+    OP_CARET,          /* ^ */
+    OP_TILDE,          /* ~ */
+    OP_BANG,           /* ! */
+    OP_EQ,             /* == */
+    OP_NE,             /* != */
+    OP_LT,             /* < */
+    OP_GT,             /* > */
+    OP_LE,             /* <= */
+    OP_GE,             /* >= */
+    OP_LSHIFT,         /* << */
+    OP_RSHIFT,         /* >> */
+    OP_LAND,           /* && */
+    OP_LOR,            /* || */
+    OP_ASSIGN,         /* = */
+    OP_PLUS_ASSIGN,    /* += */
+    OP_MINUS_ASSIGN,   /* -= */
+    OP_MUL_ASSIGN,     /* *= */
+    OP_DIV_ASSIGN,     /* /= */
+    OP_MOD_ASSIGN,     /* %= */
+    OP_BITAND_ASSIGN,  /* &= */
+    OP_BITOR_ASSIGN,   /* |= */
+    OP_XOR_ASSIGN,     /* ^= */
+    OP_LSHIFT_ASSIGN,  /* <<= */
+    OP_RSHIFT_ASSIGN,  /* >>= */
+    OP_INCR,           /* ++ (pre or post) */
+    OP_DECR,           /* -- (pre or post) */
+    OP_SUBSCRIPT,      /* [] */
+    OP_CALL,           /* () */
+    OP_ARROW,          /* -> */
+    OP_UNKNOWN,        /* fallback for unrecognised operator names */
+} OperatorKind;
+
+/* Source-text-driven detection of an operator method's kind from
+ * its name token. The token's `loc` points into the source buffer;
+ * the operator symbol follows the "operator" keyword in source.
+ * Returns OP_UNKNOWN when nothing matches (e.g. conversion
+ * operator `operator T()`, where the caller should use
+ * mangle_class_conversion instead). */
+OperatorKind operator_kind_from_method_name(Token *name);
+
+void mangle_class_operator(Type *class_type, OperatorKind op,
+                            Type **param_types, int nparams,
+                            bool is_const);
+
+/* Conversion operator `operator T()` — N4659 §16.3.1.5
+ * [over.match.conv]. Itanium encodes as `cv<T>`. Human encodes as
+ * a per-target-type suffix so distinct conversion operators on the
+ * same class get distinct symbols. */
+void mangle_class_conversion(Type *class_type, Type *target_type,
+                              bool is_const);
 
 /* The vtable struct type for a polymorphic class:
  *   class vec → sf__vec__vtable */
@@ -154,13 +221,18 @@ int mangle_type_to_buf(Type *ty, char *buf, int pos, int max);
 /* substitution table at the start.                                 */
 /* ---------------------------------------------------------------- */
 void itan_mangle_class_tag(Type *class_type);
-void itan_mangle_class_method_cv(Type *class_type, Token *method_name,
-                                  Type **param_types, int nparams,
-                                  bool is_const);
+void itan_mangle_class_method(Type *class_type, Token *method_name,
+                               Type **param_types, int nparams,
+                               bool is_const);
 void itan_mangle_class_ctor(Type *class_type,
                              Type **param_types, int nparams);
 void itan_mangle_class_dtor(Type *class_type);
 void itan_mangle_class_dtor_body(Type *class_type);
+void itan_mangle_class_operator(Type *class_type, OperatorKind op,
+                                 Type **param_types, int nparams,
+                                 bool is_const);
+void itan_mangle_class_conversion(Type *class_type, Type *target_type,
+                                   bool is_const);
 void itan_mangle_class_vtable_type(Type *class_type);
 void itan_mangle_class_vtable_instance(Type *class_type);
 void itan_emit_type_for_mangle(Type *ty);

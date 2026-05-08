@@ -92,8 +92,11 @@ Mangler g_mangler_human = {
 
 Mangler *g_mangler = &g_mangler_human;
 
-/* Active scheme. CLI flag --mangling= sets this in main.c. */
-MangleKind g_mangle_kind = MANGLE_HUMAN;
+/* Active scheme. CLI flag --mangling= sets this in main.c.
+ * Default is Itanium so sea-front output links interoperably with
+ * gcc/clang/libstdc++. Human-readable mangling stays available
+ * behind --mangling=human for grep-friendly disassembly. */
+MangleKind g_mangle_kind = MANGLE_ITANIUM;
 
 /* ------------------------------------------------------------------ */
 /* Framework — recursive walker that calls into the active vtable.    */
@@ -128,20 +131,15 @@ static void emit_namespace_chain(Type *class_type) {
     (void)n;
 }
 
-/* Emit the mangled encoding for a single type argument in a
- * template argument list. For the human scheme, this produces
- * the type's C-like name (int, double, struct tag, etc.).
- * Exposed in mangle.h so emit_c.c's template-id-suffix path
- * (qualified template-call sites) defers to the same encoder —
- * keeps mangling at qualified call sites in lockstep with class-
- * tag and param-suffix mangling. */
-void emit_type_for_mangle(Type *ty) {
-    if (g_mangle_kind == MANGLE_ITANIUM) { itan_emit_type_for_mangle(ty); return; }
+/* Non-dispatching human type encoder. Used directly by paths that
+ * MUST stay in human encoding regardless of g_mangle_kind — namely
+ * C struct tag emission (mangle_class_tag and friends), since
+ * struct tags are TU-local C identifiers that benefit from
+ * grep-friendly readable form even when linker symbols are
+ * Itanium. The recursive calls go through this same function so
+ * the encoding stays human all the way down. */
+static void hum_emit_type(Type *ty) {
     if (!ty) { fputs("unknown", stdout); return; }
-    /* CV-qualifiers — N4659 §10.1.7.1 [dcl.type.cv].
-     * Itanium encodes const as 'K', volatile as 'V'; we use
-     * 'const_' / 'volatile_' prefixes for readability.
-     * E.g. 'const int&' → 'const_int_ref'. */
     if (ty->is_const)    fputs("const_", stdout);
     if (ty->is_volatile) fputs("volatile_", stdout);
     switch (ty->kind) {
@@ -158,25 +156,20 @@ void emit_type_for_mangle(Type *ty) {
     case TY_FLOAT:   fputs("float", stdout); return;
     case TY_DOUBLE:  fputs("double", stdout); return;
     case TY_LDOUBLE: fputs("ldouble", stdout); return;
-    case TY_PTR:     emit_type_for_mangle(ty->base); fputs("_ptr", stdout); return;
-    case TY_REF:     emit_type_for_mangle(ty->base); fputs("_ref", stdout); return;
-    case TY_RVALREF: emit_type_for_mangle(ty->base); fputs("_rref", stdout); return;
+    case TY_PTR:     hum_emit_type(ty->base); fputs("_ptr", stdout); return;
+    case TY_REF:     hum_emit_type(ty->base); fputs("_ref", stdout); return;
+    case TY_RVALREF: hum_emit_type(ty->base); fputs("_rref", stdout); return;
     /* Array-as-parameter decays to pointer — N4659 §11.3.4/5
-     * [dcl.array]. Mangling must use the decayed form so a
-     * forward-decl 'f(T*)' and a definition 'f(T arr[N])' produce
-     * the same symbol. Without this, gengtype.c's set_gc_used_type
-     * had distinct mangled names for fwd-decl vs def. */
-    case TY_ARRAY:   emit_type_for_mangle(ty->base); fputs("_ptr", stdout); return;
+     * [dcl.array]. */
+    case TY_ARRAY:   hum_emit_type(ty->base); fputs("_ptr", stdout); return;
     case TY_STRUCT: case TY_UNION:
         if (ty->tag) fprintf(stdout, "%.*s", ty->tag->len, ty->tag->loc);
         else fputs("anon", stdout);
-        /* If this struct itself is a template instantiation, emit
-         * its template args recursively. */
         if (ty->n_template_args > 0) {
             fputs("_t_", stdout);
             for (int i = 0; i < ty->n_template_args; i++) {
                 if (i > 0) fputc('_', stdout);
-                emit_type_for_mangle(ty->template_args[i]);
+                hum_emit_type(ty->template_args[i]);
             }
             fputs("_te_", stdout);
         }
@@ -185,18 +178,12 @@ void emit_type_for_mangle(Type *ty) {
         if (ty->tag) fprintf(stdout, "%.*s", ty->tag->len, ty->tag->loc);
         else fputs("anon_enum", stdout);
         return;
-    /* Function type — typically appears as TY_PTR(TY_FUNC) for
-     * function-pointer parameters. Encode as 'fn_<ret>_<params>_fne_'
-     * so 'int (*)(const void*, const void*)' has a stable mangled
-     * form rather than collapsing to 'unknown'. Two function-pointer
-     * params with different signatures must produce different
-     * symbols (N4659 §16.2 [over.load]). */
     case TY_FUNC:
         fputs("fn_", stdout);
-        emit_type_for_mangle(ty->ret);
+        hum_emit_type(ty->ret);
         for (int i = 0; i < ty->nparams; i++) {
             fputc('_', stdout);
-            emit_type_for_mangle(ty->params[i]);
+            hum_emit_type(ty->params[i]);
         }
         fputs("_fne_", stdout);
         return;
@@ -251,6 +238,17 @@ void emit_type_for_mangle(Type *ty) {
         fputs("unknown", stdout);
         return;
     }
+}
+
+/* Public type encoder. Dispatches on g_mangle_kind: human callers
+ * (struct tag emission) reach this with the active kind already
+ * being human, and itanium callers route through here from their
+ * own emission paths. The non-dispatching hum_emit_type is the
+ * fallback for code paths that need always-human regardless of
+ * mode (sf__*-prefixed C struct tags). */
+void emit_type_for_mangle(Type *ty) {
+    if (g_mangle_kind == MANGLE_ITANIUM) { itan_emit_type_for_mangle(ty); return; }
+    hum_emit_type(ty);
 }
 
 /* Buffer-output version of emit_type_for_mangle. Same encoding,
@@ -386,12 +384,15 @@ static void emit_class_open(Type *class_type) {
     g_mangler->open_class(g_mangler);
     g_mangler->append_class_name(g_mangler,
         class_type ? class_type->tag : NULL);
-    /* Template argument suffix */
+    /* Template argument suffix — always human, since this is the
+     * C struct tag emission path. Calling hum_emit_type directly
+     * (not the dispatching emit_type_for_mangle) keeps the
+     * encoding consistent regardless of g_mangle_kind. */
     if (class_type && class_type->n_template_args > 0) {
         fputs("_t_", stdout);
         for (int i = 0; i < class_type->n_template_args; i++) {
             if (i > 0) fputc('_', stdout);
-            emit_type_for_mangle(class_type->template_args[i]);
+            hum_emit_type(class_type->template_args[i]);
         }
         fputs("_te_", stdout);
     }
@@ -405,12 +406,15 @@ static void emit_class_close(void) {
 /* High-level helpers                                                 */
 /* ------------------------------------------------------------------ */
 
-/* C struct tags are TU-local C identifiers, not linker symbols, so
- * the Itanium ABI has no opinion on them. Always emit the human
- * form regardless of g_mangle_kind — keeps grep-friendly disassembly
- * under --mangling=itanium. The C struct's mangled-name symbols
- * (methods, ctors, dtors) are emitted by the helpers below which DO
- * dispatch. */
+/* C struct tags are TU-local C identifiers, never linker symbols.
+ * Always emit the human form regardless of g_mangle_kind so
+ * disassembly and `gdb` print readable names like
+ * `struct sf__vec_t_int_te_` even when linker symbols are
+ * Itanium-mangled. The struct tag and the linker symbol live in
+ * different name spaces (C compiler vs linker), so coexisting
+ * encodings doesn't cause mixing — emit_class_open's nested
+ * type-arg emission goes through hum_emit_type directly to keep
+ * the entire tag in human form. */
 void mangle_class_tag(Type *class_type) {
     emit_class_open(class_type);
     emit_class_close();
@@ -484,18 +488,10 @@ int mangle_param_suffix_to_buf(Type **param_types, int nparams,
 }
 
 void mangle_class_method(Type *class_type, Token *method_name,
-                          Type **param_types, int nparams) {
-    emit_class_open(class_type);
-    g_mangler->append_member(g_mangler, method_name);
-    mangle_param_suffix(param_types, nparams);
-    emit_class_close();
-}
-
-void mangle_class_method_cv(Type *class_type, Token *method_name,
-                             Type **param_types, int nparams,
-                             bool is_const) {
+                          Type **param_types, int nparams,
+                          bool is_const) {
     if (g_mangle_kind == MANGLE_ITANIUM) {
-        itan_mangle_class_method_cv(class_type, method_name,
+        itan_mangle_class_method(class_type, method_name,
                                      param_types, nparams, is_const);
         return;
     }
@@ -520,6 +516,128 @@ void mangle_class_ctor(Type *class_type,
     emit_class_close();
 }
 
+/* Operator-kind dispatch tables. The human suffix is what follows
+ * the class tag in the mangled name (`__plus`, `__subscript`, ...);
+ * the Itanium op-id is the 2-letter code per §5.1.4.1
+ * [mangle.operator-name]. NULL entries mean "fallback to method-
+ * name encoding" (rare; unknown ops). */
+static const char *const op_human_suffix[] = {
+    [OP_PLUS]            = "__plus",
+    [OP_MINUS]           = "__minus",
+    [OP_STAR]            = "__deref",        /* unary; binary uses __mul */
+    [OP_SLASH]           = "__div",
+    [OP_MOD]             = "__mod",
+    [OP_AMP]             = "__bitand",
+    [OP_PIPE]            = "__bitor",
+    [OP_CARET]           = "__xor",
+    [OP_TILDE]           = "__compl",
+    [OP_BANG]            = "__not",
+    [OP_EQ]              = "__eq",
+    [OP_NE]              = "__ne",
+    [OP_LT]              = "__lt",
+    [OP_GT]              = "__gt",
+    [OP_LE]              = "__le",
+    [OP_GE]              = "__ge",
+    [OP_LSHIFT]          = "__lshift",
+    [OP_RSHIFT]          = "__rshift",
+    [OP_LAND]            = "__land",
+    [OP_LOR]             = "__lor",
+    [OP_ASSIGN]          = "__assign",
+    [OP_PLUS_ASSIGN]     = "__plus_assign",
+    [OP_MINUS_ASSIGN]    = "__minus_assign",
+    [OP_MUL_ASSIGN]      = "__mul_assign",
+    [OP_DIV_ASSIGN]      = "__div_assign",
+    [OP_MOD_ASSIGN]      = "__mod_assign",
+    [OP_BITAND_ASSIGN]   = "__bitand_assign",
+    [OP_BITOR_ASSIGN]    = "__bitor_assign",
+    [OP_XOR_ASSIGN]      = "__xor_assign",
+    [OP_LSHIFT_ASSIGN]   = "__lshift_assign",
+    [OP_RSHIFT_ASSIGN]   = "__rshift_assign",
+    [OP_INCR]            = "__incr",
+    [OP_DECR]            = "__decr",
+    [OP_SUBSCRIPT]       = "__subscript",
+    [OP_CALL]            = "__call",
+    [OP_ARROW]           = "__arrow",
+    [OP_UNKNOWN]         = "__operator",
+};
+
+OperatorKind operator_kind_from_method_name(Token *name) {
+    if (!name) return OP_UNKNOWN;
+    const char *after = name->loc + name->len;
+    while (*after == ' ' || *after == '\t') after++;
+    /* Three-char patterns first to avoid prefix-shadowing. */
+    if (after[0] == '<' && after[1] == '<' && after[2] == '=') return OP_LSHIFT_ASSIGN;
+    if (after[0] == '>' && after[1] == '>' && after[2] == '=') return OP_RSHIFT_ASSIGN;
+    /* Two-char. */
+    if (after[0] == '<' && after[1] == '<') return OP_LSHIFT;
+    if (after[0] == '>' && after[1] == '>') return OP_RSHIFT;
+    if (after[0] == '=' && after[1] == '=') return OP_EQ;
+    if (after[0] == '!' && after[1] == '=') return OP_NE;
+    if (after[0] == '<' && after[1] == '=') return OP_LE;
+    if (after[0] == '>' && after[1] == '=') return OP_GE;
+    if (after[0] == '+' && after[1] == '+') return OP_INCR;
+    if (after[0] == '-' && after[1] == '-') return OP_DECR;
+    if (after[0] == '+' && after[1] == '=') return OP_PLUS_ASSIGN;
+    if (after[0] == '-' && after[1] == '=') return OP_MINUS_ASSIGN;
+    if (after[0] == '*' && after[1] == '=') return OP_MUL_ASSIGN;
+    if (after[0] == '/' && after[1] == '=') return OP_DIV_ASSIGN;
+    if (after[0] == '%' && after[1] == '=') return OP_MOD_ASSIGN;
+    if (after[0] == '&' && after[1] == '=') return OP_BITAND_ASSIGN;
+    if (after[0] == '|' && after[1] == '=') return OP_BITOR_ASSIGN;
+    if (after[0] == '^' && after[1] == '=') return OP_XOR_ASSIGN;
+    if (after[0] == '&' && after[1] == '&') return OP_LAND;
+    if (after[0] == '|' && after[1] == '|') return OP_LOR;
+    if (after[0] == '-' && after[1] == '>') return OP_ARROW;
+    if (after[0] == '(' && after[1] == ')') return OP_CALL;
+    /* Single-char. */
+    if (after[0] == '[') return OP_SUBSCRIPT;
+    if (after[0] == '+') return OP_PLUS;
+    if (after[0] == '-') return OP_MINUS;
+    if (after[0] == '*') return OP_STAR;
+    if (after[0] == '/') return OP_SLASH;
+    if (after[0] == '%') return OP_MOD;
+    if (after[0] == '&') return OP_AMP;
+    if (after[0] == '|') return OP_PIPE;
+    if (after[0] == '^') return OP_CARET;
+    if (after[0] == '~') return OP_TILDE;
+    if (after[0] == '!') return OP_BANG;
+    if (after[0] == '<') return OP_LT;
+    if (after[0] == '>') return OP_GT;
+    if (after[0] == '=') return OP_ASSIGN;
+    /* Conversion operator (`operator T()`) — caller should detect
+     * via the function's return type and use mangle_class_conversion. */
+    return OP_UNKNOWN;
+}
+
+void mangle_class_operator(Type *class_type, OperatorKind op,
+                            Type **param_types, int nparams,
+                            bool is_const) {
+    if (g_mangle_kind == MANGLE_ITANIUM) {
+        itan_mangle_class_operator(class_type, op,
+                                    param_types, nparams, is_const);
+        return;
+    }
+    emit_class_open(class_type);
+    fputs(op_human_suffix[op], stdout);
+    mangle_param_suffix(param_types, nparams);
+    if (is_const) fputs("_const", stdout);
+    emit_class_close();
+}
+
+void mangle_class_conversion(Type *class_type, Type *target_type,
+                              bool is_const) {
+    if (g_mangle_kind == MANGLE_ITANIUM) {
+        itan_mangle_class_conversion(class_type, target_type, is_const);
+        return;
+    }
+    emit_class_open(class_type);
+    fputs("__op_", stdout);
+    hum_emit_type(target_type);
+    /* No param suffix — conversion operators take only `this`. */
+    if (is_const) fputs("_const", stdout);
+    emit_class_close();
+}
+
 void mangle_class_dtor(Type *class_type) {
     if (g_mangle_kind == MANGLE_ITANIUM) { itan_mangle_class_dtor(class_type); return; }
     emit_class_open(class_type);
@@ -534,9 +652,10 @@ void mangle_class_dtor_body(Type *class_type) {
     emit_class_close();
 }
 
-/* Vtable type and instance — same TU-local-C-identifier story as
- * mangle_class_tag. The Itanium vtable-symbol shape (`_ZTV<class>`)
- * is a separate slice (see project_itanium_mangling_slice.md). */
+/* Vtable type and instance — same TU-local C identifier story as
+ * mangle_class_tag, always human. The Itanium vtable LINKER symbol
+ * (`_ZTV<class>`) and typeinfo (`_ZTI<class>`) are separate
+ * concepts that emit elsewhere when those slices land. */
 void mangle_class_vtable_type(Type *class_type) {
     emit_class_open(class_type);
     fputs("__vtable", stdout);

@@ -335,9 +335,8 @@ static int resolve_overload(Type *class_type, Token *name, bool is_ctor,
                              bool receiver_is_const,
                              Type ***out_param_types,
                              Node **out_best);
-static const char *operator_suffix_for_name(Token *name);
 static int resolve_operator_overload(Type *class_type,
-                                      const char *op_suffix,
+                                      OperatorKind op,
                                       Type **arg_types, int nargs,
                                       bool receiver_is_const,
                                       Type ***out_param_types,
@@ -640,26 +639,6 @@ static void emit_return_expr(Node *e) {
     fputs("&(", stdout);
     emit_expr(e);
     fputc(')', stdout);
-}
-
-/* Emit template-arg suffix (_t_<type>_te_) from an ND_TEMPLATE_ID node.
- * Used when a qualified call's leading part has explicit template args
- * (e.g. Box<int>::test → sf__Box_t_int_te___test_p_void_pe_). */
-static void emit_template_id_suffix(Node *tid) {
-    if (!tid || tid->kind != ND_TEMPLATE_ID || tid->template_id.nargs == 0)
-        return;
-    fputs("_t_", stdout);
-    for (int i = 0; i < tid->template_id.nargs; i++) {
-        if (i > 0) fputc('_', stdout);
-        Node *arg = tid->template_id.args[i];
-        Type *ty = (arg && arg->kind == ND_VAR_DECL) ? arg->var_decl.ty : NULL;
-        /* Defer to mangle.c's canonical encoder so this stays in
-         * lockstep with the class-tag and param-suffix encodings:
-         * each Type maps to one mangled spelling regardless of which
-         * call site emits it. */
-        emit_type_for_mangle(ty);
-    }
-    fputs("_te_", stdout);
 }
 
 /* Shared diagnostic for the "no matching overload" case. We fail
@@ -2537,7 +2516,7 @@ static bool method_is_const(Type *class_type, Token *name) {
  * from collect_overload_candidates because operator methods are all
  * named 'operator' — the suffix is what distinguishes them. */
 static void collect_operator_candidates(Type *class_type,
-                                         const char *op_suffix,
+                                         OperatorKind op,
                                          Node **found, int *nfound, int cap) {
     if (!class_type) return;
     Node *cd = class_type->class_def;
@@ -2569,15 +2548,14 @@ static void collect_operator_candidates(Type *class_type,
         if (!is_def && !is_decl) continue;
         Token *mn = is_def ? m->func.name : m->var_decl.name;
         if (!mn || mn->kind != TK_KW_OPERATOR) continue;
-        const char *s = operator_suffix_for_name(mn);
-        if (strcmp(s, op_suffix) != 0) continue;
+        if (operator_kind_from_method_name(mn) != op) continue;
         if (*nfound < cap) found[(*nfound)++] = m;
     }
     if (class_type->class_region) {
         for (int i = 0; i < class_type->class_region->nbases; i++) {
             DeclarativeRegion *br = class_type->class_region->bases[i];
             if (br && br->owner_type)
-                collect_operator_candidates(br->owner_type, op_suffix,
+                collect_operator_candidates(br->owner_type, op,
                                              found, nfound, cap);
         }
     }
@@ -2590,7 +2568,7 @@ static void collect_operator_candidates(Type *class_type,
  * can read per-candidate flags like is_const_method for _const
  * suffix mangling. Returns -1 if no candidate exists. */
 static int resolve_operator_overload(Type *class_type,
-                                      const char *op_suffix,
+                                      OperatorKind op,
                                       Type **arg_types, int nargs,
                                       bool receiver_is_const,
                                       Type ***out_param_types,
@@ -2601,7 +2579,7 @@ static int resolve_operator_overload(Type *class_type,
     enum { MAX_CAND = 32 };
     Node *cands[MAX_CAND];
     int ncands = 0;
-    collect_operator_candidates(class_type, op_suffix,
+    collect_operator_candidates(class_type, op,
                                  cands, &ncands, MAX_CAND);
     if (ncands == 0) return -1;
     if (ncands == 1) {
@@ -2646,18 +2624,19 @@ static int resolve_operator_overload(Type *class_type,
  * + mangle_class_tag + suffix + param-suffix + _const emission. The
  * ND_UNARY site has a different shape (only emits on np == 0) and
  * keeps its open-coded form. */
-static int emit_class_op_mangled_name(Type *class_ty, const char *op_suffix,
+static int emit_class_op_mangled_name(Type *class_ty, OperatorKind op,
                                        Type **args, int nargs,
                                        bool receiver_is_const,
                                        Type ***out_pty,
                                        Node **out_winner) {
     Node *winner = NULL;
-    int np = resolve_operator_overload(class_ty, op_suffix, args, nargs,
+    int np = resolve_operator_overload(class_ty, op, args, nargs,
                                         receiver_is_const, out_pty, &winner);
-    mangle_class_tag(class_ty);
-    fputs(op_suffix, stdout);
-    if (np >= 0) mangle_param_suffix(*out_pty, np);
-    if (candidate_is_const(winner)) fputs("_const", stdout);
+    bool mc = candidate_is_const(winner);
+    mangle_class_operator(class_ty, op,
+                           np >= 0 ? *out_pty : args,
+                           np >= 0 ? np : nargs,
+                           mc);
     if (out_winner) *out_winner = winner;
     return np;
 }
@@ -2925,37 +2904,39 @@ static const char *binop_str(TokenKind k) {
  * Returns NULL if the operator is not overloadable or we don't
  * support rewriting it yet. Must match the suffixes in
  * emit_operator_method_name. */
-static const char *binop_to_operator_suffix(TokenKind op) {
+/* Map a binary-operator TokenKind to OperatorKind. Returns
+ * OP_UNKNOWN for tokens that aren't class-overloadable binops. */
+static OperatorKind binop_to_operator_kind(TokenKind op) {
     switch (op) {
-    case TK_PLUS:           return "__plus";
-    case TK_MINUS:          return "__minus";
-    case TK_STAR:           return "__deref";  /* operator* (binary = multiply) */
-    case TK_SLASH:          return "__div";
-    case TK_PERCENT:        return "__mod";
-    case TK_AMP:            return "__bitand";
-    case TK_PIPE:           return "__bitor";
-    case TK_CARET:          return "__xor";
-    case TK_SHL:            return "__lshift";
-    case TK_SHR:            return "__rshift";
-    case TK_EQ:             return "__eq";
-    case TK_NE:             return "__ne";
-    case TK_LT:             return "__lt";
-    case TK_GT:             return "__gt";
-    case TK_LE:             return "__le";
-    case TK_GE:             return "__ge";
-    case TK_LAND:           return "__land";
-    case TK_LOR:            return "__lor";
-    case TK_PLUS_ASSIGN:    return "__plus_assign";
-    case TK_MINUS_ASSIGN:   return "__minus_assign";
-    case TK_STAR_ASSIGN:    return "__mul_assign";
-    case TK_SLASH_ASSIGN:   return "__div_assign";
-    case TK_AMP_ASSIGN:     return "__bitand_assign";
-    case TK_PIPE_ASSIGN:    return "__bitor_assign";
-    case TK_CARET_ASSIGN:   return "__xor_assign";
-    case TK_SHL_ASSIGN:     return "__lshift_assign";
-    case TK_SHR_ASSIGN:     return "__rshift_assign";
-    case TK_PERCENT_ASSIGN: return "__mod_assign";
-    default:                return NULL;
+    case TK_PLUS:           return OP_PLUS;
+    case TK_MINUS:          return OP_MINUS;
+    case TK_STAR:           return OP_STAR;
+    case TK_SLASH:          return OP_SLASH;
+    case TK_PERCENT:        return OP_MOD;
+    case TK_AMP:            return OP_AMP;
+    case TK_PIPE:           return OP_PIPE;
+    case TK_CARET:          return OP_CARET;
+    case TK_SHL:            return OP_LSHIFT;
+    case TK_SHR:            return OP_RSHIFT;
+    case TK_EQ:             return OP_EQ;
+    case TK_NE:             return OP_NE;
+    case TK_LT:             return OP_LT;
+    case TK_GT:             return OP_GT;
+    case TK_LE:             return OP_LE;
+    case TK_GE:             return OP_GE;
+    case TK_LAND:           return OP_LAND;
+    case TK_LOR:            return OP_LOR;
+    case TK_PLUS_ASSIGN:    return OP_PLUS_ASSIGN;
+    case TK_MINUS_ASSIGN:   return OP_MINUS_ASSIGN;
+    case TK_STAR_ASSIGN:    return OP_MUL_ASSIGN;
+    case TK_SLASH_ASSIGN:   return OP_DIV_ASSIGN;
+    case TK_AMP_ASSIGN:     return OP_BITAND_ASSIGN;
+    case TK_PIPE_ASSIGN:    return OP_BITOR_ASSIGN;
+    case TK_CARET_ASSIGN:   return OP_XOR_ASSIGN;
+    case TK_SHL_ASSIGN:     return OP_LSHIFT_ASSIGN;
+    case TK_SHR_ASSIGN:     return OP_RSHIFT_ASSIGN;
+    case TK_PERCENT_ASSIGN: return OP_MOD_ASSIGN;
+    default:                return OP_UNKNOWN;
     }
 }
 
@@ -3273,8 +3254,8 @@ static void emit_expr(Node *n) {
         }
         if (lhs_ty && (lhs_ty->kind == TY_STRUCT || lhs_ty->kind == TY_UNION) &&
             lhs_ty->tag) {
-            const char *suffix = binop_to_operator_suffix(n->binary.op);
-            if (suffix) {
+            OperatorKind opk = binop_to_operator_kind(n->binary.op);
+            if (opk != OP_UNKNOWN) {
                 /* Resolve the specific operator overload by matching
                  * the rhs type against each candidate's sole param
                  * (ignoring the implicit 'this'). Fall back to
@@ -3289,7 +3270,7 @@ static void emit_expr(Node *n) {
                 Type **pty = NULL;
                 bool lhs_const = receiver_type_is_const(
                     n->binary.lhs ? n->binary.lhs->resolved_type : NULL);
-                int np = emit_class_op_mangled_name(lhs_ty, suffix, args, 1,
+                int np = emit_class_op_mangled_name(lhs_ty, opk, args, 1,
                                                      lhs_const, &pty, NULL);
                 fputc('(', stdout);
                 emit_addrof_for_this(n->binary.lhs);
@@ -3315,14 +3296,14 @@ static void emit_expr(Node *n) {
         if (ty_is_ref(lhs_ty)) lhs_ty = lhs_ty->base;
         if (lhs_ty && (lhs_ty->kind == TY_STRUCT || lhs_ty->kind == TY_UNION) &&
             lhs_ty->tag && n->binary.op != TK_ASSIGN) {
-            const char *suffix = binop_to_operator_suffix(n->binary.op);
-            if (suffix) {
+            OperatorKind opk = binop_to_operator_kind(n->binary.op);
+            if (opk != OP_UNKNOWN) {
                 Type *rhs_ty = n->binary.rhs ? n->binary.rhs->resolved_type : NULL;
                 Type *args[1] = { rhs_ty };
                 Type **pty = NULL;
                 bool lhs_const = receiver_type_is_const(
                     n->binary.lhs ? n->binary.lhs->resolved_type : NULL);
-                int np = emit_class_op_mangled_name(lhs_ty, suffix, args, 1,
+                int np = emit_class_op_mangled_name(lhs_ty, opk, args, 1,
                                                      lhs_const, &pty, NULL);
                 fputc('(', stdout);
                 emit_addrof_for_this(n->binary.lhs);
@@ -3538,7 +3519,6 @@ static void emit_expr(Node *n) {
          * param suffix '_p_void_pe_' vs '_p_T_pe_'). */
         Type *ot = n->unary.operand ? n->unary.operand->resolved_type : NULL;
         if (ty_is_ref(ot)) ot = ot->base;
-        const char *usuf = NULL;
         /* Operator-overload rvalue operand ('~(a - b)' where '-' is
          * struct operator-, returns struct, then '~' dispatches to
          * operator~). sema's common_arith_type returns NULL for
@@ -3554,36 +3534,30 @@ static void emit_expr(Node *n) {
                 ? sub->binary.lhs : sub->unary.operand;
             if (sub_op) ot = sub_op->resolved_type;
         }
+        OperatorKind uop = OP_UNKNOWN;
         if (ot && (ot->kind == TY_STRUCT || ot->kind == TY_UNION) &&
             ot->tag) {
             switch (n->unary.op) {
-            case TK_MINUS: usuf = "__minus"; break;
-            case TK_PLUS:  usuf = "__plus";  break;
-            case TK_EXCL:  usuf = "__not";   break;
-            case TK_TILDE: usuf = "__compl"; break;
-            /* '*x' where x is a class value → operator*() dispatch.
-             * Pattern: gcc 4.8 expr.h insn_gen_fn, expr.c '(*genfun)(args)'. */
-            case TK_STAR:  usuf = "__deref"; break;
-            /* Prefix '++x' / '--x' on a class value → operator++/--().
-             * Pattern: gcc 4.8 predict.c '++compare_count' where
-             * compare_count is double_int. */
-            case TK_INC:   usuf = "__incr"; break;
-            case TK_DEC:   usuf = "__decr"; break;
+            case TK_MINUS: uop = OP_MINUS; break;
+            case TK_PLUS:  uop = OP_PLUS;  break;
+            case TK_EXCL:  uop = OP_BANG;  break;
+            case TK_TILDE: uop = OP_TILDE; break;
+            case TK_STAR:  uop = OP_STAR;  break;
+            case TK_INC:   uop = OP_INCR;  break;
+            case TK_DEC:   uop = OP_DECR;  break;
             default: break;
             }
         }
-        if (usuf) {
+        if (uop != OP_UNKNOWN) {
             Type **pty = NULL;
             Node *winner = NULL;
             bool op_const = receiver_type_is_const(
                 n->unary.operand ? n->unary.operand->resolved_type : NULL);
-            int np = resolve_operator_overload(ot, usuf, NULL, 0,
+            int np = resolve_operator_overload(ot, uop, NULL, 0,
                                                 op_const, &pty, &winner);
             if (np == 0) {
-                mangle_class_tag(ot);
-                fputs(usuf, stdout);
-                mangle_param_suffix(NULL, 0);
-                if (candidate_is_const(winner)) fputs("_const", stdout);
+                mangle_class_operator(ot, uop, NULL, 0,
+                                       candidate_is_const(winner));
                 fputs("(&", stdout);
                 emit_expr(n->unary.operand);
                 fputc(')', stdout);
@@ -3722,14 +3696,14 @@ static void emit_expr(Node *n) {
                 Type **pty = NULL;
                 Node *winner = NULL;
                 bool callee_const = receiver_type_is_const(cty);
-                int np = resolve_operator_overload(cty, "__call",
+                int np = resolve_operator_overload(cty, OP_CALL,
                                                     at, na, callee_const,
                                                     &pty, &winner);
                 if (np >= 0 || (winner && winner->kind == ND_FUNC_DEF)) {
-                    mangle_class_tag(cty);
-                    fputs("__call", stdout);
-                    if (np >= 0) mangle_param_suffix(pty, np);
-                    if (candidate_is_const(winner)) fputs("_const", stdout);
+                    mangle_class_operator(cty, OP_CALL,
+                                           np >= 0 ? pty : at,
+                                           np >= 0 ? np : na,
+                                           candidate_is_const(winner));
                     fputc('(', stdout);
                     /* Implicit this — lvalue callee address. */
                     if (is_addressable_lvalue(callee_)) {
@@ -3929,20 +3903,45 @@ static void emit_expr(Node *n) {
                             }
                         }
                     }
+                    /* Determine the class Type to mangle through. The
+                     * cascade mirrors the owner_class / resolved /
+                     * stub fallback above, with template-id args
+                     * from `ltid` populated onto the stub so
+                     * `Class<int>::foo` mangles with the
+                     * instantiation's template args.
+                     *
+                     * Single mangle_class_method call below
+                     * replaces what was a manual concat of
+                     * `mangle_class_tag + "__" + method + param-
+                     * suffix` — the manual form mixed human prefix
+                     * (mangle_class_tag is always human, TU-local C
+                     * tag) with dispatched suffix (mangle_param_
+                     * suffix), producing inconsistent symbols under
+                     * --mangling=itanium. */
+                    Type stub = {0};
+                    Type *mangle_ctype = NULL;
                     if (owner_class) {
-                        mangle_class_tag(owner_class);
+                        mangle_ctype = owner_class;
                     } else if (callee_q->qualified.resolved_class_type) {
-                        /* mangle_class_tag emits its own 'sf__' prefix. */
-                        mangle_class_tag(callee_q->qualified.resolved_class_type);
+                        mangle_ctype = callee_q->qualified.resolved_class_type;
                     } else {
-                        fputs("sf__", stdout);
-                        fprintf(stdout, "%.*s",
-                                class_tok->len, class_tok->loc);
-                        if (ltid && ltid->kind == ND_TEMPLATE_ID)
-                            emit_template_id_suffix(ltid);
+                        stub.kind = TY_STRUCT;
+                        stub.tag  = class_tok;
+                        if (ltid && ltid->kind == ND_TEMPLATE_ID &&
+                            ltid->template_id.nargs > 0) {
+                            stub.n_template_args = ltid->template_id.nargs;
+                            static Type *stub_args_buf[16];
+                            int n = stub.n_template_args < 16
+                                      ? stub.n_template_args : 16;
+                            for (int i = 0; i < n; i++) {
+                                Node *a = ltid->template_id.args[i];
+                                stub_args_buf[i] = (a && a->kind == ND_VAR_DECL)
+                                                     ? a->var_decl.ty : NULL;
+                            }
+                            stub.template_args = stub_args_buf;
+                        }
+                        mangle_ctype = &stub;
                     }
-                    fprintf(stdout, "__%.*s",
-                            method_tok->len, method_tok->loc);
                     /* Member-template fallback fb_pty / fb_np set in
                      * the else branch below; declared at outer scope
                      * so the args-emit for-loop can also use them as
@@ -3975,11 +3974,17 @@ static void emit_expr(Node *n) {
                             }
                         }
                     }
+                    /* Compute final (params, nparams) from the same
+                     * cascade as before — sema-resolved callee_ft,
+                     * else TU-walk fallback for member templates,
+                     * else call-site arg types. */
+                    Type **final_pty = NULL;
+                    int    final_np  = 0;
                     if (!callee_ft_has_dep && callee_ft &&
                         callee_ft->kind == TY_FUNC &&
                         callee_ft->nparams > 0) {
-                        mangle_param_suffix(callee_ft->params,
-                                             callee_ft->nparams);
+                        final_pty = callee_ft->params;
+                        final_np  = callee_ft->nparams;
                     } else {
                         /* Member-template fallback: sema can't resolve
                          * a class member-template name to a TY_FUNC
@@ -4166,14 +4171,23 @@ static void emit_expr(Node *n) {
                             }
                         }
                         if (fb_np >= 0) {
-                            mangle_param_suffix(fb_pty, fb_np);
+                            final_pty = fb_pty;
+                            final_np  = fb_np;
                         } else {
                             Type **at = NULL;
                             int na = collect_call_arg_types(n->call.args,
                                                              n->call.nargs, &at);
-                            mangle_param_suffix(at, na);
+                            final_pty = at;
+                            final_np  = na;
                         }
                     }
+                    /* Single mangling call — emits the full linker
+                     * symbol consistently under whichever scheme is
+                     * active. Replaces the manual prefix + member +
+                     * suffix concat. */
+                    mangle_class_method(mangle_ctype, method_tok,
+                                            final_pty, final_np,
+                                            /*is_const=*/false);
                     fputc('(', stdout);
                     for (int i = 0; i < n->call.nargs; i++) {
                         if (i > 0) fputs(", ", stdout);
@@ -4301,7 +4315,7 @@ static void emit_expr(Node *n) {
                 }
                 {
                     bool mc = candidate_is_const(winner);
-                    mangle_class_method_cv(class_type, mname, call_pty, np, mc);
+                    mangle_class_method(class_type, mname, call_pty, np, mc);
                 }
                 /* N4659 §11.4.9 [class.static]: static member functions
                  * have no implicit 'this'. Open the arg list with no
@@ -4665,7 +4679,7 @@ static void emit_expr(Node *n) {
                                  * through the actual instantiated class_def. */
                                 bool mc = method_is_const(method_class,
                                     callee->member.member);
-                                mangle_class_method_cv(method_class,
+                                mangle_class_method(method_class,
                                     callee->member.member, at, na, mc);
                                 call_np = na;
                                 call_pty = at;
@@ -4683,7 +4697,7 @@ static void emit_expr(Node *n) {
                                 Type *fty = callee->resolved_type;
                                 bool mc = method_is_const(method_class,
                                     callee->member.member);
-                                mangle_class_method_cv(method_class,
+                                mangle_class_method(method_class,
                                     callee->member.member,
                                     fty->params, fty->nparams, mc);
                                 call_np = fty->nparams;
@@ -4717,7 +4731,7 @@ static void emit_expr(Node *n) {
                                 call_np = cty->nparams;
                             }
                             bool mc = candidate_is_const(winner);
-                            mangle_class_method_cv(method_class,
+                            mangle_class_method(method_class,
                                                      callee->member.member,
                                                      call_pty, call_np, mc);
                         }
@@ -5392,7 +5406,7 @@ static void emit_expr(Node *n) {
             Node *winner = NULL;
             bool base_const = receiver_type_is_const(
                 n->subscript.base ? n->subscript.base->resolved_type : NULL);
-            int np = resolve_operator_overload(base_ty, "__subscript",
+            int np = resolve_operator_overload(base_ty, OP_SUBSCRIPT,
                                                 args, 1, base_const,
                                                 &pty, &winner);
             bool ref_return = false;
@@ -5418,10 +5432,10 @@ static void emit_expr(Node *n) {
              * Same rule as the method-call ref_ret handling. */
             bool cur_returns_ref = ty_is_ref(g_current_func_ret_ty);
             if (ref_return && !cur_returns_ref) fputs("(*", stdout);
-            mangle_class_tag(base_ty);
-            fputs("__subscript", stdout);
-            if (np >= 0) mangle_param_suffix(pty, np);
-            if (candidate_is_const(winner)) fputs("_const", stdout);
+            mangle_class_operator(base_ty, OP_SUBSCRIPT,
+                                   np >= 0 ? pty : args,
+                                   np >= 0 ? np : 1,
+                                   candidate_is_const(winner));
             fputs("(&", stdout);
             emit_expr(n->subscript.base);
             fputs(", ", stdout);
@@ -6402,9 +6416,13 @@ static void emit_bool_context_expr(Node *expr) {
         t->tag && t->class_region) {
         Declaration *opd = lookup_in_scope(t->class_region, "operator", 8);
         if (opd && opd->type && opd->type->kind == TY_FUNC) {
+            /* Conversion operator — Itanium encodes as cv<T> per
+             * §5.1.4.1; the human path encodes as `__op_<T>`.
+             * Either way the mangling module owns the dispatch. */
             Token op_tok = { .kind = TK_IDENT, .loc = "operator", .len = 8 };
             bool mc = method_is_const(t, &op_tok);
-            mangle_class_method_cv(t, &op_tok, NULL, 0, mc);
+            Type *target = opd->type->ret;
+            mangle_class_conversion(t, target, mc);
             fputs("(&(", stdout);
             emit_expr(expr);
             fputs("))", stdout);
@@ -7293,13 +7311,31 @@ static void emit_stmt(Node *n) {
         if (range_ty->kind == TY_STRUCT || range_ty->kind == TY_UNION) {
             Type *iter_ty = class_method_return_type(range_ty, "begin", 5);
             if (iter_ty) {
+                /* The range-for desugar relies on `begin()` and
+                 * `end()` member functions taking no parameters and
+                 * returning the iterator type — N4659 §9.5.4
+                 * [stmt.ranged]. Route through mangle_class_method so
+                 * the mangling stays consistent under whichever
+                 * scheme is active. */
+                static char tok_begin_text[] = "begin";
+                static char tok_end_text[]   = "end";
+                static Token tok_begin = {
+                    .kind = TK_IDENT, .loc = tok_begin_text, .len = 5
+                };
+                static Token tok_end = {
+                    .kind = TK_IDENT, .loc = tok_end_text, .len = 3
+                };
                 fputs("{\n", stdout); g_indent++;
                 emit_indent(); emit_type(iter_ty); fputs(" __sf_end = ", stdout);
-                mangle_class_tag(range_ty); fputs("__end_p_void_pe_(&(", stdout);
+                mangle_class_method(range_ty, &tok_end, NULL, 0,
+                                        /*is_const=*/false);
+                fputs("(&(", stdout);
                 emit_expr(range); fputs("));\n", stdout);
                 emit_indent(); fputs("for (", stdout); emit_type(iter_ty);
                 fputs(" __sf_it = ", stdout);
-                mangle_class_tag(range_ty); fputs("__begin_p_void_pe_(&(", stdout);
+                mangle_class_method(range_ty, &tok_begin, NULL, 0,
+                                        /*is_const=*/false);
+                fputs("(&(", stdout);
                 emit_expr(range); fputs(")); __sf_it != __sf_end; ++__sf_it) {\n",
                                           stdout);
                 g_indent++; emit_indent(); emit_type(decl_ty);
@@ -8174,64 +8210,25 @@ static void emit_func_def(Node *n) {
     g_current_lambda_fn   = saved_lam;
 }
 
-/* Compute the mangled suffix for an operator method from its token.
- * 'operator[]' → '__subscript', 'operator=' → '__assign', etc.
- * The name token for operator functions is the 'operator' keyword;
- * the actual operator is the next token(s) in the source. Falls back
- * to '__operator' for unrecognised operators. Shared between the
- * decl-site emitter and the call-site candidate matcher so both
- * agree on which operator is which. */
-static const char *operator_suffix_for_name(Token *name) {
-    if (!name) return "__operator";
-    const char *after = name->loc + name->len;
-    while (*after == ' ' || *after == '\t') after++;
-
-    if (after[0] == '[')       return "__subscript";
-    if (after[0] == '(' && after[1] == ')') return "__call";
-    if (after[0] == '=' && after[1] == '=') return "__eq";
-    if (after[0] == '!' && after[1] == '=') return "__ne";
-    if (after[0] == '<' && after[1] == '=') return "__le";
-    if (after[0] == '>' && after[1] == '=') return "__ge";
-    if (after[0] == '<' && after[1] != '<') return "__lt";
-    if (after[0] == '>' && after[1] != '>') return "__gt";
-    if (after[0] == '+' && after[1] == '=') return "__plus_assign";
-    if (after[0] == '-' && after[1] == '=') return "__minus_assign";
-    if (after[0] == '*' && after[1] == '=') return "__mul_assign";
-    if (after[0] == '/' && after[1] == '=') return "__div_assign";
-    if (after[0] == '+' && after[1] == '+') return "__incr";
-    if (after[0] == '-' && after[1] == '-') return "__decr";
-    if (after[0] == '+')  return "__plus";
-    if (after[0] == '-' && after[1] == '>') return "__arrow";
-    if (after[0] == '-')  return "__minus";
-    if (after[0] == '*')  return "__deref";
-    if (after[0] == '/')  return "__div";
-    if (after[0] == '%')  return "__mod";
-    if (after[0] == '&' && after[1] == '&') return "__land";
-    if (after[0] == '|' && after[1] == '|') return "__lor";
-    if (after[0] == '&' && after[1] == '=') return "__bitand_assign";
-    if (after[0] == '|' && after[1] == '=') return "__bitor_assign";
-    if (after[0] == '^' && after[1] == '=') return "__xor_assign";
-    if (after[0] == '%' && after[1] == '=') return "__mod_assign";
-    if (after[0] == '&')  return "__bitand";
-    if (after[0] == '|')  return "__bitor";
-    if (after[0] == '^')  return "__xor";
-    if (after[0] == '~')  return "__compl";
-    if (after[0] == '!')  return "__not";
-    if (after[0] == '<' && after[1] == '<' && after[2] == '=') return "__lshift_assign";
-    if (after[0] == '>' && after[1] == '>' && after[2] == '=') return "__rshift_assign";
-    if (after[0] == '<' && after[1] == '<') return "__lshift";
-    if (after[0] == '>' && after[1] == '>') return "__rshift";
-    if (after[0] == '=')  return "__assign";
-    return "__operator";
-}
-
+/* Method DEF dispatcher for overloaded operators. The mangling
+ * module owns the per-scheme encoding decisions; this just decodes
+ * the operator-kind from the method-name token and routes to the
+ * right entry point (mangle_class_operator for operator-symbol
+ * methods, mangle_class_conversion for `operator T()`). */
 static void emit_operator_method_name_cv(Type *class_type, Token *name,
+                                          Type *ret_ty,
                                           Type **param_types, int nparams,
                                           bool is_const) {
-    mangle_class_tag(class_type);
-    fputs(operator_suffix_for_name(name), stdout);
-    mangle_param_suffix(param_types, nparams);
-    if (is_const) fputs("_const", stdout);
+    OperatorKind op = operator_kind_from_method_name(name);
+    if (op == OP_UNKNOWN && ret_ty) {
+        /* No operator symbol detected — must be a conversion
+         * operator `operator T()`, where T is the function's
+         * return type. */
+        mangle_class_conversion(class_type, ret_ty, is_const);
+    } else {
+        mangle_class_operator(class_type, op,
+                               param_types, nparams, is_const);
+    }
 }
 
 /*
@@ -8274,12 +8271,14 @@ static void emit_method_signature(Node *func, Type *class_type, bool emit_inline
     } else if (is_operator_name(func->func.name)) {
         Type **pty = NULL;
         int np = collect_func_param_types(func, &pty);
-        emit_operator_method_name_cv(class_type, func->func.name, pty, np,
+        emit_operator_method_name_cv(class_type, func->func.name,
+                                      func->func.ret_ty,
+                                      pty, np,
                                       func->func.is_const_method);
     } else {
         Type **pty = NULL;
         int np = collect_func_param_types(func, &pty);
-        mangle_class_method_cv(class_type, func->func.name, pty, np,
+        mangle_class_method(class_type, func->func.name, pty, np,
                                 func->func.is_const_method);
     }
     fputc('(', stdout);
@@ -8760,13 +8759,14 @@ static void emit_class_def(Node *n) {
                 Type **pty = NULL;
                 int np = collect_func_param_types(m, &pty);
                 bool mc = m->var_decl.ty && m->var_decl.ty->is_const;
+                Type *ret_ty = m->var_decl.ty ? m->var_decl.ty->ret : NULL;
                 emit_operator_method_name_cv(class_type, m->var_decl.name,
-                                              pty, np, mc);
+                                              ret_ty, pty, np, mc);
             } else {
                 Type **pty = NULL;
                 int np = collect_func_param_types(m, &pty);
                 bool mc = m->var_decl.ty && m->var_decl.ty->is_const;
-                mangle_class_method_cv(class_type, m->var_decl.name,
+                mangle_class_method(class_type, m->var_decl.name,
                                         pty, np, mc);
             }
             /* Static methods: no 'this' parameter.
@@ -8983,7 +8983,8 @@ methods_phase:;
             if (is_virt_funcdef) {
                 Type **pty = NULL;
                 int np = collect_func_param_types(m, &pty);
-                mangle_class_method(class_type, mname, pty, np);
+                mangle_class_method(class_type, mname, pty, np,
+                                        /*is_const=*/false);
             } else {
                 fputs("0", stdout);
             }

@@ -523,13 +523,14 @@ static Type *normalize_param(Type *ty, int slot) {
 /* Public entry points                                                */
 /* ------------------------------------------------------------------ */
 
-/* mangle_class_tag is no longer dispatched — see mangle.c comment.
- * Kept here as an unreachable abort to flag any future call site
- * that does end up dispatching, so the divergence isn't silent. */
+/* mangle_class_tag is always-human (TU-local C identifiers, kept
+ * grep-friendly even under itanium). These stubs flag accidental
+ * dispatch — they shouldn't be reachable from the dispatch in
+ * mangle.c. */
 void itan_mangle_class_tag(Type *class_type) {
     (void)class_type;
     fputs("sea-front internal error: itan_mangle_class_tag is "
-          "unreachable; see src/codegen/mangle.c\n", stderr);
+          "unreachable; see mangle_class_tag in mangle.c\n", stderr);
     abort();
 }
 
@@ -561,8 +562,28 @@ static void emit_prefix_open(ItanCtx *ctx, Type *class_type, bool is_const) {
         emit_source_name(outer[i]);
         ctx_push(ctx, slot);
     }
-    emit_source_name(class_type->tag);
-    ctx_push(ctx, class_type);
+    /* The class type pushed into the sub table must be unqualified.
+     * A receiver with cv (e.g. `const X &` whose class_type at the
+     * call site carries is_const=true) would otherwise match a later
+     * `const X` parameter as `S_`, swallowing the K wrapper that the
+     * definition emits. Itanium ABI §5.1.5: the prefix for a member
+     * function names the class, not a cv-qualified form. The method's
+     * own const-ness is conveyed by the K after N, above. */
+    static Type s_unq_class;
+    Type *cls = class_type;
+    if (cls && (cls->is_const || cls->is_volatile)) {
+        s_unq_class = *cls;
+        s_unq_class.is_const = false;
+        s_unq_class.is_volatile = false;
+        cls = &s_unq_class;
+    }
+    /* Class prefix step — defer to emit_unqualified_name so the
+     * template-id form `<name>I<args>E` is emitted when the class
+     * carries template_args (Itanium ABI §5.1.6.7 [mangle.template-
+     * id]). Without this, `Box<int>::get` and `Box<long>::get`
+     * collide on `_ZN3Box3getEv`. */
+    emit_unqualified_name(ctx, cls);
+    ctx_push(ctx, cls);
 }
 
 /* Close the nested-name with E and emit the parameter type list. */
@@ -581,7 +602,7 @@ static void emit_params_close(ItanCtx *ctx,
  * Shape: _Z N <cv?> <prefix> <method-name> E <params>
  * where <cv> is K (const) and/or V (volatile) on the implicit object
  * parameter (§5.1.5.2 [mangle.member-fn]). */
-void itan_mangle_class_method_cv(Type *class_type, Token *method_name,
+void itan_mangle_class_method(Type *class_type, Token *method_name,
                                   Type **param_types, int nparams,
                                   bool is_const) {
     ItanCtx ctx;
@@ -648,19 +669,102 @@ void itan_mangle_class_dtor_body(Type *class_type) {
     emit_params_close(&ctx, NULL, 0);
 }
 
-/* Vtable entries — also no longer dispatched. Same flagging-only
- * abort to surface any unexpected call. */
+/* Operator-name encoding — Itanium ABI §5.1.4.1
+ * [mangle.operator-name]. Two-letter codes per the spec. Unary
+ * variants of plus/minus/star/amp use distinct codes (`ps mi de ad`)
+ * vs binary (`pl mi ml an`); we pick by `nparams` since unary
+ * operators take only the implicit object parameter (nparams==0)
+ * while binary ops take nparams==1. */
+static const char *itan_op_id(OperatorKind op, int nparams) {
+    bool unary = (nparams == 0);
+    switch (op) {
+    case OP_PLUS:           return unary ? "ps" : "pl";
+    case OP_MINUS:          return unary ? "ng" : "mi";
+    case OP_STAR:           return unary ? "de" : "ml";
+    case OP_AMP:            return unary ? "ad" : "an";
+    case OP_SLASH:          return "dv";
+    case OP_MOD:            return "rm";
+    case OP_PIPE:           return "or";
+    case OP_CARET:          return "eo";
+    case OP_TILDE:          return "co";
+    case OP_BANG:           return "nt";
+    case OP_EQ:             return "eq";
+    case OP_NE:             return "ne";
+    case OP_LT:             return "lt";
+    case OP_GT:             return "gt";
+    case OP_LE:             return "le";
+    case OP_GE:             return "ge";
+    case OP_LSHIFT:         return "ls";
+    case OP_RSHIFT:         return "rs";
+    case OP_LAND:           return "aa";
+    case OP_LOR:            return "oo";
+    case OP_ASSIGN:         return "aS";
+    case OP_PLUS_ASSIGN:    return "pL";
+    case OP_MINUS_ASSIGN:   return "mI";
+    case OP_MUL_ASSIGN:     return "mL";
+    case OP_DIV_ASSIGN:     return "dV";
+    case OP_MOD_ASSIGN:     return "rM";
+    case OP_BITAND_ASSIGN:  return "aN";
+    case OP_BITOR_ASSIGN:   return "oR";
+    case OP_XOR_ASSIGN:     return "eO";
+    case OP_LSHIFT_ASSIGN:  return "lS";
+    case OP_RSHIFT_ASSIGN:  return "rS";
+    case OP_INCR:           return "pp";
+    case OP_DECR:           return "mm";
+    case OP_SUBSCRIPT:      return "ix";
+    case OP_CALL:           return "cl";
+    case OP_ARROW:          return "pt";
+    case OP_UNKNOWN:        return NULL;  /* caller falls back to source-name */
+    }
+    return NULL;
+}
+
+void itan_mangle_class_operator(Type *class_type, OperatorKind op,
+                                 Type **param_types, int nparams,
+                                 bool is_const) {
+    ItanCtx ctx;
+    ctx_reset(&ctx);
+    emit_prefix_open(&ctx, class_type, is_const);
+    const char *id = itan_op_id(op, nparams);
+    if (id) {
+        fputs(id, stdout);
+    } else {
+        /* Unrecognised — fall back to a source-name "operator" as
+         * a best-effort. Won't match gcc-compiled libraries for
+         * the same operator, but stays consistent inside sea-front. */
+        Token op_tok = { .kind = TK_IDENT, .loc = "operator", .len = 8 };
+        emit_source_name(&op_tok);
+    }
+    emit_params_close(&ctx, param_types, nparams);
+}
+
+/* Conversion operator — Itanium §5.1.4.1: `cv<T>` where <T> is the
+ * target type encoded as a regular type. Like `cvb` for
+ * `operator bool`, `cvi` for `operator int`. */
+void itan_mangle_class_conversion(Type *class_type, Type *target_type,
+                                   bool is_const) {
+    ItanCtx ctx;
+    ctx_reset(&ctx);
+    emit_prefix_open(&ctx, class_type, is_const);
+    fputs("cv", stdout);
+    emit_type(&ctx, target_type);
+    emit_params_close(&ctx, NULL, 0);
+}
+
+/* Vtable helpers — also always-human (TU-local). Stubs as above. */
 void itan_mangle_class_vtable_type(Type *class_type) {
     (void)class_type;
     fputs("sea-front internal error: itan_mangle_class_vtable_type "
-          "is unreachable; see src/codegen/mangle.c\n", stderr);
+          "is unreachable; see mangle_class_vtable_type in mangle.c\n",
+          stderr);
     abort();
 }
 
 void itan_mangle_class_vtable_instance(Type *class_type) {
     (void)class_type;
     fputs("sea-front internal error: itan_mangle_class_vtable_instance "
-          "is unreachable; see src/codegen/mangle.c\n", stderr);
+          "is unreachable; see mangle_class_vtable_instance in mangle.c\n",
+          stderr);
     abort();
 }
 

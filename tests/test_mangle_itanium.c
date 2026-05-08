@@ -121,7 +121,7 @@ static void run_fixture_params(const char *label, Type **params, int n) {
 static void run_fixture_method(const char *label, Type *cls, Token *m,
                                 Type **params, int np, bool is_const) {
     printf("%s: ", label);
-    itan_mangle_class_method_cv(cls, m, params, np, is_const);
+    itan_mangle_class_method(cls, m, params, np, is_const);
     putchar('\n');
 }
 
