@@ -71,11 +71,12 @@ static DeclarativeRegion *wrap_qscope(Parser *p, DeclarativeRegion *qscope) {
     return wrapper;
 }
 
-/* Re-apply a single deferred wrapper from a grouped declarator.
- * Preserves cv-qualifiers (for ptrs) and array length / size-expr
- * (for arrays) — the existing code dropped these, which silently
- * lost 'const' on '(*const NAME)(args)' and the size on
- * '(*NAME[N])(args)'. */
+/* Re-apply a single deferred wrapper from a grouped declarator —
+ * the cv-qualifiers (for ptrs) and array length / size-expr (for
+ * arrays) recorded on the wrapper carry through to the new type so
+ * declarators like `(*const NAME)(args)` retain `const` on the
+ * pointer and `(*NAME[N])(args)` retain `[N]` on the array.
+ * N4659 §11.3 [dcl.meaning]. */
 static Type *apply_pending_wrap(Parser *p, Type *ty, Type *w) {
     Type *nt;
     if (w->kind == TY_PTR)        nt = new_ptr_type(p, ty);

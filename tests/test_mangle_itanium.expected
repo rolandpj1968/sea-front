@@ -15,6 +15,7 @@ double: d
 long_double: e
 int_ptr: Pi
 const_int_ptr: PKi
+cv_int_ptr: PVKi
 int_ptr_ptr: PPi
 int_ref: Ri
 int_rref: Oi

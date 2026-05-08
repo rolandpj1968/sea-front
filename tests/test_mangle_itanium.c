@@ -34,6 +34,7 @@ static Type t_double = { .kind = TY_DOUBLE };
 static Type t_ldouble = { .kind = TY_LDOUBLE };
 
 static Type t_const_int = { .kind = TY_INT, .is_const = true };
+static Type t_cv_int    = { .kind = TY_INT, .is_const = true, .is_volatile = true };
 
 /* Pointer / reference Types. We have to give them distinct identities
  * so two `int*` from different fixtures don't accidentally pointer-
@@ -44,6 +45,7 @@ static Type t_int_ptr_2      = { .kind = TY_PTR, .base = &t_int };
 static Type t_int_ptr_3      = { .kind = TY_PTR, .base = &t_int };
 static Type t_const_int_ptr  = { .kind = TY_PTR, .base = &t_const_int };
 static Type t_int_ptr_ptr    = { .kind = TY_PTR, .base = &t_int_ptr };
+static Type t_cv_int_ptr     = { .kind = TY_PTR, .base = &t_cv_int };
 static Type t_int_ref        = { .kind = TY_REF, .base = &t_int };
 static Type t_int_rref       = { .kind = TY_RVALREF, .base = &t_int };
 static Type t_void_ptr       = { .kind = TY_PTR, .base = &t_void };
@@ -166,6 +168,7 @@ int main(void) {
     /* Compounds */
     run_fixture_type("int_ptr",         &t_int_ptr);
     run_fixture_type("const_int_ptr",   &t_const_int_ptr);
+    run_fixture_type("cv_int_ptr",      &t_cv_int_ptr);
     run_fixture_type("int_ptr_ptr",     &t_int_ptr_ptr);
     run_fixture_type("int_ref",         &t_int_ref);
     run_fixture_type("int_rref",        &t_int_rref);

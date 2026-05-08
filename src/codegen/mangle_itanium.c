@@ -312,13 +312,14 @@ static void emit_type(ItanCtx *c, Type *ty);
  * form itself is a substitution candidate (Itanium §5.1.6.5). */
 static void emit_qual_wrapper(ItanCtx *c, Type *ty) {
     (void)c;
-    /* Itanium §5.1.5: order is r V K when multiple are present, with
-     * the type substituted as the qualified form added en bloc.
-     * For the Stage 1 fixture set we only have const & volatile;
-     * 'r' (restrict) is reachable but rare. */
-    if (ty->is_const)    fputc('K', stdout);
+    /* Itanium §5.1.5: encoding order when multiple cv-qualifiers
+     * are present is r V K — restrict outermost, then volatile,
+     * then const. Verified against gcc: `const volatile T*` →
+     * `PVK1T`. Sea-front doesn't track restrict on Type yet, so
+     * the (commented) 'r' branch is a placeholder. */
+    /* if (ty->is_restrict) fputc('r', stdout); */
     if (ty->is_volatile) fputc('V', stdout);
-    /* No restrict tracking on Type currently; would emit 'r' here. */
+    if (ty->is_const)    fputc('K', stdout);
 }
 
 static void emit_type(ItanCtx *c, Type *ty) {

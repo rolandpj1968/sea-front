@@ -38,7 +38,9 @@ typedef struct MemInit {
 /* Lambda capture — N4659 §8.1.5.2 [expr.prim.lambda.capture].
  * One entry per capture in the lambda-introducer. Defaults [&] / [=]
  * are recorded on the lambda node's default_kind and the implied
- * captures are populated by sema's body walk (odr-use analysis).
+ * captures are populated by the parser's default_capture_walk in
+ * src/parse/expr.c (odr-use approximation done at parse time so the
+ * captures list is closed by the time sema runs).
  * 'name' is the captured variable; for [this] it is NULL and is_this
  * is true. by_ref is true for '&name' (and is forced for is_this).
  * resolved_decl / resolved_type are filled by sema when the name is
