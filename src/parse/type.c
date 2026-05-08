@@ -476,6 +476,37 @@ DeclSpec parse_type_specifiers(Parser *p) {
             }
             #undef MAX_BASES
 
+            /* Elaborated-type-specifier with no body — N4659 §10.1.7.3
+             * [dcl.type.elab]: 'class B b;' refers to the existing class B.
+             * If a complete definition exists, reuse its Type so the
+             * referenced object inherits class_region, class_def, and
+             * inheritance info. Without this, 'class B b;' produces a
+             * tag-only Type and member calls on b lose access to base
+             * methods (b.middleman() can't see A::middleman). */
+            if (!parser_at(p, TK_LBRACE) && ty->tag &&
+                n_base_types == 0 && n_base_regions == 0) {
+                Declaration *existing = lookup_unqualified_kind(p,
+                    ty->tag->loc, ty->tag->len, ENTITY_TYPE);
+                if (!existing)
+                    existing = lookup_unqualified_kind(p,
+                        ty->tag->loc, ty->tag->len, ENTITY_TAG);
+                if (existing && existing->type &&
+                    (existing->type->class_region || existing->type->class_def)) {
+                    Type *eT = existing->type;
+                    /* Preserve cv qualifiers from the elaborated form. */
+                    if (eT->is_const == is_const &&
+                        eT->is_volatile == is_volatile) {
+                        result.type = eT; return result;
+                    }
+                    /* Make a cv-stamped copy that shares class_region. */
+                    Type *copy = new_type(p, eT->kind);
+                    *copy = *eT;
+                    copy->is_const = is_const;
+                    copy->is_volatile = is_volatile;
+                    result.type = copy; return result;
+                }
+            }
+
             /* Class body { member-specification } */
             if (parser_consume(p, TK_LBRACE)) {
                 /* N4659 §6.3.7 [basic.scope.class]: push class scope */

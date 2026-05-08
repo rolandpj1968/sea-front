@@ -8417,6 +8417,36 @@ static void emit_class_def(Node *n) {
                 break;
             }
         }
+        /* Out-of-class virtual definitions: 'virtual int foo(int);'
+         * declared in the class body, body emitted later as a top-level
+         * ND_FUNC_DEF whose class_type points back here. The OOL
+         * definition site doesn't carry the 'virtual' keyword, so
+         * d->func.is_virtual is false on it; match by name against the
+         * in-class virtual declarations instead. Without this scan a
+         * class whose virtuals are only OOL gets no vptr field, breaking
+         * any in-TU dispatch (e.g. a non-virtual method calling the
+         * virtual one — pattern from gcc 4.8 g++.dg/ipa/devirt-2.C). */
+        if (!any_virtual_has_body && g_tu) {
+            for (int i = 0; i < n->class_def.nmembers && !any_virtual_has_body; i++) {
+                Node *m = n->class_def.members[i];
+                if (!m || m->kind != ND_VAR_DECL) continue;
+                if (!m->var_decl.ty || m->var_decl.ty->kind != TY_FUNC) continue;
+                if (!m->var_decl.is_virtual) continue;
+                Token *vn = m->var_decl.name;
+                if (!vn) continue;
+                for (int j = 0; j < g_tu->tu.ndecls; j++) {
+                    Node *d = g_tu->tu.decls[j];
+                    if (!d || d->kind != ND_FUNC_DEF) continue;
+                    if (d->func.class_type != class_type) continue;
+                    if (!d->func.name) continue;
+                    if (d->func.name->len == vn->len &&
+                        memcmp(d->func.name->loc, vn->loc, vn->len) == 0) {
+                        any_virtual_has_body = true;
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     if (g_emit_phase == PHASE_METHODS) goto methods_phase;
