@@ -9054,23 +9054,36 @@ methods_phase:;
             if (is_virt_decl && m->var_decl.is_destructor) continue;
             Token *mname = is_virt_funcdef ? m->func.name : m->var_decl.name;
             emit_indent();
-            /* Slot points at an in-TU body (ND_FUNC_DEF) — emit the
-             * mangled name. For declaration-only virtuals (ND_VAR_DECL,
-             * including pure virtuals 'virtual T fn() = 0' which we
-             * don't separately track) emit NULL: the slot stays in
-             * place to keep the vtable layout stable for derived
-             * classes, and a dispatched call would NULL-deref (which
-             * matches Itanium's __cxa_pure_virtual semantics — call
-             * to pure virtual is undefined).
+            /* Slot points at an in-TU body. ND_FUNC_DEF is the in-class
+             * inline body; ND_VAR_DECL is the in-class declaration that
+             * may pair with an out-of-class ND_FUNC_DEF in the same TU
+             * (g++.dg/ipa/devirt-2.C pattern). Search the TU for the
+             * matching OOL definition before falling back to NULL.
              *
-             * SHORTCUT: doesn't search for an out-of-class ND_FUNC_DEF
-             * in the same TU (e.g. 'void Foo::fn() { ... }' at file
-             * scope). When that pattern is needed, replace the bare
-             * 'is_virt_funcdef' check with a TU-walk for matching
-             * out-of-class definition. TODO(seafront#out-of-class-virt). */
-            if (is_virt_funcdef) {
+             * NULL slot for genuinely declaration-only virtuals (pure
+             * virtuals or extern definitions): the slot stays in place
+             * to keep the vtable layout stable for derived classes,
+             * and a dispatched call would NULL-deref — matches Itanium
+             * __cxa_pure_virtual semantics (call to pure virtual is UB). */
+            Node *ool_def = NULL;
+            if (is_virt_decl && g_tu) {
+                for (int j = 0; j < g_tu->tu.ndecls; j++) {
+                    Node *d = g_tu->tu.decls[j];
+                    if (!d || d->kind != ND_FUNC_DEF) continue;
+                    if (d->func.class_type != class_type) continue;
+                    if (!d->func.name || !mname) continue;
+                    if (d->func.name->len == mname->len &&
+                        memcmp(d->func.name->loc, mname->loc, mname->len) == 0) {
+                        ool_def = d;
+                        break;
+                    }
+                }
+            }
+            if (is_virt_funcdef || ool_def) {
                 Type **pty = NULL;
-                int np = collect_func_param_types(m, &pty);
+                int np = is_virt_funcdef
+                       ? collect_func_param_types(m, &pty)
+                       : collect_func_param_types(ool_def, &pty);
                 mangle_class_method(class_type, mname, pty, np,
                                         /*is_const=*/false);
             } else {
