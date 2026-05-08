@@ -177,8 +177,16 @@ if [ -z "$INPUTS" ]; then
     exec $SEA_CC -no-pie "$@" $SEA_AUTO_LIBS
 fi
 
-if [ "$MODE" = "link" ]; then
-    log "Link mode — passthrough to $SEA_CC"
+# Link mode with NO source files (just .o/.a/-l): passthrough to cc.
+# Link mode WITH source files (e.g. `sea-front-cc src.cpp -o exe`) is
+# the combined-compile-and-link form: compile each source through our
+# pipeline to a tmp .o, then link the .o set in a final cc invocation.
+# Falling back to passthrough for the combined form silently bypasses
+# sea-front, which makes test runs that drive sea-front-cc this way
+# (g++.dg dg-do-run, autoconf-style probes) measure the host compiler
+# instead of sea-front.
+if [ "$MODE" = "link" ] && [ -z "$INPUTS" ]; then
+    log "Link mode (no sources) — passthrough to $SEA_CC"
     exec $SEA_CC -no-pie "$@" $SEA_AUTO_LIBS
 fi
 
@@ -186,14 +194,18 @@ fi
 # so we can iterate without losing args that contain spaces.
 eval "set -- $INPUTS"
 
-# Default output: derive from input basename in CURRENT directory.
-# C compilers (gcc, g++) put the .o next to the cwd, not next to the
-# source — match that behavior so build systems find the .o where they
-# expect. Pattern: gcc 4.8 host-linux.c is referenced as
-# '../../gcc/config/host-linux.c' but the .o is expected to be just
-# 'host-linux.o' in the build dir.
-if [ -z "$OUTPUT" ] && [ "$MODE" = "compile" ]; then
+# Output naming:
+#   compile mode (-c, single source, no -o): basename + .o in cwd, to
+#     match gcc/g++'s relative-source-but-cwd-output convention used by
+#     gcc 4.8's build (e.g. '../../gcc/config/host-linux.c' → 'host-linux.o').
+#   link mode (compile-and-link): the per-source .o is a temp file;
+#     OUTPUT names the final exe, set via -o or defaulted to a.out.
+LINK_OBJS=""
+if [ "$MODE" = "compile" ] && [ -z "$OUTPUT" ]; then
     OUTPUT=$(basename "$1" | sed 's/\.[^.]*$/.o/')
+fi
+if [ "$MODE" = "link" ] && [ -z "$OUTPUT" ]; then
+    OUTPUT=a.out
 fi
 
 # Compile mode: preprocess → sea-front → cc -c
@@ -237,7 +249,16 @@ for src in "$@"; do
     qsrc=$(shell_quote "$src")
     qpp=$(shell_quote "$pp_file")
     qcfile=$(shell_quote "$c_file")
-    qout=$(shell_quote "$OUTPUT")
+
+    # In compile mode the .o is the deliverable; in link mode it's a
+    # temp that gets fed to the final cc link step.
+    if [ "$MODE" = "compile" ]; then
+        obj_file="$OUTPUT"
+    else
+        obj_file="$TMPDIR/sf_obj_${base}_$$.o"
+        LINK_OBJS="$LINK_OBJS $(shell_quote "$obj_file")"
+    fi
+    qobj=$(shell_quote "$obj_file")
 
     log "  Preprocess: $SEA_CPP -E $SF_DEFINES $STD_FLAG $STDCXX_FLAGS $CPP_FLAGS $src"
     eval "$SEA_CPP -E $SF_DEFINES $STD_FLAG $STDCXX_FLAGS $CPP_FLAGS $qsrc -o $qpp" 2>/dev/null
@@ -248,13 +269,26 @@ for src in "$@"; do
 
     # Step 3: Compile C → .o
     # Use -std=c99 for gcc 4.7 compatibility (for-init declarations)
-    log "  Compile: $SEA_CC -std=c99 -c $CC_FLAGS -o $OUTPUT $c_file"
-    eval "$SEA_CC -std=c99 -c $CC_FLAGS -o $qout $qcfile"
+    log "  Compile: $SEA_CC -std=c99 -c $CC_FLAGS -o $obj_file $c_file"
+    eval "$SEA_CC -std=c99 -c $CC_FLAGS -o $qobj $qcfile"
 
     # Cleanup (skip when SEA_KEEP_TMP is set, for debugging)
     if [ -z "$SEA_KEEP_TMP" ]; then
         rm -f "$pp_file" "$c_file"
     fi
 done
+
+# Link mode: link the produced .o files (plus any .o/.a/-l args from
+# CC_FLAGS) into the final binary. The host C linker is fine — sea-front
+# emits C, and Itanium-mangled symbols are just C identifiers at this
+# point.
+if [ "$MODE" = "link" ]; then
+    qout=$(shell_quote "$OUTPUT")
+    log "  Link: $SEA_CC -no-pie $LINK_OBJS $CC_FLAGS -o $OUTPUT $SEA_AUTO_LIBS"
+    eval "$SEA_CC -no-pie $LINK_OBJS $CC_FLAGS -o $qout $SEA_AUTO_LIBS"
+    if [ -z "$SEA_KEEP_TMP" ]; then
+        eval "rm -f $LINK_OBJS"
+    fi
+fi
 
 log "Done"
