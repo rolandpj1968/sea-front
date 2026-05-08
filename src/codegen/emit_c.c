@@ -1548,6 +1548,46 @@ static Type *class_base(Type *class_type, int i) {
     return class_type->class_region->bases[i]->owner_type;
 }
 
+/* Find the class that owns the __sf_vptr field for `t`. Sea-front
+ * places the vptr in the first polymorphic ancestor that itself has
+ * no polymorphic base, so a derived class reuses its base's vptr
+ * (offset-0 invariant — see emit_class_def's struct-emit comment).
+ * Walk up through index-0 polymorphic bases until we find that owner.
+ * Returns NULL if t isn't polymorphic. */
+static Type *vptr_owner_class(Type *t) {
+    if (!t || !t->has_virtual_methods) return NULL;
+    Type *cur = t;
+    while (1) {
+        Type *first_poly_base = NULL;
+        int nb = class_nbases(cur);
+        for (int b = 0; b < nb; b++) {
+            Type *base = class_base(cur, b);
+            if (base && base->has_virtual_methods) {
+                first_poly_base = base;
+                break;
+            }
+        }
+        if (!first_poly_base) return cur;
+        cur = first_poly_base;
+    }
+}
+
+/* Emit `this->__sf_vptr` (when class_type owns the vptr) or
+ * `((struct <owner-tag> *)this)->__sf_vptr` (when an ancestor owns it).
+ * The cast is sound because sea-front lays the polymorphic base at
+ * offset 0 of the derived struct, matching the Itanium-style ABI's
+ * is-a-compatibility convention. */
+static void emit_vptr_lhs(Type *class_type) {
+    Type *owner = vptr_owner_class(class_type);
+    if (!owner || owner == class_type) {
+        fputs("this->__sf_vptr", stdout);
+        return;
+    }
+    fputs("((struct ", stdout);
+    mangle_class_tag(owner);
+    fputs(" *)this)->__sf_vptr", stdout);
+}
+
 /* Find a path from 'current' to a base 'target' through the
  * non-virtual inheritance graph. Depth-first; first match wins,
  * matching the lookup convention in lookup.c. Path indices are
@@ -4281,9 +4321,11 @@ static void emit_expr(Node *n) {
             Type **call_pty = NULL;
             int call_np = -1;
             if (method_is_virtual(class_type, mname)) {
-                /* Virtual dispatch: this->__sf_vptr->m(this, args) */
-                fprintf(stdout, "this->__sf_vptr->%.*s(this",
-                        mname->len, mname->loc);
+                /* Virtual dispatch through the vptr-owning ancestor.
+                 * The vptr lives at the polymorphic root, not on every
+                 * derived class — see emit_vptr_lhs. */
+                emit_vptr_lhs(class_type);
+                fprintf(stdout, "->%.*s(this", mname->len, mname->loc);
             } else {
                 Type **at = NULL;
                 int na = collect_call_arg_types(n->call.args,
@@ -4608,8 +4650,23 @@ static void emit_expr(Node *n) {
                      * Emit the receiver expression once into the slot
                      * and once as the first arg (no temporary —
                      * sufficient for the lvalue/pointer cases we
-                     * support). */
-                    if (obj_is_ptr) {
+                     * support).
+                     *
+                     * The vptr lives in the polymorphic-root ancestor,
+                     * not on every derived struct. Cast through the
+                     * owner — sound thanks to the offset-0 layout
+                     * invariant for the first polymorphic base. */
+                    Type *vowner = vptr_owner_class(ot);
+                    bool need_cast = (vowner && vowner != ot);
+                    if (need_cast) {
+                        fputs("((struct ", stdout);
+                        mangle_class_tag(vowner);
+                        fputs(" *)", stdout);
+                        if (!obj_is_ptr) fputc('&', stdout);
+                        fputc('(', stdout);
+                        emit_expr(obj);
+                        fputs("))->__sf_vptr->", stdout);
+                    } else if (obj_is_ptr) {
                         fputc('(', stdout);
                         emit_expr(obj);
                         fputs(")->__sf_vptr->", stdout);
@@ -7679,7 +7736,8 @@ static void emit_ctor_member_inits(Node *func) {
         }
         if (any_body) {
             emit_indent();
-            fputs("this->__sf_vptr = &", stdout);
+            emit_vptr_lhs(cdef->class_def.ty);
+            fputs(" = &", stdout);
             mangle_class_vtable_instance(cdef->class_def.ty);
             fputs(";\n", stdout);
         }
@@ -9110,7 +9168,8 @@ methods_phase:;
          * body): the vtable instance isn't emitted. */
         if (class_type->has_virtual_methods && any_virtual_has_body) {
             emit_indent();
-            fputs("this->__sf_vptr = &", stdout);
+            emit_vptr_lhs(class_type);
+            fputs(" = &", stdout);
             mangle_class_vtable_instance(class_type);
             fputs(";\n", stdout);
         }
