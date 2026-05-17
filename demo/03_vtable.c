@@ -59,7 +59,10 @@ struct sf__Cat;
 struct sf__Animal__vtable;
 struct sf__Animal {
     const struct sf__Animal__vtable *__sf_vptr;
+    int weight;
 };
+/* C++: Animal(int w) : weight(w) */
+__SF_INLINE void sf__Animal__ctor_p_int_pe_(struct sf__Animal *this, int w);
 /* C++: virtual int speak() */
 __SF_INLINE int sf__Animal__speak_p_void_pe_(struct sf__Animal *this);
 
@@ -67,9 +70,8 @@ __SF_INLINE int sf__Animal__speak_p_void_pe_(struct sf__Animal *this);
 struct sf__Cat__vtable;
 struct sf__Cat {
     struct sf__Animal __sf_base;
-    int weight;
 };
-/* C++: Cat(int w) : weight(w) */
+/* C++: Cat(int w) : Animal(w) */
 __SF_INLINE void sf__Cat__ctor_p_int_pe_(struct sf__Cat *this, int w);
 /* C++: virtual int speak() */
 __SF_INLINE int sf__Cat__speak_p_void_pe_(struct sf__Cat *this);
@@ -84,13 +86,14 @@ struct sf__Animal__vtable {
 static const struct sf__Animal__vtable sf__Animal__vtable_instance = {
     sf__Animal__speak_p_void_pe_,
 };
+/* C++: Animal(int w) : weight(w) */
+__SF_INLINE void sf__Animal__ctor_p_int_pe_(struct sf__Animal *this, int w) {
+    this->__sf_vptr = &sf__Animal__vtable_instance;
+    this->weight = w;
+}
 /* C++: virtual int speak() */
 __SF_INLINE int sf__Animal__speak_p_void_pe_(struct sf__Animal *this) {
     return 0;
-}
-__SF_INLINE void sf__Animal__ctor_p_void_pe_(struct sf__Animal *this);
-__SF_INLINE void sf__Animal__ctor_p_void_pe_(struct sf__Animal *this) {
-    this->__sf_vptr = &sf__Animal__vtable_instance;
 }
 
 struct sf__Cat__vtable {
@@ -99,11 +102,10 @@ struct sf__Cat__vtable {
 static const struct sf__Cat__vtable sf__Cat__vtable_instance = {
     sf__Cat__speak_p_void_pe_,
 };
-/* C++: Cat(int w) : weight(w) */
+/* C++: Cat(int w) : Animal(w) */
 __SF_INLINE void sf__Cat__ctor_p_int_pe_(struct sf__Cat *this, int w) {
-    sf__Animal__ctor_p_void_pe_(&this->__sf_base);
+    sf__Animal__ctor_p_int_pe_(&this->__sf_base, w);
     ((struct sf__Animal *)this)->__sf_vptr = &sf__Cat__vtable_instance;
-    this->weight = w;
 }
 /* C++: virtual int speak() */
 __SF_INLINE int sf__Cat__speak_p_void_pe_(struct sf__Cat *this) {
@@ -112,15 +114,14 @@ __SF_INLINE int sf__Cat__speak_p_void_pe_(struct sf__Cat *this) {
 
 /* C++: int describe(Animal *a) */
 int describe_p_Animal_ptr_pe_(struct sf__Animal* a) {
-    return (a)->__sf_vptr->speak(a);
+    return (((a)->__sf_vptr->speak(a) * 10) + a->weight);
 }
 
 /* C++: int main() */
 int main(void) {
         struct sf__Animal a;
-    sf__Animal__ctor_p_void_pe_(&a);
+    sf__Animal__ctor_p_int_pe_(&a, 3);
         struct sf__Cat c;
     sf__Cat__ctor_p_int_pe_(&c, 4);
-    int s = (describe_p_Animal_ptr_pe_((&a)) + describe_p_Animal_ptr_pe_((&c)));
-    return (s + c.weight);
+    return (describe_p_Animal_ptr_pe_((&a)) + describe_p_Animal_ptr_pe_((&c)));
 }

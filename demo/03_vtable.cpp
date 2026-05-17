@@ -10,25 +10,28 @@
 // (here, Cat::speak overrides Animal::speak).
 //
 // Virtual calls go via the vptr; non-virtual methods are direct C calls.
+// Single-inheritance polymorphism only — multi-inheritance vtable
+// thunks aren't implemented yet (the C/B/D pattern from g++.dg/ipa
+// /pr46287 still needs offset-adjusting thunks).
 
 struct Animal {
+    int weight;
+    Animal(int w) : weight(w) {}
     virtual int speak() { return 0; }     // "silent"
     virtual ~Animal() {}
 };
 
 struct Cat : Animal {
-    int weight;
-    Cat(int w) : weight(w) {}
+    Cat(int w) : Animal(w) {}             // base ctor passes through weight
     virtual int speak() { return 7; }     // "meow"
 };
 
 int describe(Animal *a) {
-    return a->speak();                    // dispatched through vptr
+    return a->speak() * 10 + a->weight;   // dispatched through vptr
 }
 
 int main() {
-    Animal a;
+    Animal a(3);
     Cat    c(4);
-    int    s = describe(&a) + describe(&c);   // 0 + 7 = 7
-    return s + c.weight;                      // 7 + 4 = 11
+    return describe(&a) + describe(&c);   // 3 + 74 = 77
 }
