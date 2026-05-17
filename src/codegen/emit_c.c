@@ -9881,6 +9881,25 @@ methods_phase:;
                     break;
                 }
                 if (!override_m) continue;
+                /* Pure-virtual override (ND_VAR_DECL with no in-TU
+                 * body) — no concrete symbol exists for the thunk
+                 * to call. Skip emitting the thunk and let the
+                 * secondary-vtable slot fall back to 0 below (gcc 4.8
+                 * g++.dg/abi/covariant4 — RA::clone() is = 0). */
+                if (override_m->kind == ND_VAR_DECL && g_tu) {
+                    Token *on = override_m->var_decl.name;
+                    bool has_body = false;
+                    for (int j = 0; j < g_tu->tu.ndecls && !has_body; j++) {
+                        Node *d = g_tu->tu.decls[j];
+                        if (!d || d->kind != ND_FUNC_DEF) continue;
+                        if (d->func.class_type != class_type) continue;
+                        if (!d->func.name || !on) continue;
+                        if (d->func.name->len == on->len &&
+                            memcmp(d->func.name->loc, on->loc, on->len) == 0)
+                            has_body = true;
+                    }
+                    if (!has_body) continue;
+                }
                 /* Emit the thunk. Signature mirrors B's slot:
                  *   <ret> sf__<Deriv>__thunk_for_<Base>_<method-suffix>(
                  *       struct sf__<Base> *bp, <other params>) {
@@ -9998,6 +10017,25 @@ methods_phase:;
                     override_m = dm;
                     break;
                 }
+                /* Pure-virtual override has no thunk emitted by pass 1
+                 * (no body to call). Clear override_m so the slot falls
+                 * through to the pass-through / base case below — and
+                 * THAT case will also produce 0 if base's method is
+                 * pure too. */
+                if (override_m && override_m->kind == ND_VAR_DECL && g_tu) {
+                    Token *on = override_m->var_decl.name;
+                    bool has_body = false;
+                    for (int j = 0; j < g_tu->tu.ndecls && !has_body; j++) {
+                        Node *d = g_tu->tu.decls[j];
+                        if (!d || d->kind != ND_FUNC_DEF) continue;
+                        if (d->func.class_type != class_type) continue;
+                        if (!d->func.name || !on) continue;
+                        if (d->func.name->len == on->len &&
+                            memcmp(d->func.name->loc, on->loc, on->len) == 0)
+                            has_body = true;
+                    }
+                    if (!has_body) override_m = NULL;
+                }
                 Type **slot_pty = NULL;
                 int slot_pn = 0;
                 if (b_funcdef) slot_pn = collect_func_param_types(bm, &slot_pty);
@@ -10011,14 +10049,31 @@ methods_phase:;
                     emit_token_text(bname);
                     mangle_param_suffix(slot_pty, slot_pn);
                 } else {
-                    /* Pass-through: use whichever symbol B's primary
-                     * vtable would fill the slot with. const-ness
-                     * from the base's declaration, not hardcoded. */
-                    bool b_const = false;
-                    if (b_funcdef) b_const = bm->func.is_const_method;
-                    else if (bm->var_decl.ty) b_const = bm->var_decl.ty->is_const;
-                    mangle_class_method(base, bname, slot_pty, slot_pn,
-                                         b_const);
+                    /* Pass-through: emit base's method symbol IFF a
+                     * body exists somewhere. Pure-virtual base methods
+                     * have no body anywhere — fall back to 0. */
+                    bool base_has_body = b_funcdef;  /* ND_FUNC_DEF is in-class body */
+                    if (!base_has_body && b_decl && g_tu) {
+                        Token *bn = bm->var_decl.name;
+                        for (int j = 0; j < g_tu->tu.ndecls && !base_has_body; j++) {
+                            Node *d = g_tu->tu.decls[j];
+                            if (!d || d->kind != ND_FUNC_DEF) continue;
+                            if (d->func.class_type != base) continue;
+                            if (!d->func.name || !bn) continue;
+                            if (d->func.name->len == bn->len &&
+                                memcmp(d->func.name->loc, bn->loc, bn->len) == 0)
+                                base_has_body = true;
+                        }
+                    }
+                    if (!base_has_body) {
+                        fputs("0", stdout);
+                    } else {
+                        bool b_const = false;
+                        if (b_funcdef) b_const = bm->func.is_const_method;
+                        else if (bm->var_decl.ty) b_const = bm->var_decl.ty->is_const;
+                        mangle_class_method(base, bname, slot_pty, slot_pn,
+                                             b_const);
+                    }
                 }
                 fputs(",\n", stdout);
             }
