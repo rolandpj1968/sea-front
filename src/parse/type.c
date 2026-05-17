@@ -701,6 +701,19 @@ DeclSpec parse_type_specifiers(Parser *p) {
                             any_member_needs_default = true;
                         }
                     }
+                    /* NSDMI — N4659 §12.6.2/9 [class.base.init]/9: a
+                     * default-member-initializer on a non-static data
+                     * member contributes to default-ctor synthesis;
+                     * without a synthesized ctor, the init never runs
+                     * and the field stays uninitialised at the C
+                     * declaration site (struct members can't carry
+                     * inline initialisers in C). */
+                    if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
+                        m->var_decl.ty->kind != TY_FUNC &&
+                        !(m->var_decl.storage_flags & DECL_STATIC) &&
+                        m->var_decl.init) {
+                        any_member_needs_default = true;
+                    }
                 }
                 /* Implicit default ctor — N4659 §15.1 [class.ctor]/4:
                  * if no user-declared ctors at all, the implicit default

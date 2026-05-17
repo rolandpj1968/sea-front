@@ -8364,6 +8364,24 @@ static void emit_ctor_mem_init_one(Node *func, Node *m) {
              * the second-and-later args. Non-listed scalar members
              * are left default-initialized (= uninitialized) per C
              * semantics. */
+            /* NSDMI ('struct B { int a = 42; };' — C++11 §12.6.2/9
+             * [class.base.init]): when there's no explicit mem-init
+             * AND the member declaration carries an in-class
+             * initializer, the synthesized ctor must apply it as
+             * if 'this->member = init;'. Without this the in-body
+             * '= 42' was either silently dropped or — when forwarded
+             * to the struct emit — produced invalid C struct syntax.
+             * Skip when the member is itself a class type (the in-class
+             * init for class members needs ctor selection; deferred). */
+            if (!found && m->var_decl.init && mty->kind != TY_STRUCT &&
+                mty->kind != TY_UNION &&
+                !(m->var_decl.storage_flags & DECL_STATIC)) {
+                emit_indent();
+                fprintf(stdout, "this->%.*s = ",
+                        m->var_decl.name->len, m->var_decl.name->loc);
+                emit_expr(m->var_decl.init);
+                fputs(";\n", stdout);
+            }
             if (found && found->nargs >= 1) {
                 /* N4659 §15.6.2 [class.base.init]/9: a mem-initializer
                  * initialises (not assigns to) the named member, which
@@ -9204,7 +9222,12 @@ static void emit_class_def(Node *n) {
                 if (s->var_decl.ty && s->var_decl.ty->kind == TY_FUNC) continue;
                 if (s->var_decl.storage_flags & DECL_STATIC) continue;
                 emit_indent();
+                /* Struct-body members can't carry inline initializers
+                 * in C — defer NSDMI to the synthesized ctor. */
+                Node *saved_init = s->var_decl.init;
+                s->var_decl.init = NULL;
                 emit_var_decl_inner(s);
+                s->var_decl.init = saved_init;
                 fputs(";\n", stdout);
             }
             continue;
@@ -9249,7 +9272,10 @@ static void emit_class_def(Node *n) {
             continue;
         }
         emit_indent();
+        Node *saved_init = m->var_decl.init;
+        m->var_decl.init = NULL;
         emit_var_decl_inner(m);
+        m->var_decl.init = saved_init;
         fputs(";\n", stdout);
     }
     g_indent--;
@@ -10043,13 +10069,28 @@ methods_phase:;
         for (int i = 0; i < n->class_def.nmembers; i++) {
             Node *m = n->class_def.members[i];
             if (!m || m->kind != ND_VAR_DECL) continue;
-            if (!m->var_decl.ty || m->var_decl.ty->kind != TY_STRUCT) continue;
-            if (!m->var_decl.ty->has_default_ctor) continue;
+            if (!m->var_decl.ty || m->var_decl.ty->kind == TY_FUNC) continue;
+            if (m->var_decl.storage_flags & DECL_STATIC) continue;
             if (!m->var_decl.name) continue;
-            emit_indent();
-            mangle_class_ctor(m->var_decl.ty, NULL, 0);
-            fprintf(stdout, "(&this->%.*s);\n",
-                    m->var_decl.name->len, m->var_decl.name->loc);
+            if (m->var_decl.ty->kind == TY_STRUCT ||
+                m->var_decl.ty->kind == TY_UNION) {
+                if (!m->var_decl.ty->has_default_ctor) continue;
+                emit_indent();
+                mangle_class_ctor(m->var_decl.ty, NULL, 0);
+                fprintf(stdout, "(&this->%.*s);\n",
+                        m->var_decl.name->len, m->var_decl.name->loc);
+                continue;
+            }
+            /* NSDMI for scalar / pointer / enum members — apply the
+             * in-class default-member-init as an assignment in the
+             * synthesized default ctor. N4659 §12.6.2/9. */
+            if (m->var_decl.init) {
+                emit_indent();
+                fprintf(stdout, "this->%.*s = ",
+                        m->var_decl.name->len, m->var_decl.name->loc);
+                emit_expr(m->var_decl.init);
+                fputs(";\n", stdout);
+            }
         }
         g_indent--;
         fputs("}\n", stdout);
