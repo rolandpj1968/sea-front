@@ -1516,10 +1516,22 @@ DeclSpec parse_type_specifiers(Parser *p) {
  * any other type-specifier." */
 void parse_absorb_trailing_cv(Parser *p, DeclSpec *spec) {
     if (!spec->type) return;
+    if (!parser_at(p, TK_KW_CONST) && !parser_at(p, TK_KW_VOLATILE))
+        return;
+    /* spec->type may be a canonical class Type shared across all
+     * uses (returned by the elaborated-type-specifier reuse path).
+     * Mutating its is_const / is_volatile would retroactively
+     * cv-qualify every earlier reference — including TU-scope
+     * extern decls — corrupting downstream type-matching.
+     * Copy first, then stamp. N4659 §6.9.3 [basic.type.qualifier]
+     * — cv-qualification yields a distinct type. */
+    Type *copy = arena_alloc(p->arena, sizeof(Type));
+    *copy = *spec->type;
     while (parser_at(p, TK_KW_CONST) || parser_at(p, TK_KW_VOLATILE)) {
-        if (parser_consume(p, TK_KW_CONST))    spec->type->is_const = true;
-        if (parser_consume(p, TK_KW_VOLATILE)) spec->type->is_volatile = true;
+        if (parser_consume(p, TK_KW_CONST))    copy->is_const = true;
+        if (parser_consume(p, TK_KW_VOLATILE)) copy->is_volatile = true;
     }
+    spec->type = copy;
 }
 
 /*
