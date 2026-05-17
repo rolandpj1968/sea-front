@@ -9518,8 +9518,17 @@ methods_phase:;
                 int np = is_virt_funcdef
                        ? collect_func_param_types(m, &pty)
                        : collect_func_param_types(ool_def, &pty);
+                /* Mirror the actual definition's const-ness so the
+                 * vtable instance references the same mangled
+                 * symbol the body emits. 'B *clone() const' on a
+                 * virtual base needs '_const' in the suffix. */
+                bool slot_const = false;
+                if (is_virt_funcdef)
+                    slot_const = m->func.is_const_method;
+                else if (m->kind == ND_VAR_DECL && m->var_decl.ty)
+                    slot_const = m->var_decl.ty->is_const;
                 mangle_class_method(class_type, mname, pty, np,
-                                        /*is_const=*/false);
+                                        slot_const);
             } else {
                 fputs("0", stdout);
             }
@@ -9644,8 +9653,19 @@ methods_phase:;
                 }
                 fputs(") {\n    ", stdout);
                 if (ret_ty && ret_ty->kind != TY_VOID) fputs("return ", stdout);
+                /* Const-ness mirrors the derived class's override: a
+                 * 'B *clone() const' in the base demands an override
+                 * that's also const, so the derived's symbol carries
+                 * the _const suffix. Mangling 'is_const=false' here
+                 * referenced a non-existent non-const symbol — the
+                 * defs had _const, the thunks called without it. */
+                bool ov_const = false;
+                if (override_is_funcdef)
+                    ov_const = override_m->func.is_const_method;
+                else if (override_m->var_decl.ty)
+                    ov_const = override_m->var_decl.ty->is_const;
                 mangle_class_method(class_type, bname, override_pty,
-                                     override_np, /*is_const=*/false);
+                                     override_np, ov_const);
                 fputs("((struct ", stdout);
                 mangle_class_tag(class_type);
                 fputs(" *)((char *)__bp - offsetof(struct ", stdout);
@@ -9725,9 +9745,13 @@ methods_phase:;
                     mangle_param_suffix(slot_pty, slot_pn);
                 } else {
                     /* Pass-through: use whichever symbol B's primary
-                     * vtable would fill the slot with. */
+                     * vtable would fill the slot with. const-ness
+                     * from the base's declaration, not hardcoded. */
+                    bool b_const = false;
+                    if (b_funcdef) b_const = bm->func.is_const_method;
+                    else if (bm->var_decl.ty) b_const = bm->var_decl.ty->is_const;
                     mangle_class_method(base, bname, slot_pty, slot_pn,
-                                         /*is_const=*/false);
+                                         b_const);
                 }
                 fputs(",\n", stdout);
             }
