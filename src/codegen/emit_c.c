@@ -7974,25 +7974,55 @@ static void emit_ctor_member_inits(Node *func) {
                 int na = collect_call_arg_types(base_mi->args,
                                                  base_mi->nargs, &at);
                 Type **pty = NULL;
+                Node *best = NULL;
                 int np = resolve_overload(base, /*name=*/NULL,
                                            /*is_ctor=*/true, at, na,
                                            /*receiver_is_const=*/false,
-                                           &pty, /*out_best=*/NULL);
+                                           &pty, &best);
                 if (np < 0) {
                     if (na != 0)
                         die_no_overload(base, NULL, na,
                                          "base mem-init ctor call");
                     /* na == 0: fall through to default-ctor path below. */
                 } else {
+                    /* Default-arg injection — N4659 §11.3.6
+                     * [dcl.fct.default]: when fewer user args than the
+                     * matching ctor's params, fill the tail from the
+                     * resolved ctor's param_defaults. Without this, the
+                     * mangled name (np params) and the call (na args)
+                     * disagree, leaving a too-few-arguments call. */
+                    Node **defaults = NULL;
+                    if (best && best->kind == ND_VAR_DECL && best->var_decl.ty &&
+                        best->var_decl.ty->kind == TY_FUNC)
+                        defaults = best->var_decl.ty->param_defaults;
+                    else if (best && best->kind == ND_FUNC_DEF) {
+                        /* Per-param defaults are stored on the
+                         * ND_PARAM children's default_value when the
+                         * ctor was parsed as a definition. Build a
+                         * temporary array. */
+                        static Node *def_buf[16];
+                        int nd = best->func.nparams < 16 ? best->func.nparams : 0;
+                        for (int p = 0; p < nd; p++) {
+                            Node *par = best->func.params[p];
+                            def_buf[p] = (par && par->kind == ND_PARAM)
+                                ? par->param.default_value : NULL;
+                        }
+                        defaults = def_buf;
+                    }
                     emit_indent();
                     mangle_class_ctor(base, pty, np);
                     fputs("(&this->", stdout);
                     if (b == 0) fputs("__sf_base", stdout);
                     else        fprintf(stdout, "__sf_base%d", b);
-                    for (int a = 0; a < base_mi->nargs; a++) {
+                    for (int a = 0; a < np; a++) {
                         fputs(", ", stdout);
-                        emit_arg_for_param(base_mi->args[a],
-                                            a < np ? pty[a] : NULL);
+                        Node *arg = (a < base_mi->nargs)
+                            ? base_mi->args[a]
+                            : (defaults ? defaults[a] : NULL);
+                        if (arg)
+                            emit_arg_for_param(arg, a < np ? pty[a] : NULL);
+                        else
+                            fputs("0", stdout);
                     }
                     fputs(");\n", stdout);
                     continue;

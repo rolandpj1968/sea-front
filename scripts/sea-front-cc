@@ -264,8 +264,10 @@ for src in "$@"; do
     eval "$SEA_CPP -E $SF_DEFINES $STD_FLAG $STDCXX_FLAGS $CPP_FLAGS $qsrc -o $qpp" 2>/dev/null
 
     # Step 2: Transpile C++ → C
-    log "  Transpile: $SEA_FRONT --emit-c $pp_file"
-    eval "$SEA_FRONT --emit-c $qpp > $qcfile" 2>/dev/null
+    # SEA_FRONT_FLAGS lets callers pass through extra flags (e.g.
+    # --mangling=human to revert to the pre-Itanium scheme).
+    log "  Transpile: $SEA_FRONT --emit-c ${SEA_FRONT_FLAGS:-} $pp_file"
+    eval "$SEA_FRONT --emit-c ${SEA_FRONT_FLAGS:-} $qpp > $qcfile" 2>/dev/null
 
     # Step 3: Compile C → .o
     # Use -std=c99 for gcc 4.7 compatibility (for-init declarations)
