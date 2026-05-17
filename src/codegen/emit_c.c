@@ -7779,9 +7779,57 @@ static void emit_ctor_member_inits(Node *func) {
         int nb = class_nbases(cty);
         for (int b = 0; b < nb; b++) {
             Type *base = class_base(cty, b);
-            if (!base || !base->has_default_ctor) continue;
+            if (!base) continue;
+            /* Check the mem-init-list for an entry naming this base
+             * (by tag — N4659 §15.6.2 [class.base.init] allows
+             * 'Derived(args) : Base(b_args), member(m_args) {}'). */
+            MemInit *base_mi = NULL;
+            if (base->tag) {
+                for (int k = 0; k < func->func.n_mem_inits; k++) {
+                    MemInit *mi = &func->func.mem_inits[k];
+                    if (mi->name && mi->name->len == base->tag->len &&
+                        memcmp(mi->name->loc, base->tag->loc,
+                               base->tag->len) == 0) {
+                        base_mi = mi;
+                        break;
+                    }
+                }
+            }
+            if (base_mi) {
+                /* Explicit 'Base(args)' — resolve the overload against
+                 * the user's args and emit the call. */
+                Type **at = NULL;
+                int na = collect_call_arg_types(base_mi->args,
+                                                 base_mi->nargs, &at);
+                Type **pty = NULL;
+                int np = resolve_overload(base, /*name=*/NULL,
+                                           /*is_ctor=*/true, at, na,
+                                           /*receiver_is_const=*/false,
+                                           &pty, /*out_best=*/NULL);
+                if (np < 0) {
+                    if (na != 0)
+                        die_no_overload(base, NULL, na,
+                                         "base mem-init ctor call");
+                    /* na == 0: fall through to default-ctor path below. */
+                } else {
+                    emit_indent();
+                    mangle_class_ctor(base, pty, np);
+                    fputs("(&this->", stdout);
+                    if (b == 0) fputs("__sf_base", stdout);
+                    else        fprintf(stdout, "__sf_base%d", b);
+                    for (int a = 0; a < base_mi->nargs; a++) {
+                        fputs(", ", stdout);
+                        emit_arg_for_param(base_mi->args[a],
+                                            a < np ? pty[a] : NULL);
+                    }
+                    fputs(");\n", stdout);
+                    continue;
+                }
+            }
+            /* No explicit mem-init for this base — default-init iff
+             * the base has a default ctor we can resolve. */
+            if (!base->has_default_ctor) continue;
             emit_indent();
-            /* Default-ctor chain into the base. 0-arg signature. */
             mangle_class_ctor(base, NULL, 0);
             fputs("(&this->", stdout);
             if (b == 0) fputs("__sf_base", stdout);
