@@ -3920,6 +3920,40 @@ static void emit_expr(Node *n) {
             fputs(n->codegen_temp_name, stdout);
             return;
         }
+        /* Zero-arg functional cast 'T()' to a non-template class name —
+         * N4659 §8.2.3 [expr.type.conv]. The callee is ND_IDENT whose
+         * resolved_decl is ENTITY_TYPE/ENTITY_TAG and there are no
+         * args; lower to a value-init compound literal '(struct T){0}'.
+         * Without this, 'Derived()' in expression position emitted as
+         * a literal call to a function named 'Derived' — cc rejected. */
+        if (n->call.nargs == 0 && n->call.callee &&
+            n->call.callee->kind == ND_IDENT) {
+            Declaration *rd = n->call.callee->ident.resolved_decl;
+            Token *cname = n->call.callee->ident.name;
+            Type *probe_ty = NULL;
+            if (rd && (rd->entity == ENTITY_TYPE ||
+                       rd->entity == ENTITY_TAG) && rd->type) {
+                probe_ty = rd->type;
+            } else if (cname) {
+                /* Sema didn't tag the resolved_decl (e.g. typedef
+                 * names at file scope). Probe the TU by tag to see
+                 * if 'cname' names a class. */
+                Type probe = {0};
+                probe.kind = TY_STRUCT;
+                probe.tag = cname;
+                Node *cdef = find_class_def_by_tag_only(&probe);
+                if (cdef && cdef->class_def.ty)
+                    probe_ty = cdef->class_def.ty;
+            }
+            if (probe_ty &&
+                (probe_ty->kind == TY_STRUCT ||
+                 probe_ty->kind == TY_UNION)) {
+                fputc('(', stdout);
+                emit_type(probe_ty);
+                fputs("){0}", stdout);
+                return;
+            }
+        }
         /* Capturing-lambda call — N4659 §8.1.5/3 [expr.prim.lambda].
          * Invoking the closure invokes its function call operator;
          * sea-front lowers that to a free fn taking the closure ptr
