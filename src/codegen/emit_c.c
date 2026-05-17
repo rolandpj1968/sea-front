@@ -9257,8 +9257,12 @@ static void emit_class_def(Node *n) {
         if (!m->var_decl.name) continue;
         emit_source_comment(m->tok);
         fputs("static ", stdout);
-        if (m->var_decl.ty && !m->var_decl.ty->is_const)
-            fputs("const ", stdout);
+        /* emit_type handles 'const' based on ty->is_const — do not
+         * add an inverted 'const' here. The previous logic
+         * (`if (!is_const) fputs("const ")`) made every non-const
+         * static data member uneditable in C: 'static int count;'
+         * came out as 'static const int sf__C__count;', breaking
+         * '++count' in every member function body. */
         emit_type(m->var_decl.ty);
         fputc(' ', stdout);
         mangle_class_tag(class_type);
