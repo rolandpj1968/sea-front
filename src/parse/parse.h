@@ -366,6 +366,16 @@ struct Node {
                                      * parts[0] token text. NULL when
                                      * parts[0] already names the class
                                      * directly. */
+            Declaration *resolved_decl;
+                                    /* Sema-populated: the final
+                                     * Declaration the qualified id
+                                     * resolves to. Codegen reads
+                                     * c_linkage and asm_name from
+                                     * here to emit the correct symbol
+                                     * for namespace-qualified calls
+                                     * that resolve to an extern "C"
+                                     * function (e.g. 'std::exit' via
+                                     * 'using ::exit' in <cstdlib>). */
         } qualified;
 
         /* ND_BINARY, ND_ASSIGN — N4659 §8.5-§8.18

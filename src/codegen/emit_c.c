@@ -4046,6 +4046,29 @@ static void emit_expr(Node *n) {
                 callee_q->qualified.nparts >= 2) {
                 Token *class_tok = callee_q->qualified.parts[0];
                 Token *method_tok = callee_q->qualified.parts[callee_q->qualified.nparts - 1];
+                /* Namespace-qualified extern "C" function: sema
+                 * stashed the Declaration; if it carries c_linkage
+                 * (or an explicit asm_name), emit the bare/asm form
+                 * just like the unqualified path. Covers 'std::exit'
+                 * via 'using ::exit;' in <cstdlib> — the symbol
+                 * actually linked is 'exit', not the Itanium-mangled
+                 * '_ZN3std4exitEi'. N4659 §10.5/6 [dcl.link]. */
+                Declaration *qd = callee_q->qualified.resolved_decl;
+                if (qd && qd->type && qd->type->kind == TY_FUNC &&
+                    (qd->c_linkage || qd->asm_name)) {
+                    emit_free_func_symbol(method_tok, qd->asm_name,
+                                           qd->c_linkage,
+                                           qd->type->params,
+                                           qd->type->nparams);
+                    fputc('(', stdout);
+                    for (int i = 0; i < n->call.nargs; i++) {
+                        if (i > 0) fputs(", ", stdout);
+                        emit_arg_for_param(n->call.args[i],
+                            (i < qd->type->nparams) ? qd->type->params[i] : NULL);
+                    }
+                    fputc(')', stdout);
+                    return;
+                }
                 if (class_tok && method_tok) {
                     /* N4659 §16.3 [over.match]: use the DECL's param
                      * types for mangling. If the Phase-2 qualified

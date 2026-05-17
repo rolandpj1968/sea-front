@@ -2132,7 +2132,18 @@ Node *parse_top_level_decl(Parser *p) {
              * model fully), since downstream parser shortcuts treat
              * unknown idents in type position as opaque type-names. */
             EntityKind ek = src ? src->entity : ENTITY_TYPE;
-            region_declare(p, last_name->loc, last_name->len, ek, fwd);
+            Declaration *aliased = region_declare(p, last_name->loc,
+                                                   last_name->len, ek, fwd);
+            /* Propagate linkage attributes so a 'using ::exit;' inside
+             * namespace std resolves at the call site as the global
+             * extern "C" exit (mangled bare 'exit'), not as a fresh
+             * ND_QUALIFIED with no linkage info. Without this,
+             * 'std::exit(0)' emits an Itanium-mangled name no libc
+             * symbol satisfies. */
+            if (aliased && src) {
+                aliased->c_linkage = src->c_linkage;
+                aliased->asm_name  = src->asm_name;
+            }
         }
         (void)tok;
         return NULL;

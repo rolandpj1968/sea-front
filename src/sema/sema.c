@@ -2046,6 +2046,13 @@ static void visit(Sema *s, Node *n) {
                         member->loc, member->len);
                     if (md && md->type)
                         n->resolved_type = md->type;
+                    /* Stash the Declaration so codegen can read
+                     * c_linkage / asm_name. 'std::exit' resolves
+                     * here via 'using ::exit;' inside namespace std
+                     * — the propagated Declaration is the global
+                     * extern "C" exit, which must mangle bare. */
+                    if (md)
+                        n->qualified.resolved_decl = md;
                 }
                 if (ld && ld->type && ld->type->class_region) {
                     Declaration *md = lookup_in_scope(ld->type->class_region,
