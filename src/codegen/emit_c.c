@@ -4085,6 +4085,35 @@ static void emit_expr(Node *n) {
                     fputc(')', stdout);
                     return;
                 }
+                /* Free function in the std namespace under Itanium
+                 * mangling — emit '_ZSt<len><name><param-encoding>'
+                 * to match libstdc++'s standard encoding. The fully-
+                 * scoped 'N3std<len><name>E' form sea-front otherwise
+                 * produces is a valid Itanium <name>, but it's NOT
+                 * the form libstdc++.so exports — link fails on
+                 * std::set_terminate, std::set_unexpected, std::exit
+                 * (without a using-decl), etc. Itanium ABI 5.1.5:
+                 * <unscoped-name> ::= St <unqualified-name>. */
+                if (g_mangle_kind == MANGLE_ITANIUM &&
+                    qd && qd->type && qd->type->kind == TY_FUNC &&
+                    class_tok && class_tok->len == 3 &&
+                    memcmp(class_tok->loc, "std", 3) == 0 &&
+                    !callee_q->qualified.resolved_class_type &&
+                    callee_q->qualified.nparts == 2 &&
+                    method_tok) {
+                    fputs("_ZSt", stdout);
+                    fprintf(stdout, "%d%.*s",
+                        method_tok->len, method_tok->len, method_tok->loc);
+                    mangle_param_suffix(qd->type->params, qd->type->nparams);
+                    fputc('(', stdout);
+                    for (int i = 0; i < n->call.nargs; i++) {
+                        if (i > 0) fputs(", ", stdout);
+                        emit_arg_for_param(n->call.args[i],
+                            (i < qd->type->nparams) ? qd->type->params[i] : NULL);
+                    }
+                    fputc(')', stdout);
+                    return;
+                }
                 if (class_tok && method_tok) {
                     /* N4659 §16.3 [over.match]: use the DECL's param
                      * types for mangling. If the Phase-2 qualified
