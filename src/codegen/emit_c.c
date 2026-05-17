@@ -440,6 +440,14 @@ static bool is_addressable_lvalue(Node *n) {
     }
 }
 
+static int find_base_path(Type *current, Type *target,
+                          int *path, int max_depth);
+static void emit_base_chain(int *path, int len);
+static Node *find_class_def_by_tag_only(Type *class_type);
+static Node *find_class_def_by_tag_args(Type *class_type);
+static int class_nbases(Type *class_type);
+static Type *class_base(Type *class_type, int i);
+
 static void emit_arg_for_param(Node *arg, Type *param_ty) {
     if (!arg) return;
     /* 'vNULL' passed as a function argument to a struct-typed param:
@@ -573,6 +581,59 @@ static void emit_arg_for_param(Node *arg, Type *param_ty) {
         emit_expr(arg);
         fputs("})", stdout);
         return;
+    }
+    /* Derived-to-base reference binding — N4659 §11.6.3 [dcl.init.ref]/4.1
+     * + §7.11 [conv.ptr]. When 'd' is of derived type D and the param is
+     * 'B&' where B is a base of D, C++ implicit conversion binds B& to
+     * the B-subobject of d. In our sea-front layout the B-subobject lives
+     * at d.__sf_base[N] for the Nth base, so we need '&(d).__sf_base[N]'
+     * not the bare '&(d)' a generic lvalue→ref binding would emit.
+     * Without this, the callee dereferences an offset of zero into D when
+     * it expects the B layout — silent corruption / segv. */
+    if (at && param_ty->base && at != param_ty->base &&
+        (at->kind == TY_STRUCT || at->kind == TY_UNION) &&
+        (param_ty->base->kind == TY_STRUCT || param_ty->base->kind == TY_UNION)) {
+        /* Recover class_region if the Type copy lost it (typedef path,
+         * subst_type result, etc.) — same fallback ND_MEMBER uses. */
+        Type *deriv = at;
+        if (!deriv->class_region && deriv->tag) {
+            Node *d = find_class_def_by_tag_args(deriv);
+            if (!d) d = find_class_def_by_tag_only(deriv);
+            if (d && d->class_def.ty && d->class_def.ty->class_region)
+                deriv = d->class_def.ty;
+        }
+        int base_path[8];
+        int base_len = find_base_path(deriv, param_ty->base, base_path, 8);
+        /* Type identity isn't canonical across all paths — D's stored
+         * base-Type for B and the param's B-Type may be different
+         * instances. Fall back to tag-based search when the pointer-
+         * equality walk fails. */
+        if (base_len == 0 && param_ty->base->tag) {
+            Type *tgt = param_ty->base;
+            int nb = class_nbases(deriv);
+            for (int b = 0; b < nb; b++) {
+                Type *base = class_base(deriv, b);
+                if (!base || !base->tag) continue;
+                if (base->tag->len == tgt->tag->len &&
+                    memcmp(base->tag->loc, tgt->tag->loc,
+                           tgt->tag->len) == 0) {
+                    base_path[0] = b;
+                    base_len = 1;
+                    break;
+                }
+            }
+        }
+        if (base_len > 0) {
+            fputs("&(", stdout);
+            emit_expr(arg);
+            fputs(").", stdout);
+            if (base_len > 1)
+                emit_base_chain(base_path, base_len - 1);
+            int last = base_path[base_len - 1];
+            if (last == 0) fputs("__sf_base", stdout);
+            else           fprintf(stdout, "__sf_base%d", last);
+            return;
+        }
     }
     fputs("&(", stdout);
     emit_expr(arg);
@@ -4664,7 +4725,21 @@ static void emit_expr(Node *n) {
                         fputs(" *)", stdout);
                         if (!obj_is_ptr) fputc('&', stdout);
                         fputc('(', stdout);
+                        /* For ref-params (lowered to T*), emit_ident
+                         * auto-derefs to '(*p)'. We're about to cast
+                         * the result to a polymorphic-root pointer,
+                         * so the underlying T* IS what we want — skip
+                         * the deref to avoid producing a struct value
+                         * inside the pointer-cast. Without this,
+                         * 'b.foo()' on B& emits
+                         * '((struct A *)((*b)))->...' which casts a
+                         * struct value to pointer. */
+                        bool saved_srd = g_suppress_ref_deref;
+                        if (obj_is_ptr && obj && obj->kind == ND_IDENT &&
+                            is_ref_param(obj->ident.name))
+                            g_suppress_ref_deref = true;
                         emit_expr(obj);
+                        g_suppress_ref_deref = saved_srd;
                         fputs("))->__sf_vptr->", stdout);
                     } else if (obj_is_ptr) {
                         fputc('(', stdout);
@@ -9259,7 +9334,14 @@ static void emit_top_level(Node *n) {
             /* Const/non-const overloads now get distinct mangled names
              * (via _const suffix) — no dedup needed. N4659 §16.2/3. */
             Node *saved = g_current_class_def;
-            if (n->func.is_constructor && n->func.class_type->class_def)
+            /* Set the enclosing class for any OOL method, not just
+             * constructors. Implicit-this name resolution
+             * (find_base_path / emit_base_chain) needs g_current_class_def
+             * to walk through __sf_base for inherited-member access in
+             * the body. Without this, 'b' in 'void D::foo() { ...b... }'
+             * (b inherited from C, D's first base) emits as 'this->b'
+             * which has no such field — N4659 §10.2 [class.member.lookup]. */
+            if (n->func.class_type->class_def)
                 g_current_class_def = n->func.class_type->class_def;
             /* OOL definition: emit as static inline iff the user
              * marked it 'inline' (DECL_INLINE) OR the owner class is
