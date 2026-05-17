@@ -7770,10 +7770,9 @@ static void emit_ctor_member_inits(Node *func) {
      * "...non-static data members are initialized in the order
      *  they were declared in the class definition (again regardless
      *  of the order of the mem-initializers)" — and bases come first.
-     * For each direct base, call its default ctor if it has one.
-     * (Mem-init-list base-class entries with explicit args are NOT
-     * yet handled — that needs a richer mem-init parse to recognise
-     * 'Base(args)' versus 'member(args)'.) */
+     * For each direct base, look up an explicit mem-init entry by tag
+     * and emit the matching ctor with the user's args; fall through
+     * to a default-ctor call when there is no explicit entry. */
     if (cdef->class_def.ty) {
         Type *cty = cdef->class_def.ty;
         int nb = class_nbases(cty);
