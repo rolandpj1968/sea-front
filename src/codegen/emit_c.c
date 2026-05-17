@@ -8466,49 +8466,57 @@ static void emit_ctor_member_inits(Node *func) {
             if (is_member) continue;
             /* Find the transitive base by tag-name. Walk each direct
              * base's chain; first hit wins (matches sea-front's
-             * unqualified-name resolution order). */
+             * unqualified-name resolution order). resume_at[d] holds
+             * the next child index to try at depth d, so backtracking
+             * doesn't re-descend into already-explored subtrees. */
             Type *target = NULL;
             int path[8];
             int path_len = 0;
             for (int b = 0; b < nbd && !target; b++) {
                 Type *bb = class_base(cty2, b);
-                /* DFS for a transitive base whose tag matches mi->name. */
-                Type *stack[16]; int slen = 0;
-                int idx_stack[16];
-                if (bb) { stack[slen] = bb; idx_stack[slen] = b; slen++; }
-                while (slen > 0) {
+                if (!bb || !bb->tag) continue;
+                if (bb->tag->len == mi->name->len &&
+                    memcmp(bb->tag->loc, mi->name->loc, mi->name->len) == 0) {
+                    path[0] = b;
+                    path_len = 1;
+                    target = bb;
+                    break;
+                }
+                Type *stack[16];
+                int   resume_at[16];
+                int   parent_idx[16];
+                int   slen = 0;
+                stack[slen] = bb;
+                resume_at[slen] = 0;
+                parent_idx[slen] = b;
+                slen++;
+                while (slen > 0 && !target) {
                     Type *cur = stack[slen-1];
                     int nb = class_nbases(cur);
-                    /* Try cur's direct bases. */
-                    bool found_child = false;
-                    for (int c = 0; c < nb; c++) {
-                        Type *child = class_base(cur, c);
-                        if (!child || !child->tag) continue;
-                        if (child->tag->len == mi->name->len &&
-                            memcmp(child->tag->loc, mi->name->loc,
-                                   mi->name->len) == 0) {
-                            /* Build path: idx_stack contains the
-                             * indices from the outermost level down
-                             * to cur's position; append c. */
-                            for (int j = 0; j < slen; j++) path[j] = idx_stack[j];
-                            path[slen] = c;
-                            path_len = slen + 1;
-                            target = child;
-                            found_child = true;
-                            break;
-                        }
+                    int c = resume_at[slen-1];
+                    if (c >= nb) { slen--; continue; }
+                    /* Advance past this index for the next iteration
+                     * (whether we match, descend, or skip). */
+                    resume_at[slen-1] = c + 1;
+                    Type *child = class_base(cur, c);
+                    if (!child) continue;
+                    if (child->tag &&
+                        child->tag->len == mi->name->len &&
+                        memcmp(child->tag->loc, mi->name->loc,
+                               mi->name->len) == 0) {
+                        path[0] = parent_idx[0];
+                        for (int j = 1; j < slen; j++) path[j] = parent_idx[j];
+                        path[slen] = c;
+                        path_len = slen + 1;
+                        target = child;
+                        break;
                     }
-                    if (target) break;
-                    /* Descend into the first unexplored child. */
-                    if (!found_child && nb > 0 && slen < 16) {
-                        Type *child = class_base(cur, 0);
-                        if (child) {
-                            idx_stack[slen] = 0;
-                            stack[slen++] = child;
-                            continue;
-                        }
+                    if (slen < 16 && class_nbases(child) > 0) {
+                        stack[slen] = child;
+                        resume_at[slen] = 0;
+                        parent_idx[slen] = c;
+                        slen++;
                     }
-                    slen--;  /* backtrack */
                 }
             }
             if (!target) continue;
