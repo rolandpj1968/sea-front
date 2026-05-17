@@ -496,6 +496,57 @@ static void emit_arg_for_param(Node *arg, Type *param_ty) {
         g_suppress_ref_deref = saved;
         return;
     }
+    /* Derived-to-base POINTER conversion — N4659 §7.11 [conv.ptr]/3.
+     * Mirror of the reference-binding case below, but for plain
+     * pointer params. When 'D *p' is passed to a 'B *' param and B
+     * is a base of D, C++ adjusts the pointer to the B-subobject.
+     * In sea-front's layout the Nth base lives at __sf_baseN, so a
+     * D-pointer pp must be lowered to '&(pp)->__sf_baseN' (or '&p'
+     * for the first base, where offset is zero — but we emit
+     * '__sf_base' uniformly for clarity and let the compiler fold). */
+    if (param_ty && param_ty->kind == TY_PTR && param_ty->base &&
+        (param_ty->base->kind == TY_STRUCT || param_ty->base->kind == TY_UNION) &&
+        arg->resolved_type && arg->resolved_type->kind == TY_PTR &&
+        arg->resolved_type->base &&
+        (arg->resolved_type->base->kind == TY_STRUCT ||
+         arg->resolved_type->base->kind == TY_UNION) &&
+        arg->resolved_type->base != param_ty->base) {
+        Type *deriv = arg->resolved_type->base;
+        if (!deriv->class_region && deriv->tag) {
+            Node *d = find_class_def_by_tag_args(deriv);
+            if (!d) d = find_class_def_by_tag_only(deriv);
+            if (d && d->class_def.ty && d->class_def.ty->class_region)
+                deriv = d->class_def.ty;
+        }
+        int base_path[8];
+        int base_len = find_base_path(deriv, param_ty->base, base_path, 8);
+        if (base_len == 0 && param_ty->base->tag) {
+            Type *tgt = param_ty->base;
+            int nb = class_nbases(deriv);
+            for (int b = 0; b < nb; b++) {
+                Type *base = class_base(deriv, b);
+                if (!base || !base->tag) continue;
+                if (base->tag->len == tgt->tag->len &&
+                    memcmp(base->tag->loc, tgt->tag->loc,
+                           tgt->tag->len) == 0) {
+                    base_path[0] = b;
+                    base_len = 1;
+                    break;
+                }
+            }
+        }
+        if (base_len > 0) {
+            fputs("&(", stdout);
+            emit_expr(arg);
+            fputs(")->", stdout);
+            if (base_len > 1)
+                emit_base_chain(base_path, base_len - 1);
+            int last = base_path[base_len - 1];
+            if (last == 0) fputs("__sf_base", stdout);
+            else           fprintf(stdout, "__sf_base%d", last);
+            return;
+        }
+    }
     if (!ty_is_ref(param_ty)) { emit_expr(arg); return; }
     Type *at = arg->resolved_type;
     /* Already a ref in the AST (lowered to pointer) — pass as-is. */
@@ -7856,12 +7907,72 @@ static void emit_ctor_member_inits(Node *func) {
                 any_body = true; break;
             }
         }
+        /* Also pick up OOL virtual definitions — same shape as the
+         * vtable struct emit. An in-class 'virtual void foo();'
+         * (ND_VAR_DECL) paired with an out-of-class body
+         * (ND_FUNC_DEF in g_tu->tu.decls) is the gcc 4.8
+         * g++.dg/ipa/pr46287 pattern; without this the vtable is
+         * never installed and dispatch lands on uninitialised
+         * memory. */
+        if (!any_body && g_tu) {
+            Type *cty = cdef->class_def.ty;
+            for (int i = 0; i < cdef->class_def.nmembers && !any_body; i++) {
+                Node *m = cdef->class_def.members[i];
+                if (!m || m->kind != ND_VAR_DECL) continue;
+                if (!m->var_decl.ty || m->var_decl.ty->kind != TY_FUNC) continue;
+                if (!m->var_decl.is_virtual) continue;
+                Token *vn = m->var_decl.name;
+                if (!vn) continue;
+                for (int j = 0; j < g_tu->tu.ndecls; j++) {
+                    Node *d = g_tu->tu.decls[j];
+                    if (!d || d->kind != ND_FUNC_DEF) continue;
+                    if (d->func.class_type != cty) continue;
+                    if (!d->func.name) continue;
+                    if (d->func.name->len == vn->len &&
+                        memcmp(d->func.name->loc, vn->loc, vn->len) == 0) {
+                        any_body = true; break;
+                    }
+                }
+            }
+        }
         if (any_body) {
             emit_indent();
             emit_vptr_lhs(cdef->class_def.ty);
             fputs(" = &", stdout);
             mangle_class_vtable_instance(cdef->class_def.ty);
             fputs(";\n", stdout);
+            /* Secondary-vtable install for each non-first polymorphic
+             * base. The B-subobject's own ctor already wrote B's
+             * primary vtable into its vptr; overwrite with Derived's
+             * thunk-bearing secondary vtable so dispatch through B*
+             * reaches Derived's overrides. N4659 §13.3 [class.virtual]
+             * + the secondary-vtable emit above. */
+            Type *cty = cdef->class_def.ty;
+            int nb = class_nbases(cty);
+            for (int bi = 1; bi < nb; bi++) {
+                Type *base = class_base(cty, bi);
+                if (!base || !base->has_virtual_methods) continue;
+                /* Vptr lives in base's polymorphic-root ancestor. */
+                Type *base_root = vptr_owner_class(base);
+                if (!base_root) base_root = base;
+                /* Address-of the base subobject, cast to the vptr-
+                 * owner pointer-type, then write through ->__sf_vptr.
+                 * The cast wins us const-vtable-pointer compatibility
+                 * (the secondary vtable's struct type differs from
+                 * the vptr field's declared type — both compile to
+                 * the same pointer-to-struct of fn-ptrs). */
+                emit_indent();
+                fputs("((struct ", stdout);
+                mangle_class_tag(base_root);
+                fprintf(stdout, " *)&this->__sf_base%d)->__sf_vptr = ", bi);
+                fputs("(const struct ", stdout);
+                mangle_class_vtable_type(base_root);
+                fputs(" *)&", stdout);
+                mangle_class_tag(cty);
+                fputs("__vtable_for_", stdout);
+                mangle_class_tag(base);
+                fputs("_instance;\n", stdout);
+            }
         }
     }
     for (int i = 0; i < cdef->class_def.nmembers; i++) {
@@ -9217,6 +9328,176 @@ methods_phase:;
         fputs("};\n", stdout);
     }
 
+    /* Multi-inheritance virtual dispatch: for each non-first polymorphic
+     * base B, emit thunks (one per virtual that this class overrides in
+     * B's slot set) and a secondary vtable instance typed as B's vtable
+     * struct. Installed by the ctor below so that a B*-view of a Derived
+     * dispatches through Derived's overrides. N4659 §13.3 [class.virtual].
+     * First base shares its vptr with the polymorphic-root chain (vptr
+     * at offset 0), so no thunks needed there. */
+    if (class_type && class_type->has_virtual_methods &&
+        any_virtual_has_body) {
+        int nb = class_nbases(class_type);
+        for (int bi = 1; bi < nb; bi++) {
+            Type *base = class_base(class_type, bi);
+            if (!base || !base->has_virtual_methods) continue;
+            if (!base->class_def) continue;
+            Node *base_def = base->class_def;
+            /* Pass 1: for every virtual slot in B that THIS class
+             * overrides (same name + same param count), emit a thunk
+             * function. The thunk adjusts B* down to Derived* and
+             * calls the most-derived implementation. */
+            for (int j = 0; j < base_def->class_def.nmembers; j++) {
+                Node *bm = base_def->class_def.members[j];
+                if (!bm) continue;
+                bool b_funcdef = (bm->kind == ND_FUNC_DEF && bm->func.is_virtual);
+                bool b_decl = (bm->kind == ND_VAR_DECL && bm->var_decl.is_virtual &&
+                               bm->var_decl.ty && bm->var_decl.ty->kind == TY_FUNC);
+                if (!b_funcdef && !b_decl) continue;
+                if (b_funcdef && bm->func.is_destructor) continue;
+                if (b_decl && bm->var_decl.is_destructor) continue;
+                Token *bname = b_funcdef ? bm->func.name : bm->var_decl.name;
+                int b_np = b_funcdef ? bm->func.nparams : bm->var_decl.ty->nparams;
+                /* Does THIS class re-declare a same-named method with
+                 * the same arity? If so, the slot needs a thunk. */
+                Node *override_m = NULL;
+                Type **override_pty = NULL;
+                int override_np = -1;
+                bool override_is_funcdef = false;
+                for (int k = 0; k < n->class_def.nmembers; k++) {
+                    Node *dm = n->class_def.members[k];
+                    if (!dm) continue;
+                    bool d_funcdef = (dm->kind == ND_FUNC_DEF && dm->func.is_virtual);
+                    bool d_decl = (dm->kind == ND_VAR_DECL && dm->var_decl.is_virtual &&
+                                   dm->var_decl.ty && dm->var_decl.ty->kind == TY_FUNC);
+                    if (!d_funcdef && !d_decl) continue;
+                    Token *dn = d_funcdef ? dm->func.name : dm->var_decl.name;
+                    int d_np = d_funcdef ? dm->func.nparams : dm->var_decl.ty->nparams;
+                    if (!dn || !bname) continue;
+                    if (dn->len != bname->len ||
+                        memcmp(dn->loc, bname->loc, bname->len) != 0) continue;
+                    if (d_np != b_np) continue;
+                    override_m = dm;
+                    override_is_funcdef = d_funcdef;
+                    override_np = collect_func_param_types(dm, &override_pty);
+                    break;
+                }
+                if (!override_m) continue;
+                /* Emit the thunk. Signature mirrors B's slot:
+                 *   <ret> sf__<Deriv>__thunk_for_<Base>_<method-suffix>(
+                 *       struct sf__<Base> *bp, <other params>) {
+                 *     <return> sf__<Deriv>__<method>_p_..._pe_(
+                 *       (struct sf__<Deriv> *)((char *)bp -
+                 *           offsetof(struct sf__<Deriv>, __sf_base<bi>)),
+                 *       <other params...>);
+                 *   } */
+                Type *ret_ty = b_funcdef ? bm->func.ret_ty
+                                         : bm->var_decl.ty->ret;
+                /* Param types for both the suffix and the thunk's
+                 * own declaration. Funcdef carries ND_PARAM children;
+                 * decl carries them as Type** on the function type. */
+                Type **b_pty = NULL;
+                int b_pn = 0;
+                if (b_funcdef) b_pn = collect_func_param_types(bm, &b_pty);
+                else { b_pty = bm->var_decl.ty->params; b_pn = b_np; }
+                fputs("static ", stdout);
+                emit_type(ret_ty);
+                fputc(' ', stdout);
+                mangle_class_tag(class_type);
+                fputs("__thunk_for_", stdout);
+                mangle_class_tag(base);
+                fputs("__", stdout);
+                emit_token_text(bname);
+                /* Param suffix keeps overloaded virtuals distinct. */
+                mangle_param_suffix(b_pty, b_pn);
+                fputs("(struct ", stdout);
+                mangle_class_tag(base);
+                fputs(" *__bp", stdout);
+                for (int p = 0; p < b_np; p++) {
+                    fputs(", ", stdout);
+                    Type *pty = b_funcdef ? bm->func.params[p]->param.ty
+                                          : bm->var_decl.ty->params[p];
+                    emit_type(pty);
+                    fprintf(stdout, " __a%d", p);
+                }
+                fputs(") {\n    ", stdout);
+                if (ret_ty && ret_ty->kind != TY_VOID) fputs("return ", stdout);
+                mangle_class_method(class_type, bname, override_pty,
+                                     override_np, /*is_const=*/false);
+                fputs("((struct ", stdout);
+                mangle_class_tag(class_type);
+                fputs(" *)((char *)__bp - offsetof(struct ", stdout);
+                mangle_class_tag(class_type);
+                fprintf(stdout, ", __sf_base%d))", bi);
+                for (int p = 0; p < b_np; p++)
+                    fprintf(stdout, ", __a%d", p);
+                fputs(");\n}\n", stdout);
+                (void)override_is_funcdef;
+            }
+            /* Pass 2: emit the secondary vtable instance. Same struct
+             * type as B's vtable; slot values are the thunk (when
+             * overridden) or B's own slot value otherwise. */
+            fputs("static const struct ", stdout);
+            mangle_class_vtable_type(base);
+            fputc(' ', stdout);
+            mangle_class_tag(class_type);
+            fputs("__vtable_for_", stdout);
+            mangle_class_tag(base);
+            fputs("_instance = {\n", stdout);
+            g_indent++;
+            for (int j = 0; j < base_def->class_def.nmembers; j++) {
+                Node *bm = base_def->class_def.members[j];
+                if (!bm) continue;
+                bool b_funcdef = (bm->kind == ND_FUNC_DEF && bm->func.is_virtual);
+                bool b_decl = (bm->kind == ND_VAR_DECL && bm->var_decl.is_virtual &&
+                               bm->var_decl.ty && bm->var_decl.ty->kind == TY_FUNC);
+                if (!b_funcdef && !b_decl) continue;
+                if (b_funcdef && bm->func.is_destructor) continue;
+                if (b_decl && bm->var_decl.is_destructor) continue;
+                Token *bname = b_funcdef ? bm->func.name : bm->var_decl.name;
+                int b_np = b_funcdef ? bm->func.nparams : bm->var_decl.ty->nparams;
+                Node *override_m = NULL;
+                for (int k = 0; k < n->class_def.nmembers; k++) {
+                    Node *dm = n->class_def.members[k];
+                    if (!dm) continue;
+                    bool d_funcdef = (dm->kind == ND_FUNC_DEF && dm->func.is_virtual);
+                    bool d_decl = (dm->kind == ND_VAR_DECL && dm->var_decl.is_virtual &&
+                                   dm->var_decl.ty && dm->var_decl.ty->kind == TY_FUNC);
+                    if (!d_funcdef && !d_decl) continue;
+                    Token *dn = d_funcdef ? dm->func.name : dm->var_decl.name;
+                    int d_np = d_funcdef ? dm->func.nparams : dm->var_decl.ty->nparams;
+                    if (!dn || !bname) continue;
+                    if (dn->len != bname->len ||
+                        memcmp(dn->loc, bname->loc, bname->len) != 0) continue;
+                    if (d_np != b_np) continue;
+                    override_m = dm;
+                    break;
+                }
+                Type **slot_pty = NULL;
+                int slot_pn = 0;
+                if (b_funcdef) slot_pn = collect_func_param_types(bm, &slot_pty);
+                else { slot_pty = bm->var_decl.ty->params; slot_pn = b_np; }
+                emit_indent();
+                if (override_m) {
+                    mangle_class_tag(class_type);
+                    fputs("__thunk_for_", stdout);
+                    mangle_class_tag(base);
+                    fputs("__", stdout);
+                    emit_token_text(bname);
+                    mangle_param_suffix(slot_pty, slot_pn);
+                } else {
+                    /* Pass-through: use whichever symbol B's primary
+                     * vtable would fill the slot with. */
+                    mangle_class_method(base, bname, slot_pty, slot_pn,
+                                         /*is_const=*/false);
+                }
+                fputs(",\n", stdout);
+            }
+            g_indent--;
+            fputs("};\n", stdout);
+        }
+    }
+
     /* Now emit each method (ND_FUNC_DEF in the member list) as a
      * separate free function. Trivial dtors are skipped to match
      * the forward-decl loop above. g_current_class_def is set so
@@ -9337,6 +9618,25 @@ methods_phase:;
             fputs(" = &", stdout);
             mangle_class_vtable_instance(class_type);
             fputs(";\n", stdout);
+            /* Secondary-vtable install for non-first poly bases. Same
+             * shape as emit_ctor_member_inits. */
+            for (int bi = 1; bi < nb_c; bi++) {
+                Type *base = class_base(class_type, bi);
+                if (!base || !base->has_virtual_methods) continue;
+                Type *base_root = vptr_owner_class(base);
+                if (!base_root) base_root = base;
+                emit_indent();
+                fputs("((struct ", stdout);
+                mangle_class_tag(base_root);
+                fprintf(stdout, " *)&this->__sf_base%d)->__sf_vptr = ", bi);
+                fputs("(const struct ", stdout);
+                mangle_class_vtable_type(base_root);
+                fputs(" *)&", stdout);
+                mangle_class_tag(class_type);
+                fputs("__vtable_for_", stdout);
+                mangle_class_tag(base);
+                fputs("_instance;\n", stdout);
+            }
         }
         for (int i = 0; i < n->class_def.nmembers; i++) {
             Node *m = n->class_def.members[i];
