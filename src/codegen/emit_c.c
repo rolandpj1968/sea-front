@@ -230,18 +230,34 @@ static int find_return_target_from(int top) {
     return -1;
 }
 
-/* For BREAK: the topmost live entry IS the next target — both
- * CL_VAR (chain to its label) and CL_LOOP (its break_label) live
- * in the same field. Returns -1 only if break is used outside any
- * loop or var scope (malformed; should already be a sema error). */
+/* For BREAK: walk outward looking for a CL_LOOP — only loops and
+ * switches are valid break destinations (N4659 §9.6 [stmt.break]).
+ * CL_VARs above the loop contribute their cleanup labels as chain
+ * stops, but the topmost entry being a CL_VAR or CL_TRY without
+ * any enclosing CL_LOOP means there's no break destination at all
+ * (sema would have flagged a user-written break; the cleanup
+ * machinery should likewise emit no break-chain).
+ * Returns the topmost CL_VAR label_id when a CL_LOOP exists above
+ * it, else -1. */
 static int find_break_target_from(int top) {
+    bool has_loop = false;
+    for (int i = top - 1; i >= 0; i--) {
+        if (g_cf.live[i].kind == CL_LOOP) { has_loop = true; break; }
+    }
+    if (!has_loop) return -1;
     if (top <= 0) return -1;
     return g_cf.live[top - 1].label_id;
 }
 
-/* For CONT: same as break, but CL_LOOP resolves to its cont_label
- * instead of its break_label. CL_VAR is unchanged. */
+/* For CONT: same rule as break — only meaningful with an enclosing
+ * CL_LOOP (N4659 §9.6 [stmt.cont]). Returns the topmost entry's
+ * appropriate label when a loop is present, else -1. */
 static int find_cont_target_from(int top) {
+    bool has_loop = false;
+    for (int i = top - 1; i >= 0; i--) {
+        if (g_cf.live[i].kind == CL_LOOP) { has_loop = true; break; }
+    }
+    if (!has_loop) return -1;
     if (top <= 0) return -1;
     CleanupEntry *e = &g_cf.live[top - 1];
     return (e->kind == CL_VAR) ? e->label_id : e->cont_label_id;
