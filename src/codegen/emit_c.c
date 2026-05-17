@@ -8414,15 +8414,18 @@ static void emit_ctor_mem_init_one(Node *func, Node *m) {
                     fprintf(stdout, "this->%.*s = ",
                             m->var_decl.name->len, m->var_decl.name->loc);
                 }
-                /* Reference field (lowered to T*): the RHS pointer
-                 * goes in directly; suppress the ND_IDENT ref-param
-                 * auto-deref that would emit (*policy). N4659 §11.3.2
-                 * [dcl.ref]/4 — references must be initialised; we
-                 * model that by storing the pointer. */
-                bool saved = g_suppress_ref_deref;
-                if (ty_is_ref(mty)) g_suppress_ref_deref = true;
-                emit_expr(found->args[0]);
-                g_suppress_ref_deref = saved;
+                /* Reference field (lowered to T*): the RHS must be a
+                 * pointer to the referent. Route through
+                 * emit_arg_for_param with the ref Type so it applies
+                 * the same '&(lvalue)' / pass-through-ref-param logic
+                 * function-call arguments use. Without this, a class
+                 * temp like 'A()' on the RHS was assigned as a struct
+                 * value to a 'const A *' field — type mismatch. */
+                if (ty_is_ref(mty)) {
+                    emit_arg_for_param(found->args[0], mty);
+                } else {
+                    emit_expr(found->args[0]);
+                }
                 fputs(";\n", stdout);
             }
         }
