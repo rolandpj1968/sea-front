@@ -1916,12 +1916,34 @@ no_grouped_abstract:;
     if (parser_at(p, TK_IDENT) && parser_peek_ahead(p, 1)->kind == TK_SCOPE) {
         /* Look ahead for '*' at the end of the nested-name-specifier. */
         int n = 0;
+        Token *owner_tok = parser_peek(p);
         while (parser_peek_ahead(p, n)->kind == TK_IDENT &&
                parser_peek_ahead(p, n + 1)->kind == TK_SCOPE)
             n += 2;
         if (parser_peek_ahead(p, n)->kind == TK_STAR) {
             for (int i = 0; i <= n; i++) parser_advance(p);
-            base = new_ptr_type(p, base);
+            /* Build a TY_PMEM. base is the member's pointee type;
+             * pmem_owner is the owning class (looked up by tag).
+             * N4659 §11.3.3 [dcl.mptr]. The base value is what
+             * 'obj.*p' yields — not a pointer to it. */
+            Type *pmem = new_type(p, TY_PMEM);
+            pmem->base = base;
+            /* Resolve owner class by name; falls back to a tag-only
+             * Type if not in scope (rare — usually the class is
+             * already known by the time its pmem appears). */
+            Declaration *od = lookup_unqualified_kind(p, owner_tok->loc,
+                owner_tok->len, ENTITY_TYPE);
+            if (!od)
+                od = lookup_unqualified_kind(p, owner_tok->loc,
+                    owner_tok->len, ENTITY_TAG);
+            if (od && od->type)
+                pmem->pmem_owner = od->type;
+            else {
+                Type *ow = new_type(p, TY_STRUCT);
+                ow->tag = owner_tok;
+                pmem->pmem_owner = ow;
+            }
+            base = pmem;
             while (parser_at(p, TK_KW_CONST) || parser_at(p, TK_KW_VOLATILE)) {
                 if (parser_consume(p, TK_KW_CONST))    base->is_const = true;
                 if (parser_consume(p, TK_KW_VOLATILE)) base->is_volatile = true;

@@ -109,6 +109,14 @@ static void dump_type(Type *ty) {
         printf("nttp-value");
         if (ty->tag) printf(" %.*s", ty->tag->len, ty->tag->loc);
         return;
+    case TY_PMEM:
+        printf("(pmem ");
+        dump_type(ty->base);
+        if (ty->pmem_owner && ty->pmem_owner->tag)
+            printf(" of %.*s", ty->pmem_owner->tag->len,
+                   ty->pmem_owner->tag->loc);
+        printf(")");
+        return;
     }
 }
 

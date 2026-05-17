@@ -1,15 +1,15 @@
 (translation-unit
   (template (params (param ? "_Ret") (param ? "_Tp"))
     (class-def "mem_fun"
-      (func-def ctor void "mem_fun" (params (param (ptr (func-type dependent _Ret ())) "pf"))
+      (func-def ctor void "mem_fun" (params (param (func-type (pmem dependent _Ret of _Tp) ()) "pf"))
         (block))
       (func-def const dependent _Ret "operator" (params (param (ptr dependent _Tp) "p"))
         (block
           (return (call (->* (ident "p") (ident "f"))))))
-      (var-decl (ptr (func-type dependent _Ret ())) "f")))
+      (var-decl (func-type (pmem dependent _Ret of _Tp) ()) "f")))
   (class-def "PMtest"
     (var-decl int "v")
-    (func-def int "run" (params (param (ptr struct PMtest) "p") (param (ptr int) "pm"))
+    (func-def int "run" (params (param (ptr struct PMtest) "p") (param (pmem int of PMtest) "pm"))
       (block
         (return (+ (->* (ident "p") (ident "pm")) (.* (* (ident "this")) (ident "pm")))))))
   (template (params (param ? "_Str"))

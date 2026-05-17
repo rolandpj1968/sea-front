@@ -1028,6 +1028,17 @@ typedef enum {
      * NTTP values produce distinct C symbols. Never appears outside
      * Type::template_args[]; sema/codegen treat it as opaque. */
     TY_NTTP_VALUE,
+
+    /* Pointer-to-data-member — N4659 §11.3.3 [dcl.mptr].
+     * 'T C::*' is a pointer-to-data-member of C of type T.
+     * Sea-front lowers it to __PTRDIFF_TYPE__ (long on LP64)
+     * holding the member's byte offset within C, with -1 as
+     * the null-pmem sentinel (Itanium ABI convention since 0
+     * is a valid offset for the first member). The .base field
+     * carries the pointee type T; owner_class carries C.
+     * Pointer-to-member-function is not yet modelled — falls
+     * back to TY_PTR like before. */
+    TY_PMEM,
 } TypeKind;
 
 struct Type {
@@ -1141,6 +1152,10 @@ struct Type {
      * emitting out-of-class ctor/dtor definitions whose body needs
      * to chain into member ctors. NULL for forward-declared types. */
     Node *class_def;
+
+    /* TY_PMEM: the owning class type. The .base field carries the
+     * pointee (member's value type). N4659 §11.3.3 [dcl.mptr]. */
+    Type *pmem_owner;
 
     /* Lambda closure marker — N4659 §8.1.5 [expr.prim.lambda].
      * For closure TY_STRUCTs synthesised at lambda parse time,

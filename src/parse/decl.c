@@ -175,12 +175,31 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
             /* nested-name-specifier * — pointer-to-member.
              * Look ahead for '*' at the end of the nested-name chain. */
             int n = 0;
+            Token *owner_tok = parser_peek(p);
             while (parser_peek_ahead(p, n)->kind == TK_IDENT &&
                    parser_peek_ahead(p, n + 1)->kind == TK_SCOPE)
                 n += 2;
             if (parser_peek_ahead(p, n)->kind == TK_STAR) {
                 for (int i = 0; i <= n; i++) parser_advance(p);
-                base_ty = new_ptr_type(p, base_ty);
+                /* Build TY_PMEM rather than TY_PTR — N4659 §11.3.3
+                 * [dcl.mptr]. base is the member's value type;
+                 * pmem_owner is the owning class. C-level lowering
+                 * stores the byte-offset of the member in __PTRDIFF_TYPE__. */
+                Type *pmem = new_type(p, TY_PMEM);
+                pmem->base = base_ty;
+                Declaration *od = lookup_unqualified_kind(p,
+                    owner_tok->loc, owner_tok->len, ENTITY_TYPE);
+                if (!od)
+                    od = lookup_unqualified_kind(p,
+                        owner_tok->loc, owner_tok->len, ENTITY_TAG);
+                if (od && od->type) {
+                    pmem->pmem_owner = od->type;
+                } else {
+                    Type *ow = new_type(p, TY_STRUCT);
+                    ow->tag = owner_tok;
+                    pmem->pmem_owner = ow;
+                }
+                base_ty = pmem;
                 while (parser_at(p, TK_KW_CONST) || parser_at(p, TK_KW_VOLATILE)) {
                     if (parser_consume(p, TK_KW_CONST))    base_ty->is_const = true;
                     if (parser_consume(p, TK_KW_VOLATILE)) base_ty->is_volatile = true;

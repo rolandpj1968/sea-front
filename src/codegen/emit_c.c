@@ -1963,6 +1963,14 @@ static void emit_type(Type *ty) {
         if (ty->tag) fprintf(stdout, "%.*s", ty->tag->len, ty->tag->loc);
         fputs("*/ int", stdout);
         return;
+    case TY_PMEM:
+        /* Pointer-to-data-member lowers to __PTRDIFF_TYPE__ — a
+         * signed integer holding the member's byte offset within the
+         * owning class. Null is represented as -1 (Itanium ABI). The
+         * pointee type and owner class are tracked on the Type for
+         * sema/codegen but don't appear in the C type name. */
+        fputs("__PTRDIFF_TYPE__", stdout);
+        return;
     default:
         fputs("/*?*/ int", stdout);
         return;
@@ -3418,6 +3426,27 @@ static void emit_expr(Node *n) {
         }
         return;
     case ND_BINARY: {
+        /* Pointer-to-data-member access — N4659 §8.5 [expr.mptr.oper].
+         * 'obj .* pmem'   → *(T *)((char *)&(obj) + (pmem))
+         * 'obj ->* pmem'  → *(T *)((char *)(obj) + (pmem))
+         * pmem is __PTRDIFF_TYPE__ holding the member's byte offset
+         * in the owning class. The cast type T comes from the pmem's
+         * Type::base. */
+        if (n->binary.op == TK_DOTSTAR || n->binary.op == TK_ARROWSTAR) {
+            Type *pty = n->binary.rhs ? n->binary.rhs->resolved_type : NULL;
+            Type *field_ty = (pty && pty->kind == TY_PMEM) ? pty->base : NULL;
+            fputs("(*(", stdout);
+            if (field_ty) emit_type(field_ty);
+            else          fputs("int", stdout);
+            fputs(" *)((char *)", stdout);
+            if (n->binary.op == TK_DOTSTAR) fputc('&', stdout);
+            fputc('(', stdout);
+            emit_expr(n->binary.lhs);
+            fputs(") + (", stdout);
+            emit_expr(n->binary.rhs);
+            fputs(")))", stdout);
+            return;
+        }
         /* Overloaded-operator dispatch — N4659 §16.5 [over.oper]:
          * 'a op b' where a has class type calls the class's operator.
          *
@@ -3784,6 +3813,33 @@ static void emit_expr(Node *n) {
             emit_expr(n->unary.operand);
             g_suppress_ref_deref = saved;
             return;
+        }
+        /* '&Class::member' — N4659 §8.3.1/3 [expr.unary.op]: takes a
+         * pointer-to-data-member. Lower to the member's offsetof in
+         * its owning class (cast to ptrdiff_t). Null pmem is -1 by
+         * convention so any valid member offset (including 0) is
+         * distinguishable. */
+        if (n->unary.op == TK_AMP &&
+            n->unary.operand && n->unary.operand->kind == ND_QUALIFIED &&
+            n->unary.operand->qualified.nparts == 2) {
+            Token *cls = n->unary.operand->qualified.parts[0];
+            Token *mem = n->unary.operand->qualified.parts[1];
+            if (cls && mem) {
+                fputs("(__PTRDIFF_TYPE__)__builtin_offsetof(struct ", stdout);
+                /* Owner class tag — use the mangled-class-tag form so
+                 * nested-namespace names route correctly. Build a
+                 * probe Type that resolves to the class def's Type so
+                 * mangle_class_tag picks up template args, etc. */
+                Type probe = {0};
+                probe.kind = TY_STRUCT;
+                probe.tag = cls;
+                Node *cdef = find_class_def_by_tag_only(&probe);
+                Type *ct = (cdef && cdef->class_def.ty) ? cdef->class_def.ty
+                                                         : &probe;
+                mangle_class_tag(ct);
+                fprintf(stdout, ", %.*s)", mem->len, mem->loc);
+                return;
+            }
         }
         /* `delete v` — N4659 §8.3.5 [expr.delete]. Lower to:
          *   (dtor-dispatch(v), __builtin_free(v))
