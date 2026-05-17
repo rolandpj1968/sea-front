@@ -713,6 +713,12 @@ struct Node {
              * conflict pass treats multiple asm-renamed decls of the
              * same target symbol as one. */
             Token *asm_name;
+            /* GNU cleanup attribute — 'int x __attribute__((cleanup(h)))'.
+             * Stores the cleanup-function name token so codegen can
+             * re-emit the attribute on the C variable declaration; gcc
+             * (the back-end cc) implements the cleanup semantics — sea-
+             * front just passes the name through. */
+            Token *cleanup_attr_name;
         } var_decl;
 
         /* ND_FUNC_DEF — N4659 §11.4 [dcl.fct.def]
@@ -1490,6 +1496,8 @@ void parser_restore(Parser *p, ParseState saved);
  * Lexer treats __attribute__ as a plain identifier. */
 void parser_skip_gnu_attributes(Parser *p);
 void parser_skip_gnu_attributes_with_mode(Parser *p, Token **out_mode);
+void parser_skip_gnu_attributes_with_mode_and_cleanup(
+    Parser *p, Token **out_mode, Token **out_cleanup);
 void parser_skip_cxx_attributes(Parser *p);
 
 /* Node constructors (arena-allocated) */

@@ -1801,8 +1801,15 @@ Node *parse_declaration(Parser *p) {
     }
 
     /* GCC __attribute__ between declarator and initializer:
-     * 'int x __attribute__((unused)) = 5;'. Common in gcc source. */
-    parser_skip_gnu_attributes(p);
+     * 'int x __attribute__((unused)) = 5;'. Common in gcc source.
+     * Detect cleanup(handler) on the way past so codegen can re-emit
+     * the attribute on the C variable. */
+    {
+        Token *cleanup_tok = NULL;
+        parser_skip_gnu_attributes_with_mode_and_cleanup(p, NULL, &cleanup_tok);
+        if (cleanup_tok)
+            decl->var_decl.cleanup_attr_name = cleanup_tok;
+    }
 
     if (parser_consume(p, TK_ASSIGN)) {
         /* = initializer-clause — could be expression or braced-init-list.

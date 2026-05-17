@@ -242,13 +242,27 @@ void parser_skip_gnu_attributes(Parser *p) {
  * becomes a long-sized type on 64-bit. libcpp's lex.c relies on this.
  * Caller passes NULL when they don't care. */
 void parser_skip_gnu_attributes_with_mode(Parser *p, Token **out_mode) {
+    parser_skip_gnu_attributes_with_mode_and_cleanup(p, out_mode, NULL);
+}
+
+/* Like parser_skip_gnu_attributes_with_mode, but also detects
+ *   __attribute__((cleanup (handler)))
+ * and returns the cleanup-handler identifier via *out_cleanup. The
+ * caller stamps it onto the var-decl so the C emit re-emits the
+ * attribute (gcc handles the cleanup semantics natively). N4659
+ * doesn't model this — it's a gcc C extension applicable to local
+ * variables (see __attribute__((cleanup)) in gcc's extensions docs). */
+void parser_skip_gnu_attributes_with_mode_and_cleanup(Parser *p,
+                                                       Token **out_mode,
+                                                       Token **out_cleanup) {
     while (parser_at(p, TK_IDENT) &&
            (token_equal(parser_peek(p), "__attribute__") ||
             token_equal(parser_peek(p), "__attribute"))) {
         parser_advance(p);                  /* __attribute__ */
         parser_expect(p, TK_LPAREN);
         parser_expect(p, TK_LPAREN);
-        /* Scan forward looking for __mode__(X) before skipping. */
+        /* Scan forward looking for __mode__(X) / cleanup(X) before
+         * skipping. */
         int depth = 1;
         while (depth > 0 && !parser_at_eof(p)) {
             if (out_mode && parser_at(p, TK_IDENT) &&
@@ -256,6 +270,12 @@ void parser_skip_gnu_attributes_with_mode(Parser *p, Token **out_mode) {
                 parser_peek_ahead(p, 1)->kind == TK_LPAREN &&
                 parser_peek_ahead(p, 2)->kind == TK_IDENT) {
                 *out_mode = parser_peek_ahead(p, 2);
+            }
+            if (out_cleanup && parser_at(p, TK_IDENT) &&
+                token_equal(parser_peek(p), "cleanup") &&
+                parser_peek_ahead(p, 1)->kind == TK_LPAREN &&
+                parser_peek_ahead(p, 2)->kind == TK_IDENT) {
+                *out_cleanup = parser_peek_ahead(p, 2);
             }
             if (parser_at(p, TK_LPAREN)) depth++;
             else if (parser_at(p, TK_RPAREN)) { depth--; if (depth == 0) break; }

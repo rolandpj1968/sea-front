@@ -6316,6 +6316,14 @@ static void emit_var_decl_inner(Node *n) {
         fputs(" : ", stdout);
         emit_expr(n->var_decl.bitfield_width);
     }
+    /* GCC cleanup attribute — pass through so the back-end cc handles
+     * the cleanup semantics on the C-level variable. Goes between the
+     * declarator-id and the initializer in gcc's accepted grammar. */
+    if (n->var_decl.cleanup_attr_name) {
+        fputs(" __attribute__((cleanup(", stdout);
+        emit_token_text(n->var_decl.cleanup_attr_name);
+        fputs(")))", stdout);
+    }
     if (n->var_decl.init) {
         fputs(" = ", stdout);
         /* Zero-arg functional-cast init of a struct var:
