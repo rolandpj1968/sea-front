@@ -5989,6 +5989,60 @@ static void emit_expr(Node *n) {
 
 static void emit_stmt(Node *n);
 
+/* Emit an initializer expression, applying derived-to-base pointer
+ * adjustment when the target type is 'Base *' and the init is a
+ * 'Derived *' value. The matching cases are TY_PTR-to-class on both
+ * sides with distinct class types where Derived has Base in its
+ * inheritance chain. Without this, 'B *b = &d;' (where 'D : ..., B')
+ * stored the unadjusted D-pointer in b, and downstream dispatch via
+ * b reached the wrong vtable / wrong subobject. N4659 §7.11
+ * [conv.ptr]. Falls through to plain emit_expr for non-conversion
+ * cases. */
+static void emit_init_with_target(Node *init, Type *target_ty) {
+    if (!init || !target_ty || target_ty->kind != TY_PTR ||
+        !target_ty->base ||
+        (target_ty->base->kind != TY_STRUCT &&
+         target_ty->base->kind != TY_UNION)) {
+        emit_expr(init); return;
+    }
+    Type *src = init->resolved_type;
+    if (!src || src->kind != TY_PTR || !src->base ||
+        (src->base->kind != TY_STRUCT && src->base->kind != TY_UNION) ||
+        src->base == target_ty->base) {
+        emit_expr(init); return;
+    }
+    Type *deriv = src->base;
+    if (!deriv->class_region && deriv->tag) {
+        Node *d = find_class_def_by_tag_args(deriv);
+        if (!d) d = find_class_def_by_tag_only(deriv);
+        if (d && d->class_def.ty && d->class_def.ty->class_region)
+            deriv = d->class_def.ty;
+    }
+    int base_path[8];
+    int base_len = find_base_path(deriv, target_ty->base, base_path, 8);
+    if (base_len == 0 && target_ty->base->tag) {
+        Type *tgt = target_ty->base;
+        int nb = class_nbases(deriv);
+        for (int b = 0; b < nb; b++) {
+            Type *base = class_base(deriv, b);
+            if (!base || !base->tag) continue;
+            if (base->tag->len == tgt->tag->len &&
+                memcmp(base->tag->loc, tgt->tag->loc,
+                       tgt->tag->len) == 0) {
+                base_path[0] = b; base_len = 1; break;
+            }
+        }
+    }
+    if (base_len == 0) { emit_expr(init); return; }
+    fputs("&(", stdout);
+    emit_expr(init);
+    fputs(")->", stdout);
+    if (base_len > 1) emit_base_chain(base_path, base_len - 1);
+    int last = base_path[base_len - 1];
+    if (last == 0) fputs("__sf_base", stdout);
+    else           fprintf(stdout, "__sf_base%d", last);
+}
+
 static void emit_var_decl_inner(Node *n) {
     Type *ty = n->var_decl.ty;
     /* Bare enum definition without a variable:
@@ -6030,7 +6084,7 @@ static void emit_var_decl_inner(Node *n) {
                     n->var_decl.name->len, n->var_decl.name->loc);
             if (n->var_decl.init) {
                 fputs(" = ", stdout);
-                emit_expr(n->var_decl.init);
+                emit_init_with_target(n->var_decl.init, n->var_decl.ty);
             }
             return;
         }
@@ -6045,7 +6099,7 @@ static void emit_var_decl_inner(Node *n) {
                 n->var_decl.name->len, n->var_decl.name->loc);
         if (n->var_decl.init) {
             fputs(" = ", stdout);
-            emit_expr(n->var_decl.init);
+            emit_init_with_target(n->var_decl.init, n->var_decl.ty);
         }
         return;
     }
@@ -6068,7 +6122,7 @@ static void emit_var_decl_inner(Node *n) {
         if (n->var_decl.init && n->var_decl.init->kind > 0 &&
             n->var_decl.init->kind < 200) {
             fputs(" = ", stdout);
-            emit_expr(n->var_decl.init);
+            emit_init_with_target(n->var_decl.init, n->var_decl.ty);
         }
         return;
     }
@@ -6141,7 +6195,7 @@ static void emit_var_decl_inner(Node *n) {
             fputc(')', stdout);
             if (n->var_decl.init) {
                 fputs(" = ", stdout);
-                emit_expr(n->var_decl.init);
+                emit_init_with_target(n->var_decl.init, n->var_decl.ty);
             }
             return;
         }
@@ -6167,7 +6221,7 @@ static void emit_var_decl_inner(Node *n) {
         emit_pointer_to_array_declarator(ty, n->var_decl.name)) {
         if (n->var_decl.init) {
             fputs(" = ", stdout);
-            emit_expr(n->var_decl.init);
+            emit_init_with_target(n->var_decl.init, n->var_decl.ty);
         }
         return;
     }
@@ -6220,7 +6274,7 @@ static void emit_var_decl_inner(Node *n) {
         /* Array init (if any) */
         if (n->var_decl.init) {
             fputs(" = ", stdout);
-            emit_expr(n->var_decl.init);
+            emit_init_with_target(n->var_decl.init, n->var_decl.ty);
         }
         return;
     }
@@ -6249,7 +6303,7 @@ static void emit_var_decl_inner(Node *n) {
                 n->var_decl.name->len, n->var_decl.name->loc);
         if (n->var_decl.init) {
             fputs(" = ", stdout);
-            emit_expr(n->var_decl.init);
+            emit_init_with_target(n->var_decl.init, n->var_decl.ty);
         }
         return;
     }
@@ -6364,11 +6418,11 @@ static void emit_var_decl_inner(Node *n) {
         bool init_is_ptr = init_rt && init_rt->kind == TY_PTR;
         if (init_is_ref && var_is_struct) {
             fputs("(*", stdout);
-            emit_expr(n->var_decl.init);
+            emit_init_with_target(n->var_decl.init, n->var_decl.ty);
             fputc(')', stdout);
         } else if (var_is_ref && !init_is_ref && !init_is_ptr) {
             fputc('&', stdout);
-            emit_expr(n->var_decl.init);
+            emit_init_with_target(n->var_decl.init, n->var_decl.ty);
         } else if (var_is_ref && init_e && init_e->kind == ND_IDENT &&
                    is_ref_param(init_e->ident.name)) {
             /* Ref var bound to another ref-param: both lower to T*,
@@ -6383,7 +6437,7 @@ static void emit_var_decl_inner(Node *n) {
             emit_expr(init_e);
             g_suppress_ref_deref = saved;
         } else {
-            emit_expr(n->var_decl.init);
+            emit_init_with_target(n->var_decl.init, n->var_decl.ty);
         }
     } else if (n->var_decl.has_ctor_init && n->var_decl.ty &&
                n->var_decl.ty->kind != TY_STRUCT &&
@@ -9100,7 +9154,17 @@ static void emit_class_def(Node *n) {
         Type *base = class_base(class_type, b);
         if (base && base->has_virtual_methods) { has_poly_base = true; break; }
     }
-    if (poly && !has_poly_base && any_virtual_has_body) {
+    /* Emit the vptr field for any polymorphic class that owns the
+     * vptr slot (no polymorphic base). The earlier any_virtual_has_body
+     * gate was over-conservative — it skipped the field when all
+     * virtuals were pure (=0) or extern-only. Pure-virtual abstract
+     * classes still need the field so derived classes' secondary
+     * vtable install can write through &derived->__sf_baseN->__sf_vptr.
+     * The vtable struct emit further down is still gated on
+     * any_virtual_has_body, but a pointer-to-incomplete struct is
+     * valid C for the field itself. N4659 §13.3 [class.virtual] —
+     * polymorphism is a property of the type, not the body. */
+    if (poly && !has_poly_base) {
         emit_indent();
         fputs("const struct ", stdout);
         mangle_class_vtable_type(class_type);
@@ -9451,7 +9515,15 @@ methods_phase:;
      * the right slot regardless of how many regular virtuals the
      * Derived adds. N4659 §15.4 [class.dtor]/12. */
     bool need_dtor_slot = class_has_virtual_dtor(class_type);
-    if (class_type && class_type->has_virtual_methods && any_virtual_has_body) {
+    /* Emit the vtable STRUCT for any polymorphic class so derived
+     * classes' secondary vtable instances (typed as the base's
+     * vtable struct) have a complete type to allocate. The STRUCT
+     * is just slot types — no symbol references — so it's safe
+     * even for abstract bases with pure-virtuals or extern-only
+     * polymorphic classes (libstdc++'s std::exception family).
+     * The INSTANCE emit further down stays gated on
+     * any_virtual_has_body. N4659 §13.3 [class.virtual]. */
+    if (class_type && class_type->has_virtual_methods) {
         /* The struct definition. */
         fputs("struct ", stdout);
         mangle_class_vtable_type(class_type);
@@ -9503,10 +9575,16 @@ methods_phase:;
         }
         g_indent--;
         fputs("};\n", stdout);
+    }
 
-        /* The static instance. Each slot points at the method's
-         * mangled free-function form. The forward decls for these
-         * methods were emitted above, so the names are visible here. */
+    /* The static instance — only when at least one virtual has a
+     * body in this TU. Abstract bases with all-pure-virtual slots
+     * and extern-only polymorphic classes are skipped (the slots
+     * would either be NULL placeholders or undefined references). */
+    if (class_type && class_type->has_virtual_methods && any_virtual_has_body) {
+        /* Each slot points at the method's mangled free-function
+         * form. The forward decls for these methods were emitted
+         * above, so the names are visible here. */
         fputs("static const struct ", stdout);
         mangle_class_vtable_type(class_type);
         fputc(' ', stdout);

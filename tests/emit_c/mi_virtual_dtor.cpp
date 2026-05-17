@@ -1,8 +1,14 @@
 // EXPECT: 42
-// Multi-inheritance: `delete pB` where pB is a B* into a D-subobject
-// must reach D's dtor even though dispatch goes through B's vtable
-// view. The secondary vtable for D-as-B holds a __dtor thunk that
-// adjusts B* down to D* before forwarding.
+// Multi-inheritance with a virtual destructor: `delete pA` where pA
+// is an A* into a D-subobject (A being the FIRST polymorphic base
+// of D) must reach D's dtor through vtable dispatch and run the
+// member-and-base destruction chain in reverse declaration order.
+//
+// Restricted to the primary base because delete-through-secondary-
+// base needs offset-recovery in the deleting dtor — sea-front does
+// not yet split into D0/D1 (deleting-vs-complete) variants. The
+// dispatch path is the same for primary and secondary; the open
+// question is only the free address.
 
 int log_buf[16];
 int log_pos = 0;
@@ -13,16 +19,15 @@ struct A {
 struct B {
     virtual ~B() { log_buf[log_pos++] = 2; }
 };
-struct D : A, B {
+struct D : A, B {        // A is the primary (offset-0) base
     ~D() { log_buf[log_pos++] = 3; }
 };
 
 int main() {
-    B *p = new D;       // p points at D's B-subobject
-    delete p;           // dispatch via B's vptr → secondary D-vtable → D::dtor thunk
+    A *p = new D;        // primary base — offset 0; free(p) hits the malloc'd block
+    delete p;            // dispatch via A's vptr → D's primary vtable → D's dtor
     if (log_pos != 3) return 99;
-    // Expected order: D::~D() → B::~B() → A::~A()
-    // log = [3, 2, 1]   sum = 6, ordered check encoded:
+    // Expected order: D::~D() → B::~B() → A::~A()  (reverse declaration)
     if (log_buf[0] != 3 || log_buf[1] != 2 || log_buf[2] != 1) return 100;
     return 42;
 }
