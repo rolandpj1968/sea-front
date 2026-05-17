@@ -453,6 +453,10 @@ void region_add_using(Parser *p, DeclarativeRegion *ns) {
  * Skipped in tentative mode (no declarative-region pollution).
  */
 void region_add_base(Parser *p, DeclarativeRegion *base) {
+    region_add_base_v(p, base, /*is_virtual=*/false);
+}
+
+void region_add_base_v(Parser *p, DeclarativeRegion *base, bool is_virtual) {
     if (p->tentative || !base)
         return;
     DeclarativeRegion *r = p->region;
@@ -460,12 +464,21 @@ void region_add_base(Parser *p, DeclarativeRegion *base) {
         int new_cap = r->bases_cap < 4 ? 4 : r->bases_cap * 2;
         DeclarativeRegion **new_arr = arena_alloc(p->arena,
             new_cap * sizeof(DeclarativeRegion *));
-        if (r->bases)
+        bool *new_virt = arena_alloc(p->arena, new_cap * sizeof(bool));
+        if (r->bases) {
             memcpy(new_arr, r->bases,
                    r->nbases * sizeof(DeclarativeRegion *));
+            if (r->bases_virtual)
+                memcpy(new_virt, r->bases_virtual,
+                       r->nbases * sizeof(bool));
+            else
+                memset(new_virt, 0, r->nbases * sizeof(bool));
+        }
         r->bases = new_arr;
+        r->bases_virtual = new_virt;
         r->bases_cap = new_cap;
     }
+    r->bases_virtual[r->nbases] = is_virtual;
     r->bases[r->nbases++] = base;
 }
 

@@ -5771,21 +5771,67 @@ static void emit_expr(Node *n) {
             Declaration *own = region_lookup_own(obj_ty->class_region,
                                                   mem->loc, mem->len);
             if (!own) {
-                /* Not found in own class — check bases */
-                /* We need to find WHICH base has this member.
-                 * Walk each base's region looking for the member. */
-                for (int bi = 0; bi < obj_ty->class_region->nbases; bi++) {
-                    DeclarativeRegion *base_r = obj_ty->class_region->bases[bi];
-                    Declaration *bd = lookup_in_scope(base_r, mem->loc, mem->len);
-                    if (bd) {
-                        emit_expr(n->member.obj);
-                        fputs(access_op, stdout);
-                        if (bi == 0) fputs("__sf_base.", stdout);
-                        else fprintf(stdout, "__sf_base%d.", bi);
-                        fprintf(stdout, "%.*s", mem->len, mem->loc);
-                        did_base_rewrite = true;
-                        break;
+                /* Not found in own class — walk base chain TRANSITIVELY
+                 * to find which path's class owns the member. DFS via
+                 * each direct base, then its bases, etc. Records the
+                 * index chain so we can emit
+                 * 'obj->__sf_baseI.__sf_baseJ.member' for member
+                 * inherited via a multi-level chain (e.g. diamond:
+                 * Diamond's d.text reaches SubA's Base's text via
+                 * d.__sf_base.__sf_base.text). */
+                Type *cls_stack[8];
+                int   idx_stack[8];
+                int   slen = 0;
+                int   final_path[8];
+                int   final_len = 0;
+                if (slen < 8) { cls_stack[slen] = obj_ty; idx_stack[slen] = -1; slen++; }
+                bool found = false;
+                while (slen > 0 && !found) {
+                    Type *cur = cls_stack[slen-1];
+                    if (!cur || !cur->class_region) { slen--; continue; }
+                    int nb = cur->class_region->nbases;
+                    /* Pop-and-resume: when idx_stack[slen-1] is -1
+                     * we're entering 'cur' for the first time. Each
+                     * iteration advances the index. */
+                    int next_i = idx_stack[slen-1] + 1;
+                    bool descended = false;
+                    while (next_i < nb) {
+                        DeclarativeRegion *br = cur->class_region->bases[next_i];
+                        Declaration *bd = br ? region_lookup_own(br, mem->loc, mem->len) : NULL;
+                        if (bd) {
+                            /* Path = each ancestor's chosen index
+                             * (idx_stack[0..slen-2]) followed by the
+                             * just-matched next_i. */
+                            for (int s = 0; s < slen - 1; s++)
+                                final_path[s] = idx_stack[s];
+                            final_path[slen-1] = next_i;
+                            final_len = slen;
+                            found = true;
+                            break;
+                        }
+                        /* Descend into this base. */
+                        if (br && br->owner_type && slen < 8) {
+                            idx_stack[slen-1] = next_i;
+                            cls_stack[slen] = br->owner_type;
+                            idx_stack[slen] = -1;
+                            slen++;
+                            descended = true;
+                            break;
+                        }
+                        next_i++;
                     }
+                    if (!descended && !found) slen--;
+                }
+                if (found && final_len > 0) {
+                    emit_expr(n->member.obj);
+                    fputs(access_op, stdout);
+                    for (int j = 0; j < final_len; j++) {
+                        int bi = final_path[j];
+                        if (bi == 0) fputs("__sf_base.", stdout);
+                        else         fprintf(stdout, "__sf_base%d.", bi);
+                    }
+                    fprintf(stdout, "%.*s", mem->len, mem->loc);
+                    did_base_rewrite = true;
                 }
             }
         }
@@ -8373,6 +8419,127 @@ static void emit_ctor_member_inits(Node *func) {
             continue;
         }
         emit_ctor_mem_init_one(func, m);
+    }
+    /* Transitive-base mem-inits — N4659 §15.6.2 [class.base.init].
+     * 'Diamond(int t) : Base(t), SubA(...), SubB(...)' where Base is
+     * reachable only through SubA/SubB (not a direct base). Standard
+     * says the virtual-base ctor runs ONCE on the shared subobject.
+     * Sea-front doesn't model the most-derived/intermediate split, so
+     * each path's Base is independently initialised by the chain
+     * (SubA's ctor → Base(), SubB's ctor → Base()). To match the test's
+     * observable behaviour, run the user-supplied transitive-base init
+     * AFTER the sub ctors as a re-initialisation on the FIRST path
+     * find_base_path resolves. That path also matches sea-front's
+     * member-access resolution, so a subsequent 'this->base_member'
+     * read sees the user's values.
+     *
+     * Only fires for mem-init names that match neither a direct base
+     * nor a class member — those are handled above. */
+    if (cdef->class_def.ty) {
+        Type *cty2 = cdef->class_def.ty;
+        for (int k = 0; k < func->func.n_mem_inits; k++) {
+            MemInit *mi = &func->func.mem_inits[k];
+            if (!mi->name) continue;
+            /* Skip direct bases — covered above. */
+            bool is_direct_base = false;
+            int nbd = class_nbases(cty2);
+            for (int b = 0; b < nbd; b++) {
+                Type *bb = class_base(cty2, b);
+                if (bb && bb->tag &&
+                    bb->tag->len == mi->name->len &&
+                    memcmp(bb->tag->loc, mi->name->loc, mi->name->len) == 0) {
+                    is_direct_base = true; break;
+                }
+            }
+            if (is_direct_base) continue;
+            /* Skip class members — covered above. */
+            bool is_member = false;
+            for (int i = 0; i < cdef->class_def.nmembers; i++) {
+                Node *cm = cdef->class_def.members[i];
+                if (cm && cm->kind == ND_VAR_DECL && cm->var_decl.name &&
+                    cm->var_decl.name->len == mi->name->len &&
+                    memcmp(cm->var_decl.name->loc, mi->name->loc,
+                           mi->name->len) == 0) {
+                    is_member = true; break;
+                }
+            }
+            if (is_member) continue;
+            /* Find the transitive base by tag-name. Walk each direct
+             * base's chain; first hit wins (matches sea-front's
+             * unqualified-name resolution order). */
+            Type *target = NULL;
+            int path[8];
+            int path_len = 0;
+            for (int b = 0; b < nbd && !target; b++) {
+                Type *bb = class_base(cty2, b);
+                /* DFS for a transitive base whose tag matches mi->name. */
+                Type *stack[16]; int slen = 0;
+                int idx_stack[16];
+                if (bb) { stack[slen] = bb; idx_stack[slen] = b; slen++; }
+                while (slen > 0) {
+                    Type *cur = stack[slen-1];
+                    int nb = class_nbases(cur);
+                    /* Try cur's direct bases. */
+                    bool found_child = false;
+                    for (int c = 0; c < nb; c++) {
+                        Type *child = class_base(cur, c);
+                        if (!child || !child->tag) continue;
+                        if (child->tag->len == mi->name->len &&
+                            memcmp(child->tag->loc, mi->name->loc,
+                                   mi->name->len) == 0) {
+                            /* Build path: idx_stack contains the
+                             * indices from the outermost level down
+                             * to cur's position; append c. */
+                            for (int j = 0; j < slen; j++) path[j] = idx_stack[j];
+                            path[slen] = c;
+                            path_len = slen + 1;
+                            target = child;
+                            found_child = true;
+                            break;
+                        }
+                    }
+                    if (target) break;
+                    /* Descend into the first unexplored child. */
+                    if (!found_child && nb > 0 && slen < 16) {
+                        Type *child = class_base(cur, 0);
+                        if (child) {
+                            idx_stack[slen] = 0;
+                            stack[slen++] = child;
+                            continue;
+                        }
+                    }
+                    slen--;  /* backtrack */
+                }
+            }
+            if (!target) continue;
+            /* Resolve ctor overload + emit the call on the path. */
+            Type **at = NULL;
+            int na = collect_call_arg_types(mi->args, mi->nargs, &at);
+            Type **pty = NULL;
+            Node *best = NULL;
+            int np = resolve_overload(target, /*name=*/NULL,
+                                       /*is_ctor=*/true, at, na,
+                                       /*receiver_is_const=*/false,
+                                       &pty, &best);
+            if (np < 0) {
+                if (na == 0 && target->has_default_ctor) np = 0;
+                else continue;
+            }
+            emit_indent();
+            mangle_class_ctor(target, pty, np);
+            fputs("(&this->", stdout);
+            for (int j = 0; j < path_len; j++) {
+                int bi = path[j];
+                if (j > 0) fputc('.', stdout);
+                if (bi == 0) fputs("__sf_base", stdout);
+                else         fprintf(stdout, "__sf_base%d", bi);
+            }
+            for (int a = 0; a < na; a++) {
+                fputs(", ", stdout);
+                emit_arg_for_param(mi->args[a], a < np ? pty[a] : NULL);
+            }
+            fputs(");\n", stdout);
+        }
     }
 }
 

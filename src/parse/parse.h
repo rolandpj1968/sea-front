@@ -1361,6 +1361,12 @@ struct DeclarativeRegion {
     DeclarativeRegion **bases;
     int                 nbases;
     int                 bases_cap;
+    /* Parallel array: is the i-th base virtually inherited?
+     * 'virtual public B' / 'public virtual B' — N4659 §13.1
+     * [class.derived]. Sea-front uses this to decide layout
+     * (vbase = pointer + most-derived-owned storage) and ctor
+     * synthesis (most-derived initialises the vbase storage). */
+    bool               *bases_virtual;
 
     /* For REGION_CLASS: back-pointer to the class Type that owns this
      * region. Lets sema/codegen recover the class name (via type->tag)
@@ -1853,6 +1859,9 @@ bool lookup_is_template_name(Parser *p, Token *tok);
  */
 void region_add_using(Parser *p, DeclarativeRegion *ns);
 void region_add_base(Parser *p, DeclarativeRegion *base);
+/* Like region_add_base but also tracks 'virtual' from the base
+ * specifier (N4659 §13.1 [class.derived]). */
+void region_add_base_v(Parser *p, DeclarativeRegion *base, bool is_virtual);
 Declaration *lookup_in_scope(DeclarativeRegion *scope,
                              const char *name, int name_len);
 

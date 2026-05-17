@@ -407,15 +407,21 @@ DeclSpec parse_type_specifiers(Parser *p) {
             #define MAX_BASES 16
             DeclarativeRegion *base_regions[MAX_BASES];
             Type *base_types[MAX_BASES];
+            bool base_is_virtual_parallel[MAX_BASES];
             int n_base_regions = 0;
             int n_base_types = 0;
+            (void)base_is_virtual_parallel;
             if (parser_consume(p, TK_COLON)) {
                 for (;;) {
                     parser_skip_cxx_attributes(p);
                     parser_skip_gnu_attributes(p);
+                    bool this_is_virtual = false;
                     /* Optional virtual + access-specifier in either order. */
                     for (int i = 0; i < 2; i++) {
-                        if (parser_consume(p, TK_KW_VIRTUAL)) continue;
+                        if (parser_consume(p, TK_KW_VIRTUAL)) {
+                            this_is_virtual = true;
+                            continue;
+                        }
                         if (parser_consume(p, TK_KW_PUBLIC) ||
                             parser_consume(p, TK_KW_PROTECTED) ||
                             parser_consume(p, TK_KW_PRIVATE))
@@ -466,8 +472,10 @@ DeclSpec parse_type_specifiers(Parser *p) {
                     if (base_ty && n_base_types < MAX_BASES)
                         base_types[n_base_types++] = base_ty;
                     if (base_ty && base_ty->class_region &&
-                        n_base_regions < MAX_BASES)
+                        n_base_regions < MAX_BASES) {
+                        base_is_virtual_parallel[n_base_regions] = this_is_virtual;
                         base_regions[n_base_regions++] = base_ty->class_region;
+                    }
                     /* Pack expansion '...' on a base-class type. */
                     parser_consume(p, TK_ELLIPSIS);
                     if (!parser_consume(p, TK_COMMA))
@@ -522,7 +530,8 @@ DeclSpec parse_type_specifiers(Parser *p) {
                  * unqualified name in this scope walks bases after the
                  * class's own buckets. */
                 for (int i = 0; i < n_base_regions; i++)
-                    region_add_base(p, base_regions[i]);
+                    region_add_base_v(p, base_regions[i],
+                                       base_is_virtual_parallel[i]);
 
                 /* N4659 §9.2/2 [class]: the class-name is also inserted
                  * into the scope of the class itself ("injected class
