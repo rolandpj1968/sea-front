@@ -1906,12 +1906,21 @@ static void build_inst_template_args(Type *inst_ty, Node *tmpl,
                                       : NULL;
         }
         /* NTTP attribution — propagate the parameter's declared type
-         * onto the arg Type so mangling reads it from structured data. */
+         * onto the arg Type so mangling reads it from structured data.
+         * The declared type may itself be a template parameter (e.g.
+         * 'template<typename T, T V> ...' — V's declared type is `T`,
+         * which is TY_DEPENDENT until we substitute. Resolve through
+         * the SubstMap so `integral_constant<bool, false>`'s V has
+         * nttp_decl_type = bool, not the pre-substitution T placeholder.
+         * Without this, builtin_code() falls back and every bool/int/long
+         * NTTP collapses to the same Itanium `Li0E` literal encoding. */
         if (t && t->kind == TY_NTTP_VALUE && tmpl &&
             i < tmpl->template_decl.nparams) {
             Node *param = tmpl->template_decl.params[i];
-            if (param && param->kind == ND_PARAM && param->param.ty)
-                t->nttp_decl_type = param->param.ty;
+            if (param && param->kind == ND_PARAM && param->param.ty) {
+                Type *resolved = subst_type(param->param.ty, map, arena);
+                t->nttp_decl_type = resolved ? resolved : param->param.ty;
+            }
         }
         inst_ty->template_args[i] = t;
     }
@@ -3629,8 +3638,13 @@ static Type *canonicalize_type(Type *ty, DedupSet *ds, Arena *arena) {
     key[pos++] = '\0';
     for (int i = 0; i < tid->template_id.nargs; i++) {
         Node *arg = tid->template_id.args[i];
-        Type *arg_ty = (arg && arg->kind == ND_VAR_DECL) ?
-                        arg->var_decl.ty : NULL;
+        /* For type args the parser wraps in ND_VAR_DECL; for NTTP
+         * literal args it leaves the literal Node directly. Both shapes
+         * must contribute to the dedup key — without the NTTP branch,
+         * '<bool,true>' and '<bool,false>' produced the same key and
+         * downstream pointer-replacement collapsed them, breaking
+         * call-site mangling at every distinct NTTP value site. */
+        Type *arg_ty = template_arg_to_arg_type(arg, arena);
         pos = type_to_key(arg_ty, key, pos, MAX_DEDUP_KEY);
         key[pos++] = '\0';
     }
