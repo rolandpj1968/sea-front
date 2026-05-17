@@ -434,10 +434,16 @@ struct Node {
 
         /* ND_CAST — N4659 §8.4 [expr.cast]
          * C-style cast: (type)expr.
-         * Also used for functional casts T(expr) in later stages. */
+         * Also used for functional casts T(expr) in later stages.
+         * 'new T(args)' reuses this node — operand holds the malloc
+         * call, new_ctor_args carries the user's ctor args (NULL
+         * for plain '(T)x' casts and 'new T' without parens). */
         struct {
             Type *ty;
             Node *operand;
+            Node **new_ctor_args;
+            int    new_ctor_nargs;
+            bool   is_new_expr;
         } cast;
 
         /* ND_SIZEOF — N4659 §8.3.3 [expr.sizeof]

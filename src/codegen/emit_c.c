@@ -1684,6 +1684,32 @@ static Type *vptr_owner_class(Type *t) {
     }
 }
 
+/* True iff class_type has a virtual destructor (user-declared or
+ * inherited from any polymorphic base). N4659 §15.4 [class.dtor]/12.
+ * The vtable layout needs to reserve a __dtor slot iff this holds. */
+static bool class_has_virtual_dtor(Type *class_type) {
+    if (!class_type) return false;
+    Node *cdef = class_type->class_def;
+    if (cdef) {
+        for (int i = 0; i < cdef->class_def.nmembers; i++) {
+            Node *m = cdef->class_def.members[i];
+            if (!m) continue;
+            if (m->kind == ND_FUNC_DEF && m->func.is_destructor &&
+                m->func.is_virtual) return true;
+            if (m->kind == ND_VAR_DECL && m->var_decl.is_destructor &&
+                m->var_decl.is_virtual) return true;
+        }
+    }
+    /* Inherited from any direct base — N4659 §15.4 [class.dtor]/12
+     * makes the derived's dtor implicitly virtual. */
+    int nb = class_nbases(class_type);
+    for (int b = 0; b < nb; b++) {
+        Type *base = class_base(class_type, b);
+        if (class_has_virtual_dtor(base)) return true;
+    }
+    return false;
+}
+
 /* Emit `this->__sf_vptr` (when class_type owns the vptr) or
  * `((struct <owner-tag> *)this)->__sf_vptr` (when an ancestor owns it).
  * The cast is sound because sea-front lays the polymorphic base at
@@ -3743,14 +3769,50 @@ static void emit_expr(Node *n) {
             g_suppress_ref_deref = saved;
             return;
         }
-        /* `delete v` — N4659 §8.3.5 [expr.delete]. Stub: emit
-         * `((void)(v))` (discard, no-op). Same TODO as ND_CAST's
-         * `new` stub; a proper fix would emit __builtin_free + dtor.
-         * The caller-side void context is preserved by the explicit
-         * (void) cast. */
+        /* `delete v` — N4659 §8.3.5 [expr.delete]. Lower to:
+         *   (dtor-dispatch(v), __builtin_free(v))
+         * where dtor-dispatch picks the vptr path for polymorphic
+         * classes with a virtual dtor and the static wrapper otherwise.
+         * The comma expression preserves the value-less context
+         * (delete is a void expression). For trivially-destructible
+         * pointees, the dtor call is elided. */
         if (n->unary.op == TK_KW_DELETE) {
-            fputs("((void)(", stdout);
-            emit_expr(n->unary.operand);
+            Node *opnd = n->unary.operand;
+            Type *pt = opnd ? opnd->resolved_type : NULL;
+            Type *pointee = NULL;
+            if (pt && pt->kind == TY_PTR) pointee = pt->base;
+            /* Resolve pointee through tag if class_region is missing. */
+            if (pointee && (pointee->kind == TY_STRUCT || pointee->kind == TY_UNION) &&
+                !pointee->class_region && pointee->tag) {
+                Node *d = find_class_def_by_tag_args(pointee);
+                if (!d) d = find_class_def_by_tag_only(pointee);
+                if (d && d->class_def.ty) pointee = d->class_def.ty;
+            }
+            bool has_virt_dtor = pointee && class_has_virtual_dtor(pointee);
+            bool has_dtor      = pointee && pointee->has_dtor;
+            fputc('(', stdout);
+            if (has_virt_dtor) {
+                /* Vptr dispatch: read the vptr from the polymorphic
+                 * root, then invoke its __dtor slot with the original
+                 * pointer (slot signature takes the static pointer
+                 * type, so the cast for vtable-type access is sound). */
+                Type *root = vptr_owner_class(pointee);
+                if (!root) root = pointee;
+                fputs("((struct ", stdout);
+                mangle_class_tag(root);
+                fputs(" *)(", stdout);
+                emit_expr(opnd);
+                fputs("))->__sf_vptr->__dtor(", stdout);
+                emit_expr(opnd);
+                fputs("), ", stdout);
+            } else if (has_dtor) {
+                mangle_class_dtor(pointee);
+                fputc('(', stdout);
+                emit_expr(opnd);
+                fputs("), ", stdout);
+            }
+            fputs("__builtin_free(", stdout);
+            emit_expr(opnd);
             fputs("))", stdout);
             return;
         }
@@ -5255,6 +5317,66 @@ static void emit_expr(Node *n) {
             emit_type(n->cast.ty);
             fputs("*)0)", stdout);
             return;
+        }
+        /* 'new T(args)' / 'new T' — the parser handed us a malloc-call
+         * operand plus the user's ctor args. Emit a statement-expr
+         *   ({ T *__tmp = (T *)malloc(sizeof(T)); ctor(__tmp, args);
+         *      __tmp; })
+         * so the expression's value is the freshly-constructed pointer.
+         * GNU extension (cf. cproc side-goal memory) but the only
+         * portable alternative is a hoisted local + comma operator,
+         * which would require statement-level rewriting. */
+        if (n->cast.is_new_expr && n->cast.ty && n->cast.ty->kind == TY_PTR &&
+            n->cast.ty->base &&
+            (n->cast.ty->base->kind == TY_STRUCT ||
+             n->cast.ty->base->kind == TY_UNION)) {
+            Type *pointee = n->cast.ty->base;
+            Type *p_resolved = pointee;
+            if (!p_resolved->class_region && p_resolved->tag) {
+                Node *d = find_class_def_by_tag_args(p_resolved);
+                if (!d) d = find_class_def_by_tag_only(p_resolved);
+                if (d && d->class_def.ty) p_resolved = d->class_def.ty;
+            }
+            int na = n->cast.new_ctor_nargs;
+            bool need_ctor = (na > 0) ||
+                (p_resolved && p_resolved->has_default_ctor);
+            if (need_ctor) {
+                /* Resolve the matching ctor overload. For na==0 the
+                 * call site wants the default ctor; sea-front
+                 * synthesizes one when no user-declared ctor matches,
+                 * so a failed lookup with na==0 still emits a 0-arg
+                 * call against the synthesized mangled symbol. */
+                Type **at = NULL;
+                int   nat = collect_call_arg_types(
+                    n->cast.new_ctor_args, na, &at);
+                Type **pty = NULL;
+                int np = resolve_overload(p_resolved, /*name=*/NULL,
+                                           /*is_ctor=*/true, at, nat,
+                                           /*receiver_is_const=*/false,
+                                           &pty, /*out_best=*/NULL);
+                if (np < 0 && na == 0 && p_resolved->has_default_ctor) {
+                    np = 0;
+                    pty = NULL;
+                }
+                if (np >= 0) {
+                    fputs("({ ", stdout);
+                    emit_type(n->cast.ty);
+                    fputs(" __sf_new_tmp = (", stdout);
+                    emit_type(n->cast.ty);
+                    fputc(')', stdout);
+                    emit_expr(n->cast.operand);
+                    fputs("; ", stdout);
+                    mangle_class_ctor(p_resolved, pty, np);
+                    fputs("(__sf_new_tmp", stdout);
+                    for (int i = 0; i < na; i++) {
+                        fputs(", ", stdout);
+                        emit_arg_for_param(n->cast.new_ctor_args[i],
+                                            i < np ? pty[i] : NULL);
+                    }
+                    fputs("); __sf_new_tmp; })", stdout);
+                    return;
+                }
+            }
         }
         /* Cast TO a reference type — target lowers to T*. The cast
          * binds an lvalue (or the result of a ref-yielding expr) to
@@ -8650,6 +8772,16 @@ static void emit_class_def(Node *n) {
                 break;
             }
         }
+        /* A derived class that inherits a virtual dtor without declaring
+         * its own virtual method still needs the vtable machinery: its
+         * dtor is implicitly virtual (N4659 §15.4/12) and the vtable
+         * slot must be installed. Without this, dispatch through a base
+         * pointer reaches the base's vtable instance and the wrong dtor
+         * runs. The user-written dtor's ND_FUNC_DEF is NOT marked
+         * is_virtual (the parser only sets it when the source keyword
+         * appears), so the loop above misses it. */
+        if (!any_virtual_has_body && class_has_virtual_dtor(class_type))
+            any_virtual_has_body = true;
         /* Out-of-class virtual definitions: 'virtual int foo(int);'
          * declared in the class body, body emitted later as a top-level
          * ND_FUNC_DEF whose class_type points back here. The OOL
@@ -9214,18 +9346,25 @@ methods_phase:;
      * mangled method addresses; ctors install '&instance' into the
      * object's __sf_vptr field, and call sites dispatch through it.
      *
-     * Limitation: virtual destructors don't get a vtable slot —
-     * delete-through-base is the use-case that needs them, and
-     * sea-front doesn't yet route through the dtor wrapper. The
-     * vtable-instance loop further down skips ND_FUNC_DEF and
-     * ND_VAR_DECL members tagged is_destructor.
-     * TODO(seafront#virt-dtor-slot). */
+     * The dtor slot (`__dtor`) is FIRST so its byte offset is stable
+     * across the inheritance hierarchy: every class with a virtual
+     * dtor exposes __dtor at offset 0 of its vtable struct, so
+     * dispatch through a base-typed vtable pointer always lands on
+     * the right slot regardless of how many regular virtuals the
+     * Derived adds. N4659 §15.4 [class.dtor]/12. */
+    bool need_dtor_slot = class_has_virtual_dtor(class_type);
     if (class_type && class_type->has_virtual_methods && any_virtual_has_body) {
         /* The struct definition. */
         fputs("struct ", stdout);
         mangle_class_vtable_type(class_type);
         fputs(" {\n", stdout);
         g_indent++;
+        if (need_dtor_slot) {
+            emit_indent();
+            fputs("void (*__dtor)(struct ", stdout);
+            mangle_class_tag(class_type);
+            fputs(" *);\n", stdout);
+        }
         for (int i = 0; i < n->class_def.nmembers; i++) {
             Node *m = n->class_def.members[i];
             if (!m) continue;
@@ -9276,6 +9415,15 @@ methods_phase:;
         mangle_class_vtable_instance(class_type);
         fputs(" = {\n", stdout);
         g_indent++;
+        if (need_dtor_slot) {
+            emit_indent();
+            /* The wrapper symbol chains user body + member dtors +
+             * base dtors. It always exists when class_has_virtual_dtor
+             * is true (any class with a virtual dtor — user-declared
+             * or transitive — gets a wrapper emitted). */
+            mangle_class_dtor(class_type);
+            fputs(",\n", stdout);
+        }
         for (int i = 0; i < n->class_def.nmembers; i++) {
             Node *m = n->class_def.members[i];
             if (!m) continue;
@@ -9343,6 +9491,27 @@ methods_phase:;
             if (!base || !base->has_virtual_methods) continue;
             if (!base->class_def) continue;
             Node *base_def = base->class_def;
+            /* Dtor thunk for B-as-base — N4659 §15.4 [class.dtor]/12.
+             * When base has a virtual dtor, its vtable struct exposes
+             * a __dtor slot at offset 0; the secondary vtable for
+             * Derived-as-B must populate the same slot with a thunk
+             * so `delete bp;` (bp: B*) reaches Derived's dtor chain. */
+            bool base_virt_dtor = class_has_virtual_dtor(base);
+            if (base_virt_dtor && class_type->has_dtor) {
+                fputs("static void ", stdout);
+                mangle_class_tag(class_type);
+                fputs("__thunk_for_", stdout);
+                mangle_class_tag(base);
+                fputs("__dtor(struct ", stdout);
+                mangle_class_tag(base);
+                fputs(" *__bp) {\n    ", stdout);
+                mangle_class_dtor(class_type);
+                fputs("((struct ", stdout);
+                mangle_class_tag(class_type);
+                fputs(" *)((char *)__bp - offsetof(struct ", stdout);
+                mangle_class_tag(class_type);
+                fprintf(stdout, ", __sf_base%d)));\n}\n", bi);
+            }
             /* Pass 1: for every virtual slot in B that THIS class
              * overrides (same name + same param count), emit a thunk
              * function. The thunk adjusts B* down to Derived* and
@@ -9445,6 +9614,22 @@ methods_phase:;
             mangle_class_tag(base);
             fputs("_instance = {\n", stdout);
             g_indent++;
+            /* Slot 0 of B's vtable struct is __dtor when B has a
+             * virtual dtor — match that layout. */
+            if (base_virt_dtor) {
+                emit_indent();
+                if (class_type->has_dtor) {
+                    mangle_class_tag(class_type);
+                    fputs("__thunk_for_", stdout);
+                    mangle_class_tag(base);
+                    fputs("__dtor", stdout);
+                } else {
+                    /* No Derived dtor to thunk to — fall back to B's
+                     * own wrapper (which still runs B's chain). */
+                    mangle_class_dtor(base);
+                }
+                fputs(",\n", stdout);
+            }
             for (int j = 0; j < base_def->class_def.nmembers; j++) {
                 Node *bm = base_def->class_def.members[j];
                 if (!bm) continue;

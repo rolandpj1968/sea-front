@@ -658,7 +658,12 @@ DeclSpec parse_type_specifiers(Parser *p) {
                         Node *body = m->func.body;
                         bool empty = body && body->kind == ND_BLOCK &&
                                      body->block.nstmts == 0;
-                        if (!empty) ty->has_dtor = true;
+                        /* Virtual dtors always need a wrapper — the
+                         * vtable slot points at it, and dispatch must
+                         * reach SOME callable even when the user body
+                         * is empty. N4659 §15.4 [class.dtor]/12. For
+                         * non-virtual empty dtors, no wrapper needed. */
+                        if (!empty || m->func.is_virtual) ty->has_dtor = true;
                     } else if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
                                m->var_decl.ty->kind == TY_FUNC &&
                                m->var_decl.is_destructor) {
@@ -728,6 +733,15 @@ DeclSpec parse_type_specifiers(Parser *p) {
                         if (!bt) continue;
                         if (bt->has_dtor) ty->has_dtor = true;
                         if (bt->has_default_ctor) ty->has_default_ctor = true;
+                        /* Polymorphism is inherited: any base with a
+                         * vtable makes the derived polymorphic too,
+                         * even if it declares no virtuals of its own.
+                         * N4659 §13.3 [class.virtual]/2. Needed so the
+                         * vtable struct, instance, and vptr-install all
+                         * happen for classes whose only virtual is the
+                         * inherited dtor. */
+                        if (bt->has_virtual_methods)
+                            ty->has_virtual_methods = true;
                     }
                 }
             }

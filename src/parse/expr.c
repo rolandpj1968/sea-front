@@ -1952,23 +1952,34 @@ static Node *unary_expr(Parser *p) {
 
         /* Optional initializer: (args) or braced-init-list {args}
          * — N4659 §8.3.4 [expr.new]/15. */
+        /* Capture initializer args so codegen can run the ctor on the
+         * freshly malloc'd storage. N4659 §8.3.4 [expr.new]/15-17. */
+        Node **ctor_args = NULL;
+        int    ctor_nargs = 0;
+        bool   has_ctor_init = false;   /* true once we've seen '(' or '{' */
         if (parser_consume(p, TK_LPAREN)) {
+            has_ctor_init = true;
+            Vec args = vec_new(p->arena);
             if (!parser_at(p, TK_RPAREN)) {
-                /* Parse comma-separated args; consume optional '...' pack
-                 * expansion after each. */
-                parse_assign_expr(p);
+                Node *a0 = parse_assign_expr(p);
+                if (a0) vec_push(&args, a0);
                 parser_consume(p, TK_ELLIPSIS);
                 while (parser_consume(p, TK_COMMA)) {
-                    parse_assign_expr(p);
+                    Node *an = parse_assign_expr(p);
+                    if (an) vec_push(&args, an);
                     parser_consume(p, TK_ELLIPSIS);
                 }
             }
             parser_expect(p, TK_RPAREN);
+            ctor_args = (Node **)args.data;
+            ctor_nargs = args.len;
         } else if (parser_consume(p, TK_LBRACE)) {
+            has_ctor_init = true;
             /* Braced new-initializer. Skip-and-discard — sema doesn't
              * model the initializer structure, just walk past it. */
             parser_skip_to_matching_rbrace(p);
         }
+        (void)has_ctor_init;
 
         /* Lower 'new T' to '(T *)malloc(sizeof(T))'. C++03 default-
          * initializes T (no-op for class-with-trivial-ctor / POD;
@@ -1998,7 +2009,11 @@ static Node *unary_expr(Parser *p) {
         }
         Type *ptr_ty = new_type(p, TY_PTR);
         ptr_ty->base = ty;
-        return new_cast_node(p, ptr_ty, malloc_call, tok);
+        Node *cast = new_cast_node(p, ptr_ty, malloc_call, tok);
+        cast->cast.is_new_expr = true;
+        cast->cast.new_ctor_args = ctor_args;
+        cast->cast.new_ctor_nargs = ctor_nargs;
+        return cast;
     }
 
     /* delete-expression — N4659 §8.3.5 [expr.delete]
