@@ -7719,11 +7719,24 @@ static void emit_stmt(Node *n) {
                   stdout);
             return;
         }
-        if (range_ty->kind == TY_ARRAY && range_ty->array_len > 0) {
+        if (range_ty->kind == TY_ARRAY) {
             fputs("{\n", stdout); g_indent++;
             emit_indent(); emit_type(range_ty->base);
             fputs(" *__sf_end = (", stdout); emit_expr(range);
-            fprintf(stdout, ") + %d;\n", range_ty->array_len);
+            if (range_ty->array_len > 0) {
+                fprintf(stdout, ") + %d;\n", range_ty->array_len);
+            } else {
+                /* Array length not preserved on the parsed type
+                 * (deduced-from-initializer case 'int a[] = {1,2,3};').
+                 * Fall back to sizeof / sizeof(elem) at the use site —
+                 * the C compiler still knows the size of the array
+                 * variable from its declaration. N4659 §9.5.4
+                 * [stmt.ranged]/1: range-for on an array uses the
+                 * array bounds. */
+                fputs(") + sizeof(", stdout); emit_expr(range);
+                fputs(") / sizeof(*(", stdout); emit_expr(range);
+                fputs("));\n", stdout);
+            }
             emit_indent(); fputs("for (", stdout); emit_type(range_ty->base);
             fputs(" *__sf_it = (", stdout); emit_expr(range);
             fputs("); __sf_it != __sf_end; ++__sf_it) {\n", stdout);
