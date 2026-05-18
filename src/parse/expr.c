@@ -331,6 +331,32 @@ static Type *deduce_lambda_return_expr(Parser *p, Node *e) {
             t = t->base;
         return t;
     }
+    case ND_BINARY: {
+        /* Arithmetic / comparison binary expressions: take whichever
+         * side we can deduce. Mixing produces a wider type per the
+         * usual arithmetic conversions, but for the cheap cases sea-
+         * front handles here both operands tend to be of the same
+         * basic type and the result type matches either operand.
+         * Comparison ops yield bool. */
+        TokenKind op = e->binary.op;
+        if (op == TK_EQ || op == TK_NE || op == TK_LT || op == TK_LE ||
+            op == TK_GT || op == TK_GE || op == TK_LAND || op == TK_LOR)
+            return new_type(p, TY_BOOL);
+        Type *lt = deduce_lambda_return_expr(p, e->binary.lhs);
+        if (lt) return lt;
+        return deduce_lambda_return_expr(p, e->binary.rhs);
+    }
+    case ND_UNARY:
+    case ND_POSTFIX:
+        return deduce_lambda_return_expr(p, e->unary.operand);
+    case ND_TERNARY: {
+        Type *tt = deduce_lambda_return_expr(p, e->ternary.then_);
+        if (tt) return tt;
+        return deduce_lambda_return_expr(p, e->ternary.else_);
+    }
+    case ND_CAST:
+        /* C-style cast: the cast's target type IS the result. */
+        return e->cast.ty;
     default:
         return NULL;
     }
