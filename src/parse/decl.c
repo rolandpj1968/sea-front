@@ -2050,6 +2050,21 @@ Node *parse_top_level_decl(Parser *p) {
     if (parser_consume(p, TK_SEMI))
         return NULL;
 
+    /* Top-level asm-declaration — N4659 §10.4 [dcl.asm]
+     *   asm-declaration: asm ( string-literal ) ;
+     * libstdc++ 13 <iostream> uses '__extension__ __asm(".globl ...");'
+     * at namespace scope to publish a versioned init symbol. Skip the
+     * directive entirely — the emitted C doesn't need it. */
+    if (parser_at(p, TK_KW_ASM)) {
+        parser_advance(p);
+        parser_expect(p, TK_LPAREN);
+        while (!parser_at(p, TK_RPAREN) && !parser_at_eof(p))
+            parser_advance(p);
+        parser_expect(p, TK_RPAREN);
+        parser_consume(p, TK_SEMI);
+        return NULL;
+    }
+
     /* Skip preprocessor leftovers — #pragma, #line, etc.
      * These should have been consumed by the preprocessor, but mcpp
      * in independent mode passes through unknown pragmas. We skip
@@ -2239,6 +2254,39 @@ Node *parse_top_level_decl(Parser *p) {
         Token *ns = NULL;
         if (parser_at(p, TK_IDENT))
             ns = parser_advance(p);
+
+        /* namespace-alias-definition — N4659 §10.3.2 [namespace.alias]
+         *   namespace identifier = qualified-namespace-specifier ;
+         * libstdc++ cxxabi.h uses 'namespace abi = __cxxabiv1;' at
+         * top scope. We register the alias as an ENTITY_NAMESPACE
+         * pointing at the same region as the target so qualified
+         * lookups through the alias resolve correctly. */
+        if (ns && parser_consume(p, TK_ASSIGN)) {
+            Declaration *tgt = NULL;
+            if (parser_at(p, TK_IDENT)) {
+                Token *first = parser_advance(p);
+                tgt = lookup_unqualified_kind(p, first->loc, first->len,
+                                               ENTITY_NAMESPACE);
+                /* Optional further '::seg' chain — walk into nested
+                 * namespaces and keep the deepest one as the target. */
+                while (parser_consume(p, TK_SCOPE)) {
+                    if (!parser_at(p, TK_IDENT)) break;
+                    Token *seg = parser_advance(p);
+                    if (tgt && tgt->ns_region) {
+                        Declaration *next = region_lookup_own(tgt->ns_region,
+                                                              seg->loc, seg->len);
+                        if (next && next->entity == ENTITY_NAMESPACE)
+                            tgt = next;
+                    }
+                }
+            }
+            parser_expect(p, TK_SEMI);
+            Declaration *alias = region_declare(p, ns->loc, ns->len,
+                                                 ENTITY_NAMESPACE, /*type=*/NULL);
+            if (alias && tgt && tgt->ns_region)
+                alias->ns_region = tgt->ns_region;
+            return NULL;  /* alias produces no AST node — name binding only */
+        }
 
         /* C++17 nested namespace: namespace A::B { }
          * Terminates: each iteration consumes :: and ident */
