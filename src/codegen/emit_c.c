@@ -11974,6 +11974,17 @@ void emit_c(Node *tu) {
             need_global_init = true;
             break;
         }
+        /* Array of class type with default ctor — each element needs
+         * the ctor to run at startup. Walk through TY_ARRAY layers. */
+        if (ty->kind == TY_ARRAY) {
+            Type *elem = ty;
+            while (elem && elem->kind == TY_ARRAY) elem = elem->base;
+            if (elem && (elem->kind == TY_STRUCT || elem->kind == TY_UNION) &&
+                elem->has_default_ctor) {
+                need_global_init = true;
+                break;
+            }
+        }
         if (n->var_decl.init && n->var_decl.deferred_to_global_init) {
             need_global_init = true;
             break;
@@ -11991,12 +12002,33 @@ void emit_c(Node *tu) {
             Type *ty = n->var_decl.ty;
             bool is_class = (ty->kind == TY_STRUCT || ty->kind == TY_UNION) &&
                             ty->has_default_ctor;
+            /* Single-dim array of class — emit a loop calling the
+             * element ctor. Multi-dim arrays are skipped for now
+             * (their TY_ARRAY chain would need recursive unrolling). */
+            bool is_array_of_class = false;
+            int  arr_size = 0;
+            Type *elem_ty = NULL;
+            if (ty->kind == TY_ARRAY && ty->base &&
+                (ty->base->kind == TY_STRUCT || ty->base->kind == TY_UNION) &&
+                ty->base->has_default_ctor) {
+                is_array_of_class = true;
+                arr_size = ty->array_len;
+                elem_ty = ty->base;
+            }
             bool deferred = n->var_decl.init && n->var_decl.deferred_to_global_init;
-            if (!is_class && !deferred) continue;
+            if (!is_class && !is_array_of_class && !deferred) continue;
             if (is_class) {
                 fputs("    ", stdout);
                 mangle_class_ctor(ty, NULL, 0);
                 fprintf(stdout, "(&%.*s);\n",
+                        n->var_decl.name->len, n->var_decl.name->loc);
+            }
+            if (is_array_of_class && arr_size > 0) {
+                fprintf(stdout,
+                        "    for (int __sf_i = 0; __sf_i < %d; ++__sf_i) ",
+                        arr_size);
+                mangle_class_ctor(elem_ty, NULL, 0);
+                fprintf(stdout, "(&%.*s[__sf_i]);\n",
                         n->var_decl.name->len, n->var_decl.name->loc);
             }
             if (deferred) {
