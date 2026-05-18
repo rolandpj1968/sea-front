@@ -1983,6 +1983,25 @@ static void visit(Sema *s, Node *n) {
     case ND_SIZEOF:
         visit(s, n->sizeof_.expr);
         break;
+    case ND_TYPEID:
+        /* N4659 §8.2.7 [expr.typeid]. Walk the operand so its
+         * resolved_type gets filled in — emit reads it to pick the
+         * per-static-type sentinel. The result is a sea-front-private
+         * 'const void *' lvalue; we synthesize a void* type here so
+         * downstream operators (== / !=) see a pointer rather than
+         * the C++ source-level 'const std::type_info&'. */
+        visit(s, n->typeid_.operand);
+        {
+            Type *vp = arena_alloc(s->arena, sizeof(Type));
+            memset(vp, 0, sizeof(Type));
+            vp->kind = TY_PTR;
+            vp->base = arena_alloc(s->arena, sizeof(Type));
+            memset(vp->base, 0, sizeof(Type));
+            vp->base->kind = TY_VOID;
+            vp->base->is_const = true;
+            n->resolved_type = vp;
+        }
+        break;
     case ND_COMMA:
         /* ND_COMMA's struct layout differs from ND_BINARY's (no 'op'
          * field), so the union aliasing with visit_binary read the

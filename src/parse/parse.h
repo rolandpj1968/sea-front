@@ -209,6 +209,13 @@ typedef enum {
                          * form when at least one type argument is
                          * dependent; substituted during template clone
                          * and re-evaluated by emit. */
+    ND_TYPEID,          /* typeid(type-id) or typeid(expression) —
+                         * N4659 §8.2.7 [expr.typeid]. Sea-front lowers
+                         * the static-type form to a unique per-type
+                         * sentinel address (typeid.static_type set);
+                         * the polymorphic-glvalue form (operand has
+                         * virtual methods) needs vtable-based RTTI and
+                         * is emitted as a runtime-abort stub. */
 
     /* -- Top level -- */
     ND_TRANSLATION_UNIT, /* translation-unit — N4659 §A.5 (grammar) /
@@ -940,6 +947,21 @@ struct Node {
             Type  *arg0;
             Type  *arg1;    /* NULL for single-arg traits */
         } type_trait;
+
+        /* ND_TYPEID — N4659 §8.2.7 [expr.typeid]
+         *   typeid ( type-id )            // static, by type
+         *   typeid ( expression )         // static or dynamic depending
+         *                                 // on operand's polymorphism
+         * static_type is the type whose sentinel address this typeid
+         * resolves to; for the expression form it's the operand's
+         * resolved static type (computed by sema or at emit). For the
+         * polymorphic-glvalue case the operand expression is preserved
+         * so emit can mark it as the dynamic-RTTI shape (currently a
+         * runtime abort — see docs/rtti.md). */
+        struct {
+            Type *static_type;  /* type whose typeinfo sentinel to take */
+            Node *operand;      /* the original expression, NULL for type-id form */
+        } typeid_;
 
         /* ND_TRANSLATION_UNIT — N4659 §A.5 (grammar) / §5.2/2
          * [lex.phases]:

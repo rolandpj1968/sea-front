@@ -528,6 +528,19 @@ static void dump(Node *node, int depth) {
         printf(")");
         break;
 
+    case ND_TYPEID:
+        printf("(typeid");
+        if (node->typeid_.static_type) {
+            printf(" ");
+            dump_type(node->typeid_.static_type);
+        }
+        if (node->typeid_.operand) {
+            printf(" ");
+            dump(node->typeid_.operand, depth + 1);
+        }
+        printf(")");
+        break;
+
     case ND_CLASS_DEF:
         printf("(class-def");
         if (node->class_def.tag)

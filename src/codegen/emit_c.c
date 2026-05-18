@@ -55,6 +55,11 @@
 
 bool g_emit_line_directives = true;
 
+/* Forward declarations for the typeid sentinel helpers — used by
+ * emit_expr's ND_TYPEID case which lives ahead of the definitions. */
+static const char *typeid_sym_for_type(Type *ty);
+static Type       *typeid_resolved_type(Node *n);
+
 /* Two-phase emit: structs first, then method bodies. */
 static int g_emit_phase = 0;
 enum { PHASE_STRUCTS = 1, PHASE_METHODS = 2 };
@@ -6691,6 +6696,16 @@ static void emit_expr(Node *n) {
         fputc(r ? '1' : '0', stdout);
         return;
     }
+    case ND_TYPEID: {
+        /* typeid — N4659 §8.2.7 [expr.typeid]. Lower to the sentinel
+         * address pre-collected by typeid_collect_walk; comparisons
+         * (==/!=) then reduce to pointer equality, correct for static
+         * types. See the docstring on typeid_collect_walk for the
+         * polymorphic-glvalue caveat. */
+        fprintf(stdout, "((const void *)&%s)",
+                typeid_sym_for_type(typeid_resolved_type(n)));
+        return;
+    }
     case ND_TEMPLATE_ID: {
         /* Bare template-id 'Foo<args>' in expression position. Most
          * sites that produce one (subscript base, callee, type arg)
@@ -11742,6 +11757,171 @@ static void emit_top_level(Node *n) {
  * via goto; the others are walked only by fall-through. Suppressing
  * the warning is much cheaper than tracking per-label reference
  * counts at codegen time. */
+/* ----- typeid sentinels — N4659 §8.2.7 [expr.typeid] -------------
+ * Sea-front lowers typeid(T) (and typeid(expr) when expr is not a
+ * polymorphic glvalue) to the address of a per-type sentinel char.
+ * Tests that compare typeids via == / != become pointer comparisons
+ * over those addresses, which is correct for static types.
+ *
+ * The polymorphic-glvalue case (operand has virtual methods) needs
+ * a vtable typeinfo slot — see docs/rtti.md. Currently emit-equivalent
+ * to the static type: works for `typeid(x) == typeid(int)` but gives
+ * the static-not-dynamic type for `typeid(*virtual_base_ptr)`. Marked
+ * TODO; documented in docs/rtti.md as the next RTTI slice.
+ *
+ * The set is collected by typeid_collect_walk over the TU before
+ * emit, then each entry forward-declared at the top of the emitted
+ * C. emit_expr for ND_TYPEID resolves to '((const void *)&sym)'. */
+#define TYPEID_SYM_BUFLEN 512
+typedef struct { char *sym; } TypeidSetEntry;
+static TypeidSetEntry *g_typeid_set = NULL;
+static int g_typeid_set_n = 0;
+static int g_typeid_set_cap = 0;
+
+static const char *typeid_sym_for_type(Type *ty) {
+    static char buf[TYPEID_SYM_BUFLEN];
+    /* Prefix __sf_typeid_ (not __sf_typeinfo_) so this sentinel
+     * doesn't clash with the EH path's hard-coded
+     * __sf_typeinfo_int (see emit_prelude — slice-3 throw machinery).
+     * The two prefixes will merge once the per-type typeinfo emit
+     * lands (docs/rtti.md); for now they're independent. */
+    int pos = snprintf(buf, sizeof(buf), "__sf_typeid_");
+    if (ty) pos = mangle_type_to_buf(ty, buf, pos, (int)sizeof(buf));
+    else { /* fallback for typeid(expr) where the static type is unknown */
+        pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, "unknown");
+    }
+    if (pos < 0 || pos >= (int)sizeof(buf)) pos = (int)sizeof(buf) - 1;
+    buf[pos] = 0;
+    return buf;
+}
+
+static void typeid_set_add(const char *sym) {
+    for (int i = 0; i < g_typeid_set_n; i++)
+        if (strcmp(g_typeid_set[i].sym, sym) == 0) return;
+    if (g_typeid_set_n == g_typeid_set_cap) {
+        g_typeid_set_cap = g_typeid_set_cap ? g_typeid_set_cap * 2 : 16;
+        g_typeid_set = realloc(g_typeid_set,
+            (size_t)g_typeid_set_cap * sizeof(*g_typeid_set));
+        if (!g_typeid_set) abort();
+    }
+    g_typeid_set[g_typeid_set_n].sym = xstrdup(sym);
+    g_typeid_set_n++;
+}
+
+/* Pick the type whose sentinel a typeid expression should yield.
+ * For typeid(type-id) it's stored on the node; for typeid(expr) it's
+ * the operand's resolved_type. NULL when neither is set — emit will
+ * fall back to "unknown". */
+static Type *typeid_resolved_type(Node *n) {
+    if (!n || n->kind != ND_TYPEID) return NULL;
+    if (n->typeid_.static_type) return n->typeid_.static_type;
+    if (n->typeid_.operand) return n->typeid_.operand->resolved_type;
+    return NULL;
+}
+
+/* Recursively walk the TU collecting typeid sentinel names so we can
+ * emit `static const char` definitions for them before any use site.
+ * Mirrors the shape of the broader emit-time walks (call args, member
+ * inits, control flow) — kept terse since it just descends to find
+ * ND_TYPEID, never produces output. */
+static void typeid_collect_walk(Node *n) {
+    if (!n) return;
+    if (n->kind == ND_TYPEID) {
+        typeid_set_add(typeid_sym_for_type(typeid_resolved_type(n)));
+    }
+    switch (n->kind) {
+    case ND_BINARY:
+        typeid_collect_walk(n->binary.lhs);
+        typeid_collect_walk(n->binary.rhs); break;
+    case ND_UNARY:    typeid_collect_walk(n->unary.operand); break;
+    case ND_POSTFIX:  typeid_collect_walk(n->unary.operand); break;
+    case ND_TERNARY:
+        typeid_collect_walk(n->ternary.cond);
+        typeid_collect_walk(n->ternary.then_);
+        typeid_collect_walk(n->ternary.else_); break;
+    case ND_COMMA:
+        typeid_collect_walk(n->comma.lhs);
+        typeid_collect_walk(n->comma.rhs); break;
+    case ND_ASSIGN:
+        typeid_collect_walk(n->binary.lhs);
+        typeid_collect_walk(n->binary.rhs); break;
+    case ND_CALL:
+        typeid_collect_walk(n->call.callee);
+        for (int i = 0; i < n->call.nargs; i++)
+            typeid_collect_walk(n->call.args[i]);
+        break;
+    case ND_MEMBER:    typeid_collect_walk(n->member.obj); break;
+    case ND_SUBSCRIPT:
+        typeid_collect_walk(n->subscript.base);
+        typeid_collect_walk(n->subscript.index); break;
+    case ND_CAST:      typeid_collect_walk(n->cast.operand); break;
+    case ND_TYPEID:    typeid_collect_walk(n->typeid_.operand); break;
+    case ND_VAR_DECL:
+        typeid_collect_walk(n->var_decl.init);
+        for (int i = 0; i < n->var_decl.ctor_nargs; i++)
+            typeid_collect_walk(n->var_decl.ctor_args[i]);
+        break;
+    case ND_FUNC_DEF:  typeid_collect_walk(n->func.body); break;
+    case ND_BLOCK:
+        for (int i = 0; i < n->block.nstmts; i++)
+            typeid_collect_walk(n->block.stmts[i]);
+        break;
+    case ND_RETURN:    typeid_collect_walk(n->ret.expr); break;
+    case ND_EXPR_STMT: typeid_collect_walk(n->expr_stmt.expr); break;
+    case ND_IF:
+        typeid_collect_walk(n->if_.init);
+        typeid_collect_walk(n->if_.cond);
+        typeid_collect_walk(n->if_.then_);
+        typeid_collect_walk(n->if_.else_); break;
+    case ND_WHILE:
+        typeid_collect_walk(n->while_.cond);
+        typeid_collect_walk(n->while_.body); break;
+    case ND_DO:
+        typeid_collect_walk(n->do_.body);
+        typeid_collect_walk(n->do_.cond); break;
+    case ND_FOR:
+        typeid_collect_walk(n->for_.init);
+        typeid_collect_walk(n->for_.cond);
+        typeid_collect_walk(n->for_.inc);
+        typeid_collect_walk(n->for_.body); break;
+    case ND_SWITCH:
+        typeid_collect_walk(n->switch_.init);
+        typeid_collect_walk(n->switch_.expr);
+        typeid_collect_walk(n->switch_.body); break;
+    case ND_CASE:
+        typeid_collect_walk(n->case_.expr);
+        typeid_collect_walk(n->case_.stmt); break;
+    case ND_DEFAULT:   typeid_collect_walk(n->default_.stmt); break;
+    case ND_LABEL:     typeid_collect_walk(n->label.stmt); break;
+    case ND_TRY:
+        typeid_collect_walk(n->try_.body);
+        for (int i = 0; i < n->try_.nhandlers; i++)
+            typeid_collect_walk(n->try_.handlers[i]);
+        break;
+    case ND_HANDLER:   typeid_collect_walk(n->handler.body); break;
+    case ND_THROW:     typeid_collect_walk(n->throw_.operand); break;
+    case ND_CLASS_DEF:
+        for (int i = 0; i < n->class_def.nmembers; i++)
+            typeid_collect_walk(n->class_def.members[i]);
+        break;
+    case ND_TRANSLATION_UNIT:
+        for (int i = 0; i < n->tu.ndecls; i++)
+            typeid_collect_walk(n->tu.decls[i]);
+        break;
+    default: break;
+    }
+}
+
+static void emit_typeid_sentinels(void) {
+    if (g_typeid_set_n == 0) return;
+    fputs("\n/* typeid sentinels — N4659 §8.2.7 [expr.typeid] */\n",
+          stdout);
+    for (int i = 0; i < g_typeid_set_n; i++)
+        fprintf(stdout, "static const char %s = 0;\n",
+                g_typeid_set[i].sym);
+    fputc('\n', stdout);
+}
+
 static void emit_prelude(void) {
     fputs("/* generated by sea-front --emit-c */\n", stdout);
     fputs("#include <stdint.h>\n", stdout);
@@ -12052,6 +12232,8 @@ void emit_c(Node *tu) {
      * symbol at link time. */
     free_ovld_populate(tu);
     emit_prelude();
+    typeid_collect_walk(tu);
+    emit_typeid_sentinels();
 
     /* Forward-declare ALL struct types so pointer references
      * resolve regardless of definition order. Function forward

@@ -782,6 +782,16 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
         c->type_trait.arg1 = subst_type(n->type_trait.arg1, map, arena);
         break;
 
+    case ND_TYPEID:
+        /* typeid — N4659 §8.2.7 [expr.typeid]. Substitute the static
+         * type through the SubstMap (it may reference a dependent
+         * template param: 'typeid(T)' becomes 'typeid(int)' once T is
+         * bound). The expression-form operand is cloned recursively
+         * via the standard handler. */
+        c->typeid_.static_type = subst_type(n->typeid_.static_type, map, arena);
+        c->typeid_.operand     = clone_node(n->typeid_.operand, map, arena);
+        break;
+
     case ND_TEMPLATE_ID:
         c->template_id = n->template_id;
         c->template_id.args = clone_node_array(

@@ -1894,6 +1894,42 @@ static Node *primary_expr(Parser *p) {
         return new_cast_node(p, ty, operand, tok);
     }
 
+    /* typeid — N4659 §8.2.7 [expr.typeid]
+     *   typeid ( type-id )
+     *   typeid ( expression )
+     * Disambiguate by tentative type-id parse first; rewind to
+     * expression on failure. The two forms share the same parenthesised
+     * shape — N4659 §17.3 [temp.arg] Rule 5 "type-id always wins".
+     * The result is an ND_TYPEID node whose static_type is the type
+     * we'll generate a sentinel for (set at emit time for the
+     * expression form once the operand's resolved_type is known). */
+    if (tok->kind == TK_KW_TYPEID) {
+        parser_advance(p);
+        parser_expect(p, TK_LPAREN);
+        Type *ty = NULL;
+        Node *operand = NULL;
+        if (parser_at_type_specifier(p)) {
+            ParseState saved = parser_save(p);
+            bool prev_tentative = p->tentative;
+            bool saved_failed = p->tentative_failed;
+            p->tentative = true;
+            p->tentative_failed = false;
+            Type *t = parse_type_name(p);
+            bool ok = (t != NULL) && !p->tentative_failed &&
+                      parser_at(p, TK_RPAREN);
+            p->tentative = prev_tentative;
+            p->tentative_failed = saved_failed;
+            if (ok) ty = t;
+            else parser_restore(p, saved);
+        }
+        if (!ty) operand = parse_expr(p);
+        parser_expect(p, TK_RPAREN);
+        Node *n = new_node(p, ND_TYPEID, tok);
+        n->typeid_.static_type = ty;     /* NULL for expr form */
+        n->typeid_.operand     = operand;
+        return n;
+    }
+
     /* Parenthesized expression — §8.1.5 [expr.prim.paren]
      *   ( expression )
      *
