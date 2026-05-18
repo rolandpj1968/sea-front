@@ -5337,6 +5337,13 @@ static void emit_expr(Node *n) {
                      g_current_func_ret_ty->kind == TY_RVALREF);
                 if (ref_ret && !cur_returns_ref) fputs("(*", stdout);
                 bool virt = method_is_virtual(ot, callee->member.member);
+                /* N4659 §13.3/15 [class.virtual]: a qualified call
+                 * 'obj->Class::method()' binds to Class::method
+                 * directly, bypassing virtual dispatch even when the
+                 * method IS virtual. The parser captured the trailing
+                 * qualifier segment on member.qualifier_class. */
+                if (virt && callee->member.qualifier_class)
+                    virt = false;
                 /* Param types of the resolved method; used for arg
                  * lowering at line below. NULL on the virtual path
                  * (no overload resolution there yet — virtual call
@@ -5409,7 +5416,21 @@ static void emit_expr(Node *n) {
                      * &obj.__sf_base as the this pointer. */
                     Type *method_class = ot;
 
-                    if (ot->class_region) {
+                    /* Explicit qualifier 'obj->Class::method()' —
+                     * N4659 §13.3/15 [class.virtual]: bind to the
+                     * named class's method, not the dynamic one.
+                     * Mangle against the qualifier class so the call
+                     * site matches Class::method's symbol. */
+                    if (callee->member.qualifier_class) {
+                        Type qstub = {0};
+                        qstub.kind = TY_STRUCT;
+                        qstub.tag  = callee->member.qualifier_class;
+                        Node *qcdef = find_class_def_by_tag_only(&qstub);
+                        if (qcdef && qcdef->class_def.ty)
+                            method_class = qcdef->class_def.ty;
+                    }
+
+                    if (ot->class_region && !callee->member.qualifier_class) {
                         /* Not in own class? Check bases. */
                         Token *mn = callee->member.member;
                         Declaration *own_d = region_lookup_own(

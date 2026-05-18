@@ -445,6 +445,12 @@ struct Node {
              * deduction can't recover from the call args alone.
              * NULL when there's no '<...>' after the member name. */
             Node *template_id;
+            /* Qualifier-class for 'obj.A::method()' / 'obj->A::method()' —
+             * N4659 §13.3/15 [class.virtual]: a qualified call bypasses
+             * virtual dispatch and binds to the named class's method
+             * directly. Stores the LAST qualifier segment (the class
+             * name). NULL when the member access is unqualified. */
+            Token *qualifier_class;
         } member;
 
         /* ND_SUBSCRIPT — N4659 §8.2.1 [expr.sub]

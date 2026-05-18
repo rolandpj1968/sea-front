@@ -2200,10 +2200,16 @@ static Node *postfix_expr(Parser *p) {
             bool member_template_kw = parser_consume(p, TK_KW_TEMPLATE);
             /* Qualified member: x.A::B::method.
              * Only enter when followed by '::' (we'd otherwise eat the
-             * '<' of a relational expression like 'x.first < y.first'). */
+             * '<' of a relational expression like 'x.first < y.first').
+             * Capture the LAST qualifier segment so codegen can emit a
+             * direct (non-virtual) call per N4659 §13.3/15
+             * [class.virtual] when the trailing name is a virtual
+             * method that the user explicitly bound to a specific
+             * class. */
+            Token *qualifier_class = NULL;
             while (parser_at(p, TK_IDENT) &&
                    parser_peek_ahead(p, 1)->kind == TK_SCOPE) {
-                parser_advance(p);  /* segment */
+                qualifier_class = parser_advance(p);  /* segment */
                 parser_advance(p);  /* :: */
                 parser_consume(p, TK_KW_TEMPLATE);
             }
@@ -2330,6 +2336,7 @@ static Node *postfix_expr(Parser *p) {
 
             node = new_member_node(p, node, member, op, tok);
             node->member.template_id = member_tid;
+            node->member.qualifier_class = qualifier_class;
             continue;
         }
 
