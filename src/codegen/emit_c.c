@@ -6503,11 +6503,39 @@ static void emit_expr(Node *n) {
                 probe = (cdef && cdef->class_def.ty) ? cdef->class_def.ty
                                                      : n->qualified.resolved_class_type;
             } else if (class_tok) {
+                /* Build a tag-only stub. For 'Wrap<A>::v' the
+                 * qualified-id carries lead_tid with the template
+                 * args; populate the stub's template_args from it so
+                 * mangle_class_tag produces the per-instantiation
+                 * mangled name ('sf__Wrap_t_A_te_'). Without the args
+                 * the mangled tag matches the primary template, not
+                 * the instantiation, and the emitted symbol is
+                 * undefined at link time. N4659 §17.7.1 [temp.inst]. */
                 Type stub = {0};
                 stub.kind = TY_STRUCT;
                 stub.tag  = class_tok;
-                Node *cdef = find_class_def_by_tag_only(&stub);
+                Node *ltid = n->qualified.lead_tid;
+                if (ltid && ltid->kind == ND_TEMPLATE_ID &&
+                    ltid->template_id.nargs > 0) {
+                    stub.n_template_args = ltid->template_id.nargs;
+                    Type **buf = malloc(stub.n_template_args * sizeof(Type *));
+                    if (!buf) abort();
+                    for (int i = 0; i < stub.n_template_args; i++) {
+                        Node *a = ltid->template_id.args[i];
+                        buf[i] = (a && a->kind == ND_VAR_DECL)
+                                   ? a->var_decl.ty : NULL;
+                    }
+                    stub.template_args = buf;
+                }
+                Node *cdef = find_class_def_by_tag_args(&stub);
+                if (!cdef) cdef = find_class_def_by_tag_only(&stub);
                 if (cdef && cdef->class_def.ty) probe = cdef->class_def.ty;
+                else if (stub.n_template_args > 0) {
+                    /* No instantiated def yet — mangle against the
+                     * stub so the access matches whatever the later
+                     * instantiation pass emits. */
+                    probe = &stub;
+                }
             }
             if (probe && probe->class_region && mem_tok) {
                 Declaration *sd = region_lookup_own(probe->class_region,
@@ -6518,6 +6546,19 @@ static void emit_expr(Node *n) {
                     emit_token_text(mem_tok);
                     return;
                 }
+            }
+            /* If probe came from the stub but the instantiated def
+             * isn't present (probe->class_region is NULL), the
+             * fallback walks the TU at instantiation time — for the
+             * static-member case we can still emit the mangled
+             * Class<args>__member symbol with what we have, since
+             * the instantiation pass emits a matching definition. */
+            if (probe && !probe->class_region && probe->tag && mem_tok &&
+                probe->n_template_args > 0) {
+                mangle_class_tag(probe);
+                fputs("__", stdout);
+                emit_token_text(mem_tok);
+                return;
             }
         }
         /* Scoped-enum member access: 'kind::NONE' where 'kind' is an
