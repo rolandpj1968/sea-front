@@ -165,11 +165,22 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
              * 'const char * const __attribute__((unused)) name'. */
             parser_skip_gnu_attributes(p);
         } else if (parser_consume(p, TK_LAND)) {
-            /* && — rvalue reference (C++11) */
+            /* && — rvalue reference (C++11). N4659 §11.3.2/1
+             * [dcl.ref]: references can't be cv-qualified, but gcc
+             * accepts __restrict on references as a hint (libstdc++
+             * cxxabi.h uses 'R& __restrict r'). __restrict is lexed
+             * as TK_KW_VOLATILE; discard any trailing const/volatile
+             * here so the standard-ill-formed-but-tolerated shape
+             * parses. */
             base_ty = new_rvalref_type(p, base_ty);
+            while (parser_consume(p, TK_KW_CONST) ||
+                   parser_consume(p, TK_KW_VOLATILE)) { /* discard */ }
         } else if (parser_consume(p, TK_AMP)) {
-            /* & — lvalue reference */
+            /* & — lvalue reference; see && branch for the cv-after-ref
+             * discard rationale. */
             base_ty = new_ref_type(p, base_ty);
+            while (parser_consume(p, TK_KW_CONST) ||
+                   parser_consume(p, TK_KW_VOLATILE)) { /* discard */ }
         } else if (parser_at(p, TK_IDENT) &&
                    parser_peek_ahead(p, 1)->kind == TK_SCOPE) {
             /* nested-name-specifier * — pointer-to-member.
