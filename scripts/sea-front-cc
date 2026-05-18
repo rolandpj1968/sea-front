@@ -228,7 +228,19 @@ for src in "$@"; do
     #       scalar search_line_acc_char fallback. sea-front discards
     #       inline asm bodies, so the vectorized fast-path would
     #       compile to an empty function and crash at runtime.
+    # mcpp is target-independent and doesn't carry the host gcc's
+    # type-token predefines. Reproduce the common Itanium-ABI 64-bit
+    # mapping so sources that name '__SIZE_TYPE__' / friends in
+    # type positions (e.g. placement-new overloads using
+    # 'void* operator new(__SIZE_TYPE__, void*)') still parse.
+    # TODO(seafront#predefs): drive these from a platform query
+    # instead of hard-coding LP64.
     SF_DEFINES="-DGCC_VERSION=4004"
+    SF_DEFINES="$SF_DEFINES -D__SIZE_TYPE__='long unsigned int'"
+    SF_DEFINES="$SF_DEFINES -D__PTRDIFF_TYPE__='long int'"
+    SF_DEFINES="$SF_DEFINES -D__INTPTR_TYPE__='long int'"
+    SF_DEFINES="$SF_DEFINES -D__UINTPTR_TYPE__='long unsigned int'"
+    SF_DEFINES="$SF_DEFINES -D__WCHAR_TYPE__=int"
     # Default to C++03 when no -std= flag is given. gcc 4.8 source is
     # C++03; without this, g++ 13 defaults to C++17 and libstdc++ 13
     # headers emit C++17 constructs (std::byte etc.) that sea-front
