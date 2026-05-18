@@ -352,6 +352,34 @@ static Type *deduce_lambda_return(Parser *p, Node *body) {
     }
 }
 
+/* True if 'body' contains any ND_RETURN node. Used to distinguish
+ * 'body falls off the end → void' from 'body returns something we
+ * couldn't deduce'. Without this, the caller would default an
+ * undeducible-return lambda to void, lying about the signature and
+ * breaking call sites that read the return value. */
+static bool body_has_return(Node *body) {
+    if (!body) return false;
+    switch (body->kind) {
+    case ND_RETURN: return true;
+    case ND_BLOCK:
+        for (int i = 0; i < body->block.nstmts; i++)
+            if (body_has_return(body->block.stmts[i])) return true;
+        return false;
+    case ND_IF:
+        return body_has_return(body->if_.then_) ||
+               body_has_return(body->if_.else_);
+    case ND_FOR:
+        return body_has_return(body->for_.body);
+    case ND_WHILE:
+    case ND_DO:
+        return body_has_return(body->while_.body);
+    case ND_SWITCH:
+        return body_has_return(body->switch_.body);
+    default:
+        return false;
+    }
+}
+
 static Node *primary_expr(Parser *p) {
     Token *tok = parser_peek(p);
 
@@ -632,15 +660,18 @@ static Node *primary_expr(Parser *p) {
                 if (parser_at(p, TK_LBRACE)) {
                         Node *body = parse_compound_stmt(p);
                         if (!ret_ty) ret_ty = deduce_lambda_return(p, body);
-                        /* §8.1.5.4/4: if the compound-statement's body
-                         * is empty or every return-statement path falls
-                         * off without yielding a value, the return type
-                         * is 'void'. deduce_lambda_return returns NULL
-                         * in those cases — default to void here so
-                         * captureless lambdas like '[](){}' don't fall
-                         * through to the ND_NULLPTR skip-and-discard
-                         * path and lose their identity. */
-                        if (!ret_ty) ret_ty = new_type(p, TY_VOID);
+                        /* §8.1.5.4/4: if the compound-statement has no
+                         * return statement at all, the body falls off
+                         * the end and the return type is 'void'. We
+                         * only apply this when no return is present —
+                         * defaulting to void when deduce gave up on a
+                         * present-but-undeducible return would lie
+                         * about the signature and break call sites
+                         * that read the value. Without this default,
+                         * '[](){}' falls through to the ND_NULLPTR
+                         * skip-and-discard path and loses its identity. */
+                        if (!ret_ty && !body_has_return(body))
+                            ret_ty = new_type(p, TY_VOID);
                         if (ret_ty) {
                         /* Synthesize a unique name token. The arena
                          * holds the buffer; tokens reference it.
