@@ -404,16 +404,19 @@ DeclSpec parse_type_specifiers(Parser *p) {
              * We parse each base-specifier as a type-name and remember
              * the resolved class_region (if any). The bases will be
              * attached to the class scope after region_push below. */
-            #ifdef MAX_BASES
-            #  error "MAX_BASES macro already defined — pick a different local name to avoid clashing"
-            #endif
-            #define MAX_BASES 16
-            DeclarativeRegion *base_regions[MAX_BASES];
-            Type *base_types[MAX_BASES];
-            bool base_is_virtual_parallel[MAX_BASES];
-            int n_base_regions = 0;
-            int n_base_types = 0;
-            (void)base_is_virtual_parallel;
+            /* Accumulate each base-specifier into a Vec so the
+             * parse-time list can grow past the previous 16-cap
+             * silent-truncation limit. Each entry bundles the type,
+             * its class_region (may be NULL for dependent/forward
+             * bases — region-side registration filters), and the
+             * virtual-inheritance flag. Final form gets copied into
+             * the class_def.base_types arena array below. */
+            typedef struct BaseSpec {
+                Type *ty;
+                DeclarativeRegion *region;
+                bool is_virtual;
+            } BaseSpec;
+            Vec bases = vec_new(p->arena);
             if (parser_consume(p, TK_COLON)) {
                 for (;;) {
                     parser_skip_cxx_attributes(p);
@@ -472,12 +475,12 @@ DeclSpec parse_type_specifiers(Parser *p) {
                     /* Re-parse committed and record the class_region. */
                     parser_restore(p, saved);
                     base_ty = parse_type_specifiers(p).type;
-                    if (base_ty && n_base_types < MAX_BASES)
-                        base_types[n_base_types++] = base_ty;
-                    if (base_ty && base_ty->class_region &&
-                        n_base_regions < MAX_BASES) {
-                        base_is_virtual_parallel[n_base_regions] = this_is_virtual;
-                        base_regions[n_base_regions++] = base_ty->class_region;
+                    if (base_ty) {
+                        BaseSpec *bs = arena_alloc(p->arena, sizeof(*bs));
+                        bs->ty = base_ty;
+                        bs->region = base_ty->class_region;  /* may be NULL */
+                        bs->is_virtual = this_is_virtual;
+                        vec_push(&bases, bs);
                     }
                     /* Pack expansion '...' on a base-class type. */
                     parser_consume(p, TK_ELLIPSIS);
@@ -485,7 +488,6 @@ DeclSpec parse_type_specifiers(Parser *p) {
                         break;
                 }
             }
-            #undef MAX_BASES
 
             /* Elaborated-type-specifier with no body — N4659 §10.1.7.3
              * [dcl.type.elab]: 'class B b;' refers to the existing class B.
@@ -494,8 +496,7 @@ DeclSpec parse_type_specifiers(Parser *p) {
              * inheritance info. Without this, 'class B b;' produces a
              * tag-only Type and member calls on b lose access to base
              * methods (b.middleman() can't see A::middleman). */
-            if (!parser_at(p, TK_LBRACE) && ty->tag &&
-                n_base_types == 0 && n_base_regions == 0) {
+            if (!parser_at(p, TK_LBRACE) && ty->tag && bases.len == 0) {
                 Declaration *existing = lookup_unqualified_kind(p,
                     ty->tag->loc, ty->tag->len, ENTITY_TYPE);
                 if (!existing)
@@ -532,9 +533,11 @@ DeclSpec parse_type_specifiers(Parser *p) {
                 /* Attach base-class regions captured above. Lookup of an
                  * unqualified name in this scope walks bases after the
                  * class's own buckets. */
-                for (int i = 0; i < n_base_regions; i++)
-                    region_add_base_v(p, base_regions[i],
-                                       base_is_virtual_parallel[i]);
+                for (int i = 0; i < bases.len; i++) {
+                    BaseSpec *bs = bases.data[i];
+                    if (bs->region)
+                        region_add_base_v(p, bs->region, bs->is_virtual);
+                }
 
                 /* N4659 §9.2/2 [class]: the class-name is also inserted
                  * into the scope of the class itself ("injected class
@@ -630,12 +633,16 @@ DeclSpec parse_type_specifiers(Parser *p) {
                         parse_deferred_func_body(p, fn);
                 }
                 /* Store base types for template instantiation. */
-                if (n_base_types > 0) {
+                if (bases.len > 0) {
                     result.class_def->class_def.base_types =
-                        arena_alloc(p->arena, n_base_types * sizeof(Type *));
-                    for (int i = 0; i < n_base_types; i++)
-                        result.class_def->class_def.base_types[i] = base_types[i];
-                    result.class_def->class_def.nbase_types = n_base_types;
+                        arena_alloc(p->arena, bases.len * sizeof(Type *));
+                    int n = 0;
+                    for (int i = 0; i < bases.len; i++) {
+                        BaseSpec *bs = bases.data[i];
+                        if (bs->ty)
+                            result.class_def->class_def.base_types[n++] = bs->ty;
+                    }
+                    result.class_def->class_def.nbase_types = n;
                 }
 
                 /* Trivially-destructible per N4659 §15.4 [class.dtor]/12:
