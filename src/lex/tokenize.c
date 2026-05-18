@@ -166,7 +166,7 @@ static const Keyword kw_table[] = {
      * Both groups sort before 'alignas' because '_' (0x5F) < 'a' (0x61).
      * Within them, '_B' (95+66) sorts before '__' (95+95). */
     {"_Bool",            TK_KW_BOOL},
-    {"_Complex",         TK_KW_VOID},    /* C complex type — silently skip as void; sema doesn't model */
+    {"_Complex",         TK_KW_COMPLEX}, /* C99/C11 complex types — preserved through emit so 'gcc -std=c11' accepts the round-trip */
     /* ISO/IEC TS 18661-3 interchange types (GCC 7+, glibc 2.26+).
      * NOT present in gcc 4.8 or our bootstrap target headers (gcc 4.7).
      * These only appear when preprocessing gcc 4.8 source against a
@@ -183,7 +183,7 @@ static const Keyword kw_table[] = {
     {"_Static_assert",   TK_KW_STATIC_ASSERT},
     {"__asm",            TK_KW_ASM},     /* GCC alias for asm */
     {"__asm__",          TK_KW_ASM},     /* GCC alias for asm */
-    {"__complex__",      TK_KW_VOID},    /* GCC complex — same as _Complex, treat as void */
+    {"__complex__",      TK_KW_COMPLEX}, /* GCC alias for _Complex */
     {"__const",          TK_KW_CONST},   /* GCC alias for const */
     {"__const__",        TK_KW_CONST},   /* GCC alias for const */
     {"__imag__",         TK_PLUS},       /* GCC complex imag-part — alias to unary plus (no-op) */
@@ -1116,6 +1116,7 @@ const char *token_kind_name(TokenKind kind) {
     case TK_KW_CHAR16_T:    return "KW_char16_t";
     case TK_KW_CHAR32_T:    return "KW_char32_t";
     case TK_KW_CLASS:       return "KW_class";
+    case TK_KW_COMPLEX:     return "KW__Complex";
     case TK_KW_CONST:       return "KW_const";
     case TK_KW_CONSTEXPR:   return "KW_constexpr";
     case TK_KW_CONST_CAST:  return "KW_const_cast";

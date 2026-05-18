@@ -110,6 +110,8 @@ typedef enum {
     TK_KW_CHAR16_T,
     TK_KW_CHAR32_T,
     TK_KW_CLASS,
+    TK_KW_COMPLEX,      /* _Complex / __complex__ — C99/C11 §6.2.5/11
+                         * complex types (GCC extension in C++). */
     TK_KW_CONST,
     TK_KW_CONSTEXPR,
     TK_KW_CONST_CAST,

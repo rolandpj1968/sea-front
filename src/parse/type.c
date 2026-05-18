@@ -130,6 +130,7 @@ DeclSpec parse_type_specifiers(Parser *p) {
     int cnt_float = 0, cnt_double = 0;
     int cnt_signed = 0, cnt_unsigned = 0;
     int cnt_char16 = 0, cnt_char32 = 0, cnt_wchar = 0;
+    int cnt_complex = 0;
     bool is_const = false, is_volatile = false;
     bool seen_any = false;
 
@@ -236,6 +237,7 @@ DeclSpec parse_type_specifiers(Parser *p) {
         if (tok->kind == TK_KW_CHAR16_T) { parser_advance(p); cnt_char16++; seen_any = true; continue; }
         if (tok->kind == TK_KW_CHAR32_T) { parser_advance(p); cnt_char32++; seen_any = true; continue; }
         if (tok->kind == TK_KW_WCHAR_T)  { parser_advance(p); cnt_wchar++; seen_any = true; continue; }
+        if (tok->kind == TK_KW_COMPLEX)  { parser_advance(p); cnt_complex++; seen_any = true; continue; }
 
         /* struct/union/class — N4659 §12 [class], §10.1.7.3 [dcl.type.elab]
          *
@@ -1539,6 +1541,7 @@ DeclSpec parse_type_specifiers(Parser *p) {
     ty->is_unsigned = is_unsigned_flag;
     ty->is_const = is_const;
     ty->is_volatile = is_volatile;
+    ty->is_complex = (cnt_complex > 0);
     result.type = ty; return result;
 }
 
@@ -1585,6 +1588,7 @@ bool parser_at_type_specifier(Parser *p) {
     case TK_KW_SHORT: case TK_KW_INT: case TK_KW_LONG:
     case TK_KW_FLOAT: case TK_KW_DOUBLE:
     case TK_KW_SIGNED: case TK_KW_UNSIGNED:
+    case TK_KW_COMPLEX:        /* _Complex / __complex__ */
     case TK_KW_WCHAR_T: case TK_KW_CHAR16_T: case TK_KW_CHAR32_T:
     case TK_KW_CONST: case TK_KW_VOLATILE:
     case TK_KW_STATIC: case TK_KW_EXTERN: case TK_KW_REGISTER:

@@ -2562,6 +2562,18 @@ static Node *unary_expr(Parser *p) {
         return new_unary_node(p, tok->kind, operand, tok);
     }
 
+    /* GCC __complex__/_Complex as a unary prefix — N1570 §6.5.3.4
+     * doesn't define this; gcc treats '__complex__ expr' as building
+     * a complex value with imaginary part = expr. libstdc++ <complex>
+     * uses it in expression position; sea-front doesn't model the
+     * conversion semantics, so emit as TK_PLUS (unary plus, no-op
+     * pass-through) which is at worst an arithmetic identity. */
+    if (tok->kind == TK_KW_COMPLEX) {
+        parser_advance(p);
+        Node *operand = unary_expr(p);
+        return new_unary_node(p, TK_PLUS, operand, tok);
+    }
+
     /* sizeof and alignof are handled in primary_expr (they need parens logic) */
 
     return postfix_expr(p);

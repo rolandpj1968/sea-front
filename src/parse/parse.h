@@ -1097,6 +1097,12 @@ struct Type {
     bool is_unsigned;
     bool is_const;
     bool is_volatile;
+    /* C99/C11 §6.2.5/11 — complex types. _Complex is a C feature
+     * (GCC extension in C++); when present the base type stays the
+     * real component (int/float/double) and emit prefixes _Complex
+     * to the C output. Sea-front doesn't compute on complex values,
+     * just preserves the shape for round-trip. */
+    bool is_complex;
 
     /* C++11 'auto' placeholder — N4659 §10.1.7.4 [dcl.spec.auto].
      * Parser emits TY_INT with is_auto=true; sema's visit_var_decl

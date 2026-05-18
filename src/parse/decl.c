@@ -680,6 +680,7 @@ parse_suffixes:
             case TK_KW_SHORT: case TK_KW_INT: case TK_KW_LONG:
             case TK_KW_FLOAT: case TK_KW_DOUBLE:
             case TK_KW_SIGNED: case TK_KW_UNSIGNED:
+            case TK_KW_COMPLEX:
             case TK_KW_WCHAR_T: case TK_KW_CHAR16_T: case TK_KW_CHAR32_T:
             case TK_KW_CONST: case TK_KW_VOLATILE:
             case TK_KW_STRUCT: case TK_KW_CLASS:

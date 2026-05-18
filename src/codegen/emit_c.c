@@ -2058,6 +2058,11 @@ static void emit_type(Type *ty) {
     if (!is_ptr) {
         if (ty->is_const)    fputs("const ", stdout);
         if (ty->is_volatile) fputs("volatile ", stdout);
+        /* _Complex prefix — C99/C11 §6.2.5/11. Only the scalar
+         * arithmetic types are valid carriers; the parser preserves
+         * the underlying real type (int/float/double/...) on the
+         * base Type, and we re-emit _Complex here for round-trip. */
+        if (ty->is_complex)  fputs("_Complex ", stdout);
     }
 
     switch (ty->kind) {
