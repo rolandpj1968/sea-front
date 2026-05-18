@@ -567,29 +567,37 @@ static Node *primary_expr(Parser *p) {
             if (!parser_consume(p, TK_COMMA)) break;
         }
 
-        if (captures_ok && parser_consume(p, TK_RBRACKET) &&
-            parser_consume(p, TK_LPAREN)) {
-            /* Parse param list inline — small reimplementation of the
-             * loop in decl.c; lambdas have no default args, no
-             * variadic, no class-scoped param-name shadowing concerns. */
+        if (captures_ok && parser_consume(p, TK_RBRACKET)) {
+            /* lambda-declarator is optional — '[]{...}' is a valid
+             * lambda with empty captures, empty params, deduced
+             * return type (N4659 §8.1.5/4 [expr.prim.lambda] —
+             * lambda-declarator may be omitted). When the next token
+             * isn't '(', skip the param-list parse and head straight
+             * for the optional '->' or body. */
             Node **params = NULL; int nparams = 0; int cap = 0;
-            if (!parser_at(p, TK_RPAREN)) {
-                for (;;) {
-                    DeclSpec pspec = parse_type_specifiers(p);
-                    Node *pd = pspec.type ? parse_declarator(p, pspec.type) : NULL;
-                    if (!pd) break;
-                    pd->kind = ND_PARAM;
-                    if (nparams == cap) {
-                        cap = cap ? cap * 2 : 4;
-                        Node **n = arena_alloc(p->arena, sizeof(*n) * cap);
-                        if (params) memcpy(n, params, sizeof(*n) * nparams);
-                        params = n;
+            bool had_paren = parser_consume(p, TK_LPAREN);
+            if (had_paren) {
+                /* Parse param list inline — small reimplementation of the
+                 * loop in decl.c; lambdas have no default args, no
+                 * variadic, no class-scoped param-name shadowing concerns. */
+                if (!parser_at(p, TK_RPAREN)) {
+                    for (;;) {
+                        DeclSpec pspec = parse_type_specifiers(p);
+                        Node *pd = pspec.type ? parse_declarator(p, pspec.type) : NULL;
+                        if (!pd) break;
+                        pd->kind = ND_PARAM;
+                        if (nparams == cap) {
+                            cap = cap ? cap * 2 : 4;
+                            Node **n = arena_alloc(p->arena, sizeof(*n) * cap);
+                            if (params) memcpy(n, params, sizeof(*n) * nparams);
+                            params = n;
+                        }
+                        params[nparams++] = pd;
+                        if (!parser_consume(p, TK_COMMA)) break;
                     }
-                    params[nparams++] = pd;
-                    if (!parser_consume(p, TK_COMMA)) break;
                 }
             }
-            if (parser_consume(p, TK_RPAREN)) {
+            if (!had_paren || parser_consume(p, TK_RPAREN)) {
                 /* Optional 'mutable', 'constexpr', 'noexcept(...)' —
                  * skip until '->' or '{'. */
                 while (!parser_at(p, TK_ARROW) &&
