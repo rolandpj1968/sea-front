@@ -2125,8 +2125,18 @@ Node *parse_top_level_decl(Parser *p) {
          * resolve via the base-class member lookup walk anyway.
          * TODO(seafront#using-decl-precise): do qualified lookup
          * to learn the actual entity kind. */
+        /* Capture both the qualifier path (for namespace-qualified
+         * names like 'pre::container') and the trailing identifier.
+         * The qualifier head is the FIRST IDENT we see; with that we
+         * can do a qualified lookup so 'using pre::container;'
+         * forwards the actual type info rather than registering an
+         * opaque ENTITY_TYPE. */
+        Token *first_name = NULL;
         Token *last_name = NULL;
-        if (parser_at(p, TK_IDENT)) last_name = parser_peek(p);
+        if (parser_at(p, TK_IDENT)) {
+            first_name = parser_peek(p);
+            last_name = first_name;
+        }
         while (!parser_at(p, TK_SEMI) && !parser_at_eof(p)) {
             if (parser_at(p, TK_IDENT)) last_name = parser_peek(p);
             parser_advance(p);
@@ -2148,8 +2158,25 @@ Node *parse_top_level_decl(Parser *p) {
              * (qualified namespace paths we don't fully model). The
              * downstream type-NULL fallback still produces something
              * — just opaque, not the actual structure. */
-            Declaration *src = lookup_unqualified(p, last_name->loc,
-                                                   last_name->len);
+            Declaration *src = NULL;
+            /* Qualified path: 'using ns::name;' — look up the
+             * namespace, then the name inside it. Falls back to the
+             * normal unqualified lookup if the namespace lookup
+             * fails (e.g. 'using ::name;' where first_name is just
+             * the trailing name itself). Pattern: g++.dg/cpp0x/
+             * range-for4 uses 'using pre::container;' where
+             * 'container' is only visible through namespace pre.
+             * N4659 §10.3.3 [namespace.udecl]. */
+            if (first_name && first_name != last_name) {
+                DeclarativeRegion *ns = region_find_namespace(p,
+                    first_name->loc, first_name->len);
+                if (ns)
+                    src = lookup_in_scope(ns, last_name->loc,
+                                           last_name->len);
+            }
+            if (!src)
+                src = lookup_unqualified(p, last_name->loc,
+                                          last_name->len);
             Type *fwd = (src && src->type) ? src->type : NULL;
             /* Preserve the source's entity kind exactly. Misclassifying
              * a function ('using ::free' inside namespace std) as
