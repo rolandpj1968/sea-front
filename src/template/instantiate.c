@@ -2043,26 +2043,22 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
             Type *arg_ty = NULL;
             if (i < nargs)
                 arg_ty = type_arg_from_node(template_id->template_id.args[i]);
-            /* Fall back to default if no explicit argument. Only consult
-             * param.default_type for type-params (param.ty == NULL):
-             * the param.default_type slot aliases var_decl.init in the
-             * Node union, so for NTTPs (param.ty != NULL) this slot
-             * actually holds the default *expression*, not a Type — see
-             * N4659 §17.1/8 [temp.param]. Reading it as Type* would
-             * mis-cast a Node*. */
-            if (!arg_ty && param->param.ty == NULL && param->param.default_type)
+            /* Fall back to type-param default if no explicit argument
+             * — N4659 §17.1/8 [temp.param]. NTTP defaults live in
+             * param.default_value and are handled in the else-if
+             * branch below. */
+            if (!arg_ty && param->param.default_type)
                 arg_ty = subst_type(param->param.default_type, &map, arena);
             if (arg_ty) {
                 subst_map_add(&map, pname, arg_ty);
-                /* For NTTPs whose arg is a literal (TY_NTTP_VALUE),
-                 * also bind the param→token mapping so clone.c's
-                 * ND_IDENT handler can substitute body references to
-                 * the param into the corresponding literal node.
-                 * Without this, the body's 'v' (in 'static const int
-                 * trait = v;') stays as ND_IDENT after clone and emits
-                 * as the unresolved identifier 'v'. */
-                if (param->param.ty != NULL && arg_ty->kind == TY_NTTP_VALUE &&
-                    arg_ty->tag)
+                /* For NTTP literal args (TY_NTTP_VALUE), also bind the
+                 * param→token mapping so clone.c's ND_IDENT handler
+                 * can morph body references to the param into the
+                 * corresponding literal node. Without this, the body's
+                 * 'v' (in 'static const int trait = v;') stays as
+                 * ND_IDENT after clone and emits as an unresolved
+                 * identifier. */
+                if (arg_ty->kind == TY_NTTP_VALUE && arg_ty->tag)
                     subst_map_add_tt(&map, pname, arg_ty->tag);
                 continue;
             }
@@ -2112,7 +2108,7 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
                 }
                 if (bound_tok)
                     subst_map_add_tt(&map, pname, bound_tok);
-            } else if (param->var_decl.init) {
+            } else if (param->param.default_value) {
                 /* NTTP default substitution — N4659 §17.7.1/8
                  * [temp.inst]: a template parameter default is
                  * substituted with the SubstMap built from the
@@ -2129,7 +2125,7 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
                  * 'bool b = true' but not for more complex shapes.
                  * TODO(seafront#nttp-default-eval): full constant-
                  * evaluator for arbitrary NTTP defaults. */
-                Node *def = param->var_decl.init;
+                Node *def = param->param.default_value;
                 Token *bound_tok = NULL;
                 if (def->kind == ND_TYPE_TRAIT) {
                     Type *a0 = subst_type(def->type_trait.arg0, &map, arena);
@@ -2920,12 +2916,9 @@ void template_instantiate(Node *tu, Arena *arena) {
             Type *arg_ty = (i < na) ?
                 type_arg_from_node(req->template_id->template_id.args[i]) :
                 NULL;
-            /* Only consult param.default_type for type-params
-             * (param.ty == NULL); for NTTPs that slot aliases
-             * var_decl.init in the Node union and holds the default
-             * expression, not a Type. See instantiate_one's primary
-             * binding loop for the same guard. */
-            if (!arg_ty && param->param.ty == NULL && param->param.default_type)
+            /* Type-param default — N4659 §17.1/8 [temp.param]. NTTP
+             * defaults live in param.default_value (handled below). */
+            if (!arg_ty && param->param.default_type)
                 arg_ty = subst_type(param->param.default_type, &tmp_map, arena);
             if (arg_ty) {
                 subst_map_add(&tmp_map, param->param.name, arg_ty);
@@ -2935,8 +2928,8 @@ void template_instantiate(Node *tu, Arena *arena) {
              * Currently handles the type-trait shape; other shapes
              * fall through and remain unbound (mangled as "unknown"
              * — TODO(seafront#nttp-default-eval)). */
-            if (i >= na && param->param.ty != NULL && param->var_decl.init) {
-                Node *def = param->var_decl.init;
+            if (i >= na && param->param.default_value) {
+                Node *def = param->param.default_value;
                 if (def->kind == ND_TYPE_TRAIT) {
                     Type *a0 = subst_type(def->type_trait.arg0, &tmp_map, arena);
                     Type *a1 = subst_type(def->type_trait.arg1, &tmp_map, arena);

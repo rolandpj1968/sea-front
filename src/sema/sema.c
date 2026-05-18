@@ -2320,13 +2320,11 @@ static void canonicalize_type(Type *ty, TmplIdx *idx, Arena *arena) {
     int nargs   = tid->template_id.nargs;
     if (nargs >= nparams) return;
     /* Verify trailing params have type-param defaults — bail if any
-     * don't. For NTTPs (param.ty != NULL) the default_type slot
-     * aliases var_decl.init in the Node union and holds a Node*, not
-     * a Type — so we can't substitute it here. Leave the template-id
-     * unexpanded; instantiate.c's NTTP-default branch handles it. */
+     * don't. NTTP defaults (param.default_value) are evaluated by
+     * the instantiation pass, not here. */
     for (int i = nargs; i < nparams; i++) {
         Node *p = tmpl->template_decl.params[i];
-        if (!p || p->param.ty != NULL || !p->param.default_type) return;
+        if (!p || !p->param.default_type) return;
     }
     /* Build a SubstMap from the explicit args so 'A::default_layout'-
      * style defaults can resolve against earlier bindings. */

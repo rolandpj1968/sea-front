@@ -2621,15 +2621,15 @@ static Node *parse_template_parameter(Parser *p) {
      * [temp.param] permits NTTPs to carry defaults; §17.7.1/8
      * [temp.inst] requires substitution at the instantiation point,
      * using the SubstMap built from the explicit args specified so
-     * far. Stash the parsed expression on the ND_VAR_DECL so the
-     * template-instantiate pass can substitute + fold it when this
-     * NTTP slot is unfilled by the template-id. The ND_VAR_DECL
-     * shape is what non-type template parameters carry here (vs.
-     * ND_PARAM for type parameters); reusing the var_decl.init
-     * slot — the source-level shape ('= expr') matches. */
+     * far. Stash on param.default_value — a dedicated slot that does
+     * NOT alias param.default_type (used for type-param defaults), so
+     * the four read sites (parse_template_id default expansion,
+     * sema canonicalize_type, instantiate.c's two binding loops) can
+     * dispatch on which field is set without inferring kind-of-param
+     * from param.ty being NULL. */
     if (parser_consume(p, TK_ASSIGN)) {
         Node *def = parse_template_value_default(p);
-        param->var_decl.init = def;
+        param->param.default_value = def;
     }
 
     return param;
@@ -2967,12 +2967,12 @@ Node *parse_template_id(Parser *p, Token *name) {
                 (Node **)args.data, args.len);
             for (int i = args.len; i < np; i++) {
                 Node *tp = primary->template_decl.params[i];
-                /* Only fill type-param defaults here (param.ty == NULL).
-                 * For NTTPs the default_type slot aliases var_decl.init
-                 * in the Node union and holds a Node*, not a Type — the
-                 * instantiation pass evaluates the NTTP default at the
-                 * instantiation point (N4659 §17.7.1/8 [temp.inst]). */
-                if (!tp || tp->param.ty != NULL || !tp->param.default_type) break;
+                /* Only fill type-param defaults here. NTTP defaults
+                 * live in param.default_value and are evaluated by
+                 * the instantiation pass (N4659 §17.7.1/8 [temp.inst])
+                 * — we have no SubstMap-based constant evaluator at
+                 * parse time. */
+                if (!tp || !tp->param.default_type) break;
                 Type *dt = subst_type(tp->param.default_type, &map, p->arena);
                 Node *vd = new_var_decl_node(p, dt, /*name=*/NULL, tok);
                 vec_push(&args, vd);
