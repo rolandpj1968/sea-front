@@ -4207,6 +4207,32 @@ static void emit_expr(Node *n) {
             if (probe_ty &&
                 (probe_ty->kind == TY_STRUCT ||
                  probe_ty->kind == TY_UNION)) {
+                /* Classes with virtual methods or a default ctor need
+                 * the ctor body to run (vptr setup happens there). A
+                 * bare '(struct T){0}' would leave the vptr NULL and
+                 * any virtual call would segfault. Emit a stmt-expr
+                 * that constructs into a temp and yields the value.
+                 * GNU extension (cproc-side goal accepts the cost for
+                 * this corner). N4659 §11.6.1/8 [dcl.init]
+                 * (value-initialization). Pattern: g++.dg/init/value1.C
+                 * 'A a = A();' with 'virtual void f();' on A. */
+                /* Restricted to polymorphic classes: a default ctor
+                 * with no virtual-table setup is captured well enough
+                 * by '{0}' (which zero-inits the same fields), and
+                 * the stmt-expr form would otherwise break static-
+                 * storage initializers that the C compiler folds (the
+                 * stmt-expr isn't a constant expression). For a
+                 * polymorphic class the bare '{0}' leaves the vptr
+                 * NULL and any virtual dispatch through the value
+                 * segfaults. */
+                if (probe_ty->has_virtual_methods) {
+                    fputs("({ ", stdout);
+                    emit_type(probe_ty);
+                    fputs(" __sf_val_t = {0}; ", stdout);
+                    mangle_class_ctor(probe_ty, NULL, 0);
+                    fputs("(&__sf_val_t); __sf_val_t; })", stdout);
+                    return;
+                }
                 fputc('(', stdout);
                 emit_type(probe_ty);
                 fputs("){0}", stdout);
@@ -7007,8 +7033,22 @@ static void emit_var_decl_inner(Node *n) {
                 }
             }
             if (is_func_cast) {
-                fputs("{0}", stdout);
-                return;
+                /* Classes with virtual methods or a default ctor need
+                 * the ctor body to run — fall through to emit_expr,
+                 * which uses the stmt-expr lowering for value-init.
+                 * Without this, the bare '{0}' init leaves the vptr
+                 * NULL and any virtual call through the var segfaults.
+                 * Pattern: g++.dg/init/value1.C 'A a = A();'. */
+                if (ty->has_virtual_methods) {
+                    /* fall through to emit_init_with_target below;
+                     * the expression-context path emits a stmt-expr
+                     * that runs the ctor (vptr setup). Non-polymorphic
+                     * classes stay on the '{0}' shortcut so static-
+                     * storage initializers remain constant. */
+                } else {
+                    fputs("{0}", stdout);
+                    return;
+                }
             }
         }
         /* If the variable is a struct value but the init expression
@@ -7705,9 +7745,31 @@ static void emit_stmt(Node *n) {
                 bool op_is_class = op_ty &&
                     (op_ty->kind == TY_STRUCT || op_ty->kind == TY_UNION);
                 if (op_is_class) {
-                    fputs("__SF_THROW_CLASS(&(", stdout);
-                    emit_expr(thr->throw_.operand);
-                    fprintf(stdout, "), 0, %s);\n", lbl);
+                    /* If the operand is a polymorphic-class
+                     * value-init that emits as a stmt-expr (not an
+                     * lvalue), '&(stmt-expr)' is invalid. Rewrite as
+                     * a stmt-expr that yields the address of the
+                     * named temp. Pattern: g++.dg/init/new36.C
+                     * 'throw E();' with virtual ~E() on E. */
+                    bool op_is_polymorphic = op_ty &&
+                        op_ty->has_virtual_methods;
+                    Node *op = thr->throw_.operand;
+                    bool is_func_cast_zero =
+                        op && op->kind == ND_CALL && op->call.nargs == 0 &&
+                        op->call.callee &&
+                        op->call.callee->kind == ND_IDENT;
+                    if (op_is_polymorphic && is_func_cast_zero) {
+                        fputs("__SF_THROW_CLASS(({ ", stdout);
+                        emit_type(op_ty);
+                        fputs(" __sf_thr = {0}; ", stdout);
+                        mangle_class_ctor(op_ty, NULL, 0);
+                        fputs("(&__sf_thr); &__sf_thr; })", stdout);
+                        fprintf(stdout, ", 0, %s);\n", lbl);
+                    } else {
+                        fputs("__SF_THROW_CLASS(&(", stdout);
+                        emit_expr(thr->throw_.operand);
+                        fprintf(stdout, "), 0, %s);\n", lbl);
+                    }
                 } else {
                     fputs("__SF_THROW_PRIM(", stdout);
                     emit_expr(thr->throw_.operand);
