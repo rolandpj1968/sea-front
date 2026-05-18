@@ -404,6 +404,9 @@ DeclSpec parse_type_specifiers(Parser *p) {
              * We parse each base-specifier as a type-name and remember
              * the resolved class_region (if any). The bases will be
              * attached to the class scope after region_push below. */
+            #ifdef MAX_BASES
+            #  error "MAX_BASES macro already defined — pick a different local name to avoid clashing"
+            #endif
             #define MAX_BASES 16
             DeclarativeRegion *base_regions[MAX_BASES];
             Type *base_types[MAX_BASES];

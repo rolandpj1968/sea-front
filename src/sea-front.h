@@ -254,6 +254,20 @@ static inline bool token_equals_str(struct Token *t,
     return t->len == slen && memcmp(t->loc, s, slen) == 0;
 }
 
+/* TOKEQ — compare a Token* against a string literal with the
+ * literal's length folded at compile time. Saves writing the
+ * magic-number length out at every call site:
+ *     TOKEQ(tok, "__is_class")
+ * is equivalent to
+ *     token_equals_str(tok, "__is_class", 10)
+ * The macro evaluates 'tok' twice — pass a side-effect-free
+ * expression. 'lit' must be a string literal (so sizeof gives the
+ * literal's bytes, not a pointer's). 'tok' must be non-NULL — same
+ * contract as token_equals_str. */
+#define TOKEQ(tok, lit) \
+    ((tok)->len == (int)(sizeof(lit) - 1) && \
+     memcmp((tok)->loc, (lit), sizeof(lit) - 1) == 0)
+
 /* Contiguous array of tokens — the output of the lexer.
  * Replaces the linked-list approach: better cache locality,
  * index-based save/restore for tentative parsing.

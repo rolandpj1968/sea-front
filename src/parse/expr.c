@@ -327,48 +327,42 @@ static bool type_is_aggregate(Type *t) {
  * arguments, multiple type args beyond two) don't crash the parser. */
 static bool type_trait_name_known(Token *tok) {
     if (!tok) return false;
-    int nl = tok->len;
-    const char *n = tok->loc;
-    #define M(s) (nl == (int)sizeof(s) - 1 && memcmp(n, s, sizeof(s) - 1) == 0)
-    if (M("__is_class")) return true;
-    if (M("__is_union")) return true;
-    if (M("__is_enum"))  return true;
-    if (M("__is_pod"))   return true;
-    if (M("__is_polymorphic")) return true;
-    if (M("__is_empty")) return true;
-    if (M("__is_abstract")) return true;
-    if (M("__is_final")) return true;
-    if (M("__is_literal_type")) return true;
-    if (M("__is_base_of")) return true;
-    if (M("__is_convertible_to")) return true;
-    if (M("__has_virtual_destructor")) return true;
-    if (M("__has_trivial_destructor")) return true;
-    if (M("__has_trivial_constructor")) return true;
-    if (M("__has_trivial_copy")) return true;
-    if (M("__has_trivial_assign")) return true;
-    if (M("__has_nothrow_constructor")) return true;
-    if (M("__has_nothrow_copy")) return true;
-    if (M("__has_nothrow_assign")) return true;
+    if (TOKEQ(tok, "__is_class")) return true;
+    if (TOKEQ(tok, "__is_union")) return true;
+    if (TOKEQ(tok, "__is_enum"))  return true;
+    if (TOKEQ(tok, "__is_pod"))   return true;
+    if (TOKEQ(tok, "__is_polymorphic")) return true;
+    if (TOKEQ(tok, "__is_empty")) return true;
+    if (TOKEQ(tok, "__is_abstract")) return true;
+    if (TOKEQ(tok, "__is_final")) return true;
+    if (TOKEQ(tok, "__is_literal_type")) return true;
+    if (TOKEQ(tok, "__is_base_of")) return true;
+    if (TOKEQ(tok, "__is_convertible_to")) return true;
+    if (TOKEQ(tok, "__has_virtual_destructor")) return true;
+    if (TOKEQ(tok, "__has_trivial_destructor")) return true;
+    if (TOKEQ(tok, "__has_trivial_constructor")) return true;
+    if (TOKEQ(tok, "__has_trivial_copy")) return true;
+    if (TOKEQ(tok, "__has_trivial_assign")) return true;
+    if (TOKEQ(tok, "__has_nothrow_constructor")) return true;
+    if (TOKEQ(tok, "__has_nothrow_copy")) return true;
+    if (TOKEQ(tok, "__has_nothrow_assign")) return true;
     return false;
-    #undef M
 }
 
 static int eval_type_trait(Token *name, Type *a, Type *b) {
     if (!name) return 0;
-    const char *n = name->loc;
-    int nl = name->len;
-    #define MATCH(s) (nl == (int)sizeof(s) - 1 && memcmp(n, s, sizeof(s) - 1) == 0)
 
-    if (MATCH("__is_class")) return a && a->kind == TY_STRUCT;
-    if (MATCH("__is_union")) return a && a->kind == TY_UNION;
-    if (MATCH("__is_enum"))  return a && a->kind == TY_ENUM;
-    if (MATCH("__is_polymorphic")) return a && type_is_aggregate(a) && a->has_virtual_methods;
-    if (MATCH("__is_pod")) {
+    if (TOKEQ(name, "__is_class")) return a && a->kind == TY_STRUCT;
+    if (TOKEQ(name, "__is_union")) return a && a->kind == TY_UNION;
+    if (TOKEQ(name, "__is_enum"))  return a && a->kind == TY_ENUM;
+    if (TOKEQ(name, "__is_polymorphic"))
+        return a && type_is_aggregate(a) && a->has_virtual_methods;
+    if (TOKEQ(name, "__is_pod")) {
         if (!a) return 0;
         if (!type_is_aggregate(a)) return 1;  /* scalars are POD */
         return !a->has_dtor && !a->has_virtual_methods;
     }
-    if (MATCH("__is_empty")) {
+    if (TOKEQ(name, "__is_empty")) {
         if (!a || !type_is_aggregate(a) || !a->class_def) return 0;
         Node *cd = a->class_def;
         int n_data = 0;
@@ -381,20 +375,20 @@ static int eval_type_trait(Token *name, Type *a, Type *b) {
         }
         return n_data == 0 && !a->has_virtual_methods;
     }
-    if (MATCH("__is_abstract")) {
+    if (TOKEQ(name, "__is_abstract")) {
         /* Sea-front doesn't track pure-virtual; conservative false. */
         return 0;
     }
-    if (MATCH("__is_final")) {
+    if (TOKEQ(name, "__is_final")) {
         /* Sea-front doesn't track 'final'; conservative false. */
         return 0;
     }
-    if (MATCH("__is_literal_type")) {
+    if (TOKEQ(name, "__is_literal_type")) {
         if (!a) return 0;
         if (!type_is_aggregate(a)) return 1;  /* scalars are literal */
         return !a->has_dtor;
     }
-    if (MATCH("__has_virtual_destructor")) {
+    if (TOKEQ(name, "__has_virtual_destructor")) {
         if (!a || !type_is_aggregate(a) || !a->class_def) return 0;
         Node *cd = a->class_def;
         for (int i = 0; i < cd->class_def.nmembers; i++) {
@@ -408,14 +402,14 @@ static int eval_type_trait(Token *name, Type *a, Type *b) {
         }
         return 0;
     }
-    if (MATCH("__has_trivial_destructor")) {
+    if (TOKEQ(name, "__has_trivial_destructor")) {
         if (!a) return 0;
         if (!type_is_aggregate(a)) return 1;
         return !a->has_dtor;
     }
-    if (MATCH("__has_trivial_constructor") ||
-        MATCH("__has_trivial_copy") ||
-        MATCH("__has_trivial_assign")) {
+    if (TOKEQ(name, "__has_trivial_constructor") ||
+        TOKEQ(name, "__has_trivial_copy") ||
+        TOKEQ(name, "__has_trivial_assign")) {
         if (!a) return 0;
         if (!type_is_aggregate(a)) return 1;
         /* Conservative: only count as trivial when the class has no
@@ -436,9 +430,9 @@ static int eval_type_trait(Token *name, Type *a, Type *b) {
         }
         return !a->has_virtual_methods;
     }
-    if (MATCH("__has_nothrow_constructor") ||
-        MATCH("__has_nothrow_copy") ||
-        MATCH("__has_nothrow_assign")) {
+    if (TOKEQ(name, "__has_nothrow_constructor") ||
+        TOKEQ(name, "__has_nothrow_copy") ||
+        TOKEQ(name, "__has_nothrow_assign")) {
         /* Mirror trivial: trivial implies nothrow. Sea-front doesn't
          * track noexcept on individual ctors/operators yet. */
         if (!a) return 0;
@@ -458,7 +452,7 @@ static int eval_type_trait(Token *name, Type *a, Type *b) {
         }
         return 1;
     }
-    if (MATCH("__is_base_of")) {
+    if (TOKEQ(name, "__is_base_of")) {
         if (!a || !b) return 0;
         if (!type_is_aggregate(a) || !type_is_aggregate(b)) return 0;
         if (a->tag && b->tag && a->tag->len == b->tag->len &&
@@ -475,7 +469,7 @@ static int eval_type_trait(Token *name, Type *a, Type *b) {
         }
         return 0;
     }
-    if (MATCH("__is_convertible_to")) {
+    if (TOKEQ(name, "__is_convertible_to")) {
         /* Sea-front doesn't model conversion sequences. Conservative
          * false unless source and target match exactly by tag/kind. */
         if (a && b && a->kind == b->kind) {
@@ -488,7 +482,6 @@ static int eval_type_trait(Token *name, Type *a, Type *b) {
     }
     /* Unknown trait — preserve the previous opaque-bool behavior. */
     return 0;
-    #undef MATCH
 }
 
 static Type *deduce_lambda_return_expr(Parser *p, Node *e) {
