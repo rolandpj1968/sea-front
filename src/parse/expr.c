@@ -624,6 +624,15 @@ static Node *primary_expr(Parser *p) {
                 if (parser_at(p, TK_LBRACE)) {
                         Node *body = parse_compound_stmt(p);
                         if (!ret_ty) ret_ty = deduce_lambda_return(p, body);
+                        /* §8.1.5.4/4: if the compound-statement's body
+                         * is empty or every return-statement path falls
+                         * off without yielding a value, the return type
+                         * is 'void'. deduce_lambda_return returns NULL
+                         * in those cases — default to void here so
+                         * captureless lambdas like '[](){}' don't fall
+                         * through to the ND_NULLPTR skip-and-discard
+                         * path and lose their identity. */
+                        if (!ret_ty) ret_ty = new_type(p, TY_VOID);
                         if (ret_ty) {
                         /* Synthesize a unique name token. The arena
                          * holds the buffer; tokens reference it.
