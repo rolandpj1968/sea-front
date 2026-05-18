@@ -367,6 +367,16 @@ static bool type_trait_name_known(Token *tok) {
     if (TOKEQ(tok, "__has_nothrow_constructor")) return true;
     if (TOKEQ(tok, "__has_nothrow_copy")) return true;
     if (TOKEQ(tok, "__has_nothrow_assign")) return true;
+    /* gcc-14 / clang trait intrinsics — used by libstdc++ 13 headers.
+     * stl_pair.h gates a dangling-reference check on
+     * __reference_constructs_from_temporary; the converts variant
+     * mirrors it. We don't yet model reference-binding semantics —
+     * return conservative-false in eval_type_trait so the dangling
+     * check evaluates as 'no dangle' (int[1], well-formed). Real
+     * evaluation is a TODO once sea-front has overload-resolution-
+     * grade conversion reasoning. */
+    if (TOKEQ(tok, "__reference_constructs_from_temporary")) return true;
+    if (TOKEQ(tok, "__reference_converts_from_temporary")) return true;
     return false;
 }
 
