@@ -857,6 +857,88 @@ static void emit_source_comment(Token *tok) {
  * reads back. Documented; mini-block isolation per full-expression
  * is a possible future refinement. */
 
+/* Conservative side-effect predicate for the C++17 sequencing
+ * discipline (docs/sequencing.md). Returns true only for forms with
+ * well-understood side effects: calls, pre/post inc/dec, nested
+ * assignment, and any subexpression of those. Returns false for pure
+ * value computations (idents, literals, arithmetic, member access,
+ * subscript with pure index, etc.) so the seq-hoist path doesn't
+ * fire on trivial assignments. */
+static bool expr_has_side_effects(Node *n) {
+    if (!n) return false;
+    switch (n->kind) {
+    case ND_CALL:
+    case ND_ASSIGN:
+    case ND_THROW:
+        return true;
+    case ND_UNARY:
+    case ND_POSTFIX:
+        if (n->unary.op == TK_INC || n->unary.op == TK_DEC) return true;
+        return expr_has_side_effects(n->unary.operand);
+    case ND_BINARY:
+        return expr_has_side_effects(n->binary.lhs) ||
+               expr_has_side_effects(n->binary.rhs);
+    case ND_TERNARY:
+        return expr_has_side_effects(n->ternary.cond) ||
+               expr_has_side_effects(n->ternary.then_) ||
+               expr_has_side_effects(n->ternary.else_);
+    case ND_COMMA:
+        return expr_has_side_effects(n->comma.lhs) ||
+               expr_has_side_effects(n->comma.rhs);
+    case ND_MEMBER:
+        return expr_has_side_effects(n->member.obj);
+    case ND_SUBSCRIPT:
+        return expr_has_side_effects(n->subscript.base) ||
+               expr_has_side_effects(n->subscript.index);
+    case ND_CAST:
+        return expr_has_side_effects(n->cast.operand);
+    default:
+        return false;
+    }
+}
+
+/* Returns true if 'ty' is safely emittable as a C declaration prefix:
+ * 'T name = init;'. False for compound declarator types that need
+ * the name interleaved (function pointers, arrays). Used to gate the
+ * seq-hoist away from shapes its simple prefix-form emit can't render. */
+static bool type_simple_for_decl_prefix(Type *ty) {
+    if (!ty) return false;
+    if (ty->kind == TY_FUNC) return false;
+    if (ty->kind == TY_ARRAY) return false;
+    if (ty->kind == TY_PTR && ty->base &&
+        (ty->base->kind == TY_FUNC || ty->base->kind == TY_ARRAY))
+        return false;
+    return true;
+}
+
+/* Hoist a scalar RHS to a fresh local so its evaluation completes
+ * before the surrounding statement's LHS is computed. C++17 §8.18/1
+ * (RHS-before-LHS for '='); C leaves the order unspecified.
+ * Skips when the node is already hoisted, has a non-scalar type, or
+ * lacks a resolved type. See docs/sequencing.md. */
+static void hoist_seq_scalar(Node *rhs) {
+    if (!rhs || rhs->codegen_temp_name) return;
+    Type *ty = rhs->resolved_type;
+    if (!ty) return;
+    if (ty->kind == TY_STRUCT || ty->kind == TY_UNION) return;
+    if (ty->kind == TY_VOID) return;
+    if (!type_simple_for_decl_prefix(ty)) return;
+
+    int id = g_cf.next_label_id++;
+    static char name_pool[CLEANUP_LIVE_MAX][24];
+    static int name_idx = 0;
+    if (name_idx >= CLEANUP_LIVE_MAX) name_idx = 0;
+    char *name = name_pool[name_idx++];
+    snprintf(name, 24, "__SF_seq_%d", id);
+
+    emit_indent();
+    emit_type(ty);
+    fprintf(stdout, " %s = ", name);
+    emit_expr(rhs);
+    fputs(";\n", stdout);
+    rhs->codegen_temp_name = name;
+}
+
 static bool is_class_temp_call(Node *n) {
     if (!n || n->kind != ND_CALL || n->codegen_temp_name) return false;
     /* Self-class value-construction inside the same class body —
@@ -1168,6 +1250,23 @@ static void hoist_temps_in_expr(Node *n, bool in_shortcircuit) {
          * illegal C. Force-hoist same as the ND_MEMBER case below.
          * Pattern: gcc 4.8 cgraph.c cgraph_add_thunk
          *   tree_to_double_int(virtual_offset) == double_int::from_shwi(...) */
+        /* C++17 sequencing: ND_ASSIGN is RHS-before-LHS (N4659 §8.18/1),
+         * but C leaves the order unspecified. Hoist RHS into a fresh
+         * local so RHS is sequenced first by statement order, whenever:
+         *   - RHS has side effects, AND
+         *   - LHS is not a bare-ident write ('x = ...') —
+         *     i.e. LHS performs any non-trivial value computation
+         *     (subscript, member, deref, ternary, etc.) that could
+         *     read memory the RHS's side effects might disturb.
+         * Scalar RHS only — class RHS goes through the existing struct-
+         * temp / by-ref-arg paths. See docs/sequencing.md. */
+        if (n->kind == ND_ASSIGN && !in_shortcircuit &&
+            n->binary.lhs && n->binary.rhs &&
+            !n->binary.rhs->codegen_temp_name &&
+            n->binary.lhs->kind != ND_IDENT &&
+            expr_has_side_effects(n->binary.rhs)) {
+            hoist_seq_scalar(n->binary.rhs);
+        }
         if (n->binary.lhs && !n->binary.lhs->codegen_temp_name) {
             Node *lhs = n->binary.lhs;
             NodeKind lk = lhs->kind;
