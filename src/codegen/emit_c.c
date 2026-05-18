@@ -10950,6 +10950,22 @@ methods_phase:;
             if (!m->var_decl.name) continue;
             if (m->var_decl.ty->kind == TY_STRUCT ||
                 m->var_decl.ty->kind == TY_UNION) {
+                /* NSDMI for class-typed member: 'A a = f();' or
+                 * 'A a{args};' inside the class body. N4659 §12.6.2/9
+                 * [class.base.init] runs the NSDMI in lieu of the
+                 * default ctor when no member-init list mention names
+                 * this member. Sea-front previously called the default
+                 * ctor and dropped the initializer; flip the order so
+                 * the NSDMI expression's value goes into the member.
+                 * Pattern: g++.dg/cpp0x/nsdmi4.C 'A a = f();'. */
+                if (m->var_decl.init) {
+                    emit_indent();
+                    fprintf(stdout, "this->%.*s = ",
+                            m->var_decl.name->len, m->var_decl.name->loc);
+                    emit_expr(m->var_decl.init);
+                    fputs(";\n", stdout);
+                    continue;
+                }
                 if (!m->var_decl.ty->has_default_ctor) continue;
                 emit_indent();
                 mangle_class_ctor(m->var_decl.ty, NULL, 0);
