@@ -9089,7 +9089,24 @@ static void emit_ctor_member_inits(Node *func) {
                     if (na != 0)
                         die_no_overload(base, NULL, na,
                                          "base mem-init ctor call");
-                    /* na == 0: fall through to default-ctor path below. */
+                    /* na == 0 and no resolvable default ctor: this is
+                     * value-initialization of the base — N4659
+                     * §11.6/8.3 [dcl.init], which for a POD-shaped
+                     * subobject zero-initializes the bytes. Emit a
+                     * memset so the base members start at 0 instead of
+                     * indeterminate stack contents (the bug behind
+                     * g++.dg/init/value7.C). */
+                    if (!base->has_default_ctor) {
+                        emit_indent();
+                        fputs("__builtin_memset(&this->", stdout);
+                        if (b == 0) fputs("__sf_base", stdout);
+                        else        fprintf(stdout, "__sf_base%d", b);
+                        fputs(", 0, sizeof(struct ", stdout);
+                        mangle_class_tag(base);
+                        fputs("));\n", stdout);
+                        continue;
+                    }
+                    /* Otherwise fall through to default-ctor path. */
                 } else {
                     /* Default-arg injection — N4659 §11.3.6
                      * [dcl.fct.default]: when fewer user args than the
