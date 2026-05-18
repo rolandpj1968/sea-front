@@ -2031,14 +2031,29 @@ static Node *unary_expr(Parser *p) {
          * (e.g. a class member type used before its point of declaration
          * in the same class body), accept it as an opaque type. */
         Type *ty = NULL;
+        /* Bare-name path: when the next token is a plain identifier
+         * (not a built-in type-specifier, not a template-id, not a
+         * scoped name), consume it as a bare class-type name. This
+         * avoids parse_type_name's greedy function-declarator
+         * consumption that would treat 'new B()' as a function-type
+         * 'B()' rather than a class 'B' with an empty new-initializer.
+         * N4659 §8.3.4/2 [expr.new]: the type-id has restricted
+         * declarator shape. Pattern: 'new B()' in g++.dg/cpp0x/
+         * defaulted22.C lowered to a function-pointer cast and dropped
+         * the ctor call. */
         if (parser_peek(p)->kind == TK_IDENT &&
-            !parser_at_type_specifier(p) &&
             parser_peek_ahead(p, 1)->kind != TK_LT &&
-            parser_peek_ahead(p, 1)->kind != TK_SCOPE &&
-            lookup_unqualified(p, parser_peek(p)->loc, parser_peek(p)->len) == NULL) {
+            parser_peek_ahead(p, 1)->kind != TK_SCOPE) {
             Token *name_tok = parser_advance(p);
-            ty = new_type(p, TY_STRUCT);
-            ty->tag = name_tok;
+            Declaration *d = lookup_unqualified(p, name_tok->loc, name_tok->len);
+            /* Bare-name new uses the looked-up type if available so
+             * downstream class_region lookups (ctor resolution, base
+             * walks) match the actual class type, not a fresh stub. */
+            if (d && d->type) ty = d->type;
+            else {
+                ty = new_type(p, TY_STRUCT);
+                ty->tag = name_tok;
+            }
             /* Optional ptr/ref operators */
             while (parser_consume(p, TK_STAR) || parser_consume(p, TK_AMP) ||
                    parser_consume(p, TK_LAND))

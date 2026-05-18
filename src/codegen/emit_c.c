@@ -10183,7 +10183,9 @@ static void emit_class_def(Node *n) {
              * Emitting a non-static decl here would collide with the
              * later __SF_INLINE synthesized body.
              * N4659 §10.1.6.4 [dcl.fct.def.default] / §10.1.6 [dcl.fct.def.delete]. */
-            if (m->var_decl.is_constructor && m->var_decl.ty->nparams == 0) {
+            if ((m->var_decl.is_constructor &&
+                 m->var_decl.ty->nparams == 0) ||
+                m->var_decl.is_destructor) {
                 Node *init = m->var_decl.init;
                 if (init && init->kind == ND_NULLPTR && init->tok &&
                     (init->tok->kind == TK_KW_DEFAULT ||
@@ -10347,6 +10349,19 @@ methods_phase:;
             }
             if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
                 m->var_decl.ty->kind == TY_FUNC && m->var_decl.is_destructor) {
+                /* '~A() = default;' (or '~A() = delete;') has no body,
+                 * so the dtor wrapper must not call a dtor_body — the
+                 * forward decl that would otherwise be emitted resolves
+                 * to no definition at link time. Detect the marker init
+                 * (ND_NULLPTR with TK_KW_DEFAULT / TK_KW_DELETE) and
+                 * leave the wrapper to chain straight into member/base
+                 * dtors. N4659 §10.1.6.4 [dcl.fct.def.default].
+                 * Pattern: g++.dg/cpp0x/defaulted22.C. */
+                Node *init = m->var_decl.init;
+                if (init && init->kind == ND_NULLPTR && init->tok &&
+                    (init->tok->kind == TK_KW_DEFAULT ||
+                     init->tok->kind == TK_KW_DELETE))
+                    continue;
                 user_dtor_m_out_of_class = true;
                 break;
             }
