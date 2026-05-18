@@ -2414,15 +2414,16 @@ Node *parse_top_level_decl(Parser *p) {
  * nested > is the closing delimiter rather than the greater-than
  * operator; >> splits into two >'s.
  *
- * We bump template_depth so the binary-operator parser stops at
- * the top-level >, then call parse_assign_expr. The result is
- * currently discarded — sema doesn't yet substitute defaults at
- * instantiation sites.
+ * Returns the parsed expression so the caller can stash it on the
+ * ND_PARAM for later substitution at the instantiation point
+ * (N4659 §17.7.1/8 [temp.inst] — default arg substituted when the
+ * template-id is used).
  */
-static void parse_template_value_default(Parser *p) {
+static Node *parse_template_value_default(Parser *p) {
     p->template_depth++;
-    (void)parse_assign_expr(p);
+    Node *def = parse_assign_expr(p);
     p->template_depth--;
+    return def;
 }
 
 /*
@@ -2616,9 +2617,20 @@ static Node *parse_template_parameter(Parser *p) {
         region_declare(p, param->var_decl.name->loc,
                       param->var_decl.name->len, ENTITY_VARIABLE, ty);
 
-    /* Optional default value: = constant-expression */
-    if (parser_consume(p, TK_ASSIGN))
-        parse_template_value_default(p);
+    /* Optional default value: = constant-expression. N4659 §17.1/8
+     * [temp.param] permits NTTPs to carry defaults; §17.7.1/8
+     * [temp.inst] requires substitution at the instantiation point,
+     * using the SubstMap built from the explicit args specified so
+     * far. Stash the parsed expression on the ND_VAR_DECL so the
+     * template-instantiate pass can substitute + fold it when this
+     * NTTP slot is unfilled by the template-id. The ND_VAR_DECL
+     * shape is what non-type template parameters carry here (vs.
+     * ND_PARAM for type parameters); reusing the var_decl.init
+     * slot — the source-level shape ('= expr') matches. */
+    if (parser_consume(p, TK_ASSIGN)) {
+        Node *def = parse_template_value_default(p);
+        param->var_decl.init = def;
+    }
 
     return param;
 }
@@ -2955,7 +2967,12 @@ Node *parse_template_id(Parser *p, Token *name) {
                 (Node **)args.data, args.len);
             for (int i = args.len; i < np; i++) {
                 Node *tp = primary->template_decl.params[i];
-                if (!tp || !tp->param.default_type) break;
+                /* Only fill type-param defaults here (param.ty == NULL).
+                 * For NTTPs the default_type slot aliases var_decl.init
+                 * in the Node union and holds a Node*, not a Type — the
+                 * instantiation pass evaluates the NTTP default at the
+                 * instantiation point (N4659 §17.7.1/8 [temp.inst]). */
+                if (!tp || tp->param.ty != NULL || !tp->param.default_type) break;
                 Type *dt = subst_type(tp->param.default_type, &map, p->arena);
                 Node *vd = new_var_decl_node(p, dt, /*name=*/NULL, tok);
                 vec_push(&args, vd);

@@ -2043,11 +2043,27 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
             Type *arg_ty = NULL;
             if (i < nargs)
                 arg_ty = type_arg_from_node(template_id->template_id.args[i]);
-            /* Fall back to default if no explicit argument */
-            if (!arg_ty && param->param.default_type)
+            /* Fall back to default if no explicit argument. Only consult
+             * param.default_type for type-params (param.ty == NULL):
+             * the param.default_type slot aliases var_decl.init in the
+             * Node union, so for NTTPs (param.ty != NULL) this slot
+             * actually holds the default *expression*, not a Type — see
+             * N4659 §17.1/8 [temp.param]. Reading it as Type* would
+             * mis-cast a Node*. */
+            if (!arg_ty && param->param.ty == NULL && param->param.default_type)
                 arg_ty = subst_type(param->param.default_type, &map, arena);
             if (arg_ty) {
                 subst_map_add(&map, pname, arg_ty);
+                /* For NTTPs whose arg is a literal (TY_NTTP_VALUE),
+                 * also bind the param→token mapping so clone.c's
+                 * ND_IDENT handler can substitute body references to
+                 * the param into the corresponding literal node.
+                 * Without this, the body's 'v' (in 'static const int
+                 * trait = v;') stays as ND_IDENT after clone and emits
+                 * as the unresolved identifier 'v'. */
+                if (param->param.ty != NULL && arg_ty->kind == TY_NTTP_VALUE &&
+                    arg_ty->tag)
+                    subst_map_add_tt(&map, pname, arg_ty->tag);
                 continue;
             }
             /* Non-type template parameter — N4659 §17.1/4 [temp.param].
@@ -2093,6 +2109,43 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
                     default:
                         break;
                     }
+                }
+                if (bound_tok)
+                    subst_map_add_tt(&map, pname, bound_tok);
+            } else if (param->var_decl.init) {
+                /* NTTP default substitution — N4659 §17.7.1/8
+                 * [temp.inst]: a template parameter default is
+                 * substituted with the SubstMap built from the
+                 * explicit args specified so far and evaluated at
+                 * the template-id's instantiation point.
+                 *
+                 * Sea-front handles the type-trait shape directly:
+                 * substitute each arg type via the current SubstMap,
+                 * call eval_type_trait, synthesize a Token carrying
+                 * the literal text "0" or "1" for the NTTP binding.
+                 * Other expression shapes (literal, arithmetic, ...)
+                 * fall back to binding the original default expr's
+                 * token text — works for literal defaults like
+                 * 'bool b = true' but not for more complex shapes.
+                 * TODO(seafront#nttp-default-eval): full constant-
+                 * evaluator for arbitrary NTTP defaults. */
+                Node *def = param->var_decl.init;
+                Token *bound_tok = NULL;
+                if (def->kind == ND_TYPE_TRAIT) {
+                    Type *a0 = subst_type(def->type_trait.arg0, &map, arena);
+                    Type *a1 = subst_type(def->type_trait.arg1, &map, arena);
+                    int result = eval_type_trait(def->type_trait.name, a0, a1);
+                    Token *t = arena_alloc(arena, sizeof(*t));
+                    memset(t, 0, sizeof(*t));
+                    t->kind = TK_NUM;
+                    t->loc  = result ? "1" : "0";
+                    t->len  = 1;
+                    bound_tok = t;
+                } else if (def->kind == ND_NUM || def->kind == ND_FNUM ||
+                           def->kind == ND_BOOL_LIT || def->kind == ND_NULLPTR) {
+                    bound_tok = def->tok;
+                } else if (def->kind == ND_IDENT) {
+                    bound_tok = def->ident.name;
                 }
                 if (bound_tok)
                     subst_map_add_tt(&map, pname, bound_tok);
@@ -2848,16 +2901,88 @@ void template_instantiate(Node *tu, Arena *arena) {
         int na = req->template_id->template_id.nargs;
         SubstMap tmp_map = subst_map_new_with_registry(arena,
             np > 0 ? np : 1, &reg);
+        /* Track NTTP-default arg extensions: for each param i in
+         * [na, np), nttp_extra_args[i - na] is the synthesized arg
+         * node (ND_NUM) when the param is an NTTP with an evaluable
+         * default — N4659 §17.7.1/8 [temp.inst]. NULL otherwise.
+         * After the loop we splice these into req->template_id.args
+         * so build_inst_template_args, the mangler, and dedup all
+         * see the full arg list. */
+        Node **nttp_extra_args = NULL;
+        int nttp_extra_upto = na;  /* last index where extension is contiguous */
+        if (np > na) {
+            nttp_extra_args = arena_alloc(arena, (np - na) * sizeof(Node *));
+            memset(nttp_extra_args, 0, (np - na) * sizeof(Node *));
+        }
         for (int i = 0; i < np; i++) {
             Node *param = tmpl->template_decl.params[i];
             if (!param || !param->param.name) continue;
             Type *arg_ty = (i < na) ?
                 type_arg_from_node(req->template_id->template_id.args[i]) :
                 NULL;
-            if (!arg_ty && param->param.default_type)
+            /* Only consult param.default_type for type-params
+             * (param.ty == NULL); for NTTPs that slot aliases
+             * var_decl.init in the Node union and holds the default
+             * expression, not a Type. See instantiate_one's primary
+             * binding loop for the same guard. */
+            if (!arg_ty && param->param.ty == NULL && param->param.default_type)
                 arg_ty = subst_type(param->param.default_type, &tmp_map, arena);
-            if (arg_ty)
+            if (arg_ty) {
                 subst_map_add(&tmp_map, param->param.name, arg_ty);
+                continue;
+            }
+            /* NTTP default evaluation (only when no explicit arg).
+             * Currently handles the type-trait shape; other shapes
+             * fall through and remain unbound (mangled as "unknown"
+             * — TODO(seafront#nttp-default-eval)). */
+            if (i >= na && param->param.ty != NULL && param->var_decl.init) {
+                Node *def = param->var_decl.init;
+                if (def->kind == ND_TYPE_TRAIT) {
+                    Type *a0 = subst_type(def->type_trait.arg0, &tmp_map, arena);
+                    Type *a1 = subst_type(def->type_trait.arg1, &tmp_map, arena);
+                    int result = eval_type_trait(def->type_trait.name, a0, a1);
+                    Token *t = arena_alloc(arena, sizeof(*t));
+                    memset(t, 0, sizeof(*t));
+                    t->kind = TK_NUM;
+                    t->loc  = result ? "1" : "0";
+                    t->len  = 1;
+                    /* Wrap in ND_VAR_DECL carrying a TY_NTTP_VALUE so
+                     * every site that extracts the Type via the
+                     * 'a->kind == ND_VAR_DECL ? a->var_decl.ty : NULL'
+                     * shape (stub builders, mangler, dedup) sees it.
+                     * The TY_NTTP_VALUE.tag points at the literal token
+                     * so the mangler emits 'Li1E' / 'Li0E'. */
+                    Type *nttp_ty = arena_alloc(arena, sizeof(Type));
+                    memset(nttp_ty, 0, sizeof(Type));
+                    nttp_ty->kind = TY_NTTP_VALUE;
+                    nttp_ty->tag  = t;
+                    if (param->param.ty)
+                        nttp_ty->nttp_decl_type = param->param.ty;
+                    Node *vd = arena_alloc(arena, sizeof(Node));
+                    memset(vd, 0, sizeof(Node));
+                    vd->kind = ND_VAR_DECL;
+                    vd->var_decl.ty = nttp_ty;
+                    if (i == nttp_extra_upto) {
+                        nttp_extra_args[i - na] = vd;
+                        nttp_extra_upto = i + 1;
+                    }
+                }
+            }
+        }
+        /* Splice NTTP-default extensions into the template-id's args
+         * (in place; same Node as the in-tree reference so the
+         * dedup-mangled-name rewrite at the end of this branch reaches
+         * every call site). */
+        if (nttp_extra_upto > na) {
+            int new_n = nttp_extra_upto;
+            Node **new_args = arena_alloc(arena, new_n * sizeof(Node *));
+            for (int i = 0; i < na; i++)
+                new_args[i] = req->template_id->template_id.args[i];
+            for (int i = na; i < new_n; i++)
+                new_args[i] = nttp_extra_args[i - na];
+            req->template_id->template_id.args = new_args;
+            req->template_id->template_id.nargs = new_n;
+            na = new_n;
         }
         /* Deduce remaining function-template params from call args.
          * Pattern: 'template<T, U> bool is_a(U*)' invoked as

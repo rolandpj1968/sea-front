@@ -6520,10 +6520,33 @@ static void emit_expr(Node *n) {
                     stub.n_template_args = ltid->template_id.nargs;
                     Type **buf = malloc(stub.n_template_args * sizeof(Type *));
                     if (!buf) abort();
+                    /* Backing storage for synthesized TY_NTTP_VALUE
+                     * Types when an arg is a literal expression
+                     * (ND_NUM etc.) rather than a wrapped type. */
+                    Type *nttp_buf = calloc(stub.n_template_args, sizeof(Type));
+                    if (!nttp_buf) abort();
                     for (int i = 0; i < stub.n_template_args; i++) {
                         Node *a = ltid->template_id.args[i];
-                        buf[i] = (a && a->kind == ND_VAR_DECL)
-                                   ? a->var_decl.ty : NULL;
+                        buf[i] = NULL;
+                        if (!a) continue;
+                        if (a->kind == ND_VAR_DECL) {
+                            buf[i] = a->var_decl.ty;
+                            continue;
+                        }
+                        Token *lit_tok = NULL;
+                        switch (a->kind) {
+                        case ND_NUM: case ND_FNUM:
+                        case ND_BOOL_LIT: case ND_NULLPTR:
+                            lit_tok = a->tok; break;
+                        case ND_CHAR: lit_tok = a->chr.tok; break;
+                        case ND_STR:  lit_tok = a->str.tok; break;
+                        default: break;
+                        }
+                        if (lit_tok) {
+                            nttp_buf[i].kind = TY_NTTP_VALUE;
+                            nttp_buf[i].tag  = lit_tok;
+                            buf[i] = &nttp_buf[i];
+                        }
                     }
                     stub.template_args = buf;
                 }
