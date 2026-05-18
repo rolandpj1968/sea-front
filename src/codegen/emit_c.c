@@ -9817,7 +9817,7 @@ static void emit_class_def(Node *n) {
                  * wrapper can call it. */
                 fputs("__SF_INLINE void ", stdout);
                 mangle_class_dtor_body(class_type);
-                fputs("(struct ", stdout);
+                fputs(class_type->kind == TY_UNION ? "(union " : "(struct ", stdout);
                 mangle_class_tag(class_type);
                 fputs(" *this);\n", stdout);
                 continue;
@@ -9904,7 +9904,7 @@ static void emit_class_def(Node *n) {
     if (class_type && class_type->has_dtor) {
         fputs("__SF_INLINE void ", stdout);
         mangle_class_dtor(class_type);
-        fputs("(struct ", stdout);
+        fputs(class_type->kind == TY_UNION ? "(union " : "(struct ", stdout);
         mangle_class_tag(class_type);
         fputs(" *this);\n", stdout);
     }
@@ -10461,7 +10461,7 @@ methods_phase:;
     if (class_type && class_type->has_dtor) {
         fputs("__SF_INLINE void ", stdout);
         mangle_class_dtor(class_type);
-        fputs("(struct ", stdout);
+        fputs(class_type->kind == TY_UNION ? "(union " : "(struct ", stdout);
         mangle_class_tag(class_type);
         fputs(" *this) {\n", stdout);
         g_indent++;
@@ -10540,16 +10540,18 @@ methods_phase:;
          (class_type && class_type->has_default_ctor && !any_user_ctor)) &&
         !user_default_ctor_with_body;
     if (class_type && needs_default_ctor_synth) {
+        const char *kw_open =
+            class_type->kind == TY_UNION ? "(union " : "(struct ";
         /* Forward decl + body for the synthesized ctor (0-param). */
         fputs("__SF_INLINE void ", stdout);
         mangle_class_ctor(class_type, NULL, 0);
-        fputs("(struct ", stdout);
+        fputs(kw_open, stdout);
         mangle_class_tag(class_type);
         fputs(" *this);\n", stdout);
 
         fputs("__SF_INLINE void ", stdout);
         mangle_class_ctor(class_type, NULL, 0);
-        fputs("(struct ", stdout);
+        fputs(kw_open, stdout);
         mangle_class_tag(class_type);
         fputs(" *this) {\n", stdout);
         g_indent++;
