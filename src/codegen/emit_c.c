@@ -5839,6 +5839,56 @@ static void emit_expr(Node *n) {
                     np = 0;
                     pty = NULL;
                 }
+                /* Implicit copy ctor: 'new T(arg)' where no user ctor
+                 * matches but 'arg' is convertible to 'const T&'. The
+                 * implicit copy ctor (N4659 §15.8.1 [class.copy.ctor])
+                 * does memberwise copy, which in C lowers to a struct
+                 * assignment. Emit '*__tmp = arg;' instead of a ctor
+                 * call. Without this, sea-front falls through to a
+                 * mismatched-arity ctor call ('default ctor' + the
+                 * arg) and gcc rejects with 'too many arguments'.
+                 * Pattern: g++.dg/opt/pr15054.C 'new element(x)'. */
+                if ((np < 0 || np != na) && na == 1) {
+                    Node *arg0 = n->cast.new_ctor_args[0];
+                    Type *art = arg0 ? arg0->resolved_type : NULL;
+                    /* Decide whether to deref the arg to get the
+                     * underlying class value. Reference-typed args
+                     * lower to C pointers; we want '*p' to get the
+                     * struct value. Three shapes we treat as "is a
+                     * pointer at the C level": TY_REF/RVALREF on the
+                     * resolved type, an ND_IDENT naming a ref param,
+                     * or a TY_PTR-to-class (the user passed an
+                     * already-deref'd pointer that needs a deref
+                     * here). */
+                    bool arg_is_ref = art &&
+                        (art->kind == TY_REF || art->kind == TY_RVALREF);
+                    bool arg_is_ref_param = arg0 &&
+                        arg0->kind == ND_IDENT && arg0->ident.name &&
+                        is_ref_param(arg0->ident.name);
+                    bool need_deref = arg_is_ref || arg_is_ref_param;
+                    fputs("({ ", stdout);
+                    emit_type(n->cast.ty);
+                    fputs(" __sf_new_tmp = (", stdout);
+                    emit_type(n->cast.ty);
+                    fputc(')', stdout);
+                    emit_expr(n->cast.operand);
+                    fputs("; *__sf_new_tmp = ", stdout);
+                    if (need_deref) {
+                        /* emit_arg_for_param would auto-deref ref-
+                         * params already; emit the bare name and let
+                         * the outer '*' do the work. */
+                        bool saved_supp = g_suppress_ref_deref;
+                        g_suppress_ref_deref = true;
+                        fputs("*(", stdout);
+                        emit_arg_for_param(arg0, NULL);
+                        fputc(')', stdout);
+                        g_suppress_ref_deref = saved_supp;
+                    } else {
+                        emit_arg_for_param(arg0, NULL);
+                    }
+                    fputs("; __sf_new_tmp; })", stdout);
+                    return;
+                }
                 if (np >= 0) {
                     fputs("({ ", stdout);
                     emit_type(n->cast.ty);
