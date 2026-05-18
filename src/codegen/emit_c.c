@@ -47,6 +47,7 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "emit_c.h"
 #include "mangle.h"
@@ -104,9 +105,12 @@ static Node *g_current_lambda_fn = NULL;
  * When the body uses a ref-param as a value, codegen must deref it.
  * cf_begin_function populates this table from the func's params;
  * is_ref_param checks it at ident-emission time. */
-#define REF_PARAM_CAP 32
-static Token *g_ref_params[REF_PARAM_CAP];
-static int    g_nref_params = 0;
+/* Table of the current function's reference-parameter names.
+ * Sized to the function's actual param count at cf_begin_function;
+ * any number of ref params is supported. */
+static Token **g_ref_params = NULL;
+static int     g_nref_params = 0;
+static int     g_ref_params_cap = 0;
 
 static bool is_ref_param(Token *name) {
     if (!name) return false;
@@ -212,14 +216,27 @@ typedef struct CleanupEntry {
     Node       *var_decl;       /* CL_VAR only */
 } CleanupEntry;
 
-#define CLEANUP_LIVE_MAX 64
-
 static struct {
     bool          func_has_cleanups;  /* function-wide flag, set by pre-scan */
     int           next_label_id;      /* fresh-id counter */
-    CleanupEntry  live[CLEANUP_LIVE_MAX];
+    CleanupEntry *live;               /* grows to fit deepest cleanup nesting */
     int           nlive;              /* number of live entries currently */
+    int           cap;                /* allocated capacity of live[] */
 } g_cf;
+
+/* Grow g_cf.live so g_cf.nlive can advance by 'need' more entries.
+ * Geometric growth keeps amortized push cost constant. The buffer
+ * stays alive across function emissions; pushes reset nlive to 0
+ * but don't shrink cap, so subsequent functions reuse the allocation. */
+static void cleanup_live_reserve(int need) {
+    if (g_cf.nlive + need <= g_cf.cap) return;
+    int ncap = g_cf.cap ? g_cf.cap * 2 : 16;
+    while (ncap < g_cf.nlive + need) ncap *= 2;
+    CleanupEntry *nlive = realloc(g_cf.live, ncap * sizeof(CleanupEntry));
+    if (!nlive) abort();
+    g_cf.live = nlive;
+    g_cf.cap  = ncap;
+}
 
 /* For RETURN: walk outward, skip CL_LOOP markers, find first CL_VAR.
  * Returns label_id, or -1 meaning "jump straight to __SF_epilogue". */
@@ -968,6 +985,20 @@ static bool type_simple_for_decl_prefix(Type *ty) {
  * (RHS-before-LHS for '='); C leaves the order unspecified.
  * Skips when the node is already hoisted, has a non-scalar type, or
  * lacks a resolved type. See docs/sequencing.md. */
+/* Allocate '__SF_<tag>_<id>' in malloc'd storage. Used for names
+ * borrowed by Node->codegen_temp_name; the borrow's lifetime is the
+ * rest of the emit, so a per-call malloc (one-shot process, never
+ * freed) is the right shape. Names must remain unique within the
+ * TU: reusing a slot would let one temp's name substitute for
+ * another's emit. */
+static char *make_codegen_temp_name(const char *tag, int id) {
+    enum { CAP = 32 };
+    char *name = malloc(CAP);
+    if (!name) abort();
+    snprintf(name, CAP, "__SF_%s_%d", tag, id);
+    return name;
+}
+
 static void hoist_seq_scalar(Node *rhs) {
     if (!rhs || rhs->codegen_temp_name) return;
     Type *ty = rhs->resolved_type;
@@ -977,11 +1008,7 @@ static void hoist_seq_scalar(Node *rhs) {
     if (!type_simple_for_decl_prefix(ty)) return;
 
     int id = g_cf.next_label_id++;
-    static char name_pool[CLEANUP_LIVE_MAX][24];
-    static int name_idx = 0;
-    if (name_idx >= CLEANUP_LIVE_MAX) name_idx = 0;
-    char *name = name_pool[name_idx++];
-    snprintf(name, 24, "__SF_seq_%d", id);
+    char *name = make_codegen_temp_name("seq", id);
 
     emit_indent();
     emit_type(ty);
@@ -1056,14 +1083,7 @@ static void emit_addrof_for_this(Node *n) {
 
 static void hoist_emit_decl(Node *call, bool in_shortcircuit) {
     int id = g_cf.next_label_id++;
-    /* The temp name lives in a small static buffer pool — one per
-     * temp, since multiple temps can be live in the same statement
-     * and codegen_temp_name is just a borrowed pointer. */
-    static char name_pool[CLEANUP_LIVE_MAX][24];
-    static int name_idx = 0;
-    if (name_idx >= CLEANUP_LIVE_MAX) name_idx = 0;  /* wrap */
-    char *name = name_pool[name_idx++];
-    snprintf(name, 24, "__SF_temp_%d", id);
+    char *name = make_codegen_temp_name("temp", id);
 
     /* ND_BINARY / ND_UNARY as the hoist target: operator overloads
      * on struct values. Their resolved_type is often NULL (sema's
@@ -1197,8 +1217,8 @@ hoist_done:
      * destructible types (no dtor to call) — the temp is still a
      * named local that the rest of the expression uses, but it
      * doesn't need cleanup tracking. */
-    if (call->resolved_type && call->resolved_type->has_dtor &&
-        g_cf.nlive < CLEANUP_LIVE_MAX) {
+    if (call->resolved_type && call->resolved_type->has_dtor) {
+        cleanup_live_reserve(1);
         g_cf.live[g_cf.nlive].kind = CL_VAR;
         g_cf.live[g_cf.nlive].label_id = id;
         g_cf.live[g_cf.nlive].cont_label_id = -1;
@@ -7388,8 +7408,9 @@ static void push_user_var_cleanup(Node *s) {
     if (!g_cf.func_has_cleanups || !s ||
         s->kind != ND_VAR_DECL || !s->var_decl.ty ||
         s->var_decl.ty->kind != TY_STRUCT || !s->var_decl.ty->has_dtor ||
-        !s->var_decl.name || g_cf.nlive >= CLEANUP_LIVE_MAX)
+        !s->var_decl.name)
         return;
+    cleanup_live_reserve(1);
     g_cf.live[g_cf.nlive].kind = CL_VAR;
     g_cf.live[g_cf.nlive].label_id = g_cf.next_label_id++;
     g_cf.live[g_cf.nlive].cont_label_id = -1;
@@ -7471,9 +7492,22 @@ typedef struct {
     int anon_id;
     Node *class_def_node;
 } AnonRewriteFrame;
-#define ANON_REWRITE_STACK_MAX 32
-static AnonRewriteFrame g_anon_rewrite_stack[ANON_REWRITE_STACK_MAX];
+/* Stack of active anonymous-union rewrite frames. Grows to fit the
+ * deepest nesting at runtime; any number of frames is supported. */
+static AnonRewriteFrame *g_anon_rewrite_stack = NULL;
 static int g_anon_rewrite_top = 0;
+static int g_anon_rewrite_cap = 0;
+
+static void anon_rewrite_reserve(int need) {
+    if (g_anon_rewrite_top + need <= g_anon_rewrite_cap) return;
+    int ncap = g_anon_rewrite_cap ? g_anon_rewrite_cap * 2 : 8;
+    while (ncap < g_anon_rewrite_top + need) ncap *= 2;
+    AnonRewriteFrame *n = realloc(g_anon_rewrite_stack,
+                                   ncap * sizeof(AnonRewriteFrame));
+    if (!n) abort();
+    g_anon_rewrite_stack = n;
+    g_anon_rewrite_cap = ncap;
+}
 
 /* If 'name' matches a member of any active anon-union frame, emit
  * the rewritten qualified form and return true; otherwise false. */
@@ -7527,10 +7561,10 @@ static void emit_block(Node *n) {
         if (s && s->kind == ND_CLASS_DEF && !s->class_def.tag &&
             s->class_def.ty &&
             (s->class_def.ty->kind == TY_STRUCT ||
-             s->class_def.ty->kind == TY_UNION) &&
-            g_anon_rewrite_top < ANON_REWRITE_STACK_MAX) {
+             s->class_def.ty->kind == TY_UNION)) {
             if (s->class_def.ty->anon_id == 0)
                 s->class_def.ty->anon_id = ++g_anon_counter;
+            anon_rewrite_reserve(1);
             g_anon_rewrite_stack[g_anon_rewrite_top].anon_id =
                 s->class_def.ty->anon_id;
             g_anon_rewrite_stack[g_anon_rewrite_top].class_def_node = s;
@@ -8188,13 +8222,12 @@ static void emit_stmt(Node *n) {
         if (body_wrap) {
             brk = g_cf.next_label_id++;
             cnt = g_cf.next_label_id++;
-            if (g_cf.nlive < CLEANUP_LIVE_MAX) {
-                g_cf.live[g_cf.nlive].kind = CL_LOOP;
-                g_cf.live[g_cf.nlive].label_id = brk;
-                g_cf.live[g_cf.nlive].cont_label_id = cnt;
-                g_cf.live[g_cf.nlive].var_decl = NULL;
-                g_cf.nlive++;
-            }
+            cleanup_live_reserve(1);
+            g_cf.live[g_cf.nlive].kind = CL_LOOP;
+            g_cf.live[g_cf.nlive].label_id = brk;
+            g_cf.live[g_cf.nlive].cont_label_id = cnt;
+            g_cf.live[g_cf.nlive].var_decl = NULL;
+            g_cf.nlive++;
         }
         if (cond_wrap) {
             /* Slice D-cond: cond contains a class temp. Lower to
@@ -8274,13 +8307,12 @@ static void emit_stmt(Node *n) {
         if (body_wrap) {
             brk = g_cf.next_label_id++;
             cnt = g_cf.next_label_id++;
-            if (g_cf.nlive < CLEANUP_LIVE_MAX) {
-                g_cf.live[g_cf.nlive].kind = CL_LOOP;
-                g_cf.live[g_cf.nlive].label_id = brk;
-                g_cf.live[g_cf.nlive].cont_label_id = cnt;
-                g_cf.live[g_cf.nlive].var_decl = NULL;
-                g_cf.nlive++;
-            }
+            cleanup_live_reserve(1);
+            g_cf.live[g_cf.nlive].kind = CL_LOOP;
+            g_cf.live[g_cf.nlive].label_id = brk;
+            g_cf.live[g_cf.nlive].cont_label_id = cnt;
+            g_cf.live[g_cf.nlive].var_decl = NULL;
+            g_cf.nlive++;
         }
         if (cond_wrap) {
             /* Slice D-cond for do-while: the synth must be declared
@@ -8411,13 +8443,12 @@ static void emit_stmt(Node *n) {
         if (body_wrap) {
             brk = g_cf.next_label_id++;
             cnt = g_cf.next_label_id++;
-            if (g_cf.nlive < CLEANUP_LIVE_MAX) {
-                g_cf.live[g_cf.nlive].kind = CL_LOOP;
-                g_cf.live[g_cf.nlive].label_id = brk;
-                g_cf.live[g_cf.nlive].cont_label_id = cnt;
-                g_cf.live[g_cf.nlive].var_decl = NULL;
-                g_cf.nlive++;
-            }
+            cleanup_live_reserve(1);
+            g_cf.live[g_cf.nlive].kind = CL_LOOP;
+            g_cf.live[g_cf.nlive].label_id = brk;
+            g_cf.live[g_cf.nlive].cont_label_id = cnt;
+            g_cf.live[g_cf.nlive].var_decl = NULL;
+            g_cf.nlive++;
         }
         if (cond_wrap) {
             /* Slice D-cond for for-loop: lower to a while(1) form
@@ -8777,13 +8808,12 @@ static void emit_stmt(Node *n) {
 
         /* Push CL_TRY so a throw inside the body finds this handler
          * label via find_throw_target_from. */
-        if (g_cf.nlive < CLEANUP_LIVE_MAX) {
-            g_cf.live[g_cf.nlive].kind = CL_TRY;
-            g_cf.live[g_cf.nlive].label_id = id;
-            g_cf.live[g_cf.nlive].cont_label_id = 0;
-            g_cf.live[g_cf.nlive].var_decl = NULL;
-            g_cf.nlive++;
-        }
+        cleanup_live_reserve(1);
+        g_cf.live[g_cf.nlive].kind = CL_TRY;
+        g_cf.live[g_cf.nlive].label_id = id;
+        g_cf.live[g_cf.nlive].cont_label_id = 0;
+        g_cf.live[g_cf.nlive].var_decl = NULL;
+        g_cf.nlive++;
         if (n->try_.body) emit_stmt(n->try_.body);
         if (g_cf.nlive > 0 && g_cf.live[g_cf.nlive - 1].kind == CL_TRY)
             g_cf.nlive--;
@@ -8883,7 +8913,14 @@ static void cf_begin_function(Node *func) {
     /* Populate ref-param table for deref insertion at use sites. */
     g_nref_params = 0;
     if (func && (func->kind == ND_FUNC_DEF || func->kind == ND_FUNC_DECL)) {
-        for (int i = 0; i < func->func.nparams && g_nref_params < REF_PARAM_CAP; i++) {
+        int np = func->func.nparams;
+        if (np > g_ref_params_cap) {
+            Token **n = realloc(g_ref_params, np * sizeof(Token *));
+            if (!n) abort();
+            g_ref_params = n;
+            g_ref_params_cap = np;
+        }
+        for (int i = 0; i < np; i++) {
             Node *p = func->func.params[i];
             if (p && ty_is_ref(p->param.ty) && p->param.name)
                 g_ref_params[g_nref_params++] = p->param.name;
@@ -9474,14 +9511,14 @@ static void emit_func_body(Node *func) {
  * The sig key uses func_sig_key (the same canonical mangler-output
  * encoding used for emit-time dedup), so the equality check is a
  * single string compare — no per-feature predicates to forget. */
-#define FFSIG_MAX_PARAMS 16
 typedef struct {
     Token *name;
     char   key[FUNC_SIG_KEY_MAX];
     int    key_len;
     bool   c_linkage;   /* N4659 §10.5 — extern "C": never mangle */
     bool   has_class_param; /* any param is struct/union (or ptr/ref/array thereof) */
-    Type  *params[FFSIG_MAX_PARAMS];   /* for value-context emit when rd is NULL */
+    Type **params;      /* malloc'd; nparams entries; for value-context
+                         * emit when the call's resolved_decl is NULL. */
     int    nparams;
 } FreeFuncSig;
 
@@ -9499,16 +9536,18 @@ static void free_ovld_walk(Node *n) {
     Type **params = NULL;
     int    nparams = 0;
     bool   c_linkage = false;
-    static Type *tmp_params[FFSIG_MAX_PARAMS];
     if (n->kind == ND_FUNC_DEF || n->kind == ND_FUNC_DECL) {
         name = n->func.name;
         if (name && n->kind == ND_FUNC_DEF && n->func.class_type)
             name = NULL;  /* class methods mangle via their own path */
-        nparams = n->func.nparams < FFSIG_MAX_PARAMS
-                    ? n->func.nparams : FFSIG_MAX_PARAMS;
+        nparams = n->func.nparams;
+        /* Build a Type** array from the ND_PARAM children. Lives only
+         * for the func_sig_key call below; the stored copy is fresh. */
+        Type **tmp = nparams > 0 ? malloc(nparams * sizeof(Type *)) : NULL;
+        if (nparams > 0 && !tmp) abort();
         for (int i = 0; i < nparams; i++)
-            tmp_params[i] = n->func.params[i] ? n->func.params[i]->param.ty : NULL;
-        params = tmp_params;
+            tmp[i] = n->func.params[i] ? n->func.params[i]->param.ty : NULL;
+        params = tmp;
         c_linkage = (n->func.storage_flags & DECL_C_LINKAGE) != 0;
     } else if (n->kind == ND_VAR_DECL && n->var_decl.ty &&
                n->var_decl.ty->kind == TY_FUNC) {
@@ -9517,13 +9556,18 @@ static void free_ovld_walk(Node *n) {
         params = n->var_decl.ty->params;
         c_linkage = (n->var_decl.storage_flags & DECL_C_LINKAGE) != 0;
     }
-    if (!name || g_n_ffsig_seen >= 16384) return;
+    if (!name || g_n_ffsig_seen >= 16384) {
+        if (n->kind == ND_FUNC_DEF || n->kind == ND_FUNC_DECL) free(params);
+        return;
+    }
     FreeFuncSig *e = &g_ffsig_seen[g_n_ffsig_seen++];
     e->name = name;
     e->key_len = func_sig_key(name, params, nparams, e->key);
     e->c_linkage = c_linkage;
     e->has_class_param = false;
-    e->nparams = nparams < FFSIG_MAX_PARAMS ? nparams : FFSIG_MAX_PARAMS;
+    e->nparams = nparams;
+    e->params = nparams > 0 ? malloc(nparams * sizeof(Type *)) : NULL;
+    if (nparams > 0 && !e->params) abort();
     for (int i = 0; i < e->nparams; i++) {
         e->params[i] = params ? params[i] : NULL;
         Type *t = e->params[i];
@@ -9533,6 +9577,11 @@ static void free_ovld_walk(Node *n) {
         if (t && (t->kind == TY_STRUCT || t->kind == TY_UNION))
             e->has_class_param = true;
     }
+    /* 'params' is e->params for the ND_VAR_DECL branch (shared with
+     * the Type's param list — don't free) and a fresh malloc for the
+     * ND_FUNC_* branch (free after key/has_class_param computed). */
+    if (n->kind == ND_FUNC_DEF || n->kind == ND_FUNC_DECL)
+        free(params);
 }
 
 static void free_ovld_populate(Node *tu) {
@@ -11302,16 +11351,17 @@ static void emit_top_level(Node *n) {
              * multiple times in the preprocessed output. The dedup
              * key is the full mangled signature (name + canonical
              * param suffix) — same key = same function. */
-            Type *params[FFSIG_MAX_PARAMS];
-            int np = n->func.nparams < FFSIG_MAX_PARAMS
-                       ? n->func.nparams : FFSIG_MAX_PARAMS;
+            int np = n->func.nparams;
+            Type **params = np > 0 ? malloc(np * sizeof(Type *)) : NULL;
+            if (np > 0 && !params) abort();
             for (int i = 0; i < np; i++)
                 params[i] = (n->func.params[i] &&
                              n->func.params[i]->kind == ND_PARAM)
                               ? n->func.params[i]->param.ty : NULL;
-            if (func_def_dedup_check_sig(n->func.name, params, np,
-                                          n->func.storage_flags))
-                return;
+            bool dup = func_def_dedup_check_sig(n->func.name, params, np,
+                                                 n->func.storage_flags);
+            free(params);
+            if (dup) return;
             emit_func_def(n);
         }
         return;
