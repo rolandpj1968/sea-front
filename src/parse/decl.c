@@ -1033,10 +1033,11 @@ parse_suffixes:
      * collects them in source order; we then wrap right-to-left.
      * N4659 §11.3.4 [dcl.array].
      */
-#define MAX_ARRAY_DIMS 8
-    int  dim_lens[MAX_ARRAY_DIMS];
-    Node *dim_exprs[MAX_ARRAY_DIMS];
-    int  ndims = 0;
+    typedef struct ArrayDim {
+        int   len;
+        Node *expr;
+    } ArrayDim;
+    Vec dims = vec_new(p->arena);
     while (parser_at(p, TK_LBRACKET) &&
            parser_peek_ahead(p, 1)->kind != TK_LBRACKET) {
         parser_advance(p);  /* consume [ */
@@ -1048,18 +1049,17 @@ parse_suffixes:
                 len = (int)size_expr->num.lo;
         }
         parser_expect(p, TK_RBRACKET);
-        if (ndims < MAX_ARRAY_DIMS) {
-            dim_lens[ndims]  = len;
-            dim_exprs[ndims] = (len < 0 && size_expr && size_expr->kind != ND_NUM)
-                                 ? size_expr : NULL;
-            ndims++;
-        }
+        ArrayDim *d = arena_alloc(p->arena, sizeof(*d));
+        d->len  = len;
+        d->expr = (len < 0 && size_expr && size_expr->kind != ND_NUM)
+                    ? size_expr : NULL;
+        vec_push(&dims, d);
     }
-    for (int i = ndims - 1; i >= 0; i--) {
-        ty = new_array_type(p, ty, dim_lens[i]);
-        if (dim_exprs[i]) ty->array_size_expr = dim_exprs[i];
+    for (int i = dims.len - 1; i >= 0; i--) {
+        ArrayDim *d = dims.data[i];
+        ty = new_array_type(p, ty, d->len);
+        if (d->expr) ty->array_size_expr = d->expr;
     }
-#undef MAX_ARRAY_DIMS
 
     /* Apply deferred wrappers from a grouped declarator — see the
      * grouped-declarator branch for the rationale. */

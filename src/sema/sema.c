@@ -1360,7 +1360,6 @@ static int ics_rank(Type *param, Type *arg) {
  * deduction first), ADL, user-defined conversions, reference-
  * binding sub-ranks, partial ordering of templates.
  */
-#define MAX_OVLD_CANDS 16
 
 /* For each candidate we reduce to a concrete function signature before
  * running ICS: non-template candidates use their declared TY_FUNC as-
@@ -1481,10 +1480,12 @@ static Declaration *resolve_free_function_overload(
     if (out_is_template) *out_is_template = false;
     if (ncands <= 1) return ncands == 1 ? cands[0] : NULL;
 
-    ViableCand viable[MAX_OVLD_CANDS];
-    int ranks[MAX_OVLD_CANDS][MAX_OVLD_CANDS];
+    ViableCand *viable = arena_alloc(arena, ncands * sizeof(ViableCand));
+    /* ranks indexed as ranks[i * nargs + j] (cand × arg position). */
+    int rstride = nargs > 0 ? nargs : 1;
+    int *ranks  = arena_alloc(arena, ncands * rstride * sizeof(int));
     int nv = 0;
-    for (int i = 0; i < ncands && nv < MAX_OVLD_CANDS; i++) {
+    for (int i = 0; i < ncands; i++) {
         Declaration *c = cands[i];
         if (!c) continue;
         ViableCand vc = {0};
@@ -1567,7 +1568,7 @@ static Declaration *resolve_free_function_overload(
                 r = ics_rank(vc.params[j], arg_types[j]);
             }
             if (r >= ICS_INCOMPATIBLE) ok = false;
-            ranks[nv][j] = r;
+            ranks[nv * rstride + j] = r;
         }
         if (ok) viable[nv++] = vc;
     }
@@ -1595,7 +1596,9 @@ static Declaration *resolve_free_function_overload(
      * recurse. Doesn't fully implement the standard's transform-and-
      * deduce-against-other algorithm (no synthesized fresh types),
      * but covers the common patterns the standard handles. */
-    int spec_order[MAX_OVLD_CANDS][MAX_OVLD_CANDS] = {0};
+    /* spec_order indexed as spec_order[i * nv + j]. */
+    int *spec_order = arena_alloc(arena, nv * nv * sizeof(int));
+    memset(spec_order, 0, nv * nv * sizeof(int));
     /* spec_order[i][j] == 1 iff i is strictly more specialized than j */
     for (int i = 0; i < nv; i++) {
         for (int j = 0; j < nv; j++) {
@@ -1617,16 +1620,16 @@ static Declaration *resolve_free_function_overload(
                 else if (cmp < 0) j_better = 1;
             }
             if (!incomparable && saw_strict && !j_better)
-                spec_order[i][j] = 1;
+                spec_order[i * nv + j] = 1;
         }
     }
     /* Drop any cand strictly less specialized than another viable.
      * Mark vc.is_template=false won't work — use a separate kept[] mask. */
-    bool kept[MAX_OVLD_CANDS];
+    bool *kept = arena_alloc(arena, nv * sizeof(bool));
     for (int i = 0; i < nv; i++) {
         kept[i] = true;
         for (int j = 0; j < nv; j++) {
-            if (spec_order[j][i]) { kept[i] = false; break; }
+            if (spec_order[j * nv + i]) { kept[i] = false; break; }
         }
     }
 
@@ -1638,8 +1641,8 @@ static Declaration *resolve_free_function_overload(
             bool le_all = true;
             bool lt_any = false;
             for (int k = 0; k < nargs; k++) {
-                if (ranks[i][k] > ranks[j][k]) { le_all = false; break; }
-                if (ranks[i][k] < ranks[j][k]) lt_any = true;
+                if (ranks[i * rstride + k] > ranks[j * rstride + k]) { le_all = false; break; }
+                if (ranks[i * rstride + k] < ranks[j * rstride + k]) lt_any = true;
             }
             /* §16.3.3/1 final bullet: a non-template F beats an
              * equally-ranked template G. Apply as an extra 'better'
@@ -1758,9 +1761,8 @@ static void visit_call(Sema *s, Node *n) {
         !n->call.callee->ident.implicit_this &&
         n->call.callee->ident.n_overloads > 1 &&
         !n->call.callee->is_type_dependent) {
-        Type *at[MAX_OVLD_CANDS];
         int na = n->call.nargs;
-        if (na > MAX_OVLD_CANDS) na = MAX_OVLD_CANDS;
+        Type **at = na > 0 ? arena_alloc(s->arena, na * sizeof(Type *)) : NULL;
         for (int i = 0; i < na; i++)
             at[i] = n->call.args[i] ? n->call.args[i]->resolved_type : NULL;
         SubstMap deduced = {0};
@@ -1833,9 +1835,9 @@ static void visit_call(Sema *s, Node *n) {
                 (inner->func.class_type != NULL ||
                  inner->func.qual_tid != NULL);
             if (inner && !is_ool_method) {
-                Type *at[MAX_OVLD_CANDS];
                 int na = n->call.nargs;
-                if (na > MAX_OVLD_CANDS) na = MAX_OVLD_CANDS;
+                Type **at = na > 0
+                    ? arena_alloc(s->arena, na * sizeof(Type *)) : NULL;
                 for (int i = 0; i < na; i++)
                     at[i] = n->call.args[i]
                         ? n->call.args[i]->resolved_type : NULL;
@@ -1868,9 +1870,9 @@ static void visit_call(Sema *s, Node *n) {
         lookup_overload_set_into_vec(s->cur_scope,
                                       tname->loc, tname->len, &ov);
         if (ov.len >= 1) {
-            Type *at[MAX_OVLD_CANDS];
             int na = n->call.nargs;
-            if (na > MAX_OVLD_CANDS) na = MAX_OVLD_CANDS;
+            Type **at = na > 0
+                ? arena_alloc(s->arena, na * sizeof(Type *)) : NULL;
             for (int i = 0; i < na; i++)
                 at[i] = n->call.args[i] ? n->call.args[i]->resolved_type : NULL;
             SubstMap deduced = {0};
