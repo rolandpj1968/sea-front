@@ -304,6 +304,193 @@ static void default_capture_walk(Parser *p, Node *n, CaptureWalkCtx *ctx) {
  * deduce to 'void' (§8.1.5.4/4). */
 static Type *deduce_lambda_return(Parser *p, Node *body);
 
+/* Evaluate a GCC/Clang type-trait intrinsic at parse time. Returns 0
+ * or 1 based on the type's flags. Recognised names follow the gcc
+ * documentation; the dg tests in g++.dg/ext/ exercise these in user
+ * code, and libstdc++ <type_traits> wraps the same intrinsics behind
+ * std::is_pod<T>::value etc. Unknown names fall back to '0' so the
+ * parser doesn't break on intrinsics we haven't covered yet.
+ *
+ * 'a' is the first type-arg, 'b' the second (NULL for single-arg
+ * traits). Names: __is_class, __is_union, __is_enum, __is_pod,
+ * __is_polymorphic, __is_empty, __is_abstract, __is_final,
+ * __is_literal_type, __has_trivial_*, __has_virtual_destructor,
+ * __has_nothrow_*, __is_base_of, __is_convertible_to. */
+static bool type_is_aggregate(Type *t) {
+    return t && (t->kind == TY_STRUCT || t->kind == TY_UNION);
+}
+
+/* True if 'tok' names a type-trait intrinsic that eval_type_trait
+ * actually evaluates (vs. unknown extensions that should fall through
+ * to skip-and-discard). Keeps the set explicit so newer-libstdc++
+ * intrinsics with shapes parse_type_name can't handle (pack-expansion
+ * arguments, multiple type args beyond two) don't crash the parser. */
+static bool type_trait_name_known(Token *tok) {
+    if (!tok) return false;
+    int nl = tok->len;
+    const char *n = tok->loc;
+    #define M(s) (nl == (int)sizeof(s) - 1 && memcmp(n, s, sizeof(s) - 1) == 0)
+    if (M("__is_class")) return true;
+    if (M("__is_union")) return true;
+    if (M("__is_enum"))  return true;
+    if (M("__is_pod"))   return true;
+    if (M("__is_polymorphic")) return true;
+    if (M("__is_empty")) return true;
+    if (M("__is_abstract")) return true;
+    if (M("__is_final")) return true;
+    if (M("__is_literal_type")) return true;
+    if (M("__is_base_of")) return true;
+    if (M("__is_convertible_to")) return true;
+    if (M("__has_virtual_destructor")) return true;
+    if (M("__has_trivial_destructor")) return true;
+    if (M("__has_trivial_constructor")) return true;
+    if (M("__has_trivial_copy")) return true;
+    if (M("__has_trivial_assign")) return true;
+    if (M("__has_nothrow_constructor")) return true;
+    if (M("__has_nothrow_copy")) return true;
+    if (M("__has_nothrow_assign")) return true;
+    return false;
+    #undef M
+}
+
+static int eval_type_trait(Token *name, Type *a, Type *b) {
+    if (!name) return 0;
+    const char *n = name->loc;
+    int nl = name->len;
+    #define MATCH(s) (nl == (int)sizeof(s) - 1 && memcmp(n, s, sizeof(s) - 1) == 0)
+
+    if (MATCH("__is_class")) return a && a->kind == TY_STRUCT;
+    if (MATCH("__is_union")) return a && a->kind == TY_UNION;
+    if (MATCH("__is_enum"))  return a && a->kind == TY_ENUM;
+    if (MATCH("__is_polymorphic")) return a && type_is_aggregate(a) && a->has_virtual_methods;
+    if (MATCH("__is_pod")) {
+        if (!a) return 0;
+        if (!type_is_aggregate(a)) return 1;  /* scalars are POD */
+        return !a->has_dtor && !a->has_virtual_methods;
+    }
+    if (MATCH("__is_empty")) {
+        if (!a || !type_is_aggregate(a) || !a->class_def) return 0;
+        Node *cd = a->class_def;
+        int n_data = 0;
+        for (int i = 0; i < cd->class_def.nmembers; i++) {
+            Node *m = cd->class_def.members[i];
+            if (!m || m->kind != ND_VAR_DECL) continue;
+            if (!m->var_decl.ty || m->var_decl.ty->kind == TY_FUNC) continue;
+            if (m->var_decl.storage_flags & DECL_STATIC) continue;
+            n_data++;
+        }
+        return n_data == 0 && !a->has_virtual_methods;
+    }
+    if (MATCH("__is_abstract")) {
+        /* Sea-front doesn't track pure-virtual; conservative false. */
+        return 0;
+    }
+    if (MATCH("__is_final")) {
+        /* Sea-front doesn't track 'final'; conservative false. */
+        return 0;
+    }
+    if (MATCH("__is_literal_type")) {
+        if (!a) return 0;
+        if (!type_is_aggregate(a)) return 1;  /* scalars are literal */
+        return !a->has_dtor;
+    }
+    if (MATCH("__has_virtual_destructor")) {
+        if (!a || !type_is_aggregate(a) || !a->class_def) return 0;
+        Node *cd = a->class_def;
+        for (int i = 0; i < cd->class_def.nmembers; i++) {
+            Node *m = cd->class_def.members[i];
+            if (!m) continue;
+            if (m->kind == ND_FUNC_DEF && m->func.is_destructor)
+                return m->func.is_virtual;
+            if (m->kind == ND_VAR_DECL && m->var_decl.is_destructor &&
+                m->var_decl.ty && m->var_decl.ty->kind == TY_FUNC)
+                return m->var_decl.is_virtual;
+        }
+        return 0;
+    }
+    if (MATCH("__has_trivial_destructor")) {
+        if (!a) return 0;
+        if (!type_is_aggregate(a)) return 1;
+        return !a->has_dtor;
+    }
+    if (MATCH("__has_trivial_constructor") ||
+        MATCH("__has_trivial_copy") ||
+        MATCH("__has_trivial_assign")) {
+        if (!a) return 0;
+        if (!type_is_aggregate(a)) return 1;
+        /* Conservative: only count as trivial when the class has no
+         * user-declared ctor / dtor / virtual machinery. Sea-front
+         * doesn't track copy-vs-default-vs-user separately yet. */
+        if (!a->class_def) return 1;
+        Node *cd = a->class_def;
+        for (int i = 0; i < cd->class_def.nmembers; i++) {
+            Node *m = cd->class_def.members[i];
+            if (!m) continue;
+            if (m->kind == ND_FUNC_DEF &&
+                (m->func.is_constructor || m->func.is_destructor))
+                return 0;
+            if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
+                m->var_decl.ty->kind == TY_FUNC &&
+                (m->var_decl.is_constructor || m->var_decl.is_destructor))
+                return 0;
+        }
+        return !a->has_virtual_methods;
+    }
+    if (MATCH("__has_nothrow_constructor") ||
+        MATCH("__has_nothrow_copy") ||
+        MATCH("__has_nothrow_assign")) {
+        /* Mirror trivial: trivial implies nothrow. Sea-front doesn't
+         * track noexcept on individual ctors/operators yet. */
+        if (!a) return 0;
+        if (!type_is_aggregate(a)) return 1;
+        if (!a->class_def) return 1;
+        Node *cd = a->class_def;
+        for (int i = 0; i < cd->class_def.nmembers; i++) {
+            Node *m = cd->class_def.members[i];
+            if (!m) continue;
+            if (m->kind == ND_FUNC_DEF &&
+                (m->func.is_constructor || m->func.is_destructor))
+                return 0;
+            if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
+                m->var_decl.ty->kind == TY_FUNC &&
+                (m->var_decl.is_constructor || m->var_decl.is_destructor))
+                return 0;
+        }
+        return 1;
+    }
+    if (MATCH("__is_base_of")) {
+        if (!a || !b) return 0;
+        if (!type_is_aggregate(a) || !type_is_aggregate(b)) return 0;
+        if (a->tag && b->tag && a->tag->len == b->tag->len &&
+            memcmp(a->tag->loc, b->tag->loc, a->tag->len) == 0)
+            return 1;
+        if (!b->class_region) return 0;
+        for (int i = 0; i < b->class_region->nbases; i++) {
+            DeclarativeRegion *br = b->class_region->bases[i];
+            if (!br || !br->owner_type) continue;
+            Type *base = br->owner_type;
+            if (base->tag && a->tag && base->tag->len == a->tag->len &&
+                memcmp(base->tag->loc, a->tag->loc, a->tag->len) == 0)
+                return 1;
+        }
+        return 0;
+    }
+    if (MATCH("__is_convertible_to")) {
+        /* Sea-front doesn't model conversion sequences. Conservative
+         * false unless source and target match exactly by tag/kind. */
+        if (a && b && a->kind == b->kind) {
+            if (a->kind != TY_STRUCT && a->kind != TY_UNION) return 1;
+            if (a->tag && b->tag && a->tag->len == b->tag->len &&
+                memcmp(a->tag->loc, b->tag->loc, a->tag->len) == 0)
+                return 1;
+        }
+        return 0;
+    }
+    /* Unknown trait — preserve the previous opaque-bool behavior. */
+    return 0;
+    #undef MATCH
+}
+
 static Type *deduce_lambda_return_expr(Parser *p, Node *e) {
     if (!e) return new_type(p, TY_VOID);
     switch (e->kind) {
@@ -1255,18 +1442,65 @@ static Node *primary_expr(Parser *p) {
           tok->loc[3] == 's' && tok->loc[4] == '_') ||
          (tok->loc[0] == '_' && tok->loc[1] == '_' && tok->loc[2] == 'h' &&
           tok->loc[3] == 'a' && tok->loc[4] == 's' && tok->len > 5 &&
-          tok->loc[5] == '_') ||
-         (tok->len == 17 && memcmp(tok->loc, "__underlying_type", 17) == 0) ||
-         /* __alignof / __alignof__: GCC alignment-of operator. Accepts
-          * either a type or an expression. We can't disambiguate cheaply
-          * here, so swallow the parens and emit an opaque bool — the
-          * concrete value is rarely needed in practice (default template
-          * args, never instantiated by gcc 4.8). */
-         (tok->len == 9 && memcmp(tok->loc, "__alignof", 9) == 0) ||
+          tok->loc[5] == '_'));
+
+    /* __alignof / __alignof__ accept either a type or an expression
+     * and return an integer (not bool). Sea-front doesn't track
+     * alignment precisely; emit an opaque '1' to satisfy the parse
+     * and downstream comparisons (most uses are in default template
+     * args / static_assert that gcc 4.8 never actually instantiates).
+     * Handled separately from the type-trait path because the trait
+     * path eagerly calls parse_type_name, which fails on expression
+     * arguments. */
+    bool is_alignof_ext =
+        tok->kind == TK_IDENT &&
+        ((tok->len == 9  && memcmp(tok->loc, "__alignof",   9)  == 0) ||
          (tok->len == 11 && memcmp(tok->loc, "__alignof__", 11) == 0));
+    if (is_alignof_ext &&
+        parser_peek_ahead(p, 1)->kind == TK_LPAREN &&
+        lookup_unqualified(p, tok->loc, tok->len) == NULL) {
+        Token *name_tok = parser_advance(p);
+        parser_advance(p);  /* ( */
+        parser_skip_to_matching_rparen(p);
+        Node *num = new_node(p, ND_NUM, name_tok);
+        num->num.lo = 1;
+        num->num.hi = 0;
+        num->num.is_signed = false;
+        num->resolved_type = new_type(p, TY_INT);
+        num->tok = NULL;
+        return num;
+    }
     if (is_type_trait &&
         parser_peek_ahead(p, 1)->kind == TK_LPAREN &&
         lookup_unqualified(p, tok->loc, tok->len) == NULL) {
+        /* Only the named intrinsics get the eager parse-and-fold
+         * path. Anything else (newer-libstdc++ intrinsics like
+         * __is_constructible, __add_lval_ref, __is_trivial, ...)
+         * still falls into the skip-and-discard fallback below —
+         * parse_type_name doesn't handle pack expansion '_Args...'
+         * shapes that those use, and folding to a bogus 0 would
+         * silently mis-compile downstream uses. */
+        bool known =
+            type_trait_name_known(tok);
+        if (known) {
+            Token *name_tok = parser_advance(p);
+            parser_advance(p);  /* ( */
+            Type *ta = parser_at(p, TK_RPAREN) ? NULL : parse_type_name(p);
+            Type *tb = NULL;
+            if (parser_consume(p, TK_COMMA))
+                tb = parse_type_name(p);
+            parser_expect(p, TK_RPAREN);
+            int result = eval_type_trait(name_tok, ta, tb);
+            Node *num = new_node(p, ND_NUM, name_tok);
+            num->num.lo = (uint64_t)result;
+            num->num.hi = 0;
+            num->num.is_signed = false;
+            num->resolved_type = new_type(p, TY_BOOL);
+            /* Clear the source token so emit doesn't print the
+             * intrinsic name verbatim. */
+            num->tok = NULL;
+            return num;
+        }
         Token *name_tok = parser_advance(p);
         parser_advance(p);  /* ( */
         parser_skip_to_matching_rparen(p);
