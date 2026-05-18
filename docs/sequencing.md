@@ -103,16 +103,33 @@ Restrictions:
   produces `*(c ? &a : &b) = rhs`, which has the same RHS-vs-LHS
   hazard. The phase-1 hoist catches it through the same code path.
 
-## Future phases (gated on evidence)
+## Other C++17 sequencing rules
 
-| Phase | Construct | Trigger |
-|---|---|---|
-| 2 | `a << b << c` chains (where `<<` is non-overloaded or known stream-like) | A failing test that exercises the order |
-| 3 | Function-call args with side effects | Practically rare since C++17 only constrains callee-before-args |
-| 4 | Member-access / subscript LHS with side-effecting RHS | Probably never — pure RHS dominates |
+Beyond assignment, C++17 specifies ordering for several constructs
+that C leaves unspecified:
 
-Each phase should add its own assignment-style hoist site and a
-regression test. Don't pre-implement.
+- Function call: callee sequenced before args (§8.2.2/4). Args are
+  indeterminately sequenced *with respect to each other* in both
+  languages, so no rewrite needed there.
+- Subscript: postfix sequenced before sub-expression (§8.2.1).
+- Shift: left operand before right (§8.7/4).
+- Member access `a.b`, `a->b`: trivially single-sided.
+
+The phase-1 hoist already covers all of these *when they appear as
+the LHS of an assignment* — the LHS gate (`!= ND_IDENT`) catches
+anything more complex, and the hoist itself ensures RHS is
+sequenced first.
+
+Outside of an enclosing assignment, these rules would each require
+hoisting the *first-sequenced operand* into a fresh local. That
+operand typically has a compound declarator type (function pointer
+for a callee, array/pointer for a subscript base), which the
+seq-hoist's simple `T name = init;` form cannot render — it would
+need declarator-aware decl emit. Combined with how rare the hazard
+is in real code (`f()[g()]` with interlocking side effects between
+`f` and `g`), the cost/benefit doesn't justify pre-implementing.
+If a real test surfaces a miscompile from one of these rules, build
+the declarator-aware path then.
 
 ## Anti-patterns
 
