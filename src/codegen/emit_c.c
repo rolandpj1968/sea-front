@@ -9771,6 +9771,37 @@ static void emit_class_def(Node *n) {
             }
             continue;
         }
+        /* Anonymous struct/union as a class member — C11 6.7.2.1/13
+         * makes the members of such a nested unnamed struct/union
+         * accessible directly on the enclosing class. Emit the body
+         * tagless and instance-less so gcc applies the same rule to
+         * the lowered C struct. Pattern: g++.dg/cpp0x/union3.C and
+         * expr/ptrmem4.C. */
+        if (m->kind == ND_CLASS_DEF && !m->class_def.tag &&
+            m->class_def.ty &&
+            (m->class_def.ty->kind == TY_STRUCT ||
+             m->class_def.ty->kind == TY_UNION)) {
+            emit_indent();
+            fputs(m->class_def.ty->kind == TY_UNION ? "union " : "struct ",
+                  stdout);
+            emit_open_brace();
+            g_indent++;
+            for (int mi = 0; mi < m->class_def.nmembers; mi++) {
+                Node *mm = m->class_def.members[mi];
+                if (!mm || mm->kind != ND_VAR_DECL) continue;
+                if (mm->var_decl.ty && mm->var_decl.ty->kind == TY_FUNC) continue;
+                emit_indent();
+                Node *saved_init = mm->var_decl.init;
+                mm->var_decl.init = NULL;
+                emit_var_decl_inner(mm);
+                mm->var_decl.init = saved_init;
+                fputs(";\n", stdout);
+            }
+            g_indent--;
+            emit_indent();
+            fputs("};\n", stdout);
+            continue;
+        }
         if (m->kind != ND_VAR_DECL) continue;
         /* Skip anonymous enums inside the struct body. In C++ they are
          * struct-scoped (e.g. 'struct A { enum { __value = 1 }; };'
