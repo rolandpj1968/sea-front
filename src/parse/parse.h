@@ -877,6 +877,12 @@ struct Node {
              * (whose class_region is NULL at parse time). */
             Type  **base_types;
             int     nbase_types;
+            /* Storage-class flags from the decl-specifier seq when the
+             * class-def appears as a bare declaration ('static union
+             * { int i; };'). Used to emit C11/GCC anonymous-union form
+             * with the original linkage preserved. Empty for normal
+             * class definitions. */
+            int     storage_flags;
             /* Note: base-class metadata is ALSO stored on the class_def
              * node — it lives on Type.class_region->bases (an array
              * of base-class regions). Codegen reaches it via

@@ -1498,8 +1498,14 @@ Node *parse_declaration(Parser *p) {
     /* Bare type with no declarator: 'struct Foo { ... };' */
     if (parser_at(p, TK_SEMI)) {
         parser_advance(p);
-        if (class_def)
+        if (class_def) {
+            /* Carry storage-class flags from the decl-spec so a 'static
+             * union { int i; };' at function scope can be lowered as an
+             * anonymous union with the right linkage (C11 6.7.2.1/13 +
+             * GCC extension at function/file scope). */
+            class_def->class_def.storage_flags |= spec.flags;
             return class_def;
+        }
         return new_var_decl_node(p, base_ty, /*name=*/NULL, start_tok);
     }
 

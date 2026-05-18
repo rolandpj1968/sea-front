@@ -326,6 +326,7 @@ static void mark_enum_body_emitted(Token *toks) {
  * regular emitters, which appear later in the file. */
 static void emit_expr(Node *n);
 static void emit_type(Type *ty);
+static bool emit_anon_member_rewrite(Token *name);
 static void emit_array_dims(Type *array_chain);
 /* Walks a TY_PTR/TY_ARRAY chain and emits a C declarator interleaving
  * '*' and '[N]' brackets around the optional name; returns true when
@@ -3435,6 +3436,12 @@ static void emit_expr(Node *n) {
             fputs("{0}", stdout);
             return;
         }
+        /* Anonymous-union member rewrite — see emit_anon_member_rewrite
+         * and the block-scope ND_CLASS_DEF anon branch. Bare references
+         * to a member of an active anonymous block-scope union/struct
+         * become '__sf_anon_inst_<id>.member'. */
+        if (n->ident.name && emit_anon_member_rewrite(n->ident.name))
+            return;
         if (n->ident.implicit_this && !g_current_method_is_static) {
             /* Static data members (§10.1.1/4 [dcl.stc]) lower to a
              * TU-scope variable 'sf__<class>__<name>', not a struct
@@ -7062,6 +7069,43 @@ static void emit_stmt_with_miniblock(Node *s) {
     emit_close_brace();
 }
 
+/* Anonymous union/struct member rewrite — stack of active frames.
+ * When an anonymous block-scope class-def is emitted (no source tag,
+ * no instance variable), the union is given a synth instance name
+ * '__sf_anon_inst_<id>' and its members are recorded here so bare
+ * identifier references in the enclosing block can be rewritten to
+ * the instance-qualified form. C11 6.7.2.1/13 covers anonymous
+ * struct/union *members*; this lowering supports the gcc extension
+ * that admits the same shape at function/file scope. */
+typedef struct {
+    int anon_id;
+    Node *class_def_node;
+} AnonRewriteFrame;
+#define ANON_REWRITE_STACK_MAX 32
+static AnonRewriteFrame g_anon_rewrite_stack[ANON_REWRITE_STACK_MAX];
+static int g_anon_rewrite_top = 0;
+
+/* If 'name' matches a member of any active anon-union frame, emit
+ * the rewritten qualified form and return true; otherwise false. */
+static bool emit_anon_member_rewrite(Token *name) {
+    if (!name) return false;
+    for (int f = g_anon_rewrite_top - 1; f >= 0; f--) {
+        Node *cd = g_anon_rewrite_stack[f].class_def_node;
+        for (int mi = 0; mi < cd->class_def.nmembers; mi++) {
+            Node *m = cd->class_def.members[mi];
+            if (!m || m->kind != ND_VAR_DECL || !m->var_decl.name) continue;
+            if (m->var_decl.name->len == name->len &&
+                memcmp(m->var_decl.name->loc, name->loc, name->len) == 0) {
+                fprintf(stdout, "__sf_anon_inst_%d.%.*s",
+                        g_anon_rewrite_stack[f].anon_id,
+                        name->len, name->loc);
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 static void emit_block(Node *n) {
     /* Flat blocks (comma-separated declarators, namespace/extern "C" bodies)
      * emit their statements directly without wrapping { } braces, so
@@ -7081,6 +7125,28 @@ static void emit_block(Node *n) {
      * var-decl — so at every point during emission innermost-
      * cleanup-label reflects construction state, not block topology. */
     int saved_nlive = g_cf.nlive;
+    int saved_anon_top = g_anon_rewrite_top;
+
+    /* Pre-scan for anonymous block-scope class-defs so member
+     * references later in the same block are rewritten to
+     * '__sf_anon_inst_<id>.member'. The synth instance id is
+     * allocated here (matching what emit_class_def's anon branch
+     * uses) so the rewrite name stays consistent. */
+    for (int i = 0; i < n->block.nstmts; i++) {
+        Node *s = n->block.stmts[i];
+        if (s && s->kind == ND_CLASS_DEF && !s->class_def.tag &&
+            s->class_def.ty &&
+            (s->class_def.ty->kind == TY_STRUCT ||
+             s->class_def.ty->kind == TY_UNION) &&
+            g_anon_rewrite_top < ANON_REWRITE_STACK_MAX) {
+            if (s->class_def.ty->anon_id == 0)
+                s->class_def.ty->anon_id = ++g_anon_counter;
+            g_anon_rewrite_stack[g_anon_rewrite_top].anon_id =
+                s->class_def.ty->anon_id;
+            g_anon_rewrite_stack[g_anon_rewrite_top].class_def_node = s;
+            g_anon_rewrite_top++;
+        }
+    }
 
     for (int i = 0; i < n->block.nstmts; i++) {
         Node *s = n->block.stmts[i];
@@ -7101,6 +7167,7 @@ static void emit_block(Node *n) {
 
     emit_cleanup_chain_for_added(saved_nlive);
     g_cf.nlive = saved_nlive;
+    g_anon_rewrite_top = saved_anon_top;
 
     emit_close_brace();
 }
@@ -7314,6 +7381,43 @@ static void emit_stmt(Node *n) {
         fputs(";\n", stdout);
         return;
     case ND_CLASS_DEF:
+        /* Anonymous block-scope class-def — 'static union { int i; };'
+         * in the source. C11 6.7.2.1/13 makes anonymous struct/union
+         * members visible in the enclosing struct/union scope, but
+         * NOT at function or file scope; gcc-as-C rejects bare
+         * 'union { int i; };' without an instance name.
+         *
+         * Lower to a normal union declaration with a synthesised
+         * instance name '__sf_anon_inst_<id>', then rewrite bare
+         * references to anon-union members within the enclosing block
+         * to '__sf_anon_inst_<id>.member' (see g_anon_union_stack in
+         * emit_ident and the block-scan in emit_stmt's ND_BLOCK case).
+         * Storage class is carried from the decl-specifier seq via
+         * class_def.storage_flags so 'static' survives the lowering. */
+        if (!n->class_def.tag && n->class_def.ty &&
+            (n->class_def.ty->kind == TY_STRUCT ||
+             n->class_def.ty->kind == TY_UNION)) {
+            if (n->class_def.ty->anon_id == 0)
+                n->class_def.ty->anon_id = ++g_anon_counter;
+            emit_indent();
+            emit_var_storage_flags(n->class_def.storage_flags);
+            fputs(n->class_def.ty->kind == TY_UNION ? "union " : "struct ",
+                  stdout);
+            emit_open_brace();
+            g_indent++;
+            for (int mi = 0; mi < n->class_def.nmembers; mi++) {
+                Node *m = n->class_def.members[mi];
+                if (!m || m->kind != ND_VAR_DECL) continue;
+                emit_indent();
+                emit_var_decl_inner(m);
+                fputs(";\n", stdout);
+            }
+            g_indent--;
+            emit_indent();
+            fprintf(stdout, "} __sf_anon_inst_%d;\n",
+                    n->class_def.ty->anon_id);
+            return;
+        }
         /* Block-scope struct — gcc 4.8 calls.c emit_library_call_value_1
          * defines 'struct arg' inside the function body. In C this is a
          * valid block-scope declaration, but the two-phase emit only
