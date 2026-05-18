@@ -11655,4 +11655,45 @@ void emit_c(Node *tu) {
         emit_top_level(tu->tu.decls[i]);
     }
     g_emit_phase = 0;
+
+    /* File-scope dynamic initialisation: C++ runs class-type globals
+     * through their ctor before main; C requires constant initialisers
+     * and has no equivalent. Synthesize a single constructor function
+     * '__sf_global_init' (attribute-tagged so the linker runs it
+     * pre-main) that calls the default ctor on each class-typed
+     * file-scope variable in declaration order.
+     * N4659 §6.6.2 [basic.start.init]. */
+    bool need_global_init = false;
+    for (int i = 0; i < tu->tu.ndecls; i++) {
+        Node *n = tu->tu.decls[i];
+        if (!n || n->kind != ND_VAR_DECL) continue;
+        if (!n->var_decl.ty || !n->var_decl.name) continue;
+        if (n->var_decl.storage_flags & DECL_EXTERN) continue;
+        Type *ty = n->var_decl.ty;
+        if ((ty->kind == TY_STRUCT || ty->kind == TY_UNION) &&
+            ty->has_default_ctor) {
+            need_global_init = true;
+            break;
+        }
+    }
+    if (need_global_init) {
+        fputs("\nstatic void __sf_global_init(void) __attribute__((constructor));\n",
+              stdout);
+        fputs("static void __sf_global_init(void) {\n", stdout);
+        for (int i = 0; i < tu->tu.ndecls; i++) {
+            Node *n = tu->tu.decls[i];
+            if (!n || n->kind != ND_VAR_DECL) continue;
+            if (!n->var_decl.ty || !n->var_decl.name) continue;
+            if (n->var_decl.storage_flags & DECL_EXTERN) continue;
+            Type *ty = n->var_decl.ty;
+            if ((ty->kind != TY_STRUCT && ty->kind != TY_UNION) ||
+                !ty->has_default_ctor)
+                continue;
+            fputs("    ", stdout);
+            mangle_class_ctor(ty, NULL, 0);
+            fprintf(stdout, "(&%.*s);\n",
+                    n->var_decl.name->len, n->var_decl.name->loc);
+        }
+        fputs("}\n", stdout);
+    }
 }
