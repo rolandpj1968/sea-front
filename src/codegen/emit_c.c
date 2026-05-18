@@ -6718,8 +6718,18 @@ static void emit_var_decl_inner(Node *n) {
         bool var_is_ref = ty_is_ref(ty);
         bool init_is_ptr = init_rt && init_rt->kind == TY_PTR;
         if (init_is_ref && var_is_struct) {
+            /* The init's type is a reference; in C the underlying
+             * value sits behind one pointer indirection. Suppress the
+             * default ref-param deref inside the init emission so the
+             * '(*...)' wrapper here is the only deref — otherwise an
+             * ND_IDENT ref-param init produces '*(*a)', a double
+             * deref that the C compiler rejects.
+             * Pattern: g++.dg/torture/pr59163.C 'A c = a;' with A&. */
             fputs("(*", stdout);
+            bool saved_supp = g_suppress_ref_deref;
+            g_suppress_ref_deref = true;
             emit_init_with_target(n->var_decl.init, n->var_decl.ty);
+            g_suppress_ref_deref = saved_supp;
             fputc(')', stdout);
         } else if (var_is_ref && !init_is_ref && !init_is_ptr) {
             fputc('&', stdout);
