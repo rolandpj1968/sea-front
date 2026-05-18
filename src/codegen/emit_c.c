@@ -9400,8 +9400,25 @@ static void emit_func_def(Node *n) {
     cf_begin_function(n);
     Type *saved_ret = g_current_func_ret_ty;
     Node *saved_lam = g_current_lambda_fn;
+    Node *saved_cdef_for_lambda = g_current_class_def;
     g_current_func_ret_ty = n->func.ret_ty;
-    if (n->func.is_lambda_fn) g_current_lambda_fn = n;
+    if (n->func.is_lambda_fn) {
+        g_current_lambda_fn = n;
+        /* Lambda body with '[this]' capture: implicit-this references
+         * inside the body must walk the enclosing class's base chain
+         * for inherited members ('x' resolves to a C base in a
+         * MI A : B, C). Set g_current_class_def to the captured
+         * class's def so emit_ident's base-path walk can fire.
+         * Pattern: g++.dg/cpp0x/lambda/lambda-this5.C. */
+        for (int i = 0; i < n->func.ncaptures; i++) {
+            Capture *c = &n->func.captures[i];
+            if (c->is_this && c->resolved_type &&
+                c->resolved_type->class_def) {
+                g_current_class_def = c->resolved_type->class_def;
+                break;
+            }
+        }
+    }
     /* §10.1.5/1 [dcl.constexpr]: a constexpr function is implicitly
      * inline. Sea-front doesn't enforce constexpr's restrictions
      * (compile-time evaluability) — we lower as plain runtime code
@@ -9416,6 +9433,7 @@ static void emit_func_def(Node *n) {
     emit_func_body(n);
     g_current_func_ret_ty = saved_ret;
     g_current_lambda_fn   = saved_lam;
+    g_current_class_def   = saved_cdef_for_lambda;
 }
 
 /* Method DEF dispatcher for overloaded operators. The mangling
