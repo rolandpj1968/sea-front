@@ -2037,9 +2037,23 @@ static void emit_type(Type *ty) {
         if (ty->is_const)    fputs(" const", stdout);
         if (ty->is_volatile) fputs(" volatile", stdout);
         return;
-    /* References — emit as pointer in C (caller passes &x). */
-    case TY_REF:     emit_type(ty->base); fputs("*", stdout); return;
-    case TY_RVALREF: emit_type(ty->base); fputs("*", stdout); return;
+    /* References — emit as pointer in C (caller passes &x).
+     * A reference to a function type (void(&)()) is also a single
+     * pointer level in C, so route through the function-pointer
+     * declarator form like TY_PTR(TY_FUNC) above. Otherwise the
+     * recursive emit_type call hits the TY_FUNC default branch and
+     * emits a comment-marker int, which the C compiler rejects. */
+    case TY_REF:
+    case TY_RVALREF:
+        if (ty->base && ty->base->kind == TY_FUNC) {
+            Type *fty = ty->base;
+            emit_type(fty->ret);
+            fputs(" (*)(", stdout);
+            emit_func_param_types(fty);
+            fputc(')', stdout);
+            return;
+        }
+        emit_type(ty->base); fputs("*", stdout); return;
     case TY_ARRAY:   emit_type(ty->base); fputs("*", stdout); return;
     case TY_STRUCT:
         fputs("struct ", stdout);
@@ -3062,7 +3076,18 @@ static void emit_param_declarator(Type *ty, Token *name, int idx) {
     int ptr_depth = 0;
     {
         Type *t = ty;
-        while (t && t->kind == TY_PTR && t->base) {
+        /* Reference-to-function lowers to a single function-pointer
+         * level in C (N4659 §11.3.2 [dcl.ref]). Peel once so the loop
+         * below can land on the underlying TY_FUNC and emit the
+         * '(*name)(args)' declarator. Pattern: template instantiation
+         * substitutes 'void()' for F in 'const F& f', producing
+         * TY_REF(TY_FUNC) at the parameter site. */
+        if (t && (t->kind == TY_REF || t->kind == TY_RVALREF) &&
+            t->base && t->base->kind == TY_FUNC) {
+            fty = t->base;
+            ptr_depth = 1;
+        }
+        while (!fty && t && t->kind == TY_PTR && t->base) {
             ptr_depth++;
             if (t->base->kind == TY_FUNC) { fty = t->base; break; }
             t = t->base;
