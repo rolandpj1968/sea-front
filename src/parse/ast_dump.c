@@ -514,6 +514,20 @@ static void dump(Node *node, int depth) {
         printf(")");
         break;
 
+    case ND_TYPE_TRAIT:
+        printf("(type-trait \"%.*s\"", node->type_trait.name->len,
+               node->type_trait.name->loc);
+        if (node->type_trait.arg0) {
+            printf(" ");
+            dump_type(node->type_trait.arg0);
+        }
+        if (node->type_trait.arg1) {
+            printf(" ");
+            dump_type(node->type_trait.arg1);
+        }
+        printf(")");
+        break;
+
     case ND_CLASS_DEF:
         printf("(class-def");
         if (node->class_def.tag)

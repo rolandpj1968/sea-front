@@ -772,6 +772,16 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
          * instantiated separately if needed */
         break;
 
+    case ND_TYPE_TRAIT:
+        /* Deferred GCC/Clang type-trait intrinsic. The clone walks
+         * each argument Type through subst_type so any TY_DEPENDENT
+         * gets replaced by the bound concrete type; emit later
+         * re-evaluates with the new args (parse.h:eval_type_trait). */
+        c->type_trait.name = n->type_trait.name;
+        c->type_trait.arg0 = subst_type(n->type_trait.arg0, map, arena);
+        c->type_trait.arg1 = subst_type(n->type_trait.arg1, map, arena);
+        break;
+
     case ND_TEMPLATE_ID:
         c->template_id = n->template_id;
         c->template_id.args = clone_node_array(

@@ -204,6 +204,11 @@ typedef enum {
                          *   template < template-parameter-list > declaration */
     ND_TEMPLATE_ID,     /* simple-template-id — N4659 §17.2 [temp.names]
                          *   template-name < template-argument-list(opt) > */
+    ND_TYPE_TRAIT,      /* deferred GCC/Clang type-trait intrinsic
+                         * (__is_pod, __is_class, ...). Held in this
+                         * form when at least one type argument is
+                         * dependent; substituted during template clone
+                         * and re-evaluated by emit. */
 
     /* -- Top level -- */
     ND_TRANSLATION_UNIT, /* translation-unit — N4659 §A.5 (grammar) /
@@ -926,6 +931,16 @@ struct Node {
             Node *resolved_tmpl;
         } template_id;
 
+        /* ND_TYPE_TRAIT — deferred type-trait intrinsic. Parse-time
+         * eval folds to ND_NUM when all type args are concrete; this
+         * shape is used when at least one arg is dependent so the
+         * intrinsic can be re-evaluated after template substitution. */
+        struct {
+            Token *name;    /* the intrinsic identifier */
+            Type  *arg0;
+            Type  *arg1;    /* NULL for single-arg traits */
+        } type_trait;
+
         /* ND_TRANSLATION_UNIT — N4659 §A.5 (grammar) / §5.2/2
          * [lex.phases]:
          *   translation-unit: declaration-seq(opt)
@@ -1581,6 +1596,12 @@ Node *new_template_id_node(Parser *p, Token *name, Node **args, int nargs, Token
  */
 Node *parse_expr(Parser *p);
 Node *parse_assign_expr(Parser *p);
+
+/* Evaluate a GCC/Clang type-trait intrinsic against concrete Type
+ * arguments. Returns 0 or 1. Implementation + per-trait standard
+ * citations live in parse/expr.c. Exported so codegen can re-fold
+ * ND_TYPE_TRAIT nodes after template substitution. */
+int eval_type_trait(struct Token *name, struct Type *a, struct Type *b);
 
 /* ================================================================== */
 /* Statement parser — stmt.c                                          */

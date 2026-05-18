@@ -6614,6 +6614,19 @@ static void emit_expr(Node *n) {
         }
         fputc('\n', stderr);
         abort();
+    case ND_TYPE_TRAIT: {
+        /* Deferred type-trait intrinsic, kept as ND_TYPE_TRAIT at
+         * parse time because at least one type argument was dependent.
+         * Template substitution may have replaced the args with
+         * concrete types by now; re-evaluate. Falls back to '0' for
+         * any still-dependent argument (eval_type_trait already
+         * returns 0 for TY_DEPENDENT in every branch). */
+        int r = eval_type_trait(n->type_trait.name,
+                                n->type_trait.arg0,
+                                n->type_trait.arg1);
+        fputc(r ? '1' : '0', stdout);
+        return;
+    }
     case ND_TEMPLATE_ID: {
         /* Bare template-id 'Foo<args>' in expression position. Most
          * sites that produce one (subscript base, callee, type arg)

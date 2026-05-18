@@ -304,20 +304,41 @@ static void default_capture_walk(Parser *p, Node *n, CaptureWalkCtx *ctx) {
  * deduce to 'void' (§8.1.5.4/4). */
 static Type *deduce_lambda_return(Parser *p, Node *body);
 
-/* Evaluate a GCC/Clang type-trait intrinsic at parse time. Returns 0
- * or 1 based on the type's flags. Recognised names follow the gcc
- * documentation; the dg tests in g++.dg/ext/ exercise these in user
- * code, and libstdc++ <type_traits> wraps the same intrinsics behind
- * std::is_pod<T>::value etc. Unknown names fall back to '0' so the
- * parser doesn't break on intrinsics we haven't covered yet.
+/* Evaluate a GCC/Clang type-trait intrinsic. Returns 0 or 1. The
+ * intrinsic names are gcc/clang extensions; libstdc++ <type_traits>
+ * implements the standard library type-trait classes (N4659 §23.15
+ * [meta]) on top of them — std::is_pod<T>::value etc. Unknown names
+ * fall back to '0' so the parser doesn't break on intrinsics outside
+ * this set.
  *
  * 'a' is the first type-arg, 'b' the second (NULL for single-arg
- * traits). Names: __is_class, __is_union, __is_enum, __is_pod,
- * __is_polymorphic, __is_empty, __is_abstract, __is_final,
- * __is_literal_type, __has_trivial_*, __has_virtual_destructor,
- * __has_nothrow_*, __is_base_of, __is_convertible_to. */
+ * traits). Each branch's standard reference appears inline.
+ * One-arg traits (a): __is_class, __is_union, __is_enum, __is_pod,
+ *   __is_polymorphic, __is_empty, __is_abstract, __is_final,
+ *   __is_literal_type, __has_trivial_destructor,
+ *   __has_trivial_constructor, __has_trivial_copy,
+ *   __has_trivial_assign, __has_virtual_destructor,
+ *   __has_nothrow_constructor, __has_nothrow_copy,
+ *   __has_nothrow_assign.
+ * Two-arg traits (a, b): __is_base_of (N4659 §23.15.6/2 [meta.rel]),
+ *   __is_convertible_to (§23.15.6/3). */
 static bool type_is_aggregate(Type *t) {
     return t && (t->kind == TY_STRUCT || t->kind == TY_UNION);
+}
+
+/* Parser-side mirror of sema's type_is_dependent. Walks through
+ * compound type wrappers (ptr/ref/array) to find any TY_DEPENDENT. */
+static bool parser_type_is_dependent(Type *t) {
+    while (t) {
+        if (t->kind == TY_DEPENDENT) return true;
+        if (t->kind == TY_PTR || t->kind == TY_REF ||
+            t->kind == TY_RVALREF || t->kind == TY_ARRAY) {
+            t = t->base;
+            continue;
+        }
+        return false;
+    }
+    return false;
 }
 
 /* True if 'tok' names a type-trait intrinsic that eval_type_trait
@@ -349,20 +370,27 @@ static bool type_trait_name_known(Token *tok) {
     return false;
 }
 
-static int eval_type_trait(Token *name, Type *a, Type *b) {
+int eval_type_trait(Token *name, Type *a, Type *b) {
     if (!name) return 0;
 
+    /* N4659 §23.15.4.1 [meta.unary.cat] — primary type categories. */
     if (TOKEQ(name, "__is_class")) return a && a->kind == TY_STRUCT;
     if (TOKEQ(name, "__is_union")) return a && a->kind == TY_UNION;
     if (TOKEQ(name, "__is_enum"))  return a && a->kind == TY_ENUM;
+    /* N4659 §23.15.4.3 [meta.unary.prop] — type properties below. */
     if (TOKEQ(name, "__is_polymorphic"))
         return a && type_is_aggregate(a) && a->has_virtual_methods;
     if (TOKEQ(name, "__is_pod")) {
+        /* §10/9 [basic.types]: a POD type is trivial AND standard
+         * layout. Sea-front conservatively reads this as 'no user dtor,
+         * no virtual methods'; scalars are POD. */
         if (!a) return 0;
-        if (!type_is_aggregate(a)) return 1;  /* scalars are POD */
+        if (!type_is_aggregate(a)) return 1;
         return !a->has_dtor && !a->has_virtual_methods;
     }
     if (TOKEQ(name, "__is_empty")) {
+        /* §12/2 [class]: a class is empty when it has no non-static
+         * data members and no virtual functions / virtual bases. */
         if (!a || !type_is_aggregate(a) || !a->class_def) return 0;
         Node *cd = a->class_def;
         int n_data = 0;
@@ -376,19 +404,29 @@ static int eval_type_trait(Token *name, Type *a, Type *b) {
         return n_data == 0 && !a->has_virtual_methods;
     }
     if (TOKEQ(name, "__is_abstract")) {
-        /* Sea-front doesn't track pure-virtual; conservative false. */
+        /* §13.4.2 [class.abstract]: a class is abstract if it has at
+         * least one pure virtual function. Sea-front doesn't track
+         * pure-virtual yet; conservative false. */
         return 0;
     }
     if (TOKEQ(name, "__is_final")) {
-        /* Sea-front doesn't track 'final'; conservative false. */
+        /* §10.1.7.4.2 [dcl.type.simple] + §13.3 [class.virtual]:
+         * 'final' on the class or a virtual function. Not tracked;
+         * conservative false. */
         return 0;
     }
     if (TOKEQ(name, "__is_literal_type")) {
+        /* §10.1.5 [dcl.constexpr] + §6.7/10 [basic.types]: literal
+         * type — scalars, arrays of literal type, and classes with a
+         * trivial destructor and certain ctor/aggregate shape rules.
+         * Sea-front approximates as 'scalar OR no user dtor'. */
         if (!a) return 0;
-        if (!type_is_aggregate(a)) return 1;  /* scalars are literal */
+        if (!type_is_aggregate(a)) return 1;
         return !a->has_dtor;
     }
     if (TOKEQ(name, "__has_virtual_destructor")) {
+        /* §23.15.4.3/3 [meta.unary.prop] — class type with a virtual
+         * destructor. */
         if (!a || !type_is_aggregate(a) || !a->class_def) return 0;
         Node *cd = a->class_def;
         for (int i = 0; i < cd->class_def.nmembers; i++) {
@@ -403,6 +441,10 @@ static int eval_type_trait(Token *name, Type *a, Type *b) {
         return 0;
     }
     if (TOKEQ(name, "__has_trivial_destructor")) {
+        /* §15.4/12 [class.dtor]: trivially destructible — class has
+         * no user-declared dtor (and every base/member is trivially
+         * destructible). Sea-front's has_dtor flag covers user dtor
+         * presence; scalar types are trivially destructible. */
         if (!a) return 0;
         if (!type_is_aggregate(a)) return 1;
         return !a->has_dtor;
@@ -410,11 +452,13 @@ static int eval_type_trait(Token *name, Type *a, Type *b) {
     if (TOKEQ(name, "__has_trivial_constructor") ||
         TOKEQ(name, "__has_trivial_copy") ||
         TOKEQ(name, "__has_trivial_assign")) {
+        /* §15.1/5 [class.ctor] (default), §15.8.1/12 [class.copy.ctor]
+         * (copy), §15.8.2/9 [class.copy.assign] (assign): trivially
+         * Xible — no user-declared X, every base/member is trivially
+         * X. Sea-front conservatively treats any user-declared ctor /
+         * dtor / virtual member as making all three non-trivial. */
         if (!a) return 0;
         if (!type_is_aggregate(a)) return 1;
-        /* Conservative: only count as trivial when the class has no
-         * user-declared ctor / dtor / virtual machinery. Sea-front
-         * doesn't track copy-vs-default-vs-user separately yet. */
         if (!a->class_def) return 1;
         Node *cd = a->class_def;
         for (int i = 0; i < cd->class_def.nmembers; i++) {
@@ -433,8 +477,12 @@ static int eval_type_trait(Token *name, Type *a, Type *b) {
     if (TOKEQ(name, "__has_nothrow_constructor") ||
         TOKEQ(name, "__has_nothrow_copy") ||
         TOKEQ(name, "__has_nothrow_assign")) {
-        /* Mirror trivial: trivial implies nothrow. Sea-front doesn't
-         * track noexcept on individual ctors/operators yet. */
+        /* §23.15.4.3 [meta.unary.prop] — nothrow_X. The library
+         * predicates require the operation to be well-formed AND
+         * known not to throw (no throwing call in the body, no
+         * throwing dtor in any subobject). Sea-front doesn't track
+         * noexcept per-member yet; trivial implies nothrow, so the
+         * approximation matches the trivial check above. */
         if (!a) return 0;
         if (!type_is_aggregate(a)) return 1;
         if (!a->class_def) return 1;
@@ -453,6 +501,12 @@ static int eval_type_trait(Token *name, Type *a, Type *b) {
         return 1;
     }
     if (TOKEQ(name, "__is_base_of")) {
+        /* N4659 §23.15.6/2 [meta.rel]: is_base_of<Base, Derived> is
+         * true iff Base is a base class of Derived OR Base and
+         * Derived are the same class type (modulo cv).
+         * Sea-front: tag equality first (same class), then a walk of
+         * Derived's direct bases. Multi-level base chains aren't
+         * recursed yet — TODO. */
         if (!a || !b) return 0;
         if (!type_is_aggregate(a) || !type_is_aggregate(b)) return 0;
         if (a->tag && b->tag && a->tag->len == b->tag->len &&
@@ -470,7 +524,10 @@ static int eval_type_trait(Token *name, Type *a, Type *b) {
         return 0;
     }
     if (TOKEQ(name, "__is_convertible_to")) {
-        /* Sea-front doesn't model conversion sequences. Conservative
+        /* N4659 §23.15.6/3 [meta.rel]: is_convertible<From, To> —
+         * formally, the imaginary 'To test() { return declval<From>(); }'
+         * must be well-formed.
+         * Sea-front doesn't model conversion sequences. Conservative
          * false unless source and target match exactly by tag/kind. */
         if (a && b && a->kind == b->kind) {
             if (a->kind != TY_STRUCT && a->kind != TY_UNION) return 1;
@@ -1483,6 +1540,23 @@ static Node *primary_expr(Parser *p) {
             if (parser_consume(p, TK_COMMA))
                 tb = parse_type_name(p);
             parser_expect(p, TK_RPAREN);
+            /* If any arg is dependent (template parameter not yet
+             * substituted), defer evaluation to template clone time
+             * via an ND_TYPE_TRAIT node. The clone walks the args
+             * through subst_type and the emit path re-evaluates
+             * with concrete Types. Folding now would lock the
+             * result to a single (mostly-zero) value for every
+             * instantiation. */
+            bool a_dep = ta && parser_type_is_dependent(ta);
+            bool b_dep = tb && parser_type_is_dependent(tb);
+            if (a_dep || b_dep) {
+                Node *tt = new_node(p, ND_TYPE_TRAIT, name_tok);
+                tt->type_trait.name = name_tok;
+                tt->type_trait.arg0 = ta;
+                tt->type_trait.arg1 = tb;
+                tt->resolved_type = new_type(p, TY_BOOL);
+                return tt;
+            }
             int result = eval_type_trait(name_tok, ta, tb);
             Node *num = new_node(p, ND_NUM, name_tok);
             num->num.lo = (uint64_t)result;
