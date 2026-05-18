@@ -7415,9 +7415,27 @@ static void emit_stmt(Node *n) {
                         "goto %s; } while (0);\n",
                         lbl);
             } else {
-                fputs("__SF_THROW_PRIM(", stdout);
-                emit_expr(thr->throw_.operand);
-                fprintf(stdout, ", &__sf_typeinfo_int, %s);\n", lbl);
+                /* Class-type throws can't go through __SF_THROW_PRIM
+                 * — the macro casts the operand to uintptr_t which is
+                 * invalid for struct/union values. Route those
+                 * through __SF_THROW_CLASS with the address of the
+                 * operand, which works because the operand emit is
+                 * either a compound literal (addressable since C99
+                 * §6.5.2.5) or a hoisted named temp. Pattern:
+                 * g++.dg/eh/dtor3.C 'throw excep();'. */
+                Type *op_ty = thr->throw_.operand
+                    ? thr->throw_.operand->resolved_type : NULL;
+                bool op_is_class = op_ty &&
+                    (op_ty->kind == TY_STRUCT || op_ty->kind == TY_UNION);
+                if (op_is_class) {
+                    fputs("__SF_THROW_CLASS(&(", stdout);
+                    emit_expr(thr->throw_.operand);
+                    fprintf(stdout, "), 0, %s);\n", lbl);
+                } else {
+                    fputs("__SF_THROW_PRIM(", stdout);
+                    emit_expr(thr->throw_.operand);
+                    fprintf(stdout, ", &__sf_typeinfo_int, %s);\n", lbl);
+                }
             }
             return;
         }
@@ -11311,6 +11329,20 @@ static void emit_prelude(void) {
      * NULL because primitives have no destructor. */
     fputs("#define __SF_THROW_PRIM(val, ti, lbl) "
           "do { __sf_exc_state.exc_obj = (void *)(uintptr_t)(val); "
+          "__sf_exc_state.exc_type = (ti); "
+          "__sf_exc_state.exc_dtor = 0; "
+          "__sf_exc_state.state = __SF_UNWIND_THROW; "
+          "__SF_unwind = __SF_UNWIND_THROW; "
+          "goto lbl; } while (0)\n",
+          stdout);
+    /* __SF_THROW_CLASS — class-type throw. The operand is a pointer
+     * to the exception object (compound literal '&(struct X){...}'
+     * at the call site); we stash that pointer in exc_obj without
+     * the uintptr_t cast that breaks for struct values. Type-id is
+     * a placeholder for now (no class typeinfo registry yet); catch
+     * dispatch on class types is part of EH phase 2+. */
+    fputs("#define __SF_THROW_CLASS(p_val, ti, lbl) "
+          "do { __sf_exc_state.exc_obj = (void *)(p_val); "
           "__sf_exc_state.exc_type = (ti); "
           "__sf_exc_state.exc_dtor = 0; "
           "__sf_exc_state.state = __SF_UNWIND_THROW; "
