@@ -282,9 +282,10 @@ for src in "$@"; do
     eval "$SEA_FRONT --emit-c ${SEA_FRONT_FLAGS:-} $qpp > $qcfile" 2>/dev/null
 
     # Step 3: Compile C → .o
-    # Use -std=c99 for gcc 4.7 compatibility (for-init declarations)
-    log "  Compile: $SEA_CC -std=c99 -c $CC_FLAGS -o $obj_file $c_file"
-    eval "$SEA_CC -std=c99 -c $CC_FLAGS -o $qobj $qcfile"
+    # Use -std=c11 — sea-front emits u8"..." string-prefixes verbatim
+    # (C11 §6.4.5) and _Thread_local in the EH lowering (C11 §6.7.1).
+    log "  Compile: $SEA_CC -std=c11 -c $CC_FLAGS -o $obj_file $c_file"
+    eval "$SEA_CC -std=c11 -c $CC_FLAGS -o $qobj $qcfile"
 
     # Cleanup (skip when SEA_KEEP_TMP is set, for debugging)
     if [ -z "$SEA_KEEP_TMP" ]; then
