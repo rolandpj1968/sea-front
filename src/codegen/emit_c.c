@@ -11525,6 +11525,24 @@ static void emit_top_level(Node *n) {
             n->var_decl.init = saved_init;
             return;
         }
+        /* File-scope class-typed direct-init ('const T x(args);'):
+         * the ctor runs in __sf_global_init and writes to the global
+         * storage, so 'const' on the C-level decl would either fail
+         * the cast-through-T* (warning) or — worse — put the global
+         * in .rodata and SIGSEGV at startup. Temporarily clear the
+         * type's is_const for the emit so the file-scope storage is
+         * writable; restore after. */
+        if (n->var_decl.ty && n->var_decl.ty->is_const &&
+            (n->var_decl.ty->kind == TY_STRUCT || n->var_decl.ty->kind == TY_UNION) &&
+            n->var_decl.has_ctor_init && n->var_decl.ctor_nargs > 0) {
+            bool saved_const = n->var_decl.ty->is_const;
+            n->var_decl.ty->is_const = false;
+            emit_var_storage_flags(n->var_decl.storage_flags);
+            emit_var_decl_inner(n);
+            fputs(";\n", stdout);
+            n->var_decl.ty->is_const = saved_const;
+            return;
+        }
         emit_var_storage_flags(n->var_decl.storage_flags);
         emit_var_decl_inner(n);
         fputs(";\n", stdout);
@@ -11974,6 +11992,14 @@ void emit_c(Node *tu) {
             need_global_init = true;
             break;
         }
+        /* Direct-init at file scope ('A a(42);') — has ctor_nargs > 0
+         * even if the class lacks a default ctor. Each such global
+         * needs its ctor to run at startup with the user args. */
+        if ((ty->kind == TY_STRUCT || ty->kind == TY_UNION) &&
+            n->var_decl.has_ctor_init && n->var_decl.ctor_nargs > 0) {
+            need_global_init = true;
+            break;
+        }
         /* Array of class type with default ctor — each element needs
          * the ctor to run at startup. Walk through TY_ARRAY layers. */
         if (ty->kind == TY_ARRAY) {
@@ -12001,7 +12027,11 @@ void emit_c(Node *tu) {
             if (n->var_decl.storage_flags & DECL_EXTERN) continue;
             Type *ty = n->var_decl.ty;
             bool is_class = (ty->kind == TY_STRUCT || ty->kind == TY_UNION) &&
-                            ty->has_default_ctor;
+                            ty->has_default_ctor &&
+                            !(n->var_decl.has_ctor_init && n->var_decl.ctor_nargs > 0);
+            bool is_class_direct_init =
+                (ty->kind == TY_STRUCT || ty->kind == TY_UNION) &&
+                n->var_decl.has_ctor_init && n->var_decl.ctor_nargs > 0;
             /* Single-dim array of class — emit a loop calling the
              * element ctor. Multi-dim arrays are skipped for now
              * (their TY_ARRAY chain would need recursive unrolling). */
@@ -12016,12 +12046,56 @@ void emit_c(Node *tu) {
                 elem_ty = ty->base;
             }
             bool deferred = n->var_decl.init && n->var_decl.deferred_to_global_init;
-            if (!is_class && !is_array_of_class && !deferred) continue;
+            if (!is_class && !is_class_direct_init && !is_array_of_class && !deferred)
+                continue;
             if (is_class) {
                 fputs("    ", stdout);
                 mangle_class_ctor(ty, NULL, 0);
                 fprintf(stdout, "(&%.*s);\n",
                         n->var_decl.name->len, n->var_decl.name->loc);
+            }
+            if (is_class_direct_init) {
+                fputs("    ", stdout);
+                Type **at = NULL;
+                int na = collect_call_arg_types(n->var_decl.ctor_args,
+                                                 n->var_decl.ctor_nargs, &at);
+                Type **pty = NULL;
+                Node *resolved_ctor = NULL;
+                int np = resolve_overload(ty, /*name=*/NULL,
+                                           /*is_ctor=*/true, at, na,
+                                           /*receiver_is_const=*/false,
+                                           &pty, &resolved_ctor);
+                if (np < 0) {
+                    /* No matching ctor — emit a comment placeholder and
+                     * skip rather than producing broken C. */
+                    fprintf(stdout, "/* sf: no ctor match for %.*s direct-init */;\n",
+                            n->var_decl.name->len, n->var_decl.name->loc);
+                } else {
+                    mangle_class_ctor(ty, pty, np);
+                    /* Cast away const on the receiver: C++ allows
+                     * const-qualified globals like 'const T x(...)' to
+                     * run their ctor on the storage at init time;
+                     * sea-front's __sf_global_init runs after the var
+                     * is declared const, so the ctor signature ('T*')
+                     * conflicts with '&const_var'. Cast through to a
+                     * non-const receiver. */
+                    fputs("(", stdout);
+                    fputs("(", stdout);
+                    if (ty->kind == TY_UNION) fputs("union ", stdout);
+                    else fputs("struct ", stdout);
+                    mangle_class_tag(ty);
+                    fputs(" *)&", stdout);
+                    fprintf(stdout, "%.*s",
+                            n->var_decl.name->len, n->var_decl.name->loc);
+                    for (int j = 0; j < n->var_decl.ctor_nargs; j++) {
+                        fputs(", ", stdout);
+                        emit_arg_for_param(n->var_decl.ctor_args[j],
+                                            j < np ? pty[j] : NULL);
+                    }
+                    emit_default_args_tail(resolved_ctor,
+                                           n->var_decl.ctor_nargs, np, pty);
+                    fputs(");\n", stdout);
+                }
             }
             if (is_array_of_class && arr_size > 0) {
                 fprintf(stdout,
