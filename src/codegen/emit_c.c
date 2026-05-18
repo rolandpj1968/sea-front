@@ -1157,31 +1157,31 @@ static void hoist_emit_decl(Node *call, bool in_shortcircuit) {
     }
 
     if (is_ctor_call) {
-        emit_indent();
-        emit_type(ctor_class_type);
-        fprintf(stdout, " %s;\n", name);
-        emit_indent();
         Node *resolved_ctor = NULL;
         int np = 0;
         Type **pty = NULL;
-        {
-            Type **at = NULL;
-            int na = collect_call_arg_types(call->call.args,
-                                             call->call.nargs, &at);
-            np = resolve_overload(ctor_class_type, /*name=*/NULL,
-                                   /*is_ctor=*/true,
-                                   at, na,
-                                   /*receiver_is_const=*/false,
-                                   &pty, /*out_best=*/&resolved_ctor);
-            if (np < 0) {
-                /* No matching ctor — skip ctor call. For plain C
-                 * structs whose has_default_ctor was transitively
-                 * set, this is trivial default construction (the
-                 * zero-fill from '{0}' covers it). */
-                goto hoist_done;
-            }
-            mangle_class_ctor(ctor_class_type, pty, np);
+        Type **at = NULL;
+        int na = collect_call_arg_types(call->call.args,
+                                         call->call.nargs, &at);
+        np = resolve_overload(ctor_class_type, /*name=*/NULL,
+                               /*is_ctor=*/true,
+                               at, na,
+                               /*receiver_is_const=*/false,
+                               &pty, /*out_best=*/&resolved_ctor);
+        emit_indent();
+        emit_type(ctor_class_type);
+        if (np < 0) {
+            /* No matching ctor — trivial default construction per
+             * N4659 §11.6/8 [dcl.init]. Zero-init the temp via '{0}'
+             * so the bytes are well-defined; the prior 'struct T
+             * temp;' (uninitialized) form left ptmf members and
+             * padding indeterminate (g++.dg/init/ptrmem4.C bug). */
+            fprintf(stdout, " %s = {0};\n", name);
+            goto hoist_done;
         }
+        fprintf(stdout, " %s;\n", name);
+        emit_indent();
+        mangle_class_ctor(ctor_class_type, pty, np);
         fprintf(stdout, "(&%s", name);
         for (int i = 0; i < call->call.nargs; i++) {
             fputs(", ", stdout);
