@@ -5927,7 +5927,90 @@ static void emit_expr(Node *n) {
             Node *op = n->cast.operand;
             bool op_is_ref_param = op->kind == ND_IDENT &&
                                     is_ref_param(op->ident.name);
-            bool op_already_ptr = ty_is_ref(op->resolved_type);
+            Type *op_rt = op->resolved_type;
+            bool op_already_ptr = ty_is_ref(op_rt);
+            /* Derived-to-base reference binding via static_cast — the
+             * target's referenced type is a (possibly multi-step) base
+             * of the operand's class. Walk the __sf_base chain so we
+             * land on the right subobject, not a reinterpret of the
+             * derived layout. Without this, 'static_cast<B&&>(x)' for
+             * 'X : A, B' returns the address of X (offset 0) cast to
+             * B*, but B lives at offset sizeof(A) and accesses through
+             * the cast read the wrong fields. Pattern:
+             * g++.dg/cpp0x/rv-cast3.C. */
+            Type *tgt_base = n->cast.ty->base;
+            Type *deriv = op_rt;
+            if (deriv && (deriv->kind == TY_REF || deriv->kind == TY_RVALREF))
+                deriv = deriv->base;
+            /* Patch up deriv to the class_def-bearing Type so
+             * find_base_path can walk the base chain. The
+             * resolved_type stamp on idents/calls is sometimes a
+             * stub (no class_region). */
+            if (deriv && !deriv->class_region && deriv->tag) {
+                Node *d = find_class_def_by_tag_args(deriv);
+                if (!d) d = find_class_def_by_tag_only(deriv);
+                if (d && d->class_def.ty) deriv = d->class_def.ty;
+            }
+            /* Also patch tgt_base, which we'll compare to deriv's
+             * bases by Type identity. */
+            if (tgt_base && !tgt_base->class_region && tgt_base->tag) {
+                Node *d = find_class_def_by_tag_args(tgt_base);
+                if (!d) d = find_class_def_by_tag_only(tgt_base);
+                if (d && d->class_def.ty) tgt_base = d->class_def.ty;
+            }
+            if (tgt_base && deriv && tgt_base != deriv &&
+                (deriv->kind == TY_STRUCT || deriv->kind == TY_UNION) &&
+                deriv->class_region) {
+                /* Find tgt_base in deriv's bases by tag comparison
+                 * (Type identity isn't reliable across cast vs class-
+                 * region origin). One-level lookup is enough for the
+                 * common direct-base case; multi-level would need
+                 * recursive tag comparison. */
+                int direct_base = -1;
+                int nb = class_nbases(deriv);
+                for (int b = 0; b < nb; b++) {
+                    Type *bt = class_base(deriv, b);
+                    if (!bt || !bt->tag || !tgt_base->tag) continue;
+                    if (bt->tag->len == tgt_base->tag->len &&
+                        memcmp(bt->tag->loc, tgt_base->tag->loc,
+                               tgt_base->tag->len) == 0) {
+                        direct_base = b;
+                        break;
+                    }
+                }
+                int path[8];
+                int len = 0;
+                if (direct_base >= 0) {
+                    path[0] = direct_base;
+                    len = 1;
+                }
+                if (len > 0) {
+                    fputc('(', stdout);
+                    emit_type(n->cast.ty);
+                    fputc(')', stdout);
+                    fputc('&', stdout);
+                    fputc('(', stdout);
+                    if (op_is_ref_param) {
+                        bool saved = g_suppress_ref_deref;
+                        g_suppress_ref_deref = true;
+                        emit_expr(op);
+                        g_suppress_ref_deref = saved;
+                        fputs(")->", stdout);
+                    } else if (op_already_ptr) {
+                        emit_expr(op);
+                        fputs(")->", stdout);
+                    } else {
+                        emit_expr(op);
+                        fputs(").", stdout);
+                    }
+                    for (int i = 0; i < len; i++) {
+                        if (i > 0) fputc('.', stdout);
+                        if (path[i] == 0) fputs("__sf_base", stdout);
+                        else fprintf(stdout, "__sf_base%d", path[i]);
+                    }
+                    return;
+                }
+            }
             fputc('(', stdout);
             emit_type(n->cast.ty);
             fputc(')', stdout);
