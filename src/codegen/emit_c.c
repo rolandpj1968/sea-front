@@ -5170,8 +5170,20 @@ static void emit_expr(Node *n) {
                         g_suppress_ref_deref = saved_srd;
                         fputs("))->__sf_vptr->", stdout);
                     } else if (obj_is_ptr) {
+                        /* Ref-param idents would normally auto-deref
+                         * to '(*x)' — but we want the pointer here so
+                         * '->' can chase the vtable. Suppress the deref
+                         * for the same reason the need_cast branch
+                         * above does.
+                         * Pattern: g++.dg/torture/pr48661.C E::n calls
+                         * 'x.m()' on a const B& parameter. */
+                        bool saved_srd = g_suppress_ref_deref;
+                        if (obj && obj->kind == ND_IDENT &&
+                            is_ref_param(obj->ident.name))
+                            g_suppress_ref_deref = true;
                         fputc('(', stdout);
                         emit_expr(obj);
+                        g_suppress_ref_deref = saved_srd;
                         fputs(")->__sf_vptr->", stdout);
                     } else {
                         fputc('(', stdout);
