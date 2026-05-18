@@ -717,14 +717,26 @@ static void visit_class_def(Sema *s, Node *n) {
      * func.param_scope which itself has the class region as its
      * enclosing.
      *
+     * NSDMIs ('int j = i;' in-class) are visited HERE rather than
+     * through a method body, so they need cur_scope pointed at the
+     * class region for the ident lookup to find member 'i'. Without
+     * this, the lookup walks straight to the enclosing namespace and
+     * the bare 'i' resolves nowhere — emit then drops it as an
+     * unrewritten identifier and the C compiler fails with 'i
+     * undeclared'. N4659 §12.6.2/9 [class.base.init].
+     *
      * Push the enclosing class type so 'this' inside in-class method
      * bodies (which don't have class_type stamped on each ND_FUNC_DEF
      * — only out-of-class definitions get it) gets a resolved_type. */
-    Type *saved = s->cur_class_type;
+    Type *saved_ct = s->cur_class_type;
+    DeclarativeRegion *saved_sc = s->cur_scope;
     if (n->class_def.ty) s->cur_class_type = n->class_def.ty;
+    if (n->class_def.ty && n->class_def.ty->class_region)
+        s->cur_scope = n->class_def.ty->class_region;
     for (int i = 0; i < n->class_def.nmembers; i++)
         visit(s, n->class_def.members[i]);
-    s->cur_class_type = saved;
+    s->cur_class_type = saved_ct;
+    s->cur_scope = saved_sc;
 }
 
 /* The per-field 'if (x) visit(s, x)' idiom is redundant — visit()

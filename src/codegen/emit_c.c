@@ -10689,6 +10689,14 @@ methods_phase:;
         fputs(kw_open, stdout);
         mangle_class_tag(class_type);
         fputs(" *this) {\n", stdout);
+        /* NSDMI emission inside this body needs g_current_class_def
+         * pointed at the enclosing class so emit_ident's implicit-this
+         * branch can walk the __sf_base chain to find inherited
+         * members. The method-body loop above sets/unsets this around
+         * its own emission; the synthesis path emits *after* that, so
+         * re-establish the context here. */
+        Node *saved_cdef_synth = g_current_class_def;
+        g_current_class_def = n;
         g_indent++;
         /* Base subobject construction first — declaration order. */
         int nb_c = class_nbases(class_type);
@@ -10760,6 +10768,7 @@ methods_phase:;
         }
         g_indent--;
         fputs("}\n", stdout);
+        g_current_class_def = saved_cdef_synth;
     }
 }
 
