@@ -4360,6 +4360,58 @@ static void emit_expr(Node *n) {
                 callee_q->qualified.nparts >= 2) {
                 Token *class_tok = callee_q->qualified.parts[0];
                 Token *method_tok = callee_q->qualified.parts[callee_q->qualified.nparts - 1];
+                /* Qualified instance-method call from inside the
+                 * enclosing class — 'A::f(args)' inside B which
+                 * inherits from A. Pass '&this->__sf_baseN' as the
+                 * receiver instead of treating it as a static call.
+                 * Without this, sea-front's static-call path emits
+                 * the method without 'this' and gcc rejects with
+                 * 'too few arguments'. Pattern: g++.dg/cpp0x/
+                 * nsdmi-virtual1.C 'int k = A::i + A::f();'. */
+                if (g_current_class_def && class_tok && method_tok) {
+                    Type stub = {0};
+                    stub.kind = TY_STRUCT;
+                    stub.tag  = class_tok;
+                    Node *qdef = find_class_def_by_tag_only(&stub);
+                    if (qdef && qdef->class_def.ty &&
+                        qdef->class_def.ty->class_region) {
+                        Type *qcls = qdef->class_def.ty;
+                        Type *cur = g_current_class_def->class_def.ty;
+                        int path[8];
+                        int len = find_base_path(cur, qcls, path, 8);
+                        if (len > 0) {
+                            Declaration *md = region_lookup_own(
+                                qcls->class_region,
+                                method_tok->loc, method_tok->len);
+                            if (md && !md->is_static_member &&
+                                md->type && md->type->kind == TY_FUNC) {
+                                Type **pty = md->type->params;
+                                int np = md->type->nparams;
+                                bool mc = md->type->is_const;
+                                mangle_class_method(qcls, method_tok,
+                                                     pty, np, mc);
+                                fputs("(&this", stdout);
+                                /* Dot-less base chain: emit '->__sf_baseN' or
+                                 * '.__sf_baseN' depending on whether the
+                                 * preceding token is 'this' (pointer) or
+                                 * a base subobject value. After 'this' the
+                                 * first link is '->'; subsequent are '.'. */
+                                for (int i = 0; i < len; i++) {
+                                    fputs(i == 0 ? "->" : ".", stdout);
+                                    if (path[i] == 0) fputs("__sf_base", stdout);
+                                    else fprintf(stdout, "__sf_base%d", path[i]);
+                                }
+                                for (int i = 0; i < n->call.nargs; i++) {
+                                    fputs(", ", stdout);
+                                    emit_arg_for_param(n->call.args[i],
+                                        (i < np) ? pty[i] : NULL);
+                                }
+                                fputc(')', stdout);
+                                return;
+                            }
+                        }
+                    }
+                }
                 /* Namespace-qualified extern "C" function: sema
                  * stashed the Declaration; if it carries c_linkage
                  * (or an explicit asm_name), emit the bare/asm form
@@ -6258,6 +6310,47 @@ static void emit_expr(Node *n) {
                 find_enum_tag_in_tu(g_tu, class_tok)) {
                 fprintf(stdout, "%.*s", mem_tok->len, mem_tok->loc);
                 return;
+            }
+        }
+        /* Class-qualified instance-member access from inside the
+         * enclosing class — 'A::i' inside B which inherits from A.
+         * Lower to 'this->__sf_baseN.i' via the same base-chain walk
+         * emit_ident uses for unqualified members. Without this, the
+         * fallback below emits a bare 'i', which the C compiler
+         * either rejects ('i undeclared') or silently mis-resolves
+         * to an outer variable. Pattern: g++.dg/cpp0x/nsdmi-virtual1.C
+         * 'int k = A::i + A::f();'. */
+        if (n->qualified.nparts >= 2 && n->qualified.parts &&
+            g_current_class_def) {
+            Token *class_tok = n->qualified.parts[0];
+            Token *mem_tok   = n->qualified.parts[n->qualified.nparts - 1];
+            if (class_tok && mem_tok) {
+                Type stub = {0};
+                stub.kind = TY_STRUCT;
+                stub.tag  = class_tok;
+                Node *qdef = find_class_def_by_tag_only(&stub);
+                if (qdef && qdef->class_def.ty &&
+                    qdef->class_def.ty->class_region) {
+                    Type *qcls = qdef->class_def.ty;
+                    Type *cur = g_current_class_def->class_def.ty;
+                    int path[8];
+                    int len = find_base_path(cur, qcls, path, 8);
+                    if (len > 0) {
+                        /* Verify the trailing name is an instance
+                         * data member of the qualifying class (not a
+                         * method — methods route through ND_CALL). */
+                        Declaration *md = region_lookup_own(
+                            qcls->class_region,
+                            mem_tok->loc, mem_tok->len);
+                        if (md && !md->is_static_member &&
+                            md->type && md->type->kind != TY_FUNC) {
+                            fputs("this->", stdout);
+                            emit_base_chain(path, len);
+                            emit_token_text(mem_tok);
+                            return;
+                        }
+                    }
+                }
             }
         }
         /* Namespace-qualified value access ('foo::x' where foo is a
