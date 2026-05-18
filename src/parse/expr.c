@@ -1863,9 +1863,47 @@ static Node *primary_expr(Parser *p) {
         /* Qualified name: A::B::C or ::foo */
         Token *last = parts.len > 0 ? (Token *)parts.data[parts.len - 1] : tok;
 
-        /* Rule 4: final name might be a template-id: A::B<int> */
-        if (parser_at(p, TK_LT) && lookup_is_template_name(p, last))
-            return parse_template_id(p, last);
+        /* Rule 4: final name might be a template-id: A::B<int>.
+         * lookup_is_template_name does an UNQUALIFIED lookup of the
+         * trailing segment — it misses templates that live inside
+         * the qualifier (e.g. namespace __exception_ptr's
+         * __dest_thunk, reached as __exception_ptr::__dest_thunk<T>).
+         * When the unqualified lookup fails, fall back to a
+         * tentative template-id parse: if it consumes through the
+         * matching '>' and lands on a token that legitimately
+         * follows a template-id (',' ')' ';' '(' '::' etc.), accept;
+         * otherwise restore and treat the '<' as less-than. This
+         * keeps the std-conforming cases (a::digits < N) working
+         * while admitting the qualified-template-name shapes.
+         * N4659 §17.2 [temp.names] Rule 4. */
+        if (parser_at(p, TK_LT)) {
+            if (lookup_is_template_name(p, last))
+                return parse_template_id(p, last);
+            ParseState saved = parser_save(p);
+            bool prev_tent = p->tentative;
+            bool prev_fail = p->tentative_failed;
+            p->tentative = true;
+            p->tentative_failed = false;
+            Node *tid = parse_template_id(p, last);
+            bool ok = tid && !p->tentative_failed;
+            if (ok) {
+                /* Validate the follow-set: after a real template-id
+                 * we expect a token that can legitimately follow one
+                 * in expression context. A '<' or other operator is
+                 * a likely sign we mis-parsed less-than. */
+                TokenKind k = parser_peek(p)->kind;
+                if (!(k == TK_COMMA || k == TK_RPAREN || k == TK_SEMI ||
+                      k == TK_LPAREN || k == TK_SCOPE ||
+                      k == TK_DOT || k == TK_ARROW ||
+                      k == TK_QUESTION || k == TK_COLON ||
+                      k == TK_RBRACKET || k == TK_RBRACE))
+                    ok = false;
+            }
+            p->tentative = prev_tent;
+            p->tentative_failed = prev_fail;
+            if (ok) return tid;
+            parser_restore(p, saved);
+        }
 
         {
             Node *qn = new_qualified_node(p, (Token **)parts.data, parts.len,
