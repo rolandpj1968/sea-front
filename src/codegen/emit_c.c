@@ -10075,9 +10075,25 @@ static void emit_class_def(Node *n) {
          * pointer reaches the base's vtable instance and the wrong dtor
          * runs. The user-written dtor's ND_FUNC_DEF is NOT marked
          * is_virtual (the parser only sets it when the source keyword
-         * appears), so the loop above misses it. */
-        if (!any_virtual_has_body && class_has_virtual_dtor(class_type))
-            any_virtual_has_body = true;
+         * appears), so the loop above misses it.
+         *
+         * BUT only when an in-TU dtor body exists — for an extern-only
+         * polymorphic class (only declarations, no bodies; e.g.
+         * std::exception included transitively from libstdc++) we must
+         * leave any_virtual_has_body false so the vtable instance and
+         * D1 wrapper synthesis are skipped (docs/mangling.md
+         * "System-class interop"). Walk members for an ND_FUNC_DEF
+         * destructor; a declaration-only dtor is ND_VAR_DECL and does
+         * not count. */
+        if (!any_virtual_has_body && class_has_virtual_dtor(class_type)) {
+            for (int i = 0; i < n->class_def.nmembers; i++) {
+                Node *m = n->class_def.members[i];
+                if (m && m->kind == ND_FUNC_DEF && m->func.is_destructor) {
+                    any_virtual_has_body = true;
+                    break;
+                }
+            }
+        }
         /* Out-of-class virtual definitions: 'virtual int foo(int);'
          * declared in the class body, body emitted later as a top-level
          * ND_FUNC_DEF whose class_type points back here. The OOL
