@@ -858,6 +858,57 @@ static void emit_source_comment(Token *tok) {
  * reads back. Documented; mini-block isolation per full-expression
  * is a possible future refinement. */
 
+/* True if 'n' is safe as a file-scope (static-storage) initializer
+ * under C's constant-expression rules (C11 §6.7.9/4). Conservative:
+ * accepts only literal shapes and address-of-globals; rejects calls,
+ * non-literal idents (which are runtime loads in C), and other
+ * computed expressions. Used to detect whether a file-scope ND_VAR_DECL
+ * should keep its initializer or defer it to __sf_global_init. */
+static bool is_const_initializer_for_static(Node *n) {
+    if (!n) return true;
+    switch (n->kind) {
+    case ND_NUM:
+    case ND_FNUM:
+    case ND_STR:
+    case ND_CHAR:
+    case ND_BOOL_LIT:
+    case ND_NULLPTR:
+    case ND_SIZEOF:
+    case ND_ALIGNOF:
+    case ND_OFFSETOF:
+        return true;
+    case ND_INIT_LIST:
+        for (int i = 0; i < n->init_list.nelems; i++)
+            if (!is_const_initializer_for_static(n->init_list.elems[i]))
+                return false;
+        return true;
+    case ND_UNARY:
+        /* Address-of-global is a constant address. Treat '&ident'
+         * conservatively as constant — most callers reference a
+         * file-scope global, the cast-through-pointer case is what
+         * we're trying to support. */
+        if (n->unary.op == TK_AMP && n->unary.operand &&
+            n->unary.operand->kind == ND_IDENT)
+            return true;
+        /* Unary plus / minus on a literal is also constant. */
+        if ((n->unary.op == TK_PLUS || n->unary.op == TK_MINUS) &&
+            n->unary.operand)
+            return is_const_initializer_for_static(n->unary.operand);
+        return false;
+    case ND_BINARY:
+        /* Pure arithmetic on constants. */
+        return is_const_initializer_for_static(n->binary.lhs) &&
+               is_const_initializer_for_static(n->binary.rhs);
+    case ND_CAST:
+        /* A cast is constant when its operand is. The (foo*)objPtr
+         * case fails here because objPtr is ND_IDENT — not handled.
+         * That's what routes the cast to __sf_global_init. */
+        return is_const_initializer_for_static(n->cast.operand);
+    default:
+        return false;
+    }
+}
+
 /* Conservative side-effect predicate for the C++17 sequencing
  * discipline (docs/sequencing.md). Returns true only for forms with
  * well-understood side effects: calls, pre/post inc/dec, nested
@@ -11229,6 +11280,41 @@ static void emit_top_level(Node *n) {
                 g_emit_phase = saved_phase;
             }
         }
+        /* File-scope dynamic initialisation: C requires constant
+         * initialisers for objects of static storage duration (C11
+         * §6.7.9/4). For non-class scalar/pointer globals whose init
+         * is a function call, qualified cast through a non-folded
+         * pointer, etc., defer the init to __sf_global_init so the
+         * file-scope emit just declares the variable. Don't intercept
+         * class-typed inits — those have their own copy-from-temp or
+         * ctor-call lowering elsewhere. N4659 §6.6.2 [basic.start.init].
+         * Skipped for extern / function decls (handled above) and for
+         * obvious constant shapes (literals, address-of-global,
+         * compound literals). */
+        if (n->var_decl.name && n->var_decl.init && n->var_decl.ty &&
+            n->var_decl.ty->kind != TY_FUNC &&
+            n->var_decl.ty->kind != TY_ARRAY &&
+            n->var_decl.ty->kind != TY_STRUCT &&
+            n->var_decl.ty->kind != TY_UNION &&
+            n->var_decl.ty->kind != TY_REF &&
+            n->var_decl.ty->kind != TY_RVALREF &&
+            /* const-qualified globals can't be reassigned in C's
+             * __sf_global_init body (read-only error). Leave the init
+             * in place and rely on gcc's folding for the common cases
+             * gcc accepts. The cast-through-pointer pattern that
+             * needs deferral (cast4) typically isn't const-typed. */
+            !n->var_decl.ty->is_const &&
+            !(n->var_decl.storage_flags & DECL_EXTERN) &&
+            !is_const_initializer_for_static(n->var_decl.init)) {
+            n->var_decl.deferred_to_global_init = true;
+            Node *saved_init = n->var_decl.init;
+            n->var_decl.init = NULL;
+            emit_var_storage_flags(n->var_decl.storage_flags);
+            emit_var_decl_inner(n);
+            fputs(";\n", stdout);
+            n->var_decl.init = saved_init;
+            return;
+        }
         emit_var_storage_flags(n->var_decl.storage_flags);
         emit_var_decl_inner(n);
         fputs(";\n", stdout);
@@ -11660,9 +11746,12 @@ void emit_c(Node *tu) {
      * through their ctor before main; C requires constant initialisers
      * and has no equivalent. Synthesize a single constructor function
      * '__sf_global_init' (attribute-tagged so the linker runs it
-     * pre-main) that calls the default ctor on each class-typed
-     * file-scope variable in declaration order.
-     * N4659 §6.6.2 [basic.start.init]. */
+     * pre-main) that:
+     *   - calls the default ctor on each class-typed file-scope variable
+     *   - assigns any global var whose initializer is non-constant from
+     *     C's perspective (function call, deref of a non-const-folded
+     *     variable, etc.) to the runtime-evaluated value
+     * in declaration order. N4659 §6.6.2 [basic.start.init]. */
     bool need_global_init = false;
     for (int i = 0; i < tu->tu.ndecls; i++) {
         Node *n = tu->tu.decls[i];
@@ -11672,6 +11761,10 @@ void emit_c(Node *tu) {
         Type *ty = n->var_decl.ty;
         if ((ty->kind == TY_STRUCT || ty->kind == TY_UNION) &&
             ty->has_default_ctor) {
+            need_global_init = true;
+            break;
+        }
+        if (n->var_decl.init && n->var_decl.deferred_to_global_init) {
             need_global_init = true;
             break;
         }
@@ -11686,13 +11779,23 @@ void emit_c(Node *tu) {
             if (!n->var_decl.ty || !n->var_decl.name) continue;
             if (n->var_decl.storage_flags & DECL_EXTERN) continue;
             Type *ty = n->var_decl.ty;
-            if ((ty->kind != TY_STRUCT && ty->kind != TY_UNION) ||
-                !ty->has_default_ctor)
-                continue;
-            fputs("    ", stdout);
-            mangle_class_ctor(ty, NULL, 0);
-            fprintf(stdout, "(&%.*s);\n",
-                    n->var_decl.name->len, n->var_decl.name->loc);
+            bool is_class = (ty->kind == TY_STRUCT || ty->kind == TY_UNION) &&
+                            ty->has_default_ctor;
+            bool deferred = n->var_decl.init && n->var_decl.deferred_to_global_init;
+            if (!is_class && !deferred) continue;
+            if (is_class) {
+                fputs("    ", stdout);
+                mangle_class_ctor(ty, NULL, 0);
+                fprintf(stdout, "(&%.*s);\n",
+                        n->var_decl.name->len, n->var_decl.name->loc);
+            }
+            if (deferred) {
+                fputs("    ", stdout);
+                fprintf(stdout, "%.*s = ",
+                        n->var_decl.name->len, n->var_decl.name->loc);
+                emit_init_with_target(n->var_decl.init, n->var_decl.ty);
+                fputs(";\n", stdout);
+            }
         }
         fputs("}\n", stdout);
     }

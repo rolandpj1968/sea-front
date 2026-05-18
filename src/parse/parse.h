@@ -685,6 +685,12 @@ struct Node {
             bool   is_constructor;
             bool   is_destructor;
             bool   is_virtual;
+            /* Set during emit when a file-scope ND_VAR_DECL's initializer
+             * is non-constant from C's perspective (function call, etc.).
+             * The file-scope emit suppresses the initializer; the
+             * __sf_global_init synthesizer emits an assignment at startup.
+             * N4659 §6.6.2 [basic.start.init]. */
+            bool   deferred_to_global_init;
             /* Bit-field width — N4659 §12.2.4 [class.bit]
              *   member-declarator: identifier(opt) : constant-expression
              * NULL for non-bitfield members. */
