@@ -3385,14 +3385,40 @@ static void emit_expr(Node *n) {
         for (int i = 0; i < n->lambda.ncaptures; i++) {
             Capture *c = &n->lambda.captures[i];
             if (i > 0) fputs(", ", stdout);
+            /* If the captured entity is itself a reference (T&), its
+             * C lowering is a pointer T*. The closure member's type
+             * has the reference stripped (§8.1.5.2/15 + the parser's
+             * ref-strip when allocating the closure member), so at
+             * the init site we must dereference the C-level pointer
+             * to get the underlying T value. Both by-value and by-ref
+             * captures need this: by-value because the closure stores
+             * T, by-ref because '&(*p)' on a ref-param-pointer 'p'
+             * yields the same 'p' but with the right pointer level. */
+            bool source_is_ref = c->resolved_type &&
+                (c->resolved_type->kind == TY_REF ||
+                 c->resolved_type->kind == TY_RVALREF);
             if (c->is_this) {
                 /* [this] capture — closure stores Class*. Emit 'this'. */
                 fputs("this", stdout);
             } else if (c->by_ref) {
-                fputc('&', stdout);
-                fprintf(stdout, "%.*s", c->name->len, c->name->loc);
+                if (source_is_ref) {
+                    /* Source is already a ref → C-level T*; use it
+                     * directly as the closure's T* member. */
+                    fprintf(stdout, "%.*s", c->name->len, c->name->loc);
+                } else {
+                    fputc('&', stdout);
+                    fprintf(stdout, "%.*s", c->name->len, c->name->loc);
+                }
             } else {
-                fprintf(stdout, "%.*s", c->name->len, c->name->loc);
+                if (source_is_ref) {
+                    /* Deref the C-level T* to get T for the closure's
+                     * T member. */
+                    fputs("(*", stdout);
+                    fprintf(stdout, "%.*s", c->name->len, c->name->loc);
+                    fputc(')', stdout);
+                } else {
+                    fprintf(stdout, "%.*s", c->name->len, c->name->loc);
+                }
             }
         }
         fputc('}', stdout);

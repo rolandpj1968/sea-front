@@ -320,7 +320,16 @@ static Type *deduce_lambda_return_expr(Parser *p, Node *e) {
         Token *nm = e->ident.name;
         if (!nm || nm->kind != TK_IDENT) return NULL;
         Declaration *d = lookup_unqualified(p, nm->loc, nm->len);
-        return (d && d->type) ? d->type : NULL;
+        Type *t = (d && d->type) ? d->type : NULL;
+        /* Lambda return-type deduction follows auto-deduction: strip
+         * outermost reference (N4659 §8.1.5.4/4 — same rules as
+         * §10.1.7.4.1 [dcl.spec.auto.deduce]). Without this,
+         * '[]{ return ir; }' for 'int& ir' would deduce 'int&' and
+         * the C signature emits 'int* func()' with a body that
+         * returns the int value. */
+        while (t && (t->kind == TY_REF || t->kind == TY_RVALREF))
+            t = t->base;
+        return t;
     }
     default:
         return NULL;
@@ -860,9 +869,28 @@ static Node *primary_expr(Parser *p) {
                                 } else if (captures[i].by_ref) {
                                     mty = new_type(p, TY_PTR);
                                     mty->base = captures[i].resolved_type;
+                                    /* If the captured variable is itself
+                                     * a reference, peel it — closure
+                                     * stores the underlying T*, not
+                                     * T*&. Without this, capturing a
+                                     * 'T&' by reference produces a
+                                     * pointer-to-reference shape that
+                                     * lowers to a useless T**. */
+                                    while (mty->base &&
+                                           (mty->base->kind == TY_REF ||
+                                            mty->base->kind == TY_RVALREF))
+                                        mty->base = mty->base->base;
                                     mname = captures[i].name;
                                 } else {
+                                    /* §8.1.5.2/15: by-value capture
+                                     * stores the *referenced* type when
+                                     * the named entity is a reference.
+                                     * Strip TY_REF/TY_RVALREF so the
+                                     * closure member is T, not T&. */
                                     mty = captures[i].resolved_type;
+                                    while (mty && (mty->kind == TY_REF ||
+                                                   mty->kind == TY_RVALREF))
+                                        mty = mty->base;
                                     mname = captures[i].name;
                                 }
                                 Node *m = new_node(p, ND_VAR_DECL, mname);
