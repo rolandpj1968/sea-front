@@ -7411,6 +7411,15 @@ static void emit_stmt(Node *n) {
             emit_var_storage_flags(sf);
         }
         emit_var_decl_inner(n);
+        /* Value-init 'T x{}' — empty brace-init — N4659 §11.6.1/8
+         * [dcl.init]: zero-initialize the object before calling the
+         * default ctor. The ctor call follows below; this just adds
+         * the zero-fill initializer to the declaration. */
+        if (n->var_decl.has_ctor_init && n->var_decl.ctor_nargs == 0 &&
+            n->var_decl.ty && n->var_decl.ty->kind == TY_STRUCT &&
+            n->var_decl.name) {
+            fputs(" = {0}", stdout);
+        }
         fputs(";\n", stdout);
         /* Direct-init 'T x(args)' lowers to a ctor call right
          * after the declaration. The class type's tag determines
@@ -9780,6 +9789,19 @@ static void emit_class_def(Node *n) {
         } else if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
                    m->var_decl.ty->kind == TY_FUNC && m->var_decl.name &&
                    class_type) {
+            /* Skip forward decl for '= default' / '= delete' on the
+             * default ctor — the synthesis path below (or the absence
+             * of a body for delete) handles the linkage end-to-end.
+             * Emitting a non-static decl here would collide with the
+             * later __SF_INLINE synthesized body.
+             * N4659 §10.1.6.4 [dcl.fct.def.default] / §10.1.6 [dcl.fct.def.delete]. */
+            if (m->var_decl.is_constructor && m->var_decl.ty->nparams == 0) {
+                Node *init = m->var_decl.init;
+                if (init && init->kind == ND_NULLPTR && init->tok &&
+                    (init->tok->kind == TK_KW_DEFAULT ||
+                     init->tok->kind == TK_KW_DELETE))
+                    continue;
+            }
             /* Synthesise an emit_method_signature-like header from
              * the var-decl's type. Ctor/dtor declarations route
              * through mangle_class_ctor / mangle_class_dtor_body
@@ -10480,18 +10502,44 @@ methods_phase:;
      * Body just chains into each member's default ctor in declaration
      * order. Trivially-default-constructible members contribute
      * nothing (no call). */
+    /* Distinguish:
+     *   - user-provided default ctor with body (blocks synthesis)
+     *   - 'A() = default;' (explicitly requests synthesis,
+     *     N4659 §10.1.6.4 [dcl.fct.def.default])
+     *   - any user-declared ctor at all (blocks the implicit-default
+     *     ctor rule, §15.1 [class.ctor]/4)
+     * The defaulted-default request must always produce a body even
+     * when other user ctors like A(int) are declared. */
+    bool user_default_ctor_with_body = false;
+    bool has_defaulted_default_ctor = false;
     bool any_user_ctor = false;
     for (int i = 0; i < n->class_def.nmembers; i++) {
         Node *m = n->class_def.members[i];
         if (!m) continue;
-        if ((m->kind == ND_FUNC_DEF && m->func.is_constructor) ||
-            (m->kind == ND_VAR_DECL && m->var_decl.ty &&
-             m->var_decl.ty->kind == TY_FUNC && m->var_decl.is_constructor)) {
+        if (m->kind == ND_FUNC_DEF && m->func.is_constructor) {
             any_user_ctor = true;
-            break;
+            if (m->func.nparams == 0) user_default_ctor_with_body = true;
+        } else if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
+                   m->var_decl.ty->kind == TY_FUNC &&
+                   m->var_decl.is_constructor) {
+            any_user_ctor = true;
+            int nparams = m->var_decl.ty->nparams;
+            Node *init = m->var_decl.init;
+            bool is_defaulted = init && init->kind == ND_NULLPTR &&
+                init->tok && init->tok->kind == TK_KW_DEFAULT;
+            bool is_deleted = init && init->kind == ND_NULLPTR &&
+                init->tok && init->tok->kind == TK_KW_DELETE;
+            if (nparams == 0) {
+                if (is_defaulted) has_defaulted_default_ctor = true;
+                else if (!is_deleted) user_default_ctor_with_body = true;
+            }
         }
     }
-    if (class_type && class_type->has_default_ctor && !any_user_ctor) {
+    bool needs_default_ctor_synth =
+        (has_defaulted_default_ctor ||
+         (class_type && class_type->has_default_ctor && !any_user_ctor)) &&
+        !user_default_ctor_with_body;
+    if (class_type && needs_default_ctor_synth) {
         /* Forward decl + body for the synthesized ctor (0-param). */
         fputs("__SF_INLINE void ", stdout);
         mangle_class_ctor(class_type, NULL, 0);
