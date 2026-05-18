@@ -781,7 +781,7 @@ parse_suffixes:
                         if (param_decl) {
                             param_decl->param.default_value = def_val;
                             vec_push(&params, param_decl);
-                            vec_push(&param_types, param_decl->var_decl.ty);
+                            vec_push(&param_types, param_decl->param.ty);
                         }
 
                         /* C-style variadic ellipsis WITHOUT a leading
@@ -948,7 +948,7 @@ parse_suffixes:
                     if (param_decl) {
                         param_decl->param.default_value = def_val2;
                         vec_push(&params, param_decl);
-                        vec_push(&param_types, param_decl->var_decl.ty);
+                        vec_push(&param_types, param_decl->param.ty);
                     }
                     /* No-comma variadic — see sibling paramlist parser. */
                     if (parser_consume(p, TK_ELLIPSIS)) { variadic = true; break; }
@@ -2613,9 +2613,9 @@ static Node *parse_template_parameter(Parser *p) {
     param->kind = ND_PARAM;
 
     /* Register non-type parameter name */
-    if (param->var_decl.name)
-        region_declare(p, param->var_decl.name->loc,
-                      param->var_decl.name->len, ENTITY_VARIABLE, ty);
+    if (param->param.name)
+        region_declare(p, param->param.name->loc,
+                      param->param.name->len, ENTITY_VARIABLE, ty);
 
     /* Optional default value: = constant-expression. N4659 §17.1/8
      * [temp.param] permits NTTPs to carry defaults; §17.7.1/8
