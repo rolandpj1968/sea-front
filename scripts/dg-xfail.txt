@@ -1,0 +1,32 @@
+# Tests that sea-front is not expected to pass on the g++.dg suite.
+#
+# Format: one relative path per line (relative to SEA_GCC_TESTSUITE root).
+# Lines starting with '#' are comments. Trailing whitespace ignored.
+#
+# When a listed test is run:
+#   - non-PASS outcome → XFAIL (expected fail, doesn't pollute the FAIL/E_*
+#     buckets and signal real regressions)
+#   - PASS outcome      → XPASS (loud — likely the test deserves removal
+#     from this list because some other slice fixed it)
+#
+# Buckets recognised below:
+
+# --- Itanium C++ ABI conformance ----------------------------------------
+# Sea-front uses a deliberately-private object layout, vtable shape, and
+# EH model — see docs/mangling.md "System-class interop" and docs/rtti.md
+# for the rationale. These tests assert specific gcc-on-ilp32 layout
+# offsets that sea-front isn't aiming to match.
+
+g++.dg/abi/bitfield1.C
+g++.dg/abi/bitfield8.C
+g++.dg/abi/covariant3.C
+g++.dg/abi/empty7.C
+g++.dg/abi/empty9.C
+g++.dg/abi/empty10.C
+g++.dg/abi/empty11.C
+g++.dg/abi/layout2.C
+g++.dg/abi/layout3.C
+g++.dg/abi/layout4.C
+g++.dg/abi/vbase11.C
+g++.dg/abi/vbase13.C
+g++.dg/cpp0x/regress/abi-empty7.C
