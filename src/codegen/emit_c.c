@@ -8611,6 +8611,35 @@ static void emit_stmt(Node *n) {
         return;
     case ND_WHILE: {
         Node *body = n->while_.body;
+        /* Declaration-as-condition: `while (T v = expr) body` —
+         * N4659 §9.5.1/2. Lift to a wrapping block. Approximate the
+         * re-init-per-iteration semantics with a single decl + plain
+         * test — incorrect for loops where the body modifies v and
+         * the next iteration would re-create it, but correct for
+         * the common case where the cond evaluates false on entry
+         * (operator bool with side-effecting ctor). Pattern:
+         * g++.dg/eh/scope1.C. */
+        if (n->while_.cond && n->while_.cond->kind == ND_VAR_DECL &&
+            n->while_.cond->var_decl.name) {
+            Token *nm = n->while_.cond->var_decl.name;
+            emit_open_brace();
+            emit_indent();
+            emit_var_decl_inner(n->while_.cond);
+            fputs(";\n", stdout);
+            emit_indent();
+            Node ident_stub = {0};
+            ident_stub.kind = ND_IDENT;
+            ident_stub.ident.name = nm;
+            ident_stub.resolved_type = n->while_.cond->var_decl.ty;
+            fputs("while (", stdout);
+            emit_bool_context_expr(&ident_stub);
+            fputs(") ", stdout);
+            emit_stmt(body);
+            g_indent--;
+            emit_indent();
+            fputs("}\n", stdout);
+            return;
+        }
         bool body_wrap = g_cf.func_has_cleanups && subtree_has_cleanups(body);
         bool cond_wrap = expr_has_class_temp(n->while_.cond);
         /* See for-loop's brace_only comment — a non-block body in a
@@ -8813,6 +8842,45 @@ static void emit_stmt(Node *n) {
     }
     case ND_FOR: {
         Node *body = n->for_.body;
+        /* Declaration-as-condition: `for (init; T v = expr; inc) body`
+         * — N4659 §9.5.3/2. Lift to a wrapping block then while-loop
+         * with the cond as a plain variable test. Approximate per-
+         * iteration re-init (like while-decl-cond above). Pattern:
+         * g++.dg/eh/scope1.C `for (; C br = C(); ) ...`. */
+        if (n->for_.cond && n->for_.cond->kind == ND_VAR_DECL &&
+            n->for_.cond->var_decl.name) {
+            Token *nm = n->for_.cond->var_decl.name;
+            emit_open_brace();
+            if (n->for_.init) {
+                emit_indent();
+                emit_stmt(n->for_.init);
+            }
+            emit_indent();
+            emit_var_decl_inner(n->for_.cond);
+            fputs(";\n", stdout);
+            emit_indent();
+            Node ident_stub = {0};
+            ident_stub.kind = ND_IDENT;
+            ident_stub.ident.name = nm;
+            ident_stub.resolved_type = n->for_.cond->var_decl.ty;
+            fputs("while (", stdout);
+            emit_bool_context_expr(&ident_stub);
+            fputs(") ", stdout);
+            /* Wrap body in braces with inc at the end. */
+            fputs("{\n", stdout);
+            g_indent++;
+            if (body) { emit_indent(); emit_stmt(body); }
+            if (n->for_.inc) {
+                emit_indent();
+                emit_expr(n->for_.inc);
+                fputs(";\n", stdout);
+            }
+            emit_close_brace();
+            g_indent--;
+            emit_indent();
+            fputs("}\n", stdout);
+            return;
+        }
         bool body_wrap = g_cf.func_has_cleanups && subtree_has_cleanups(body);
         bool cond_wrap = n->for_.cond && expr_has_class_temp(n->for_.cond);
         /* If func_has_cleanups, a non-block body emits a __SF_CHAIN_THROW
@@ -9177,7 +9245,33 @@ static void emit_stmt(Node *n) {
          * The C++17 init-statement is not lowered yet (would emit as
          * a preceding statement in a braced block). break/continue
          * inside are handled by the ND_BREAK/ND_CONTINUE cases —
-         * 'break' in a switch exits the switch, not a loop. */
+         * 'break' in a switch exits the switch, not a loop.
+         *
+         * Declaration-as-condition: `switch (T v = expr) body` —
+         * §9.4.2/2. Lift to a wrapping block then switch on v.
+         * Pattern: g++.dg/eh/scope1.C `switch (C br = C()) ...`. */
+        if (n->switch_.expr && n->switch_.expr->kind == ND_VAR_DECL &&
+            n->switch_.expr->var_decl.name) {
+            Token *nm = n->switch_.expr->var_decl.name;
+            emit_open_brace();
+            emit_indent();
+            emit_var_decl_inner(n->switch_.expr);
+            fputs(";\n", stdout);
+            emit_indent();
+            Node ident_stub = {0};
+            ident_stub.kind = ND_IDENT;
+            ident_stub.ident.name = nm;
+            ident_stub.resolved_type = n->switch_.expr->var_decl.ty;
+            fputs("switch (", stdout);
+            emit_bool_context_expr(&ident_stub);
+            fputs(") ", stdout);
+            if (n->switch_.body) emit_stmt(n->switch_.body);
+            else fputs(";\n", stdout);
+            g_indent--;
+            emit_indent();
+            fputs("}\n", stdout);
+            return;
+        }
         fputs("switch (", stdout);
         if (n->switch_.expr)
             emit_expr(n->switch_.expr);

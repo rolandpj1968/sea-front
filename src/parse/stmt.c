@@ -29,6 +29,99 @@
 
 #include "parse.h"
 
+/* Parse the condition slot of an if / while / for / switch — N4659
+ * §9.4.1 [stmt.select] + §9.5.1 [stmt.iter] + §9.4.2 [stmt.switch]:
+ *   condition: expression
+ *            | attribute-specifier-seq(opt) decl-specifier-seq declarator
+ *              brace-or-equal-initializer
+ * Used as e.g. `if (T x = expr)`. Tentatively try a declaration; if
+ * it doesn't end at the expected close token, restore and parse as
+ * expression.
+ *
+ * end_tok is the token that follows the condition: TK_RPAREN for
+ * if/while/switch (caller consumes ')'); TK_SEMI for the cond slot
+ * of for. Without this, a `for (; C br = C(); ) ...` shape misparses
+ * — the tentative check sees `;` after the init and bails.
+ *
+ * Returns either ND_VAR_DECL (declaration form) or an arbitrary
+ * expression node. The decl is registered in p->region — the caller
+ * is responsible for the surrounding scope push. */
+static Node *parse_condition_until(Parser *p, TokenKind end_tok) {
+    /* Same IDENT-IDENT shortcut as parse_stmt — see the long
+     * comment block there for the standard rule, our deviation,
+     * and the TODO(seafront#stmt-ambig) tracking. */
+    bool decl_ident = false;
+    if (parser_peek(p)->kind == TK_IDENT && !parser_at_type_specifier(p)) {
+        Token *t1 = parser_peek_ahead(p, 1);
+        if (t1->kind == TK_IDENT &&
+            !lookup_unqualified(p, t1->loc, t1->len))
+            decl_ident = true;
+    }
+    if (!parser_at_type_specifier(p) && !decl_ident)
+        return parse_expr(p);
+
+    ParseState saved = parser_save(p);
+    bool prev_tentative = p->tentative;
+    p->tentative = true;
+    bool saved_failed = p->tentative_failed;
+    p->tentative_failed = false;
+    Type *base = parse_type_specifiers(p).type;
+    Node *decl = base ? parse_declarator(p, base) : NULL;
+    if (decl && parser_consume(p, TK_ASSIGN))
+        decl->var_decl.init = parse_assign_expr(p);
+    else if (decl && parser_at(p, TK_LBRACE)) {
+        int depth = 0;
+        while (!parser_at_eof(p)) {
+            if (parser_at(p, TK_LBRACE)) depth++;
+            if (parser_at(p, TK_RBRACE)) {
+                depth--;
+                if (depth <= 0) { parser_advance(p); break; }
+            }
+            parser_advance(p);
+        }
+    }
+    /* Valid condition declaration needs a name — N4659 §9.4.1/2: the
+     * condition form is `decl-specifier-seq declarator brace-or-
+     * equal-initializer`. An abstract declarator without a name
+     * isn't a condition. This matters for `if (answer)` when
+     * 'answer' is BOTH a struct tag and a variable in scope —
+     * without the name check, tentative parse accepts `struct
+     * answer` and emits an empty decl. */
+    bool ok = decl && decl->var_decl.name &&
+              parser_at(p, end_tok) && !p->tentative_failed;
+    p->tentative = prev_tentative;
+    p->tentative_failed = saved_failed;
+    parser_restore(p, saved);
+    if (!ok)
+        return parse_expr(p);
+
+    base = parse_type_specifiers(p).type;
+    decl = parse_declarator(p, base);
+    if (parser_consume(p, TK_ASSIGN))
+        decl->var_decl.init = parse_assign_expr(p);
+    else if (parser_at(p, TK_LBRACE)) {
+        int depth = 0;
+        while (!parser_at_eof(p)) {
+            if (parser_at(p, TK_LBRACE)) depth++;
+            if (parser_at(p, TK_RBRACE)) {
+                depth--;
+                if (depth <= 0) { parser_advance(p); break; }
+            }
+            parser_advance(p);
+        }
+    }
+    if (decl->var_decl.name)
+        region_declare(p, decl->var_decl.name->loc,
+                       decl->var_decl.name->len, ENTITY_VARIABLE,
+                       decl->var_decl.ty);
+    return decl;
+}
+
+/* Common case: condition followed by ')'. */
+static Node *parse_condition(Parser *p) {
+    return parse_condition_until(p, TK_RPAREN);
+}
+
 /*
  * compound-statement — N4659 §9.3 [stmt.block]
  *   { statement-seq(opt) }
@@ -99,85 +192,7 @@ static Node *parse_if_stmt(Parser *p) {
      * the if-cond fails to resolve at sema time. */
     node->if_.scope = p->region;
 
-    /* Declaration in condition — N4659 §9.4.1 [stmt.select]
-     *   condition: expression
-     *            | attribute-specifier-seq(opt) decl-specifier-seq declarator
-     *              brace-or-equal-initializer
-     * Used as e.g. 'if (T x = expr)'. We tentatively try a declaration; if
-     * it doesn't end at ')', restore and parse as expression. */
-    /* Same IDENT-IDENT shortcut as parse_stmt — see the long
-     * comment block there for the standard rule, our deviation,
-     * and the TODO(seafront#stmt-ambig) tracking. */
-    bool if_decl_ident = false;
-    if (parser_peek(p)->kind == TK_IDENT && !parser_at_type_specifier(p)) {
-        Token *t1 = parser_peek_ahead(p, 1);
-        if (t1->kind == TK_IDENT &&
-            !lookup_unqualified(p, t1->loc, t1->len))
-            if_decl_ident = true;
-    }
-    if (parser_at_type_specifier(p) || if_decl_ident) {
-        ParseState saved = parser_save(p);
-        bool prev_tentative = p->tentative;
-        p->tentative = true;
-        bool saved_failed = p->tentative_failed;
-        p->tentative_failed = false;
-        Type *base = parse_type_specifiers(p).type;
-        Node *decl = base ? parse_declarator(p, base) : NULL;
-        if (decl && parser_consume(p, TK_ASSIGN))
-            decl->var_decl.init = parse_assign_expr(p);
-        else if (decl && parser_at(p, TK_LBRACE)) {
-            /* Braced-init: 'if (T x{...})'. Skip the brace-balanced
-             * init expression. */
-            int depth = 0;
-            while (!parser_at_eof(p)) {
-                if (parser_at(p, TK_LBRACE)) depth++;
-                if (parser_at(p, TK_RBRACE)) {
-                    depth--;
-                    if (depth <= 0) { parser_advance(p); break; }
-                }
-                parser_advance(p);
-            }
-        }
-        /* Valid if-condition declaration needs a name — N4659 §9.4.1
-         * [stmt.select]/2 the condition form is 'decl-specifier-seq
-         * declarator brace-or-equal-initializer'. An abstract
-         * declarator with no name is not a condition. This matters
-         * for 'if (answer)' when 'answer' is BOTH a struct tag and
-         * a variable in scope — without the name check the tentative
-         * parse accepts 'struct answer' and emits an empty decl. */
-        bool ok = decl && decl->var_decl.name &&
-                  parser_at(p, TK_RPAREN) && !p->tentative_failed;
-        p->tentative = prev_tentative;
-        p->tentative_failed = saved_failed;
-        parser_restore(p, saved);
-        if (ok) {
-            base = parse_type_specifiers(p).type;
-            decl = parse_declarator(p, base);
-            if (parser_consume(p, TK_ASSIGN))
-                decl->var_decl.init = parse_assign_expr(p);
-            else if (parser_at(p, TK_LBRACE)) {
-                int depth = 0;
-                while (!parser_at_eof(p)) {
-                    if (parser_at(p, TK_LBRACE)) depth++;
-                    if (parser_at(p, TK_RBRACE)) {
-                        depth--;
-                        if (depth <= 0) { parser_advance(p); break; }
-                    }
-                    parser_advance(p);
-                }
-            }
-            if (decl->var_decl.name)
-                region_declare(p, decl->var_decl.name->loc,
-                              decl->var_decl.name->len, ENTITY_VARIABLE,
-                              decl->var_decl.ty);
-            node->if_.cond = decl;
-        } else {
-            node->if_.cond = parse_expr(p);
-        }
-    } else {
-        node->if_.cond = parse_expr(p);
-    }
-
+    node->if_.cond = parse_condition(p);
     parser_expect(p, TK_RPAREN);
 
     /* C++20: attribute-specifier-seq before the substatement.
@@ -209,9 +224,15 @@ static Node *parse_if_stmt(Parser *p) {
 static Node *parse_while_stmt(Parser *p) {
     Token *tok = parser_expect(p, TK_KW_WHILE);
     parser_expect(p, TK_LPAREN);
-    Node *cond = parse_expr(p);
+    /* N4659 §9.5.1/2: condition can be a declaration `T x = expr`.
+     * Push a block scope so the var lives only in the loop. The body
+     * referenced by the loop sees the var; outer scope doesn't.
+     * Pattern: g++.dg/eh/scope1.C `while (C br = C()) ...`. */
+    region_push(p, REGION_BLOCK, /*name=*/NULL);
+    Node *cond = parse_condition(p);
     parser_expect(p, TK_RPAREN);
     Node *body = parse_stmt(p);
+    region_pop(p);
 
     Node *node = new_node(p, ND_WHILE, tok);
     node->while_.cond = cond;
@@ -352,10 +373,13 @@ static Node *parse_for_stmt(Parser *p) {
         parser_expect(p, TK_SEMI);
     }
 
-    /* condition (optional) */
+    /* condition (optional) — N4659 §9.5.3/2: can be a declaration
+     * `T x = expr` as in if/while. The end-of-cond marker for for is
+     * ';', not ')'. Pattern: g++.dg/eh/scope1.C
+     * `for (; C br = C(); ) ...`. */
     Node *cond = NULL;
     if (!parser_at(p, TK_SEMI))
-        cond = parse_expr(p);
+        cond = parse_condition_until(p, TK_SEMI);
     parser_expect(p, TK_SEMI);
 
     /* increment (optional) */
@@ -388,9 +412,14 @@ static Node *parse_for_stmt(Parser *p) {
 static Node *parse_switch_stmt(Parser *p) {
     Token *tok = parser_expect(p, TK_KW_SWITCH);
     parser_expect(p, TK_LPAREN);
-    Node *expr = parse_expr(p);
+    /* N4659 §9.4.2/2: condition can be a declaration. Same scope
+     * push as while/if. Pattern: g++.dg/eh/scope1.C
+     * `switch (C br = C())`. */
+    region_push(p, REGION_BLOCK, /*name=*/NULL);
+    Node *expr = parse_condition(p);
     parser_expect(p, TK_RPAREN);
     Node *body = parse_stmt(p);
+    region_pop(p);
 
     Node *node = new_node(p, ND_SWITCH, tok);
     node->switch_.expr = expr;
