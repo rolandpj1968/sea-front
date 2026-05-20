@@ -610,20 +610,25 @@ static void emit_arg_for_param(Node *arg, Type *param_ty) {
          *   ({ T __sf_cpy; T_copy_ctor(&__sf_cpy, &arg); __sf_cpy; })
          * GNU stmt-expr — the rest of the EH path uses these already.
          * Patterns: g++.dg/init/elide2.C, copy3.C, cpp0x/implicit2.C. */
+        /* Gated on !has_dtor: when the class has a destructor, a
+         * copy-constructed param would need its dtor to fire after
+         * the call. Sea-front doesn't yet manage stmt-expr-scoped
+         * temps that way — so for dtor-bearing classes the pre-fix
+         * bitwise path is kept (matches the dtor-count expectation
+         * in tests like opt/dtor1.C which check ctor/dtor balance).
+         * For classes without a dtor, the copy ctor side effects
+         * still apply via this stmt-expr and no dtor counterbalance
+         * is needed. TODO: hoist the copy temp out of the arg and
+         * register its dtor after the call, then this gate can lift. */
         if (param_ty &&
             (param_ty->kind == TY_STRUCT || param_ty->kind == TY_UNION) &&
+            !param_ty->has_dtor &&
             arg->resolved_type && is_addressable_lvalue(arg)) {
             Type *src = arg->resolved_type;
             if (src->kind == TY_REF || src->kind == TY_RVALREF)
                 src = src->base;
             if (src && src->tag && param_ty->tag &&
                 tokens_equal(src->tag, param_ty->tag)) {
-                /* Build a (const T&) param-type for the overload
-                 * lookup. C++ copy ctor takes 'const T&' (the canonical
-                 * form); §11.4.5/1. We pass src directly (the class
-                 * Type) since resolve_overload's ref-binding check
-                 * accepts a non-ref source and matches against a
-                 * ref param. */
                 Type *at[1] = { src };
                 Type **pty = NULL;
                 Node *best = NULL;
