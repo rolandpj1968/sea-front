@@ -7317,10 +7317,20 @@ static void emit_cleanup_chain_for_added(int saved_nlive) {
                     v->var_decl.name->len, v->var_decl.name->loc);
         }
     }
-    /* Three-way chain-out. See the comment in emit_block where this
-     * was originally written. */
-    char rt_buf[40], bt_buf[40], ct_buf[40];
+    /* Three-way (now four-way) chain-out. See the comment in
+     * emit_block where this was originally written.
+     *
+     * THROW dispatch: if there's an enclosing CL_TRY between this
+     * scope and the next outer CL_VAR (or no outer CL_VAR at all),
+     * an in-flight throw must reach the try-block's handler — NOT
+     * the function epilogue, which would skip the catch entirely.
+     * Pattern: g++.dg/eh/ctor1.C — dtor throws while inside a
+     * try-block; member subobjects still need to be destroyed, then
+     * control transfers to catch. find_throw_target_from with
+     * in_try=true detects this case. */
+    char rt_buf[40], bt_buf[40], ct_buf[40], th_buf[40];
     bool have_break = false, have_cont = false;
+    bool have_throw_try = false;
     bool top_is_loop = (saved_nlive > 0 &&
                         g_cf.live[saved_nlive - 1].kind == CL_LOOP);
 
@@ -7346,6 +7356,18 @@ static void emit_cleanup_chain_for_added(int saved_nlive) {
             snprintf(ct_buf, sizeof(ct_buf), "__SF_loop_cont_%d", ct);
         else
             snprintf(ct_buf, sizeof(ct_buf), "__SF_cleanup_%d", ct);
+    }
+
+    bool throw_in_try = false;
+    int th = find_throw_target_from(saved_nlive, &throw_in_try);
+    if (throw_in_try) {
+        have_throw_try = true;
+        snprintf(th_buf, sizeof(th_buf), "__SF_try_%d_handler", th);
+    }
+
+    if (have_throw_try) {
+        emit_indent();
+        fprintf(stdout, "__SF_CHAIN_THROW(%s);\n", th_buf);
     }
 
     bool collapse = have_break && have_cont &&
@@ -7902,20 +7924,37 @@ static void emit_stmt(Node *n) {
                      * lvalue), '&(stmt-expr)' is invalid. Rewrite as
                      * a stmt-expr that yields the address of the
                      * named temp. Pattern: g++.dg/init/new36.C
-                     * 'throw E();' with virtual ~E() on E. */
-                    bool op_is_polymorphic = op_ty &&
-                        op_ty->has_virtual_methods;
+                     * 'throw E();' with virtual ~E() on E.
+                     *
+                     * Same pattern applies to non-polymorphic classes
+                     * with a user-declared default ctor: the generic
+                     * 'A()' emit path drops the ctor body and lowers
+                     * to '(struct A){0}', which is wrong whenever the
+                     * ctor has side effects. Pattern:
+                     * g++.dg/eh/elide1.C 'throw A()' where A::A()
+                     * itself throws — the int-throw from inside the
+                     * ctor is what the outer try catches; emitting
+                     * just '{0}' skips that throw entirely. */
                     Node *op = thr->throw_.operand;
                     bool is_func_cast_zero =
                         op && op->kind == ND_CALL && op->call.nargs == 0 &&
                         op->call.callee &&
                         op->call.callee->kind == ND_IDENT;
-                    if (op_is_polymorphic && is_func_cast_zero) {
+                    bool needs_ctor_call = op_ty &&
+                        (op_ty->has_virtual_methods ||
+                         op_ty->has_default_ctor);
+                    if (is_func_cast_zero && needs_ctor_call) {
                         fputs("__SF_THROW_CLASS(({ ", stdout);
                         emit_type(op_ty);
                         fputs(" __sf_thr = {0}; ", stdout);
                         mangle_class_ctor(op_ty, NULL, 0);
-                        fputs("(&__sf_thr); &__sf_thr; })", stdout);
+                        fputs("(&__sf_thr); ", stdout);
+                        /* The ctor body may itself throw; if so the
+                         * outer __SF_THROW_CLASS must NOT clobber the
+                         * just-set exc_state. The CHAIN check skips
+                         * out via the same label the ctor used. */
+                        fprintf(stdout, "__SF_CHAIN_THROW(%s); ", lbl);
+                        fputs("&__sf_thr; })", stdout);
                         fprintf(stdout, ", 0, %s);\n", lbl);
                     } else {
                         fputs("__SF_THROW_CLASS(&(", stdout);
@@ -8325,12 +8364,27 @@ static void emit_stmt(Node *n) {
         Node *body = n->while_.body;
         bool body_wrap = g_cf.func_has_cleanups && subtree_has_cleanups(body);
         bool cond_wrap = expr_has_class_temp(n->while_.cond);
-        if (!body_wrap && !cond_wrap) {
+        /* See for-loop's brace_only comment — a non-block body in a
+         * func_has_cleanups function needs braces so the trailing
+         * __SF_CHAIN_THROW stays inside the loop. */
+        bool brace_only = !body_wrap && g_cf.func_has_cleanups
+                          && body && body->kind != ND_BLOCK;
+        if (!body_wrap && !cond_wrap && !brace_only) {
             /* Simple natural form — no cleanups anywhere. */
             fputs("while (", stdout);
             emit_expr(n->while_.cond);
             fputs(") ", stdout);
             emit_stmt(body);
+            return;
+        }
+        if (brace_only) {
+            fputs("while (", stdout);
+            emit_expr(n->while_.cond);
+            fputs(") {\n", stdout);
+            g_indent++;
+            emit_indent();
+            emit_stmt(body);
+            emit_close_brace();
             return;
         }
         /* Slice C: when the body has cleanups, push a CL_LOOP marker
@@ -8412,11 +8466,26 @@ static void emit_stmt(Node *n) {
         Node *body = n->do_.body;
         bool body_wrap = g_cf.func_has_cleanups && subtree_has_cleanups(body);
         bool cond_wrap = expr_has_class_temp(n->do_.cond);
-        if (!body_wrap && !cond_wrap) {
+        /* See for-loop's brace_only comment. */
+        bool brace_only = !body_wrap && g_cf.func_has_cleanups
+                          && body && body->kind != ND_BLOCK;
+        if (!body_wrap && !cond_wrap && !brace_only) {
             fputs("do ", stdout);
             emit_stmt(body);
             emit_indent();
             fputs("while (", stdout);
+            emit_expr(n->do_.cond);
+            fputs(");\n", stdout);
+            return;
+        }
+        if (brace_only) {
+            fputs("do {\n", stdout);
+            g_indent++;
+            emit_indent();
+            emit_stmt(body);
+            g_indent--;
+            emit_indent();
+            fputs("} while (", stdout);
             emit_expr(n->do_.cond);
             fputs(");\n", stdout);
             return;
@@ -8497,7 +8566,15 @@ static void emit_stmt(Node *n) {
         Node *body = n->for_.body;
         bool body_wrap = g_cf.func_has_cleanups && subtree_has_cleanups(body);
         bool cond_wrap = n->for_.cond && expr_has_class_temp(n->for_.cond);
-        if (!body_wrap && !cond_wrap) {
+        /* If func_has_cleanups, a non-block body emits a __SF_CHAIN_THROW
+         * statement after the body proper. That second statement must
+         * live INSIDE the for-loop body; without braces the chain-throw
+         * lands at the for-loop's enclosing scope and never fires per
+         * iteration. Pattern: g++.dg/eh/loop1.C — `for (...) bar(ptr);`
+         * where bar throws, catch outside. */
+        bool brace_only = !body_wrap && g_cf.func_has_cleanups
+                          && body && body->kind != ND_BLOCK;
+        if (!body_wrap && !cond_wrap && !brace_only) {
             fputs("for (", stdout);
             if (n->for_.init) {
                 Node *init = n->for_.init;
@@ -8555,6 +8632,25 @@ static void emit_stmt(Node *n) {
             if (n->for_.inc)  emit_expr(n->for_.inc);
             fputs(") ", stdout);
             emit_stmt(body);
+            return;
+        }
+        if (brace_only) {
+            fputs("for (", stdout);
+            if (n->for_.init) {
+                Node *init = n->for_.init;
+                if (init->kind == ND_VAR_DECL) emit_var_decl_inner(init);
+                else if (init->kind == ND_EXPR_STMT)
+                    emit_expr(init->expr_stmt.expr);
+            }
+            fputs("; ", stdout);
+            if (n->for_.cond) emit_expr(n->for_.cond);
+            fputs("; ", stdout);
+            if (n->for_.inc)  emit_expr(n->for_.inc);
+            fputs(") {\n", stdout);
+            g_indent++;
+            emit_indent();
+            emit_stmt(body);
+            emit_close_brace();
             return;
         }
         int brk = -1, cnt = -1;
