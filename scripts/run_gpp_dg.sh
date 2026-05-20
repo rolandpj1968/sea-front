@@ -141,6 +141,29 @@ emit_bucket() {
 files=$(grep -rlE 'dg-do[[:space:]]+run' "$SEA_GCC_TESTSUITE/g++.dg" 2>/dev/null \
         | sort)
 
+# Find files that are referenced as dg-additional-sources of OTHER
+# tests — they're sidecars, meant to be linked into the main test, not
+# run standalone. The dg upstream framework filters these via its
+# own bookkeeping; we mirror it by scanning for the directive and
+# building an exclusion set keyed on file basename within the same
+# directory. Without this, e.g. conpr-2a.cc carries `dg-do run` (so it
+# wouldn't be skipped under -E sourcing), gets picked up as a
+# standalone test, and FAILs because main is in conpr-2.C.
+sidecar_set=$(grep -rohE 'dg-additional-sources[[:space:]]*"[^"]+"' \
+              "$SEA_GCC_TESTSUITE/g++.dg" 2>/dev/null \
+              | sed -E 's/.*"([^"]+)".*/\1/' | tr ' ' '\n' | sort -u)
+if [ -n "$sidecar_set" ]; then
+    # Use awk to filter: keep paths whose basename isn't in sidecar_set.
+    sidecar_re=$(echo "$sidecar_set" | sed -e 's|[.+]|\\&|g' | tr '\n' '|' \
+                  | sed 's/|$//')
+    files=$(echo "$files" | awk -v re="^($sidecar_re)\$" \
+            '{
+                n=split($0,parts,"/");
+                base=parts[n];
+                if (base !~ re) print $0;
+             }')
+fi
+
 if [ -n "$SEA_DG_FILTER" ]; then
     files=$(echo "$files" | grep -E "$SEA_DG_FILTER")
 fi
