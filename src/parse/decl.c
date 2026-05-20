@@ -1510,6 +1510,14 @@ Node *parse_declaration(Parser *p) {
         return node;
     }
 
+    /* Reset the weak-attr latch BEFORE parse_type_specifiers — `weak`
+     * commonly appears in the decl-specifier-seq position
+     * (`extern __attribute__((weak)) void f() {}`), captured by the
+     * parser_skip_gnu_attributes call inside parse_type_specifiers's
+     * main loop. The ctor/dtor latches are reset further down because
+     * those attributes appear in the trailing position only. */
+    p->pending_attr_weak = false;
+
     /* decl-specifier-seq — §10.1 [dcl.spec] */
     DeclSpec spec = parse_type_specifiers(p);
     parse_absorb_trailing_cv(p, &spec);
@@ -1548,6 +1556,8 @@ Node *parse_declaration(Parser *p) {
     p->pending_ctor_priority    = 0;
     p->pending_dtor_priority    = 0;
     p->pending_nothrow_spec     = false;
+    /* NOT pending_attr_weak — that was reset above, BEFORE
+     * parse_type_specifiers, so the type-spec latch survives. */
 
     /* declarator — §11.3 [dcl.meaning] */
     Node *decl = parse_declarator(p, base_ty);
@@ -1564,11 +1574,14 @@ Node *parse_declaration(Parser *p) {
             decl->var_decl.attr_destructor = true;
             decl->var_decl.dtor_priority = p->pending_dtor_priority;
         }
+        if (p->pending_attr_weak)
+            decl->var_decl.attr_weak = true;
     }
     p->pending_attr_constructor = false;
     p->pending_attr_destructor  = false;
     p->pending_ctor_priority    = 0;
     p->pending_dtor_priority    = 0;
+    p->pending_attr_weak        = false;
 
     /* Function definition: type + declarator(func-type) + '{' body '}'
      *
@@ -1603,6 +1616,7 @@ Node *parse_declaration(Parser *p) {
         func->func.attr_destructor  = decl->var_decl.attr_destructor;
         func->func.ctor_priority    = decl->var_decl.ctor_priority;
         func->func.dtor_priority    = decl->var_decl.dtor_priority;
+        func->func.attr_weak        = decl->var_decl.attr_weak;
         /* No-throw spec from consume_trailing_qualifiers. Latched on
          * the parser; copy to the ND_FUNC_DEF so codegen's epilogue
          * can emit the terminate check. */

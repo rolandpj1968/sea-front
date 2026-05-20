@@ -167,11 +167,26 @@ for src in $files; do
         extra_flags="$test_std"
     fi
 
+    # Parse dg-additional-sources for sibling .cc/.cpp/.C files that must
+    # be linked alongside the main test source. The dg directive shape is
+    # '{ dg-additional-sources "foo.cc bar.cc" }'. Resolve each relative
+    # to the test's directory.
+    test_dir=$(dirname "$src")
+    additional_sources=""
+    add_list=$(grep -oE 'dg-additional-sources[[:space:]]*"[^"]+"' "$src" \
+               2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/' | head -1)
+    if [ -n "$add_list" ]; then
+        for f in $add_list; do
+            [ -f "$test_dir/$f" ] && additional_sources="$additional_sources $test_dir/$f"
+        done
+    fi
+
     # Step 1: transpile + compile + link via sea-front-cc.
     # -lstdc++ for the C++ runtime (RTTI vtables, operator new/delete,
     # std::__throw_* helpers) since the emitted C still references the
     # mangled C++ names. -lm for math/abort dependents some tests pull in.
-    if ! timeout "$SEA_DG_TIMEOUT" "$SEA_FRONT_CC" -O0 -w $extra_flags "$src" -o "$bin" \
+    if ! timeout "$SEA_DG_TIMEOUT" "$SEA_FRONT_CC" -O0 -w $extra_flags \
+            "$src" $additional_sources -o "$bin" \
             -lstdc++ -lm \
             > "$WORK/out" 2> "$WORK/err"; then
         # Bucket the failure. The preprocess step errors with a path

@@ -756,6 +756,11 @@ struct Node {
             bool   attr_destructor;
             int    ctor_priority;
             int    dtor_priority;
+            /* GNU weak attribute on a function declaration. Pass-through
+             * to the C compiler which marks the symbol as weak so a
+             * non-weak definition in another TU overrides it. Pattern:
+             * g++.dg/eh/weak1.C. */
+            bool   attr_weak;
             /* Class type that owns this OOL definition — set when the
              * declarator-id was a qualified-id like 'Foo::bar' and the
              * decl is a STATIC DATA MEMBER (not a function — that case
@@ -869,6 +874,10 @@ struct Node {
              * runtime contract calls std::terminate. N4659 §18.4
              * [except.spec]. Pattern: g++.dg/eh/spec10.C. */
             bool             is_nothrow;
+            /* GNU weak attribute. Codegen emits __attribute__((weak))
+             * ahead of the function definition. Pattern:
+             * g++.dg/eh/weak1.C. */
+            bool             attr_weak;
         } func;
 
         /* ND_LAMBDA — N4659 §8.1.5 [expr.prim.lambda].
@@ -1550,6 +1559,13 @@ struct Parser {
      * Pattern: g++.dg/ext/packed7.C (enum), g++.dg/ext/packed4.C
      * (struct + member). */
     bool pending_packed;
+    /* Side channel: `__attribute__((weak))` on a function decl. Read
+     * by parse_declaration into var_decl.attr_weak / func.attr_weak.
+     * Codegen emits `__attribute__((weak))` ahead of the prototype so
+     * the linker honours weak-symbol override semantics. Pattern:
+     * g++.dg/eh/weak1.C with the matching weak1-a.cc that strong-
+     * overrides f. */
+    bool pending_attr_weak;
     /* Side channel from consume_trailing_qualifiers → parse_declaration:
      * set true when the declarator carried a no-throw spec — either
      * `noexcept` / `noexcept(...)` or `throw()` (empty list). Codegen

@@ -10295,6 +10295,11 @@ static void emit_func_def(Node *n) {
     int sf = n->func.storage_flags;
     if (sf & DECL_CONSTEXPR) sf |= DECL_INLINE;
     emit_storage_flags_for_def(sf);
+    /* GNU __attribute__((weak)) pass-through — the linker honours it
+     * so a non-weak definition in another TU strong-overrides this
+     * one. Pattern: g++.dg/eh/weak1.C. */
+    if (n->func.attr_weak)
+        fputs("__attribute__((weak)) ", stdout);
     emit_free_func_header(n->func.ret_ty, n->func.name,
                           n->func.params, n->func.nparams, n->func.is_variadic);
     fputc(' ', stdout);
