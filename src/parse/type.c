@@ -914,6 +914,7 @@ DeclSpec parse_type_specifiers(Parser *p) {
             Token *t3 = parser_peek_ahead(p, 3);
             Token *t4 = parser_peek_ahead(p, 4);
             bool is_dtor = false, is_ctor = false;
+            bool is_conv_op = false;
             if (t2 && t2->kind == TK_TILDE && t3 && t3->kind == TK_IDENT &&
                 tokens_equal(t3, td->type->tag) &&
                 t4 && t4->kind == TK_LPAREN) {
@@ -922,8 +923,15 @@ DeclSpec parse_type_specifiers(Parser *p) {
                        tokens_equal(t2, td->type->tag) &&
                        t3 && t3->kind == TK_LPAREN) {
                 is_ctor = true;
+            } else if (t2 && t2->kind == TK_KW_OPERATOR) {
+                /* Out-of-class conversion operator:
+                 * 'Class::operator T() const'. Like ctor/dtor it has
+                 * no return-type slot — T is the conversion target
+                 * parsed by parse_declarator's operator-id branch.
+                 * Pattern: g++.dg/eh/scope1.C. */
+                is_conv_op = true;
             }
-            if (is_ctor || is_dtor) {
+            if (is_ctor || is_dtor || is_conv_op) {
                 if (is_ctor) p->pending_is_constructor = true;
                 if (is_dtor) p->pending_is_destructor = true;
                 Type *vty = new_type(p, TY_VOID);
