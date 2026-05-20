@@ -30,3 +30,12 @@ g++.dg/abi/layout4.C
 g++.dg/abi/vbase11.C
 g++.dg/abi/vbase13.C
 g++.dg/cpp0x/regress/abi-empty7.C
+
+# --- Universally xfail in gcc itself ------------------------------------
+# These tests are marked `dg-do run { xfail *-*-* }` in the source — gcc
+# itself expects them to FAIL on every target. Listing here surfaces
+# that signal in the runner's bucket counts. Only include tests where we
+# also fail; tests where we PASS something gcc-xfails are surprising
+# good news and stay in the PASS bucket.
+
+g++.dg/cpp0x/lambda/lambda-eh.C
