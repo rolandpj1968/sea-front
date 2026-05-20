@@ -178,9 +178,19 @@ for src in $files; do
         # under the input testsuite tree (not /tmp/sf_pp_*.i); sea-front
         # errors point at the preprocessed .i file; cc errors point at
         # the emitted .c (sf_out_*.c) or the original source.
+        #
+        # Link errors look like '/usr/bin/ld: ... undefined reference to'
+        # OR 'collect2: error: ld returned ...' — bucket as E_CC so they
+        # don't pollute the preprocessor-error count (the failure is in
+        # symbol resolution, downstream of sea-front transpile and cc
+        # compile). Note: this lumps link errors with cc errors; if a
+        # separate E_LINK bucket becomes useful, split here.
         if grep -qE '/sf_pp_.*\.i:[0-9]+' "$WORK/err" 2>/dev/null; then
             emit_bucket E_FRONT "$rel"
         elif grep -qE '/sf_out_.*\.c:[0-9]+' "$WORK/err" 2>/dev/null; then
+            emit_bucket E_CC "$rel"
+        elif grep -qE '(undefined reference|ld returned|/usr/bin/ld:)' \
+                 "$WORK/err" 2>/dev/null; then
             emit_bucket E_CC "$rel"
         elif grep -qE 'error:' "$WORK/err" 2>/dev/null; then
             # Error from the preprocess step (g++ -E) — the source path
