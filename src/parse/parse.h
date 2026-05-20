@@ -756,6 +756,16 @@ struct Node {
             bool   attr_destructor;
             int    ctor_priority;
             int    dtor_priority;
+            /* Class type that owns this OOL definition — set when the
+             * declarator-id was a qualified-id like 'Foo::bar' and the
+             * decl is a STATIC DATA MEMBER (not a function — that case
+             * uses ND_FUNC_DEF.func.class_type). NULL for free vars.
+             * Codegen uses this to emit the mangled name 'sf__Foo__bar'
+             * so the symbol matches the in-class declaration's. Without
+             * this an OOL static data member emitted bare ('int abort;')
+             * collides with libc symbols of the same name. Pattern:
+             * g++.dg/init/array16.C — class with 'static int abort;'. */
+            Type  *class_type;
         } var_decl;
 
         /* ND_FUNC_DEF — N4659 §11.4 [dcl.fct.def]

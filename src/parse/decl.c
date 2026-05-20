@@ -2056,6 +2056,19 @@ Node *parse_declaration(Parser *p) {
      * (decl.c:829), but may also appear on simple declarations. */
     parser_skip_gnu_attributes(p);
     parser_expect(p, TK_SEMI);
+    /* If the declarator-id was qualified ('Foo::bar') and this is an
+     * out-of-class static data member definition — i.e. NOT a function
+     * (those entered the func-def branch above) — stamp the class onto
+     * the var-decl so codegen emits the mangled name 'sf__Foo__bar'.
+     * Without this, 'int Foo::abort;' would emit as bare 'int abort;'
+     * and clash with libc's abort. Pattern: g++.dg/init/array16.C. */
+    if (decl && decl->kind == ND_VAR_DECL &&
+        decl->var_decl.ty && decl->var_decl.ty->kind != TY_FUNC &&
+        p->qualified_decl_scope &&
+        p->qualified_decl_scope->kind == REGION_CLASS &&
+        p->qualified_decl_scope->owner_type) {
+        decl->var_decl.class_type = p->qualified_decl_scope->owner_type;
+    }
     /* Drop any qualified_decl_scope set by parse_declarator — only the
      * function-def branch consumes it; for plain declarations (incl.
      * declare-only ctors/dtors) it must not leak into the next decl. */

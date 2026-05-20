@@ -505,6 +505,22 @@ void mangle_class_method(Type *class_type, Token *method_name,
     emit_class_close();
 }
 
+void mangle_class_static_data_member(Type *class_type, Token *member_name) {
+    /* Static data members always use the human-form symbol
+     * 'sf__Class__member' regardless of g_mangle_kind so the three
+     * emit sites stay consistent: the in-class declaration
+     * (emit_class_def), the qualified access in expressions
+     * (emit_c.c ND_MEMBER static path), and this OOL definition
+     * branch. Switching just this one to Itanium-scheme would make
+     * the OOL '_ZN3Foo3barE' link against the access's 'sf__Foo__bar'
+     * and fail. A future cleanup pass can lift all three to Itanium
+     * together. */
+    mangle_class_tag(class_type);
+    fputs("__", stdout);
+    if (member_name)
+        fprintf(stdout, "%.*s", member_name->len, member_name->loc);
+}
+
 void mangle_class_ctor(Type *class_type,
                         Type **param_types, int nparams) {
     if (g_mangle_kind == MANGLE_ITANIUM) {

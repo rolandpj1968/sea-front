@@ -113,6 +113,13 @@ void mangle_class_dtor(Type *class_type);
  *   class vec → sf__vec__dtor_body */
 void mangle_class_dtor_body(Type *class_type);
 
+/* Static data member — N4659 §11.4.9 [class.static.data]. The OOL
+ * definition 'int Foo::bar;' emits as 'sf__Foo__bar' / Itanium
+ * '_ZN3Foo3barE'. Without this an OOL static data member would emit
+ * its bare source name and clash with any same-named C symbol
+ * (libc 'abort', 'errno', etc.). */
+void mangle_class_static_data_member(Type *class_type, Token *member_name);
+
 /* Operator method mangling. Sea-front emits the method symbol for
  * an overloaded operator at multiple sites: the class's def, every
  * call (binary expr → operator+, subscript → operator[], etc.), and
@@ -228,6 +235,8 @@ void itan_mangle_class_ctor(Type *class_type,
                              Type **param_types, int nparams);
 void itan_mangle_class_dtor(Type *class_type);
 void itan_mangle_class_dtor_body(Type *class_type);
+void itan_mangle_class_static_data_member(Type *class_type,
+                                           Token *member_name);
 void itan_mangle_class_operator(Type *class_type, OperatorKind op,
                                  Type **param_types, int nparams,
                                  bool is_const);

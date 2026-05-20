@@ -612,6 +612,22 @@ void itan_mangle_class_method(Type *class_type, Token *method_name,
     emit_params_close(&ctx, param_types, nparams);
 }
 
+/* Static data member mangling — Itanium ABI §5.1.3 [mangle.name].
+ * Same nested-name prefix as a method, no parameter list:
+ *   _Z N <prefix> <member-name> E
+ * Used by the OOL definition 'int Foo::bar;' so the symbol matches
+ * the in-class declaration's. Pattern: g++.dg/init/array16.C —
+ * 'static int abort' inside a class would otherwise emit the bare
+ * symbol 'abort' and clash with libc. */
+void itan_mangle_class_static_data_member(Type *class_type,
+                                           Token *member_name) {
+    ItanCtx ctx;
+    ctx_reset(&ctx);
+    emit_prefix_open(&ctx, class_type, /*is_const=*/false);
+    emit_source_name(member_name);
+    fputc('E', stdout);
+}
+
 /* Constructor — Itanium ABI §5.1.4.3 [mangle.ctor-and-dtor-name].
  *
  * Itanium distinguishes three ctor variants:

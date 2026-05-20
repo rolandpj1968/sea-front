@@ -7235,8 +7235,20 @@ static void emit_var_decl_inner(Node *n) {
     }
     emit_type(ty);
     fputc(' ', stdout);
-    if (n->var_decl.name)
-        fprintf(stdout, "%.*s", n->var_decl.name->len, n->var_decl.name->loc);
+    if (n->var_decl.name) {
+        if (n->var_decl.class_type) {
+            /* Out-of-class static data member definition. Emit the
+             * mangled name so the symbol matches the in-class
+             * declaration and doesn't clash with C symbols of the
+             * same name (libc 'abort' etc.). N4659 §11.4.9
+             * [class.static.data]. Pattern: g++.dg/init/array16.C. */
+            mangle_class_static_data_member(n->var_decl.class_type,
+                                             n->var_decl.name);
+        } else {
+            fprintf(stdout, "%.*s",
+                    n->var_decl.name->len, n->var_decl.name->loc);
+        }
+    }
     /* Bit-field width — N4659 §12.2.4 [class.bit] */
     if (n->var_decl.bitfield_width) {
         fputs(" : ", stdout);
@@ -12052,6 +12064,15 @@ static void emit_top_level(Node *n) {
             n->var_decl.ty->is_const = saved_const;
             return;
         }
+        /* OOL static data member definition: the in-class declaration
+         * was emitted with `static` (so multi-TU header inclusion
+         * doesn't multi-define), so the OOL definition must also be
+         * `static` to refer to the same TU-local symbol. The source
+         * keyword 'static' isn't repeated on the OOL form
+         * (C++ §10.1.1/6 [dcl.stc]), so storage_flags doesn't carry
+         * DECL_STATIC — force it via class_type's presence. */
+        if (n->var_decl.class_type)
+            fputs("static ", stdout);
         emit_var_storage_flags(n->var_decl.storage_flags);
         emit_var_decl_inner(n);
         fputs(";\n", stdout);
