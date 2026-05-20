@@ -1105,19 +1105,29 @@ static bool consume_trailing_qualifiers(Parser *p) {
         if (parser_consume(p, TK_KW_CONST))    { saw_const = true; continue; }
         if (parser_consume(p, TK_KW_VOLATILE)) continue;
         if (parser_consume(p, TK_KW_NOEXCEPT)) {
-            /* noexcept(expr) — N4659 §15.4 [except.spec]. Skip
-             * balanced parens; the expression is consumed and
-             * discarded. */
+            /* noexcept / noexcept(expr) — N4659 §18.4 [except.spec].
+             * Bare `noexcept` (no expr) is equivalent to `noexcept(true)`
+             * and is a no-throw spec; `noexcept(false)` is throwing.
+             * For now, treat both `noexcept` (bare) and `noexcept(...)`
+             * as no-throw (conservative — gcc would only flag
+             * noexcept(false) as throwing). Codegen emits a terminate-
+             * check at the epilogue. Pattern: g++.dg/eh/spec10.C,
+             * unexpected1.C. */
+            p->pending_nothrow_spec = true;
             if (parser_consume(p, TK_LPAREN))
                 parser_skip_to_matching_rparen(p);
             continue;
         }
         break;
     }
-    /* throw(type-id-list(opt)) — N4659 §15.4 [except.spec], deprecated
-     * in C++17 but still pervasive in libstdc++ headers. */
+    /* throw(type-id-list(opt)) — N4659 §18.4 [except.spec], deprecated
+     * in C++17 but still pervasive in libstdc++ headers. `throw()` is
+     * the empty-list form, a no-throw spec. `throw(T)` is non-empty —
+     * conservatively treat as throwing (no terminate check). */
     if (parser_consume(p, TK_KW_THROW)) {
         parser_expect(p, TK_LPAREN);
+        if (parser_at(p, TK_RPAREN))
+            p->pending_nothrow_spec = true;
         parser_skip_to_matching_rparen(p);
     }
     /* GCC __attribute__ after the function declarator — common for
@@ -1537,6 +1547,7 @@ Node *parse_declaration(Parser *p) {
     p->pending_attr_destructor  = false;
     p->pending_ctor_priority    = 0;
     p->pending_dtor_priority    = 0;
+    p->pending_nothrow_spec     = false;
 
     /* declarator — §11.3 [dcl.meaning] */
     Node *decl = parse_declarator(p, base_ty);
@@ -1592,6 +1603,11 @@ Node *parse_declaration(Parser *p) {
         func->func.attr_destructor  = decl->var_decl.attr_destructor;
         func->func.ctor_priority    = decl->var_decl.ctor_priority;
         func->func.dtor_priority    = decl->var_decl.dtor_priority;
+        /* No-throw spec from consume_trailing_qualifiers. Latched on
+         * the parser; copy to the ND_FUNC_DEF so codegen's epilogue
+         * can emit the terminate check. */
+        func->func.is_nothrow       = p->pending_nothrow_spec;
+        p->pending_nothrow_spec     = false;
         func->func.is_const_method = decl->var_decl.ty->is_const;
         func->func.storage_flags = spec.flags;
         if (p->extern_c_depth > 0) func->func.storage_flags |= DECL_C_LINKAGE;

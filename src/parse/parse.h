@@ -863,6 +863,12 @@ struct Node {
             bool             attr_destructor;
             int              ctor_priority;
             int              dtor_priority;
+            /* No-throw spec — `noexcept` or `throw()` on the
+             * declarator. Codegen emits a terminate-check at the
+             * epilogue: if an exception propagates out, the C++
+             * runtime contract calls std::terminate. N4659 §18.4
+             * [except.spec]. Pattern: g++.dg/eh/spec10.C. */
+            bool             is_nothrow;
         } func;
 
         /* ND_LAMBDA — N4659 §8.1.5 [expr.prim.lambda].
@@ -1544,6 +1550,14 @@ struct Parser {
      * Pattern: g++.dg/ext/packed7.C (enum), g++.dg/ext/packed4.C
      * (struct + member). */
     bool pending_packed;
+    /* Side channel from consume_trailing_qualifiers → parse_declaration:
+     * set true when the declarator carried a no-throw spec — either
+     * `noexcept` / `noexcept(...)` or `throw()` (empty list). Codegen
+     * inserts a `if (exc_state==THROW) __sf_terminate()` check at the
+     * function's epilogue so a propagating throw triggers terminate
+     * per N4659 §18.4 [except.spec]. Patterns: g++.dg/eh/spec10.C,
+     * unexpected1.C. */
+    bool pending_nothrow_spec;
     /* N4659 §10.5 [dcl.link]: depth of enclosing extern "C" { ... }
      * blocks (and single 'extern "C"' decls). When > 0, declarations
      * parsed here get DECL_C_LINKAGE so codegen suppresses C++ name

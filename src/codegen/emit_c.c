@@ -9271,6 +9271,13 @@ static void cf_begin_function(Node *func) {
     g_cf.nlive = 0;
     g_cf.func_has_cleanups = func && func->func.body &&
                              subtree_has_cleanups(func->func.body);
+    /* A no-throw spec (`noexcept` / `throw()`) needs the prologue/
+     * epilogue scaffolding regardless of whether the body's body has
+     * cleanups — codegen plants the terminate-check inside the
+     * epilogue, so it would never fire if the function emitted as
+     * a bare braceless block. N4659 §18.4 [except.spec]. */
+    if (func && func->kind == ND_FUNC_DEF && func->func.is_nothrow)
+        g_cf.func_has_cleanups = true;
     /* Latch the source-name for __func__ rewrites in ND_IDENT. For
      * a destructor the source name token is the class name (no
      * leading '~'), so we prepend it at emit time. */
@@ -9908,7 +9915,25 @@ static void emit_func_body(Node *func) {
     }
     if (g_cf.func_has_cleanups) {
         emit_indent();
-        fputs(void_ret ? "__SF_EPILOGUE_VOID;\n" : "__SF_EPILOGUE;\n", stdout);
+        if (func->func.is_nothrow) {
+            /* No-throw spec: an exception propagating out of this
+             * function is a spec violation. N4659 §18.4 [except.spec]:
+             * `noexcept` / `throw()` violations terminate. Expand
+             * __SF_EPILOGUE inline so the THROW check lands AFTER the
+             * label (the cleanup-chain gotos to __SF_epilogue, so the
+             * check would otherwise be unreachable). Call std::terminate
+             * via the Itanium-mangled libstdc++ symbol so a user's
+             * std::set_terminate handler is respected. Pattern:
+             * g++.dg/eh/spec10.C. */
+            fputs("__SF_epilogue: ;\n", stdout);
+            emit_indent();
+            fputs("if (__sf_exc_state.state == __SF_UNWIND_THROW) "
+                  "__sf_terminate();\n", stdout);
+            emit_indent();
+            fputs(void_ret ? "return;\n" : "return __SF_retval;\n", stdout);
+        } else {
+            fputs(void_ret ? "__SF_EPILOGUE_VOID;\n" : "__SF_EPILOGUE;\n", stdout);
+        }
     }
     emit_close_brace();
 }
@@ -12470,6 +12495,19 @@ static void emit_prelude(void) {
           "__SF_unwind = __SF_UNWIND_THROW; "
           "goto lbl; } while (0)\n",
           stdout);
+    /* __sf_terminate — invoked at the epilogue of a no-throw function
+     * when an exception is in flight, N4659 §18.4 [except.spec]. When
+     * libstdc++ is linked, dispatches to std::terminate (which
+     * respects std::set_terminate). When the binary doesn't link
+     * libstdc++ — sea-front targets bare C too — the weak symbol
+     * resolves to NULL and we fall back to abort(). */
+    fputs("extern void abort(void);\n", stdout);
+    fputs("extern void _ZSt9terminatev(void) __attribute__((weak));\n",
+          stdout);
+    fputs("static inline void __sf_terminate(void) {\n"
+          "    if (_ZSt9terminatev) _ZSt9terminatev();\n"
+          "    abort();\n"
+          "}\n", stdout);
     /* __SF_INLINE — multi-TU dedup for inline-eligible functions
      * (in-class methods, synthesized ctor/dtor wrappers, dtor body
      * functions, eventually template instantiations).
