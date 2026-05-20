@@ -8477,9 +8477,25 @@ static void emit_stmt(Node *n) {
                                                at, na,
                                                /*receiver_is_const=*/false,
                                                &pty, &resolved_ctor);
-                    if (np < 0)
-                        die_no_overload(n->var_decl.ty, NULL, na,
-                                         "direct-init ctor call");
+                    if (np < 0) {
+                        /* No user-declared ctor matches. For 0-arg
+                         * direct-init on a class with a SYNTHESIZED
+                         * default ctor (has_default_ctor=true via
+                         * vptr-install or member-ctor chain), call
+                         * the synth ctor — mangle_class_ctor with
+                         * NULL/0 params produces the same symbol
+                         * emit_class_def synthesizes. Without this,
+                         * `A a = A();` for a class with virtual
+                         * methods (synth default ctor for vptr)
+                         * died with no-overload. Pattern:
+                         * g++.dg/init/value1.C. */
+                        if (na == 0 && n->var_decl.ty->has_default_ctor) {
+                            pty = NULL; np = 0;
+                        } else {
+                            die_no_overload(n->var_decl.ty, NULL, na,
+                                             "direct-init ctor call");
+                        }
+                    }
                     mangle_class_ctor(n->var_decl.ty, pty, np);
                     fprintf(stdout, "(&%.*s",
                             n->var_decl.name->len, n->var_decl.name->loc);
