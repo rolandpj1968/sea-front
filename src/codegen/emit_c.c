@@ -74,6 +74,15 @@ static Node *g_current_class_def = NULL;
  * emit_func_def / emit_method_as_free_fn so ND_RETURN can adapt to
  * reference returns (T& lowered to T*: 'return *x;' → 'return x;'). */
 static Type *g_current_func_ret_ty = NULL;
+/* Source-name token of the function currently being emitted. Used to
+ * rewrite `__func__` / `__FUNCTION__` references inside the body to a
+ * string literal of the user-written name; the C compiler's native
+ * __func__ would expand to the mangled symbol instead (e.g.
+ * '_ZN3y8a4zqjxEic' instead of 'zqjx'). N4659 §8.4.1/8 [dcl.fct.def]
+ * says __func__ is "the unqualified name of the enclosing function".
+ * Patterns: g++.dg/ext/fnname{1,2,3}.C. */
+static Token *g_current_func_src_name = NULL;
+static bool   g_current_func_is_dtor   = false;
 /* Class type of the OOL method currently being emitted. Used by
  * ND_OFFSETOF to substitute unresolvable local typedefs. */
 static Type *g_current_method_class = NULL;
@@ -3517,6 +3526,28 @@ static void emit_expr(Node *n) {
         }
         return;
     case ND_IDENT:
+        /* __func__ / __FUNCTION__ rewrite — N4659 §8.4.1/8 says the
+         * value is the unqualified function name. If we just emitted
+         * the bare identifier, the host C compiler would expand to the
+         * mangled name (e.g. '_ZN3y8a4zqjxEic'). Substitute a string
+         * literal of the original source name; destructors get a '~'
+         * prefix (the func node carries the class-name token without
+         * the tilde). __PRETTY_FUNCTION__ remains a pass-through —
+         * the verbose-with-types form would need full signature
+         * reconstruction. Patterns: g++.dg/ext/fnname{1,2,3}.C. */
+        if (n->ident.name && g_current_func_src_name &&
+            ((n->ident.name->len == 8 &&
+              memcmp(n->ident.name->loc, "__func__", 8) == 0) ||
+             (n->ident.name->len == 12 &&
+              memcmp(n->ident.name->loc, "__FUNCTION__", 12) == 0))) {
+            fputc('"', stdout);
+            if (g_current_func_is_dtor) fputc('~', stdout);
+            fprintf(stdout, "%.*s",
+                    g_current_func_src_name->len,
+                    g_current_func_src_name->loc);
+            fputc('"', stdout);
+            return;
+        }
         /* Lambda capture rewrite — N4659 §8.1.5.2 [expr.prim.lambda
          * .capture]. Inside a capturing-lambda body
          * (g_current_lambda_fn set), an identifier whose name matches
@@ -9192,6 +9223,11 @@ static void cf_begin_function(Node *func) {
     g_cf.nlive = 0;
     g_cf.func_has_cleanups = func && func->func.body &&
                              subtree_has_cleanups(func->func.body);
+    /* Latch the source-name for __func__ rewrites in ND_IDENT. For
+     * a destructor the source name token is the class name (no
+     * leading '~'), so we prepend it at emit time. */
+    g_current_func_src_name = func ? func->func.name : NULL;
+    g_current_func_is_dtor  = func ? func->func.is_destructor : false;
     /* Populate ref-param table for deref insertion at use sites. */
     g_nref_params = 0;
     if (func && (func->kind == ND_FUNC_DEF || func->kind == ND_FUNC_DECL)) {
