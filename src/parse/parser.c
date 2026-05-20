@@ -246,23 +246,33 @@ void parser_skip_gnu_attributes_with_mode(Parser *p, Token **out_mode) {
 }
 
 /* Like parser_skip_gnu_attributes_with_mode, but also detects
- *   __attribute__((cleanup (handler)))
+ *   __attribute__((cleanup (handler)))      -> *out_cleanup
+ *   __attribute__((constructor))            -> *out_is_ctor
+ *   __attribute__((destructor))             -> *out_is_dtor
  * and returns the cleanup-handler identifier via *out_cleanup. The
  * caller stamps it onto the var-decl so the C emit re-emits the
  * attribute (gcc handles the cleanup semantics natively). N4659
- * doesn't model this — it's a gcc C extension applicable to local
- * variables (see __attribute__((cleanup)) in gcc's extensions docs). */
-void parser_skip_gnu_attributes_with_mode_and_cleanup(Parser *p,
-                                                       Token **out_mode,
-                                                       Token **out_cleanup) {
+ * doesn't model these — they're gcc C extensions:
+ *   cleanup: applicable to local variables
+ *   constructor/destructor: run before/after main, applicable to
+ *     free functions. Pattern: g++.dg/init/attrib1.C.
+ * Caller passes NULL for any out-param it doesn't care about. */
+void parser_skip_gnu_attributes_full(Parser *p,
+                                      Token **out_mode,
+                                      Token **out_cleanup,
+                                      bool *out_is_ctor,
+                                      bool *out_is_dtor) {
     while (parser_at(p, TK_IDENT) &&
            (token_equal(parser_peek(p), "__attribute__") ||
             token_equal(parser_peek(p), "__attribute"))) {
         parser_advance(p);                  /* __attribute__ */
         parser_expect(p, TK_LPAREN);
         parser_expect(p, TK_LPAREN);
-        /* Scan forward looking for __mode__(X) / cleanup(X) before
-         * skipping. */
+        /* Scan forward looking for __mode__(X) / cleanup(X) /
+         * constructor / destructor before skipping. The ctor/dtor
+         * forms are token identity matches — both spelled as bare
+         * IDENT (no following '(' in the no-priority form, which is
+         * what attrib1.C uses) or with optional '(priority)'. */
         int depth = 1;
         while (depth > 0 && !parser_at_eof(p)) {
             if (out_mode && parser_at(p, TK_IDENT) &&
@@ -277,6 +287,16 @@ void parser_skip_gnu_attributes_with_mode_and_cleanup(Parser *p,
                 parser_peek_ahead(p, 2)->kind == TK_IDENT) {
                 *out_cleanup = parser_peek_ahead(p, 2);
             }
+            if (out_is_ctor && parser_at(p, TK_IDENT) &&
+                (token_equal(parser_peek(p), "constructor") ||
+                 token_equal(parser_peek(p), "__constructor__"))) {
+                *out_is_ctor = true;
+            }
+            if (out_is_dtor && parser_at(p, TK_IDENT) &&
+                (token_equal(parser_peek(p), "destructor") ||
+                 token_equal(parser_peek(p), "__destructor__"))) {
+                *out_is_dtor = true;
+            }
             if (parser_at(p, TK_LPAREN)) depth++;
             else if (parser_at(p, TK_RPAREN)) { depth--; if (depth == 0) break; }
             parser_advance(p);
@@ -284,6 +304,12 @@ void parser_skip_gnu_attributes_with_mode_and_cleanup(Parser *p,
         parser_expect(p, TK_RPAREN);        /* inner ) */
         parser_expect(p, TK_RPAREN);        /* outer ) */
     }
+}
+
+void parser_skip_gnu_attributes_with_mode_and_cleanup(Parser *p,
+                                                       Token **out_mode,
+                                                       Token **out_cleanup) {
+    parser_skip_gnu_attributes_full(p, out_mode, out_cleanup, NULL, NULL);
 }
 
 /* ------------------------------------------------------------------ */

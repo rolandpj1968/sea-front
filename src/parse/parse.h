@@ -743,6 +743,13 @@ struct Node {
              * (the back-end cc) implements the cleanup semantics — sea-
              * front just passes the name through. */
             Token *cleanup_attr_name;
+            /* GNU constructor / destructor attributes on a function
+             * declaration: 'void f() __attribute__((constructor));' —
+             * run before/after main. Pass-through to the C compiler
+             * which implements the .init_array / .fini_array hookup.
+             * Not in N4659. Pattern: g++.dg/init/attrib1.C. */
+            bool   attr_constructor;
+            bool   attr_destructor;
         } var_decl;
 
         /* ND_FUNC_DEF — N4659 §11.4 [dcl.fct.def]
@@ -831,6 +838,13 @@ struct Node {
             Type            *closure_struct_type;  /* the closure TY_STRUCT, NULL otherwise */
             struct Capture  *captures;             /* same array as on the ND_LAMBDA */
             int              ncaptures;
+            /* GNU constructor / destructor function attributes. See
+             * var_decl.attr_constructor for rationale. Propagated from
+             * the matching forward declaration via parse-time stamping
+             * on var_decl, mirrored here when var_decl is promoted to
+             * ND_FUNC_DEF. */
+            bool             attr_constructor;
+            bool             attr_destructor;
         } func;
 
         /* ND_LAMBDA — N4659 §8.1.5 [expr.prim.lambda].
@@ -1489,6 +1503,12 @@ struct Parser {
      * scope (class-name followed by '('). The class name is then
      * consumed as the declarator-id. */
     bool pending_is_constructor;
+    /* Side channel from consume_trailing_qualifiers → parse_declaration:
+     * set when the function declarator's trailing __attribute__ list
+     * includes constructor / destructor (g++.dg/init/attrib1.C). Read
+     * by parse_declaration and cleared after each declaration. */
+    bool pending_attr_constructor;
+    bool pending_attr_destructor;
     /* N4659 §10.5 [dcl.link]: depth of enclosing extern "C" { ... }
      * blocks (and single 'extern "C"' decls). When > 0, declarations
      * parsed here get DECL_C_LINKAGE so codegen suppresses C++ name
@@ -1580,6 +1600,9 @@ void parser_skip_gnu_attributes(Parser *p);
 void parser_skip_gnu_attributes_with_mode(Parser *p, Token **out_mode);
 void parser_skip_gnu_attributes_with_mode_and_cleanup(
     Parser *p, Token **out_mode, Token **out_cleanup);
+void parser_skip_gnu_attributes_full(
+    Parser *p, Token **out_mode, Token **out_cleanup,
+    bool *out_is_ctor, bool *out_is_dtor);
 void parser_skip_cxx_attributes(Parser *p);
 
 /* Node constructors (arena-allocated) */

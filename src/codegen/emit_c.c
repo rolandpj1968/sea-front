@@ -6981,6 +6981,16 @@ static void emit_var_decl_inner(Node *n) {
         if ((n->var_decl.storage_flags & DECL_C_LINKAGE) &&
             !ffsig_is_first_c_linkage(n->var_decl.name, ty->params, ty->nparams))
             return;
+        /* GCC constructor / destructor function attributes — pass
+         * through to the C compiler which wires the function into
+         * .init_array / .fini_array. Pattern: g++.dg/init/attrib1.C.
+         * Goes before the return type so gcc sees it on the prototype;
+         * the matching function definition picks the attribute up via
+         * the prior declaration. */
+        if (n->var_decl.attr_constructor)
+            fputs("__attribute__((constructor)) ", stdout);
+        if (n->var_decl.attr_destructor)
+            fputs("__attribute__((destructor)) ", stdout);
         emit_type(ty->ret);
         fputc(' ', stdout);
         emit_free_func_symbol(n->var_decl.name, n->var_decl.asm_name,
@@ -11714,6 +11724,13 @@ static void emit_top_level(Node *n) {
                 if (sf & DECL_CONSTEXPR) sf |= DECL_INLINE;
                 emit_storage_flags(sf & ~DECL_CONSTEXPR);
             }
+            /* GCC constructor / destructor function attributes — pass
+             * through. See emit_var_decl_inner's matching branch for
+             * the rationale (g++.dg/init/attrib1.C). */
+            if (n->var_decl.attr_constructor)
+                fputs("__attribute__((constructor)) ", stdout);
+            if (n->var_decl.attr_destructor)
+                fputs("__attribute__((destructor)) ", stdout);
             Type *fty = n->var_decl.ty;
             /* Function returning a function pointer requires
              * declarator-interleaving (N4659 §11.3):

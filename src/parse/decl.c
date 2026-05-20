@@ -1120,7 +1120,16 @@ static bool consume_trailing_qualifiers(Parser *p) {
         parser_expect(p, TK_LPAREN);
         parser_skip_to_matching_rparen(p);
     }
-    parser_skip_gnu_attributes(p);
+    /* GCC __attribute__ after the function declarator — common for
+     * gcc-specific function annotations:
+     *   void f() __attribute__((constructor));     [g++.dg/init/attrib1.C]
+     *   void g() __attribute__((noreturn));        (and others, pass-through)
+     * Stash constructor/destructor on a parser-side latch so
+     * parse_declaration can copy them onto the var-decl after
+     * parse_declarator returns. */
+    parser_skip_gnu_attributes_full(p, NULL, NULL,
+                                    &p->pending_attr_constructor,
+                                    &p->pending_attr_destructor);
     /* override / final — N4659 §13.3 [class.virtual]. Contextual
      * keywords (not reserved); we recognise by name. */
     while (parser_at(p, TK_IDENT) &&
@@ -1521,8 +1530,26 @@ Node *parse_declaration(Parser *p) {
         return new_var_decl_node(p, base_ty, /*name=*/NULL, start_tok);
     }
 
+    /* Reset the parser-side ctor/dtor attribute latch before parsing
+     * the declarator; consume_trailing_qualifiers writes into it when
+     * it sees the function-shape trailing attributes. */
+    p->pending_attr_constructor = false;
+    p->pending_attr_destructor  = false;
+
     /* declarator — §11.3 [dcl.meaning] */
     Node *decl = parse_declarator(p, base_ty);
+
+    /* Latch into the parsed decl so the function-def promotion path
+     * (below) and the trailing-attribute path (further below) both
+     * see them. */
+    if (decl) {
+        if (p->pending_attr_constructor)
+            decl->var_decl.attr_constructor = true;
+        if (p->pending_attr_destructor)
+            decl->var_decl.attr_destructor = true;
+    }
+    p->pending_attr_constructor = false;
+    p->pending_attr_destructor  = false;
 
     /* Function definition: type + declarator(func-type) + '{' body '}'
      *
@@ -1547,6 +1574,14 @@ Node *parse_declaration(Parser *p) {
         func->func.is_constructor = p->pending_is_constructor;
         p->pending_is_constructor = false;
         func->func.is_virtual = (spec.flags & DECL_VIRTUAL) != 0;
+        /* Mirror function-decl ctor/dtor attributes from the parsed
+         * decl onto the ND_FUNC_DEF — relevant for the rare case
+         * where the attribute is on the definition itself. The more
+         * common case (attribute on a separate forward decl, plain
+         * body afterwards) gets the attribute via the forward-decl
+         * emission (the C compiler binds the attribute to the symbol). */
+        func->func.attr_constructor = decl->var_decl.attr_constructor;
+        func->func.attr_destructor  = decl->var_decl.attr_destructor;
         func->func.is_const_method = decl->var_decl.ty->is_const;
         func->func.storage_flags = spec.flags;
         if (p->extern_c_depth > 0) func->func.storage_flags |= DECL_C_LINKAGE;
@@ -1840,12 +1875,20 @@ Node *parse_declaration(Parser *p) {
     /* GCC __attribute__ between declarator and initializer:
      * 'int x __attribute__((unused)) = 5;'. Common in gcc source.
      * Detect cleanup(handler) on the way past so codegen can re-emit
-     * the attribute on the C variable. */
+     * the attribute on the C variable. Also detects function-attr
+     * constructor / destructor for free-function init/fini hooks. */
     {
         Token *cleanup_tok = NULL;
-        parser_skip_gnu_attributes_with_mode_and_cleanup(p, NULL, &cleanup_tok);
+        bool is_ctor_attr = false;
+        bool is_dtor_attr = false;
+        parser_skip_gnu_attributes_full(p, NULL, &cleanup_tok,
+                                        &is_ctor_attr, &is_dtor_attr);
         if (cleanup_tok)
             decl->var_decl.cleanup_attr_name = cleanup_tok;
+        if (is_ctor_attr)
+            decl->var_decl.attr_constructor = true;
+        if (is_dtor_attr)
+            decl->var_decl.attr_destructor = true;
     }
 
     if (parser_consume(p, TK_ASSIGN)) {
