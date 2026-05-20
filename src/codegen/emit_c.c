@@ -7775,6 +7775,37 @@ static bool stmt_has_class_temp(Node *s) {
     }
 }
 
+/* `T v = T(args);` — copy-init from a temp constructed inline —
+ * should invoke T's ctor on v (with elision). The C-level
+ * `T v = (T){0};` is bitwise zero, skipping T's ctor side effects.
+ * Detect the explicit ctor-call shape: init is ND_CALL whose callee
+ * is a type-name (ENTITY_TYPE/ENTITY_TAG) AND the target class has
+ * a default ctor (otherwise zero-init via init list is the right
+ * lowering for a trivially-constructible class). Plain
+ * `T v = func();` does NOT match — that's a function returning T
+ * and the C-level copy semantics are correct.
+ * Rewrites `n` in place into has_ctor_init form so the existing
+ * has_ctor_init emit path (`T v; T_ctor(&v, args);`) takes over.
+ * N4659 §11.6/14 [dcl.init.aggr] — copy-init from a ctor-call
+ * collapses to a single direct-init under elision. */
+static void rewrite_copy_init_ctor_call(Node *n) {
+    if (!n || n->kind != ND_VAR_DECL) return;
+    if (!n->var_decl.init || n->var_decl.init->kind != ND_CALL) return;
+    if (n->var_decl.has_ctor_init) return;
+    if (!n->var_decl.ty || n->var_decl.ty->kind != TY_STRUCT) return;
+    if (!n->var_decl.ty->has_default_ctor) return;
+    Node *callee = n->var_decl.init->call.callee;
+    if (!callee || callee->kind != ND_IDENT) return;
+    Declaration *d = callee->ident.resolved_decl;
+    if (!d || (d->entity != ENTITY_TYPE && d->entity != ENTITY_TAG))
+        return;
+    Node *call = n->var_decl.init;
+    n->var_decl.has_ctor_init = true;
+    n->var_decl.ctor_args = call->call.args;
+    n->var_decl.ctor_nargs = call->call.nargs;
+    n->var_decl.init = NULL;
+}
+
 /* Push a CL_VAR for a user-declared class local onto the live stack.
  * Pulled out so emit_block and the mini-block path share it.
  * Transparently looks through ND_LABEL wrappers — a labelled
@@ -8338,6 +8369,7 @@ static void emit_stmt(Node *n) {
         return;
     }
     case ND_VAR_DECL:
+        rewrite_copy_init_ctor_call(n);
         /* Block-scope inline-struct dependency, same shape as the
          * top-level emit path: 'static const struct T { ... } arr[];'
          * in a function body hangs T's body off var_decl.ty's class_def
@@ -8573,10 +8605,24 @@ static void emit_stmt(Node *n) {
         if (n->if_.cond && n->if_.cond->kind == ND_VAR_DECL &&
             n->if_.cond->var_decl.name) {
             Token *nm = n->if_.cond->var_decl.name;
+            rewrite_copy_init_ctor_call(n->if_.cond);
             emit_open_brace();
             emit_indent();
             emit_var_decl_inner(n->if_.cond);
             fputs(";\n", stdout);
+            if (n->if_.cond->var_decl.has_ctor_init) {
+                emit_indent();
+                Type **at = NULL;
+                int na = collect_call_arg_types(n->if_.cond->var_decl.ctor_args,
+                                                 n->if_.cond->var_decl.ctor_nargs, &at);
+                Type **pty = NULL;
+                int np = resolve_overload(n->if_.cond->var_decl.ty,
+                                           NULL, true, at, na, false,
+                                           &pty, NULL);
+                if (np < 0 && n->if_.cond->var_decl.ctor_nargs == 0) np = 0;
+                mangle_class_ctor(n->if_.cond->var_decl.ty, pty, np);
+                fprintf(stdout, "(&%.*s);\n", nm->len, nm->loc);
+            }
             emit_indent();
             /* Build a synthetic ND_IDENT so emit_bool_context_expr
              * can decide whether to invoke `operator bool` based on
@@ -8622,10 +8668,27 @@ static void emit_stmt(Node *n) {
         if (n->while_.cond && n->while_.cond->kind == ND_VAR_DECL &&
             n->while_.cond->var_decl.name) {
             Token *nm = n->while_.cond->var_decl.name;
+            rewrite_copy_init_ctor_call(n->while_.cond);
             emit_open_brace();
             emit_indent();
             emit_var_decl_inner(n->while_.cond);
             fputs(";\n", stdout);
+            /* If rewritten to has_ctor_init, emit the ctor call. */
+            if (n->while_.cond->var_decl.has_ctor_init) {
+                emit_indent();
+                Type **at = NULL;
+                int na = collect_call_arg_types(n->while_.cond->var_decl.ctor_args,
+                                                 n->while_.cond->var_decl.ctor_nargs, &at);
+                Type **pty = NULL;
+                int np = resolve_overload(n->while_.cond->var_decl.ty,
+                                           NULL, /*is_ctor=*/true, at, na,
+                                           /*receiver_is_const=*/false,
+                                           &pty, NULL);
+                if (np < 0 && n->while_.cond->var_decl.ctor_nargs == 0)
+                    np = 0;  /* default ctor */
+                mangle_class_ctor(n->while_.cond->var_decl.ty, pty, np);
+                fprintf(stdout, "(&%.*s);\n", nm->len, nm->loc);
+            }
             emit_indent();
             Node ident_stub = {0};
             ident_stub.kind = ND_IDENT;
@@ -8850,6 +8913,7 @@ static void emit_stmt(Node *n) {
         if (n->for_.cond && n->for_.cond->kind == ND_VAR_DECL &&
             n->for_.cond->var_decl.name) {
             Token *nm = n->for_.cond->var_decl.name;
+            rewrite_copy_init_ctor_call(n->for_.cond);
             emit_open_brace();
             if (n->for_.init) {
                 emit_indent();
@@ -8858,6 +8922,19 @@ static void emit_stmt(Node *n) {
             emit_indent();
             emit_var_decl_inner(n->for_.cond);
             fputs(";\n", stdout);
+            if (n->for_.cond->var_decl.has_ctor_init) {
+                emit_indent();
+                Type **at = NULL;
+                int na = collect_call_arg_types(n->for_.cond->var_decl.ctor_args,
+                                                 n->for_.cond->var_decl.ctor_nargs, &at);
+                Type **pty = NULL;
+                int np = resolve_overload(n->for_.cond->var_decl.ty,
+                                           NULL, true, at, na, false,
+                                           &pty, NULL);
+                if (np < 0 && n->for_.cond->var_decl.ctor_nargs == 0) np = 0;
+                mangle_class_ctor(n->for_.cond->var_decl.ty, pty, np);
+                fprintf(stdout, "(&%.*s);\n", nm->len, nm->loc);
+            }
             emit_indent();
             Node ident_stub = {0};
             ident_stub.kind = ND_IDENT;
@@ -9253,10 +9330,24 @@ static void emit_stmt(Node *n) {
         if (n->switch_.expr && n->switch_.expr->kind == ND_VAR_DECL &&
             n->switch_.expr->var_decl.name) {
             Token *nm = n->switch_.expr->var_decl.name;
+            rewrite_copy_init_ctor_call(n->switch_.expr);
             emit_open_brace();
             emit_indent();
             emit_var_decl_inner(n->switch_.expr);
             fputs(";\n", stdout);
+            if (n->switch_.expr->var_decl.has_ctor_init) {
+                emit_indent();
+                Type **at = NULL;
+                int na = collect_call_arg_types(n->switch_.expr->var_decl.ctor_args,
+                                                 n->switch_.expr->var_decl.ctor_nargs, &at);
+                Type **pty = NULL;
+                int np = resolve_overload(n->switch_.expr->var_decl.ty,
+                                           NULL, true, at, na, false,
+                                           &pty, NULL);
+                if (np < 0 && n->switch_.expr->var_decl.ctor_nargs == 0) np = 0;
+                mangle_class_ctor(n->switch_.expr->var_decl.ty, pty, np);
+                fprintf(stdout, "(&%.*s);\n", nm->len, nm->loc);
+            }
             emit_indent();
             Node ident_stub = {0};
             ident_stub.kind = ND_IDENT;
