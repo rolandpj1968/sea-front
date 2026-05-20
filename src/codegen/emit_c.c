@@ -9672,10 +9672,38 @@ static void emit_ctor_mem_init_one(Node *func, Node *m) {
                      * on a plain C struct whose has_default_ctor is
                      * transitively true, this is trivial value-init —
                      * the enclosing allocation's zero-fill covers it.
-                     * For a non-zero arg count, this is a real error. */
-                    if (na != 0)
+                     *
+                     * For a 1-arg mem-init where the arg's type is the
+                     * member's type, this is an implicit copy-init
+                     * (N4659 §15.8 [class.copy]/8): a struct with no
+                     * user-declared copy ctor has an implicit one that
+                     * performs memberwise copy. C's struct assignment
+                     * is bitwise, which matches the implicit version
+                     * for plain-old-data classes (no user-defined
+                     * subobject copy ctors). Pattern: g++.dg/opt/const1.C
+                     *   template<class T> struct C { C(const T &t) : c(t) {} ... };
+                     *   C<B>(b)  // B has no user ctor — implicit copy. */
+                    bool implicit_copy = false;
+                    if (na == 1 && at && at[0]) {
+                        Type *src = at[0];
+                        if (src->kind == TY_REF || src->kind == TY_RVALREF)
+                            src = src->base;
+                        if (src && src->kind == TY_STRUCT &&
+                            src->tag && mty->tag &&
+                            tokens_equal(src->tag, mty->tag))
+                            implicit_copy = true;
+                    }
+                    if (implicit_copy) {
+                        emit_indent();
+                        fprintf(stdout, "this->%.*s = ",
+                                m->var_decl.name->len,
+                                m->var_decl.name->loc);
+                        emit_expr(found->args[0]);
+                        fputs(";\n", stdout);
+                    } else if (na != 0) {
                         die_no_overload(mty, NULL, na,
                                          "mem-init ctor call");
+                    }
                 } else {
                     emit_indent();
                     mangle_class_ctor(mty, pty, np);
