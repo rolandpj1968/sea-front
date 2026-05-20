@@ -10356,8 +10356,50 @@ static void emit_func_def(Node *n) {
      * one. Pattern: g++.dg/eh/weak1.C. */
     if (n->func.attr_weak)
         fputs("__attribute__((weak)) ", stdout);
-    emit_free_func_header(n->func.ret_ty, n->func.name,
-                          n->func.params, n->func.nparams, n->func.is_variadic);
+    /* Namespace-scoped free function: emit using the same Itanium-
+     * style mangling the call site (ND_QUALIFIED with parts
+     * [ns, fn]) uses. Otherwise the def emits bare 'ab6' while the
+     * call uses '_ZN5xyzzy3ab6EdPv' and link fails. Pattern:
+     * g++.dg/ext/fnname1.C. Reuses mangle_class_method with a stub
+     * Type whose tag is the namespace name — Itanium's namespace
+     * and class prefixes are the same `N<len>...E` shape. */
+    if (n->func.ns_token && g_mangle_kind == MANGLE_ITANIUM) {
+        Type ns_stub = {0};
+        ns_stub.kind = TY_STRUCT;
+        ns_stub.tag  = n->func.ns_token;
+        static Type *param_buf[16];
+        int np = n->func.nparams < 16 ? n->func.nparams : 16;
+        for (int i = 0; i < np; i++) {
+            Node *p = n->func.params[i];
+            param_buf[i] = (p && p->kind == ND_PARAM) ? p->param.ty : NULL;
+        }
+        emit_type(n->func.ret_ty);
+        fputc(' ', stdout);
+        mangle_class_method(&ns_stub, n->func.name, param_buf, np,
+                            /*is_const=*/false);
+        fputc('(', stdout);
+        if (n->func.nparams == 0) {
+            fputs("void", stdout);
+        } else {
+            for (int i = 0; i < n->func.nparams; i++) {
+                if (i > 0) fputs(", ", stdout);
+                Node *p = n->func.params[i];
+                if (p && p->kind == ND_PARAM) {
+                    emit_type(p->param.ty);
+                    if (p->param.name)
+                        fprintf(stdout, " %.*s",
+                                p->param.name->len, p->param.name->loc);
+                    else
+                        fprintf(stdout, " __sf_unused_%d", i);
+                }
+            }
+        }
+        fputc(')', stdout);
+    } else {
+        emit_free_func_header(n->func.ret_ty, n->func.name,
+                              n->func.params, n->func.nparams,
+                              n->func.is_variadic);
+    }
     fputc(' ', stdout);
     emit_func_body(n);
     g_current_func_ret_ty = saved_ret;

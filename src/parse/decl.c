@@ -1622,6 +1622,19 @@ Node *parse_declaration(Parser *p) {
          * can emit the terminate check. */
         func->func.is_nothrow       = p->pending_nothrow_spec;
         p->pending_nothrow_spec     = false;
+        /* Capture the enclosing namespace token (innermost named one)
+         * so codegen can emit a matching Itanium-mangled symbol on
+         * the def. Walks p->region's enclosing chain; skips anonymous
+         * blocks/prototypes. The global namespace has name==NULL —
+         * leave ns_token NULL for free functions there. */
+        if (!func->func.class_type) {
+            for (DeclarativeRegion *r = p->region; r; r = r->enclosing) {
+                if (r->kind == REGION_NAMESPACE && r->name) {
+                    func->func.ns_token = r->name;
+                    break;
+                }
+            }
+        }
         func->func.is_const_method = decl->var_decl.ty->is_const;
         func->func.storage_flags = spec.flags;
         if (p->extern_c_depth > 0) func->func.storage_flags |= DECL_C_LINKAGE;

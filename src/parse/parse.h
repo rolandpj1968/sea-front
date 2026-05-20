@@ -882,6 +882,15 @@ struct Node {
              * ahead of the function definition. Pattern:
              * g++.dg/eh/weak1.C. */
             bool             attr_weak;
+            /* Innermost enclosing namespace name token. NULL for
+             * free functions at global scope. Set at parse time by
+             * walking p->region's enclosing chain. Codegen uses this
+             * to emit the Itanium-mangled namespace name on the def
+             * so it matches the qualified call site
+             * `_ZN5xyzzy3ab6EdPv` (currently the def emits bare
+             * 'ab6' and the call's mangled symbol stays unresolved
+             * at link). Pattern: g++.dg/ext/fnname1.C. */
+            Token           *ns_token;
         } func;
 
         /* ND_LAMBDA — N4659 §8.1.5 [expr.prim.lambda].
