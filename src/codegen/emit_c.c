@@ -1675,6 +1675,13 @@ static bool subtree_has_cleanups(Node *n) {
     case ND_VAR_DECL:
         if (n->var_decl.ty && n->var_decl.ty->kind == TY_STRUCT &&
             n->var_decl.ty->has_dtor) return true;
+        /* Array of class-with-dtor — element dtors must fire at
+         * scope exit. push_user_var_cleanup emits a destruct-each-
+         * element loop. Pattern: g++.dg/init/array14.C. */
+        if (n->var_decl.ty && n->var_decl.ty->kind == TY_ARRAY &&
+            n->var_decl.ty->base &&
+            n->var_decl.ty->base->kind == TY_STRUCT &&
+            n->var_decl.ty->base->has_dtor) return true;
         return subtree_has_cleanups(n->var_decl.init);
     case ND_BLOCK:
         for (int i = 0; i < n->block.nstmts; i++)
@@ -7508,6 +7515,35 @@ static void emit_cleanup_chain_for_added(int saved_nlive) {
              * the address. */
             mangle_class_dtor(v->resolved_type);
             fprintf(stdout, "(&%s);\n", v->codegen_temp_name);
+        } else if (v->var_decl.ty &&
+                   v->var_decl.ty->kind == TY_ARRAY &&
+                   v->var_decl.ty->base &&
+                   v->var_decl.ty->base->kind == TY_STRUCT) {
+            /* Array of class — emit a destruct-each-element loop in
+             * REVERSE order (N4659 §15.6.2/12 [class.base.init] —
+             * destruction is the reverse of construction). For
+             * unsized arrays the parser may leave array_len unset;
+             * fall back to a guarded sizeof / sizeof(elem) that
+             * yields 0 when the element size is 0 (gcc empty-struct
+             * extension — sizeof(empty_struct)==0 — would otherwise
+             * trip cc's div-by-zero trap). Pattern: g++.dg/init/array14.C. */
+            Type *arr_ty = v->var_decl.ty;
+            Type *elem_ty = arr_ty->base;
+            if (arr_ty->array_len > 0) {
+                fprintf(stdout, "for (int __sf_i = %d; __sf_i >= 0; --__sf_i) ",
+                        arr_ty->array_len - 1);
+            } else {
+                fprintf(stdout,
+                    "for (int __sf_i = (int)(sizeof(%.*s[0]) ? "
+                    "sizeof(%.*s)/sizeof(%.*s[0]) : 1) - 1; "
+                    "__sf_i >= 0; --__sf_i) ",
+                    v->var_decl.name->len, v->var_decl.name->loc,
+                    v->var_decl.name->len, v->var_decl.name->loc,
+                    v->var_decl.name->len, v->var_decl.name->loc);
+            }
+            mangle_class_dtor(elem_ty);
+            fprintf(stdout, "(&%.*s[__sf_i]);\n",
+                    v->var_decl.name->len, v->var_decl.name->loc);
         } else {
             mangle_class_dtor(v->var_decl.ty);
             fprintf(stdout, "(&%.*s);\n",
@@ -7743,15 +7779,25 @@ static bool stmt_has_class_temp(Node *s) {
  * Pulled out so emit_block and the mini-block path share it.
  * Transparently looks through ND_LABEL wrappers — a labelled
  * declaration `again: C v;` still introduces v into scope and its
- * dtor must fire when a goto crosses out. Pattern: g++.dg/init/goto1.C. */
+ * dtor must fire when a goto crosses out. Pattern: g++.dg/init/goto1.C.
+ *
+ * Also handles arrays of class-with-dtor (`C arr[N];`): the dtor must
+ * fire for every element at scope exit. emit_cleanup_chain_for_added
+ * detects the array shape and emits a loop. Pattern:
+ * g++.dg/init/array14.C. */
 static void push_user_var_cleanup(Node *s) {
     if (!g_cf.func_has_cleanups || !s)
         return;
     while (s && s->kind == ND_LABEL && s->label.stmt)
         s = s->label.stmt;
-    if (s->kind != ND_VAR_DECL || !s->var_decl.ty ||
-        s->var_decl.ty->kind != TY_STRUCT || !s->var_decl.ty->has_dtor ||
-        !s->var_decl.name)
+    if (s->kind != ND_VAR_DECL || !s->var_decl.ty || !s->var_decl.name)
+        return;
+    Type *ty = s->var_decl.ty;
+    bool class_with_dtor = ty->kind == TY_STRUCT && ty->has_dtor;
+    bool array_of_class_with_dtor =
+        ty->kind == TY_ARRAY && ty->base &&
+        ty->base->kind == TY_STRUCT && ty->base->has_dtor;
+    if (!class_with_dtor && !array_of_class_with_dtor)
         return;
     cleanup_live_reserve(1);
     g_cf.live[g_cf.nlive].kind = CL_VAR;
