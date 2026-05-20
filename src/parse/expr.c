@@ -1502,7 +1502,14 @@ static Node *primary_expr(Parser *p) {
           tok->loc[3] == 's' && tok->loc[4] == '_') ||
          (tok->loc[0] == '_' && tok->loc[1] == '_' && tok->loc[2] == 'h' &&
           tok->loc[3] == 'a' && tok->loc[4] == 's' && tok->len > 5 &&
-          tok->loc[5] == '_'));
+          tok->loc[5] == '_') ||
+         /* libstdc++ 13's stl_pair.h gates a dangling-reference
+          * check on __reference_constructs_from_temporary(T, U);
+          * args are TYPES (T, const U&). Without this prefix in the
+          * gate the path falls through to expression parsing which
+          * chokes on 'const U&'. type_trait_name_known will recognise
+          * the trait name; the check returns conservative-false. */
+         (tok->len > 12 && memcmp(tok->loc, "__reference_", 12) == 0));
 
     /* __alignof / __alignof__ accept either a type or an expression
      * and return an integer (not bool). Sea-front doesn't track
