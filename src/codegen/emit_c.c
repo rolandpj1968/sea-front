@@ -595,7 +595,58 @@ static void emit_arg_for_param(Node *arg, Type *param_ty) {
             return;
         }
     }
-    if (!ty_is_ref(param_ty)) { emit_expr(arg); return; }
+    if (!ty_is_ref(param_ty)) {
+        /* Pass-by-value of a class-typed arg: C++ requires the copy
+         * ctor to run. C's struct assignment is bitwise — fine for
+         * trivially-copyable classes, but wrong when the user
+         * defined a copy ctor with observable side effects.
+         * N4659 §11.4.5 [class.copy.ctor], §16.3.1.4
+         * [over.match.copy].
+         *
+         * Detect: param is a class, arg's resolved_type names the
+         * same class (looking through cv / refs), arg is addressable,
+         * and the class declares a 1-arg ctor accepting (const T&) or
+         * (T&). When all hold, emit
+         *   ({ T __sf_cpy; T_copy_ctor(&__sf_cpy, &arg); __sf_cpy; })
+         * GNU stmt-expr — the rest of the EH path uses these already.
+         * Patterns: g++.dg/init/elide2.C, copy3.C, cpp0x/implicit2.C. */
+        if (param_ty &&
+            (param_ty->kind == TY_STRUCT || param_ty->kind == TY_UNION) &&
+            arg->resolved_type && is_addressable_lvalue(arg)) {
+            Type *src = arg->resolved_type;
+            if (src->kind == TY_REF || src->kind == TY_RVALREF)
+                src = src->base;
+            if (src && src->tag && param_ty->tag &&
+                tokens_equal(src->tag, param_ty->tag)) {
+                /* Build a (const T&) param-type for the overload
+                 * lookup. C++ copy ctor takes 'const T&' (the canonical
+                 * form); §11.4.5/1. We pass src directly (the class
+                 * Type) since resolve_overload's ref-binding check
+                 * accepts a non-ref source and matches against a
+                 * ref param. */
+                Type *at[1] = { src };
+                Type **pty = NULL;
+                Node *best = NULL;
+                int np = resolve_overload(param_ty, /*name=*/NULL,
+                                           /*is_ctor=*/true, at, 1,
+                                           /*receiver_is_const=*/false,
+                                           &pty, &best);
+                if (np >= 0 && pty && pty[0] &&
+                    (pty[0]->kind == TY_REF || pty[0]->kind == TY_RVALREF)) {
+                    fputs("({ ", stdout);
+                    emit_type(param_ty);
+                    fputs(" __sf_cpy; ", stdout);
+                    mangle_class_ctor(param_ty, pty, np);
+                    fputs("(&__sf_cpy, &(", stdout);
+                    emit_expr(arg);
+                    fputs(")); __sf_cpy; })", stdout);
+                    return;
+                }
+            }
+        }
+        emit_expr(arg);
+        return;
+    }
     Type *at = arg->resolved_type;
     /* Already a ref in the AST (lowered to pointer) — pass as-is. */
     if (ty_is_ref(at)) {
