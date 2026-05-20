@@ -315,6 +315,14 @@ void parser_skip_gnu_attributes_full(Parser *p,
                  token_equal(parser_peek(p), "__weak__"))) {
                 p->pending_attr_weak = true;
             }
+            if (parser_at(p, TK_IDENT) &&
+                (token_equal(parser_peek(p), "init_priority") ||
+                 token_equal(parser_peek(p), "__init_priority__"))) {
+                if (parser_peek_ahead(p, 1)->kind == TK_LPAREN &&
+                    parser_peek_ahead(p, 2)->kind == TK_NUM)
+                    p->pending_init_priority =
+                        (int)parser_peek_ahead(p, 2)->ival;
+            }
             if (parser_at(p, TK_LPAREN)) depth++;
             else if (parser_at(p, TK_RPAREN)) { depth--; if (depth == 0) break; }
             parser_advance(p);

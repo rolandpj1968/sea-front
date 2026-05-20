@@ -1916,11 +1916,13 @@ Node *parse_declaration(Parser *p) {
      * 'int x __attribute__((unused)) = 5;'. Common in gcc source.
      * Detect cleanup(handler) on the way past so codegen can re-emit
      * the attribute on the C variable. Also detects function-attr
-     * constructor / destructor for free-function init/fini hooks. */
+     * constructor / destructor for free-function init/fini hooks,
+     * and init_priority(N) for global-ctor ordering. */
     {
         Token *cleanup_tok = NULL;
         bool is_ctor_attr = false;
         bool is_dtor_attr = false;
+        p->pending_init_priority = 0;
         parser_skip_gnu_attributes_full(p, NULL, &cleanup_tok,
                                         &is_ctor_attr, &is_dtor_attr);
         if (cleanup_tok)
@@ -1929,6 +1931,10 @@ Node *parse_declaration(Parser *p) {
             decl->var_decl.attr_constructor = true;
         if (is_dtor_attr)
             decl->var_decl.attr_destructor = true;
+        if (p->pending_init_priority > 0) {
+            decl->var_decl.init_priority = p->pending_init_priority;
+            p->pending_init_priority = 0;
+        }
     }
 
     if (parser_consume(p, TK_ASSIGN)) {

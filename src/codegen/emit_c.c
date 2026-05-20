@@ -12109,6 +12109,10 @@ static void emit_top_level(Node *n) {
         emit_var_storage_flags(n->var_decl.storage_flags);
         emit_var_decl_inner(n);
         fputs(";\n", stdout);
+        /* init_priority(N) is handled separately in the per-var
+         * prioritized-init synthesis at the bottom of the TU emit;
+         * cc warns "init_priority attribute directive ignored" if
+         * we re-emit the attribute on the var def, so don't. */
         return;
     case ND_BLOCK:
         /* The parser packs namespace contents (and extern "C" blocks)
@@ -12760,6 +12764,36 @@ void emit_c(Node *tu) {
         }
     }
     if (need_global_init) {
+        /* Per-var prioritized init — N4659 doesn't model this; GNU's
+         * __attribute__((init_priority(N))) controls cross-TU global-
+         * ctor execution order (lower N first). Sea-front lowers to C
+         * which doesn't honour init_priority on variable decls (cc
+         * warns 'init_priority attribute directive ignored'), so we
+         * synthesize a separate __sf_init_pri_<idx>(void)
+         * __attribute__((constructor(N))) per prioritized var and
+         * skip the var in __sf_global_init's main loop.
+         * Pattern: g++.dg/special/conpr-{2,3,4}.C. */
+        for (int i = 0; i < tu->tu.ndecls; i++) {
+            Node *n = tu->tu.decls[i];
+            if (!n || n->kind != ND_VAR_DECL) continue;
+            if (!n->var_decl.ty || !n->var_decl.name) continue;
+            if (n->var_decl.storage_flags & DECL_EXTERN) continue;
+            if (n->var_decl.init_priority <= 0) continue;
+            Type *ty = n->var_decl.ty;
+            if (ty->kind != TY_STRUCT && ty->kind != TY_UNION) continue;
+            if (!ty->has_default_ctor) continue;
+            fprintf(stdout,
+                "\nstatic void __sf_init_pri_%d_%.*s(void) "
+                "__attribute__((constructor(%d)));\n",
+                i, n->var_decl.name->len, n->var_decl.name->loc,
+                n->var_decl.init_priority);
+            fprintf(stdout,
+                "static void __sf_init_pri_%d_%.*s(void) {\n    ",
+                i, n->var_decl.name->len, n->var_decl.name->loc);
+            mangle_class_ctor(ty, NULL, 0);
+            fprintf(stdout, "(&%.*s);\n}\n",
+                    n->var_decl.name->len, n->var_decl.name->loc);
+        }
         fputs("\nstatic void __sf_global_init(void) __attribute__((constructor));\n",
               stdout);
         fputs("static void __sf_global_init(void) {\n", stdout);
@@ -12768,6 +12802,9 @@ void emit_c(Node *tu) {
             if (!n || n->kind != ND_VAR_DECL) continue;
             if (!n->var_decl.ty || !n->var_decl.name) continue;
             if (n->var_decl.storage_flags & DECL_EXTERN) continue;
+            /* Prioritized vars are handled by per-var ctor functions
+             * above; skip them here. */
+            if (n->var_decl.init_priority > 0) continue;
             Type *ty = n->var_decl.ty;
             bool is_class = (ty->kind == TY_STRUCT || ty->kind == TY_UNION) &&
                             ty->has_default_ctor &&

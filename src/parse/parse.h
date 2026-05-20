@@ -761,6 +761,10 @@ struct Node {
              * non-weak definition in another TU overrides it. Pattern:
              * g++.dg/eh/weak1.C. */
             bool   attr_weak;
+            /* GNU init_priority(N) on a variable definition. Cross-TU
+             * global-ctor order (lower N = earlier). 0 = no priority.
+             * Pattern: g++.dg/special/conpr-{2,3,4}.C. */
+            int    init_priority;
             /* Class type that owns this OOL definition — set when the
              * declarator-id was a qualified-id like 'Foo::bar' and the
              * decl is a STATIC DATA MEMBER (not a function — that case
@@ -1566,6 +1570,10 @@ struct Parser {
      * g++.dg/eh/weak1.C with the matching weak1-a.cc that strong-
      * overrides f. */
     bool pending_attr_weak;
+    /* Side channel: `__attribute__((init_priority(N)))` on a variable
+     * definition. Controls cross-TU global ctor execution order
+     * (lower = earlier). Pattern: g++.dg/special/conpr-{2,3,4}.C. */
+    int  pending_init_priority;
     /* Side channel from consume_trailing_qualifiers → parse_declaration:
      * set true when the declarator carried a no-throw spec — either
      * `noexcept` / `noexcept(...)` or `throw()` (empty list). Codegen
