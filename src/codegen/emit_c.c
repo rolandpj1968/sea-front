@@ -1180,12 +1180,28 @@ static void hoist_emit_decl(Node *call, bool in_shortcircuit) {
         emit_indent();
         emit_type(ctor_class_type);
         if (np < 0) {
-            /* No matching ctor — trivial default construction per
-             * N4659 §11.6/8 [dcl.init]. Zero-init the temp via '{0}'
-             * so the bytes are well-defined; the prior 'struct T
-             * temp;' (uninitialized) form left ptmf members and
-             * padding indeterminate (g++.dg/init/ptrmem4.C bug). */
-            fprintf(stdout, " %s = {0};\n", name);
+            /* No user-declared matching ctor — trivial default
+             * construction per N4659 §11.6/8 [dcl.init]. If the class
+             * has a synthesised default ctor (has_default_ctor —
+             * needed e.g. when a member has its own ctor that must
+             * run), call it; the synth is emitted with the same
+             * mangled name as a user-defined zero-arg ctor. Pattern:
+             * g++.dg/init/elide2.C — `struct B { A a; };` where A
+             * has a user ctor that ++c's; bare `{0}` would leave c=0.
+             *
+             * If no synth either, zero-init via `{0}` so the bytes
+             * are well-defined; bare `struct T temp;` left ptmf
+             * members and padding indeterminate
+             * (g++.dg/init/ptrmem4.C bug). */
+            if (call->call.nargs == 0 && ctor_class_type &&
+                ctor_class_type->has_default_ctor) {
+                fprintf(stdout, " %s;\n", name);
+                emit_indent();
+                mangle_class_ctor(ctor_class_type, NULL, 0);
+                fprintf(stdout, "(&%s);\n", name);
+            } else {
+                fprintf(stdout, " %s = {0};\n", name);
+            }
             goto hoist_done;
         }
         fprintf(stdout, " %s;\n", name);
