@@ -9323,6 +9323,32 @@ static void emit_ctor_member_inits(Node *func) {
                                            /*receiver_is_const=*/false,
                                            &pty, &best);
                 if (np < 0) {
+                    /* 1-arg base mem-init with arg-type == base type:
+                     * implicit copy ctor — see the matching member
+                     * mem-init fall-back's comment for the rationale.
+                     * Pattern: g++.dg/init/empty1.C —
+                     *   class E1 : public E0 {}; class P : ..., E1
+                     *   P(...) : ..., E1(E1()) {}  */
+                    bool implicit_copy = false;
+                    if (na == 1 && at && at[0]) {
+                        Type *src = at[0];
+                        if (src->kind == TY_REF || src->kind == TY_RVALREF)
+                            src = src->base;
+                        if (src && src->kind == TY_STRUCT &&
+                            src->tag && base->tag &&
+                            tokens_equal(src->tag, base->tag))
+                            implicit_copy = true;
+                    }
+                    if (implicit_copy) {
+                        emit_indent();
+                        fputs("this->", stdout);
+                        if (b == 0) fputs("__sf_base", stdout);
+                        else        fprintf(stdout, "__sf_base%d", b);
+                        fputs(" = ", stdout);
+                        emit_expr(base_mi->args[0]);
+                        fputs(";\n", stdout);
+                        continue;
+                    }
                     if (na != 0)
                         die_no_overload(base, NULL, na,
                                          "base mem-init ctor call");
