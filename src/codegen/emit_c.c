@@ -6750,20 +6750,67 @@ static void emit_expr(Node *n) {
             fputc('0', stdout);
         return;
     }
-    case ND_THROW:
-        /* Throw at non-statement-position (inside a ternary branch,
-         * function-call argument, etc.). Real throw-lowering only
-         * fires from emit_stmt's ND_EXPR_STMT case where __SF_THROW_PRIM
-         * + goto are valid as a statement; in expression position
-         * we'd need a GNU statement-expression to bundle the state-
-         * set + goto + value, which sea-front doesn't take on (cproc
-         * portability). Emit a zero placeholder so the surrounding C
-         * stays well-formed; runtime semantics for these throws are
-         * skipped — the throw is silently dropped. Real-world
-         * incidence is rare; libcpp / gcc 14 don't hit this path.
-         * TODO(seafront#eh-throw-in-expr-position) per docs/exceptions.md. */
-        fputs("0 /* throw */", stdout);
+    case ND_THROW: {
+        /* Throw at non-statement-position (inside a ternary arm,
+         * function-call argument, etc.). N4659 §8.17 [expr.throw] —
+         * a throw-expression has type void but is permitted as one
+         * arm of a conditional, etc. The cproc-portability goal
+         * prefers ISO C; here we accept the GNU stmt-expr because
+         * `goto lbl` cannot otherwise appear in expression position.
+         *
+         * Shape: `({ __SF_THROW_PRIM(...); 0; })`. The `0` is the
+         * value yielded by the stmt-expr — never reached, since the
+         * macro's `goto lbl` jumps to a handler. Type-wise it's int,
+         * which converts to whatever the enclosing context demands
+         * (bool/long/etc.) via implicit conversion. Class-typed
+         * throws in expression position still route through
+         * __SF_THROW_CLASS with the operand's address.
+         *
+         * Pattern: g++.dg/eh/cond5.C `(x ? true : throw 1)`. */
+        if (!g_cf.func_has_cleanups) {
+            /* The enclosing function wasn't pre-scanned with unwind
+             * machinery — no __SF_unwind, no __SF_epilogue label. This
+             * happens when a throw appears inside an NSDMI body that
+             * was emitted as part of an implicitly-synthesised ctor
+             * (pattern: g++.dg/cpp0x/nsdmi-eh1.C — Core issue 1351,
+             * which gcc itself xfails). Fall back to the silent-drop
+             * placeholder so the emitted C still compiles. */
+            fputs("0 /* throw */", stdout);
+            return;
+        }
+        Node *op = n->throw_.operand;
+        Type *op_ty = op ? op->resolved_type : NULL;
+        bool in_try = false;
+        int target = find_throw_target_from(g_cf.nlive, &in_try);
+        char buf[32];
+        const char *lbl;
+        if (target >= 0) {
+            snprintf(buf, sizeof(buf),
+                     in_try ? "__SF_try_%d_handler" : "__SF_cleanup_%d",
+                     target);
+            lbl = buf;
+        } else {
+            lbl = "__SF_epilogue";
+        }
+        if (n->throw_.is_rethrow) {
+            fprintf(stdout,
+                    "({ __sf_exc_state.state = __SF_UNWIND_THROW; "
+                    "__SF_unwind = __SF_UNWIND_THROW; "
+                    "goto %s; 0; })",
+                    lbl);
+        } else if (op_ty &&
+                   (op_ty->kind == TY_STRUCT || op_ty->kind == TY_UNION)) {
+            fputs("({ __SF_THROW_CLASS(&(", stdout);
+            emit_expr(op);
+            fprintf(stdout, "), 0, %s); 0; })", lbl);
+        } else {
+            fputs("({ __SF_THROW_PRIM(", stdout);
+            if (op) emit_expr(op);
+            else fputs("0", stdout);
+            fprintf(stdout, ", &__sf_typeinfo_int, %s); 0; })", lbl);
+        }
         return;
+    }
     default:
         /* Silent-discard placeholder is a trap: the surrounding C
          * stays parseable (e.g. a comment-shaped placeholder
