@@ -1683,6 +1683,20 @@ static bool subtree_has_cleanups(Node *n) {
         return true;
     case ND_TRY:
         return true;
+    /* Labelled statement: walk into the wrapped stmt. Without this a
+     * labelled class-typed var-decl ('again: C v;') doesn't get its
+     * containing function flagged as func_has_cleanups, so v's
+     * cleanup never fires when a goto crosses it. Pattern:
+     * g++.dg/init/goto1.C. */
+    case ND_LABEL:
+        return subtree_has_cleanups(n->label.stmt);
+    case ND_CASE:
+        return subtree_has_cleanups(n->case_.stmt);
+    case ND_DEFAULT:
+        return subtree_has_cleanups(n->default_.stmt);
+    case ND_SWITCH:
+        return subtree_has_cleanups(n->switch_.expr) ||
+               subtree_has_cleanups(n->switch_.body);
     default:
         return false;
     }
@@ -7658,10 +7672,16 @@ static bool stmt_has_class_temp(Node *s) {
 }
 
 /* Push a CL_VAR for a user-declared class local onto the live stack.
- * Pulled out so emit_block and the mini-block path share it. */
+ * Pulled out so emit_block and the mini-block path share it.
+ * Transparently looks through ND_LABEL wrappers — a labelled
+ * declaration `again: C v;` still introduces v into scope and its
+ * dtor must fire when a goto crosses out. Pattern: g++.dg/init/goto1.C. */
 static void push_user_var_cleanup(Node *s) {
-    if (!g_cf.func_has_cleanups || !s ||
-        s->kind != ND_VAR_DECL || !s->var_decl.ty ||
+    if (!g_cf.func_has_cleanups || !s)
+        return;
+    while (s && s->kind == ND_LABEL && s->label.stmt)
+        s = s->label.stmt;
+    if (s->kind != ND_VAR_DECL || !s->var_decl.ty ||
         s->var_decl.ty->kind != TY_STRUCT || !s->var_decl.ty->has_dtor ||
         !s->var_decl.name)
         return;
