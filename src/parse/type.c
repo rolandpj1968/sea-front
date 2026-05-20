@@ -270,9 +270,15 @@ DeclSpec parse_type_specifiers(Parser *p) {
             ty->is_volatile = is_volatile;
 
             /* C++ / GCC attributes between 'class'/'struct'/'union' and
-             * the tag name (e.g. 'union [[gnu::may_alias]] X'). */
+             * the tag name (e.g. 'union [[gnu::may_alias]] X', or
+             * 'struct __attribute__((packed)) X'). */
             parser_skip_cxx_attributes(p);
+            p->pending_packed = false;
             parser_skip_gnu_attributes(p);
+            if (p->pending_packed) {
+                ty->is_packed = true;
+                p->pending_packed = false;
+            }
 
             /* Leading global scope: 'struct ::Foo' / 'class ::Foo'. */
             parser_consume(p, TK_SCOPE);
@@ -785,6 +791,14 @@ DeclSpec parse_type_specifiers(Parser *p) {
             while (parser_at(p, TK_KW_CONST) || parser_at(p, TK_KW_VOLATILE)) {
                 if (parser_consume(p, TK_KW_CONST))    ty->is_const = true;
                 if (parser_consume(p, TK_KW_VOLATILE)) ty->is_volatile = true;
+            }
+            /* Trailing __attribute__: 'struct X { ... } __attribute__((packed));'
+             * — alternative position for packed et al. */
+            p->pending_packed = false;
+            parser_skip_gnu_attributes(p);
+            if (p->pending_packed) {
+                ty->is_packed = true;
+                p->pending_packed = false;
             }
             result.type = ty; return result;
         }

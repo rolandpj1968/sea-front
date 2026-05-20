@@ -10973,7 +10973,14 @@ static void emit_class_def(Node *n) {
         fputs(";\n", stdout);
     }
     g_indent--;
-    fputs("};\n", stdout);
+    /* GNU __attribute__((packed)) — pass-through to the C compiler
+     * which packs the struct (no padding between fields). Goes
+     * between '}' and ';' on the struct definition. Pattern:
+     * g++.dg/ext/packed4.C. */
+    if (class_type && class_type->is_packed)
+        fputs("} __attribute__((packed));\n", stdout);
+    else
+        fputs("};\n", stdout);
 
     /* Static data members — §11.4.9.2 [class.static.data]. Skipped
      * from the struct body above; emit here as TU-scope variables
