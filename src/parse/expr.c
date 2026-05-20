@@ -2239,6 +2239,26 @@ static Node *postfix_expr(Parser *p) {
                 } else if (parser_peek(p)->kind >= TK_LPAREN &&
                            parser_peek(p)->kind <= TK_HASHHASH) {
                     parser_advance(p);
+                } else if (parser_at_type_specifier(p)) {
+                    /* Conversion operator: `obj.operator T()` —
+                     * N4659 §11.4.8.3 [class.conv.fct]. Consume the
+                     * type-id tokens until the trailing '(' so the
+                     * call-suffix logic below can take over. We don't
+                     * yet resolve the conversion operator to a
+                     * specific method symbol — the call site emits
+                     * `obj.member(args)` against the source name
+                     * `operator`, which doesn't link without further
+                     * codegen support. Parse-acceptance only; tests
+                     * exercising the call still fail downstream.
+                     * Pattern: g++.dg/template/conv2.C. */
+                    parse_type_specifiers(p);
+                    /* Optional cv / ptr / ref suffix. */
+                    while (parser_at(p, TK_KW_CONST) ||
+                           parser_at(p, TK_KW_VOLATILE) ||
+                           parser_at(p, TK_STAR) ||
+                           parser_at(p, TK_AMP) ||
+                           parser_at(p, TK_LAND))
+                        parser_advance(p);
                 }
             } else if (parser_at(p, TK_TILDE)) {
                 parser_advance(p);
