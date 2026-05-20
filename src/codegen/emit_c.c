@@ -12455,18 +12455,24 @@ static void emit_prelude(void) {
     /* C11 thread-local storage. Standard rather than __thread so
      * cproc / non-GNU C compilers stay supported. Single-threaded
      * targets see this as a regular global with no extra cost.
-     * Marked 'static' for slice 2: keeps the symbol TU-local so
-     * multi-TU links don't get duplicate-definition errors. The
-     * downside is that exceptions cannot propagate across TU
-     * boundaries today — every TU has its own state. Slice 5 moves
-     * this to a single shared definition (likely via a designated
-     * runtime TU emitting the global, others declaring extern). */
+     *
+     * Cross-TU sharing via __attribute__((weak)): every TU declares-
+     * and-defines __sf_exc_state, but the weak attribute lets the
+     * linker collapse all definitions into a single shared symbol.
+     * Required for cross-function-cross-TU exception propagation
+     * (a throw in TU A's function reaches a catch in TU B's main).
+     * Without this, each TU has its own static slot and the throw
+     * is invisible to other TUs' chain-checks. N4659 §18 [except].
+     * Pattern: g++.dg/eh/weak1.C. */
     fputs("#if __STDC_VERSION__ >= 201112L\n", stdout);
-    fputs("static _Thread_local struct __sf_exception_state __sf_exc_state;\n", stdout);
+    fputs("__attribute__((weak)) _Thread_local "
+          "struct __sf_exception_state __sf_exc_state;\n", stdout);
     fputs("#elif defined(__GNUC__) || defined(__clang__)\n", stdout);
-    fputs("static __thread struct __sf_exception_state __sf_exc_state;\n", stdout);
+    fputs("__attribute__((weak)) __thread "
+          "struct __sf_exception_state __sf_exc_state;\n", stdout);
     fputs("#else\n", stdout);
-    fputs("static struct __sf_exception_state __sf_exc_state;\n", stdout);
+    fputs("__attribute__((weak)) "
+          "struct __sf_exception_state __sf_exc_state;\n", stdout);
     fputs("#endif\n", stdout);
     /* Per-primitive type_info — pointer-compared at catch-dispatch
      * (slice 4). Only the primitives we actually throw need a slot;
