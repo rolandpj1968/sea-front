@@ -1535,6 +1535,8 @@ Node *parse_declaration(Parser *p) {
      * it sees the function-shape trailing attributes. */
     p->pending_attr_constructor = false;
     p->pending_attr_destructor  = false;
+    p->pending_ctor_priority    = 0;
+    p->pending_dtor_priority    = 0;
 
     /* declarator — §11.3 [dcl.meaning] */
     Node *decl = parse_declarator(p, base_ty);
@@ -1543,13 +1545,19 @@ Node *parse_declaration(Parser *p) {
      * (below) and the trailing-attribute path (further below) both
      * see them. */
     if (decl) {
-        if (p->pending_attr_constructor)
+        if (p->pending_attr_constructor) {
             decl->var_decl.attr_constructor = true;
-        if (p->pending_attr_destructor)
+            decl->var_decl.ctor_priority = p->pending_ctor_priority;
+        }
+        if (p->pending_attr_destructor) {
             decl->var_decl.attr_destructor = true;
+            decl->var_decl.dtor_priority = p->pending_dtor_priority;
+        }
     }
     p->pending_attr_constructor = false;
     p->pending_attr_destructor  = false;
+    p->pending_ctor_priority    = 0;
+    p->pending_dtor_priority    = 0;
 
     /* Function definition: type + declarator(func-type) + '{' body '}'
      *
@@ -1582,6 +1590,8 @@ Node *parse_declaration(Parser *p) {
          * emission (the C compiler binds the attribute to the symbol). */
         func->func.attr_constructor = decl->var_decl.attr_constructor;
         func->func.attr_destructor  = decl->var_decl.attr_destructor;
+        func->func.ctor_priority    = decl->var_decl.ctor_priority;
+        func->func.dtor_priority    = decl->var_decl.dtor_priority;
         func->func.is_const_method = decl->var_decl.ty->is_const;
         func->func.storage_flags = spec.flags;
         if (p->extern_c_depth > 0) func->func.storage_flags |= DECL_C_LINKAGE;

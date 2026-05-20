@@ -6986,11 +6986,22 @@ static void emit_var_decl_inner(Node *n) {
          * .init_array / .fini_array. Pattern: g++.dg/init/attrib1.C.
          * Goes before the return type so gcc sees it on the prototype;
          * the matching function definition picks the attribute up via
-         * the prior declaration. */
-        if (n->var_decl.attr_constructor)
-            fputs("__attribute__((constructor)) ", stdout);
-        if (n->var_decl.attr_destructor)
-            fputs("__attribute__((destructor)) ", stdout);
+         * the prior declaration. Priority arg controls cross-ctor
+         * order (g++.dg/special/initpri1.C). */
+        if (n->var_decl.attr_constructor) {
+            if (n->var_decl.ctor_priority > 0)
+                fprintf(stdout, "__attribute__((constructor(%d))) ",
+                        n->var_decl.ctor_priority);
+            else
+                fputs("__attribute__((constructor)) ", stdout);
+        }
+        if (n->var_decl.attr_destructor) {
+            if (n->var_decl.dtor_priority > 0)
+                fprintf(stdout, "__attribute__((destructor(%d))) ",
+                        n->var_decl.dtor_priority);
+            else
+                fputs("__attribute__((destructor)) ", stdout);
+        }
         emit_type(ty->ret);
         fputc(' ', stdout);
         emit_free_func_symbol(n->var_decl.name, n->var_decl.asm_name,
@@ -11726,11 +11737,22 @@ static void emit_top_level(Node *n) {
             }
             /* GCC constructor / destructor function attributes — pass
              * through. See emit_var_decl_inner's matching branch for
-             * the rationale (g++.dg/init/attrib1.C). */
-            if (n->var_decl.attr_constructor)
-                fputs("__attribute__((constructor)) ", stdout);
-            if (n->var_decl.attr_destructor)
-                fputs("__attribute__((destructor)) ", stdout);
+             * the rationale (g++.dg/init/attrib1.C). Priority arg
+             * gets passed via N-form when non-zero (initpri1.C). */
+            if (n->var_decl.attr_constructor) {
+                if (n->var_decl.ctor_priority > 0)
+                    fprintf(stdout, "__attribute__((constructor(%d))) ",
+                            n->var_decl.ctor_priority);
+                else
+                    fputs("__attribute__((constructor)) ", stdout);
+            }
+            if (n->var_decl.attr_destructor) {
+                if (n->var_decl.dtor_priority > 0)
+                    fprintf(stdout, "__attribute__((destructor(%d))) ",
+                            n->var_decl.dtor_priority);
+                else
+                    fputs("__attribute__((destructor)) ", stdout);
+            }
             Type *fty = n->var_decl.ty;
             /* Function returning a function pointer requires
              * declarator-interleaving (N4659 §11.3):

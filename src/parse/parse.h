@@ -747,9 +747,15 @@ struct Node {
              * declaration: 'void f() __attribute__((constructor));' —
              * run before/after main. Pass-through to the C compiler
              * which implements the .init_array / .fini_array hookup.
-             * Not in N4659. Pattern: g++.dg/init/attrib1.C. */
+             * Priority (0 = default; 100..65535 the gcc-allowed range)
+             * controls execution order across multiple ctor / dtor
+             * functions. Not in N4659.
+             * Patterns: g++.dg/init/attrib1.C (no priority),
+             *           g++.dg/special/initpri1.C (priorities). */
             bool   attr_constructor;
             bool   attr_destructor;
+            int    ctor_priority;
+            int    dtor_priority;
         } var_decl;
 
         /* ND_FUNC_DEF — N4659 §11.4 [dcl.fct.def]
@@ -845,6 +851,8 @@ struct Node {
              * ND_FUNC_DEF. */
             bool             attr_constructor;
             bool             attr_destructor;
+            int              ctor_priority;
+            int              dtor_priority;
         } func;
 
         /* ND_LAMBDA — N4659 §8.1.5 [expr.prim.lambda].
@@ -1506,9 +1514,14 @@ struct Parser {
     /* Side channel from consume_trailing_qualifiers → parse_declaration:
      * set when the function declarator's trailing __attribute__ list
      * includes constructor / destructor (g++.dg/init/attrib1.C). Read
-     * by parse_declaration and cleared after each declaration. */
+     * by parse_declaration and cleared after each declaration. Priority
+     * captures the (N) argument when present — 0 means default
+     * priority and codegen omits the (N). g++.dg/special/initpri1.C
+     * exercises 500/600/700 priorities. */
     bool pending_attr_constructor;
     bool pending_attr_destructor;
+    int  pending_ctor_priority;
+    int  pending_dtor_priority;
     /* N4659 §10.5 [dcl.link]: depth of enclosing extern "C" { ... }
      * blocks (and single 'extern "C"' decls). When > 0, declarations
      * parsed here get DECL_C_LINKAGE so codegen suppresses C++ name

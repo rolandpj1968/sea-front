@@ -246,17 +246,22 @@ void parser_skip_gnu_attributes_with_mode(Parser *p, Token **out_mode) {
 }
 
 /* Like parser_skip_gnu_attributes_with_mode, but also detects
- *   __attribute__((cleanup (handler)))      -> *out_cleanup
- *   __attribute__((constructor))            -> *out_is_ctor
- *   __attribute__((destructor))             -> *out_is_dtor
- * and returns the cleanup-handler identifier via *out_cleanup. The
- * caller stamps it onto the var-decl so the C emit re-emits the
- * attribute (gcc handles the cleanup semantics natively). N4659
- * doesn't model these — they're gcc C extensions:
+ *   __attribute__((cleanup (handler)))           -> *out_cleanup
+ *   __attribute__((constructor))                 -> *out_is_ctor
+ *   __attribute__((constructor (priority)))      -> *out_is_ctor + *out_ctor_priority
+ *   __attribute__((destructor))                  -> *out_is_dtor
+ *   __attribute__((destructor (priority)))       -> *out_is_dtor + *out_dtor_priority
+ * The caller stamps these onto the var-decl so the C emit re-emits
+ * the attribute (gcc handles all semantics natively). N4659 doesn't
+ * model these — they're gcc C extensions:
  *   cleanup: applicable to local variables
- *   constructor/destructor: run before/after main, applicable to
- *     free functions. Pattern: g++.dg/init/attrib1.C.
- * Caller passes NULL for any out-param it doesn't care about. */
+ *   constructor/destructor: run before/after main; priority controls
+ *     execution order across multiple constructors. Pattern:
+ *     g++.dg/init/attrib1.C (no priority) +
+ *     g++.dg/special/initpri1.C (priorities 500/600/700).
+ * Caller passes NULL for any out-param it doesn't care about.
+ * Priority out-params are unset when no priority is given (default
+ * priority — codegen omits the (N) argument). */
 void parser_skip_gnu_attributes_full(Parser *p,
                                       Token **out_mode,
                                       Token **out_cleanup,
@@ -268,11 +273,6 @@ void parser_skip_gnu_attributes_full(Parser *p,
         parser_advance(p);                  /* __attribute__ */
         parser_expect(p, TK_LPAREN);
         parser_expect(p, TK_LPAREN);
-        /* Scan forward looking for __mode__(X) / cleanup(X) /
-         * constructor / destructor before skipping. The ctor/dtor
-         * forms are token identity matches — both spelled as bare
-         * IDENT (no following '(' in the no-priority form, which is
-         * what attrib1.C uses) or with optional '(priority)'. */
         int depth = 1;
         while (depth > 0 && !parser_at_eof(p)) {
             if (out_mode && parser_at(p, TK_IDENT) &&
@@ -291,11 +291,19 @@ void parser_skip_gnu_attributes_full(Parser *p,
                 (token_equal(parser_peek(p), "constructor") ||
                  token_equal(parser_peek(p), "__constructor__"))) {
                 *out_is_ctor = true;
+                if (parser_peek_ahead(p, 1)->kind == TK_LPAREN &&
+                    parser_peek_ahead(p, 2)->kind == TK_NUM)
+                    p->pending_ctor_priority =
+                        (int)parser_peek_ahead(p, 2)->ival;
             }
             if (out_is_dtor && parser_at(p, TK_IDENT) &&
                 (token_equal(parser_peek(p), "destructor") ||
                  token_equal(parser_peek(p), "__destructor__"))) {
                 *out_is_dtor = true;
+                if (parser_peek_ahead(p, 1)->kind == TK_LPAREN &&
+                    parser_peek_ahead(p, 2)->kind == TK_NUM)
+                    p->pending_dtor_priority =
+                        (int)parser_peek_ahead(p, 2)->ival;
             }
             if (parser_at(p, TK_LPAREN)) depth++;
             else if (parser_at(p, TK_RPAREN)) { depth--; if (depth == 0) break; }
