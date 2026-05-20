@@ -10831,13 +10831,23 @@ static void emit_class_def(Node *n) {
     g_indent--;
     fputs("};\n", stdout);
 
-    /* Static data members — §10.1.1/4 [dcl.stc]. Skipped from the
-     * struct body above; emit them here as TU-scope variables with
-     * mangled name 'sf__<class>__<member>'. The in-class init for
-     * a const/constexpr static integral data member (§9.4.2) is
-     * the definition — emit it as 'static const T sf__C__x = init;'
-     * so multi-TU header inclusion doesn't multi-define. Member
-     * functions are forward-declared by the loop further down. */
+    /* Static data members — §11.4.9.2 [class.static.data]. Skipped
+     * from the struct body above; emit here as TU-scope variables
+     * with mangled name 'sf__<class>__<member>'. The in-class init
+     * for a const/constexpr static integral data member (§11.4.9.3)
+     * is the definition.
+     *
+     * Cross-TU sharing via __attribute__((weak)): the same class is
+     * included in many TUs, each emitting this declaration. With
+     * 'static' (TU-local), every TU had its own copy of the storage
+     * — breaks C++'s "one storage per static data member" semantics
+     * (e.g. foo_t::count incremented in TU A's ctor wouldn't be
+     * visible in TU B). With weak, the linker collapses all
+     * declarations into a single shared symbol. The OOL definition
+     * (emitted via the ND_VAR_DECL path with class_type set) emits
+     * STRONG (no weak), so when present it strong-overrides the
+     * weak headers and supplies the initializer. Patterns:
+     * g++.dg/special/conpr-{3,4}.C (cross-TU foo_t::count). */
     for (int i = 0; i < n->class_def.nmembers; i++) {
         Node *m = n->class_def.members[i];
         if (!m || m->kind != ND_VAR_DECL) continue;
@@ -10845,7 +10855,7 @@ static void emit_class_def(Node *n) {
         if (!(m->var_decl.storage_flags & DECL_STATIC)) continue;
         if (!m->var_decl.name) continue;
         emit_source_comment(m->tok);
-        fputs("static ", stdout);
+        fputs("__attribute__((weak)) ", stdout);
         /* emit_type handles 'const' based on ty->is_const — do not
          * add an inverted 'const' here. The previous logic
          * (`if (!is_const) fputs("const ")`) made every non-const
@@ -12098,14 +12108,12 @@ static void emit_top_level(Node *n) {
             return;
         }
         /* OOL static data member definition: the in-class declaration
-         * was emitted with `static` (so multi-TU header inclusion
-         * doesn't multi-define), so the OOL definition must also be
-         * `static` to refer to the same TU-local symbol. The source
-         * keyword 'static' isn't repeated on the OOL form
-         * (C++ §10.1.1/6 [dcl.stc]), so storage_flags doesn't carry
-         * DECL_STATIC — force it via class_type's presence. */
-        if (n->var_decl.class_type)
-            fputs("static ", stdout);
+         * is emitted as `__attribute__((weak)) T sf__C__m;` in every
+         * TU that includes the class header. The OOL emits STRONG
+         * (no weak) so it overrides those weak siblings — that's
+         * what supplies the initializer and gives one well-defined
+         * storage location for foo_t::count etc. across TUs.
+         * N4659 §11.4.9.2 [class.static.data]. */
         emit_var_storage_flags(n->var_decl.storage_flags);
         emit_var_decl_inner(n);
         fputs(";\n", stdout);
