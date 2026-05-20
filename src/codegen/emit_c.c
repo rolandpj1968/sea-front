@@ -11847,7 +11847,10 @@ static void emit_top_level(Node *n) {
                         n->var_decl.ty->tag->loc);
             fputs("{ ", stdout);
             emit_enum_body(n->var_decl.ty);
-            fputs(" };\n", stdout);
+            fputs(" }", stdout);
+            if (n->var_decl.ty->is_packed)
+                fputs(" __attribute__((packed))", stdout);
+            fputs(";\n", stdout);
             return;
         }
         /* Top-level free function declaration: 'int foo();' parses

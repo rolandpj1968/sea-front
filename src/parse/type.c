@@ -826,6 +826,16 @@ DeclSpec parse_type_specifiers(Parser *p) {
                 region_declare(p, ty->tag->loc, ty->tag->len, ENTITY_TAG, ty);
                 region_declare(p, ty->tag->loc, ty->tag->len, ENTITY_TYPE, ty);
             }
+            /* Trailing __attribute__ — GNU extension. Most attrs are
+             * silently skipped; 'packed' is captured on the Type so
+             * codegen can re-emit it (forces the smallest underlying
+             * width for the enum). Pattern: g++.dg/ext/packed7.C. */
+            p->pending_packed = false;
+            parser_skip_gnu_attributes(p);
+            if (p->pending_packed) {
+                ty->is_packed = true;
+                p->pending_packed = false;
+            }
             /* Register each enumerator name as ENTITY_ENUMERATOR with
              * the enum's type — N4659 §10.2/3 [dcl.enum]: enumerators
              * are declared in the enclosing scope (unless the enum is

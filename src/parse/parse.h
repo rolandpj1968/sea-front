@@ -1141,6 +1141,12 @@ struct Type {
      * to the C output. Sea-front doesn't compute on complex values,
      * just preserves the shape for round-trip. */
     bool is_complex;
+    /* GNU __attribute__((packed)) — applies to TY_STRUCT, TY_UNION,
+     * TY_ENUM. The C back-end implements the semantics (packed enum
+     * uses the minimal-width underlying type; packed struct removes
+     * all padding). Sea-front just re-emits the attribute on the
+     * type definition. Patterns: g++.dg/ext/packed4.C, packed7.C. */
+    bool is_packed;
 
     /* C++11 'auto' placeholder — N4659 §10.1.7.4 [dcl.spec.auto].
      * Parser emits TY_INT with is_auto=true; sema's visit_var_decl
@@ -1532,6 +1538,12 @@ struct Parser {
     bool pending_attr_destructor;
     int  pending_ctor_priority;
     int  pending_dtor_priority;
+    /* Side channel: any parser_skip_gnu_attributes* call sets this
+     * when the skipped attribute list contains 'packed' / '__packed__'.
+     * Caller reads + clears as needed (struct/union/enum/field).
+     * Pattern: g++.dg/ext/packed7.C (enum), g++.dg/ext/packed4.C
+     * (struct + member). */
+    bool pending_packed;
     /* N4659 §10.5 [dcl.link]: depth of enclosing extern "C" { ... }
      * blocks (and single 'extern "C"' decls). When > 0, declarations
      * parsed here get DECL_C_LINKAGE so codegen suppresses C++ name

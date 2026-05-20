@@ -305,6 +305,11 @@ void parser_skip_gnu_attributes_full(Parser *p,
                     p->pending_dtor_priority =
                         (int)parser_peek_ahead(p, 2)->ival;
             }
+            if (parser_at(p, TK_IDENT) &&
+                (token_equal(parser_peek(p), "packed") ||
+                 token_equal(parser_peek(p), "__packed__"))) {
+                p->pending_packed = true;
+            }
             if (parser_at(p, TK_LPAREN)) depth++;
             else if (parser_at(p, TK_RPAREN)) { depth--; if (depth == 0) break; }
             parser_advance(p);
