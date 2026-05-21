@@ -1230,6 +1230,14 @@ enum {
     ICS_PTR_SAME_TAG = 2,  /* T* ↔ T* where T's tag matches (same classes) */
     ICS_INTEGER_CONV = 3,  /* int↔long, signed↔unsigned, etc. — N4659
                               §7.8 [conv.integral] standard conversion */
+    ICS_FLOATING_CONV= 3,  /* int↔float / float↔float — N4659 §7.9
+                              [conv.fpint] + §7.10 [conv.double].
+                              Same tier as integer; both are
+                              "Conversion" rank in §16.3.3.2. */
+    ICS_COMPLEX_CONV = 4,  /* real → _Complex T — gcc extension. C++
+                              treats this as a worse conversion than
+                              real-to-real per §16.3.3.2 tiebreakers
+                              (matches gcc's PR c++/31780 ranking). */
     ICS_INCOMPATIBLE = 100,
 };
 
@@ -1274,6 +1282,14 @@ static int ics_rank(Type *param, Type *arg) {
         if (!p || !a) return ICS_INCOMPATIBLE;
         return ics_rank(p, a);
     }
+    /* Complex-vs-real mismatch must be tested BEFORE types_equivalent
+     * (which treats `_Complex int` and `int` as the same type — its
+     * job is structural equivalence, not overload ranking). Per
+     * §16.3.3.2 plus gcc's PR c++/31780 ranking, real→complex is one
+     * tier worse than real→real, so f(double) wins over f(_Complex
+     * int) for an int arg. */
+    if (param->is_complex != arg->is_complex)
+        return ICS_COMPLEX_CONV;
     if (types_equivalent(param, arg)) {
         /* types_equivalent ignores cv-qualifiers on the pointee
          * (TY_STRUCT / fundamental types compare by tag/kind only).
@@ -1324,10 +1340,12 @@ static int ics_rank(Type *param, Type *arg) {
             pb->tag && ab->tag && tokens_equal(pb->tag, ab->tag))
             return ICS_PTR_SAME_TAG;
     }
-    /* Integer conversion — N4659 §7.8 [conv.integral]. Any integral
-     * type converts to any other (signedness / width adjustments).
-     * Without this, calls like `f(unsigned)` invoked with a signed
-     * literal `5` fail viability. */
+    /* Integer / floating / complex conversion — N4659 §7.8, §7.9,
+     * §7.10. Any integral converts to any other, any floating to
+     * any other floating, integer↔floating, and integer↔_Complex
+     * (gcc extension). Complex is ranked one tier worse than
+     * floating per gcc's PR c++/31780 — so f(double) wins over
+     * f(_Complex int) when called with an int. */
     {
         bool p_int = param->kind == TY_BOOL || param->kind == TY_CHAR ||
             param->kind == TY_CHAR16 || param->kind == TY_CHAR32 ||
@@ -1339,7 +1357,16 @@ static int ics_rank(Type *param, Type *arg) {
             arg->kind == TY_WCHAR || arg->kind == TY_SHORT ||
             arg->kind == TY_INT || arg->kind == TY_LONG ||
             arg->kind == TY_LLONG || arg->kind == TY_ENUM;
-        if (p_int && a_int) return ICS_INTEGER_CONV;
+        bool p_float = param->kind == TY_FLOAT || param->kind == TY_DOUBLE ||
+                       param->kind == TY_LDOUBLE;
+        bool a_float = arg->kind == TY_FLOAT || arg->kind == TY_DOUBLE ||
+                       arg->kind == TY_LDOUBLE;
+        bool p_complex = param->is_complex;
+        bool a_complex = arg->is_complex;
+        if ((p_complex || a_complex) && (p_int || p_float || a_int || a_float))
+            return ICS_COMPLEX_CONV;
+        if ((p_float || p_int) && (a_float || a_int))
+            return p_int && a_int ? ICS_INTEGER_CONV : ICS_FLOATING_CONV;
     }
     return ICS_INCOMPATIBLE;
 }
