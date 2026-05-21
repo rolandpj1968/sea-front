@@ -2344,6 +2344,21 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
         mangled->kind = TK_IDENT;
         cloned->func.name = mangled;
 
+        /* Stash a back-pointer to the source template_decl and the
+         * deduced template args on the cloned func. Used by
+         * codegen's __PRETTY_FUNCTION__ emit to reconstruct the
+         * source-level signature (`foo(T, typename T::type)`) and
+         * the `[with T = x; ...]` substitution list. */
+        cloned->func.source_template = tmpl;
+        cloned->func.n_template_args = n;
+        if (n > 0) {
+            cloned->func.template_args =
+                arena_alloc(arena, n * sizeof(Type *));
+            for (int i = 0; i < n; i++)
+                cloned->func.template_args[i] =
+                    type_arg_from_node(template_id->template_id.args[i]);
+        }
+
         /* Rewrite the template-id node itself so codegen emits
          * the mangled name at call sites. We do this by converting
          * the ND_TEMPLATE_ID into an ND_IDENT pointing at the

@@ -7419,8 +7419,25 @@ static void emit_pretty_function_literal(void) {
     fputc('"', stdout);
     bool is_ctor = g_current_func_node && g_current_func_node->func.is_constructor;
     bool is_dtor = g_current_func_node && g_current_func_node->func.is_destructor;
+    /* For an instantiated function template, fall back to the SOURCE
+     * template's func node — it carries the source-level name and
+     * params with TY_DEPENDENT placeholders (T, typename T::type)
+     * instead of the cloned mangled name + concrete substitutions.
+     * gcc's __PRETTY_FUNCTION__ format shows the abstract form in
+     * the body, then lists substitutions in `[with ...]`. */
+    Node *src_func = NULL;
+    if (g_current_func_node && g_current_func_node->func.source_template) {
+        Node *t = g_current_func_node->func.source_template;
+        if (t->kind == ND_TEMPLATE_DECL && t->template_decl.decl &&
+            (t->template_decl.decl->kind == ND_FUNC_DEF ||
+             t->template_decl.decl->kind == ND_FUNC_DECL))
+            src_func = t->template_decl.decl;
+    }
+    Node *display_func = src_func ? src_func : g_current_func_node;
     if (!is_ctor && !is_dtor) {
-        emit_cxx_type(g_current_func_ret_ty);
+        Type *rt = display_func && display_func->kind == ND_FUNC_DEF
+                       ? display_func->func.ret_ty : g_current_func_ret_ty;
+        emit_cxx_type(rt);
         fputc(' ', stdout);
     }
     Node *cls_tpl = NULL;
@@ -7443,32 +7460,41 @@ static void emit_pretty_function_literal(void) {
         fputs("::", stdout);
     }
     if (is_dtor) fputc('~', stdout);
-    if (g_current_func_src_name)
-        fprintf(stdout, "%.*s",
-                g_current_func_src_name->len,
-                g_current_func_src_name->loc);
+    /* Name: prefer the source-template's name over the cloned
+     * mangled name (for free function templates). For class-method
+     * cases, src_func is NULL and we fall back to the cloned name
+     * which IS the source name (class methods keep their func.name
+     * unchanged across instantiation). */
+    Token *name_tok = src_func ? src_func->func.name : g_current_func_src_name;
+    if (name_tok)
+        fprintf(stdout, "%.*s", name_tok->len, name_tok->loc);
     fputc('(', stdout);
-    if (g_current_func_node) {
-        int np = g_current_func_node->func.nparams;
+    {
+        Node *params_owner = display_func;
+        int np = params_owner ? params_owner->func.nparams : 0;
         for (int i = 0; i < np; i++) {
             if (i > 0) fputs(", ", stdout);
-            Node *p = g_current_func_node->func.params[i];
+            Node *p = params_owner->func.params[i];
             if (p && p->kind == ND_PARAM)
                 emit_cxx_type(p->param.ty);
             else fputc('?', stdout);
         }
     }
     fputc(')', stdout);
-    /* Substitution list: only for instantiated class templates here.
-     * Free-function template substitutions (bindings1.C-style) need
-     * the source-template params + the per-instantiation arg map,
-     * which sea-front carries on the cloned func but doesn't yet
-     * thread to this emit context — deferred. */
+    /* Substitution list — emitted for either an instantiated class
+     * template (use class's template_args / src class params) or a
+     * cloned free function template (use func.template_args /
+     * source_template's params). gcc lists class-template
+     * substitutions before function-template ones; we follow the
+     * dominant pattern (class only OR function only — mixed cases
+     * aren't covered by the dg tests we target). */
+    bool emitted_with = false;
     if (g_current_method_class &&
         g_current_method_class->n_template_args > 0 &&
         cls_tpl && cls_tpl->template_decl.nparams ==
             g_current_method_class->n_template_args) {
         fputs(" [with ", stdout);
+        emitted_with = true;
         for (int i = 0; i < g_current_method_class->n_template_args; i++) {
             if (i > 0) fputs("; ", stdout);
             Node *p = cls_tpl->template_decl.params[i];
@@ -7477,8 +7503,27 @@ static void emit_pretty_function_literal(void) {
                         p->param.name->len, p->param.name->loc);
             emit_cxx_type(g_current_method_class->template_args[i]);
         }
-        fputc(']', stdout);
     }
+    if (!emitted_with && g_current_func_node &&
+        g_current_func_node->func.source_template &&
+        g_current_func_node->func.n_template_args > 0) {
+        Node *src_tpl = g_current_func_node->func.source_template;
+        if (src_tpl->kind == ND_TEMPLATE_DECL &&
+            src_tpl->template_decl.nparams ==
+                g_current_func_node->func.n_template_args) {
+            fputs(" [with ", stdout);
+            emitted_with = true;
+            for (int i = 0; i < g_current_func_node->func.n_template_args; i++) {
+                if (i > 0) fputs("; ", stdout);
+                Node *p = src_tpl->template_decl.params[i];
+                if (p && p->kind == ND_PARAM && p->param.name)
+                    fprintf(stdout, "%.*s = ",
+                            p->param.name->len, p->param.name->loc);
+                emit_cxx_type(g_current_func_node->func.template_args[i]);
+            }
+        }
+    }
+    if (emitted_with) fputc(']', stdout);
     fputc('"', stdout);
 }
 

@@ -900,6 +900,16 @@ struct Node {
              * 'ab6' and the call's mangled symbol stays unresolved
              * at link). Pattern: g++.dg/ext/fnname1.C. */
             Token           *ns_token;
+            /* For cloned template instantiations: back-pointer to
+             * the source ND_TEMPLATE_DECL and the deduced template
+             * arguments (Types). Used by __PRETTY_FUNCTION__ to
+             * reconstruct the source-level signature and the
+             * `[with T = ...]` substitution list. NULL on non-
+             * instantiated functions. Pattern:
+             * g++.dg/diagnostic/bindings1.C. */
+            Node            *source_template;
+            Type           **template_args;
+            int              n_template_args;
         } func;
 
         /* ND_LAMBDA — N4659 §8.1.5 [expr.prim.lambda].
