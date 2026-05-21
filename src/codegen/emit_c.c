@@ -1769,12 +1769,6 @@ static bool subtree_has_cleanups(Node *n) {
 /* Name mangling                                                      */
 /* ------------------------------------------------------------------ */
 
-/* Emit the mangled struct/class tag for a class type via the
- * Mangler framework (see docs/mangling.md and mangle.c). With the
- * default human scheme this produces 'sf__<NS>__<Class>' where
- * the namespace prefix walks the class's enclosing chain. The
- * '?' fallback is for class types whose tag wasn't recorded
- * (anonymous structs, currently). */
 static int g_anon_counter = 0;
 
 /* Dedup for free-function declarations and definitions.
@@ -1916,6 +1910,12 @@ static bool func_def_dedup_check_sig(Token *name, Type **params, int nparams,
 }
 
 
+/* Emit the mangled struct/class tag for a class type via the
+ * Mangler framework (see docs/mangling.md and mangle.c). With the
+ * default human scheme this produces 'sf__<NS>__<Class>' where the
+ * namespace prefix walks the class's enclosing chain. The anonymous
+ * fallback (below) is for class types whose tag wasn't recorded
+ * (anonymous structs). */
 static void emit_mangled_class_tag(Type *class_type) {
     if (!class_type || !class_type->tag) {
         /* Anonymous struct/union — generate a unique name.
@@ -8106,9 +8106,9 @@ static void emit_stmt(Node *n) {
              * macros from the prelude. Picking the macro form keeps
              * the emitted C readable, drives the protocol from one
              * place, and means an unbraced 'if (cond) return;' stays
-             * safe (the macro wraps a do-while). */
-
-            /* D-Return (NRVO-style move): if the operand is a bare
+             * safe (the macro wraps a do-while).
+             *
+             * D-Return (NRVO-style move): if the operand is a bare
              * identifier naming the topmost CL_VAR — i.e. a class
              * local that lives at the top of the live stack right
              * now — treat the return as a move. The local IS the
@@ -9643,14 +9643,6 @@ static void cf_begin_function(Node *func) {
     }
 }
 
-/* When emit_class_def is iterating its method members it sets this
- * to the class def node — ctor/dtor body emission can then consult
- * it to walk the class's members in declaration order (which the
- * hash-bucketed class_region doesn't preserve). NULL outside the
- * class member loop. (Declaration is at the top of the file —
- * forward-needed by ND_IDENT and ND_CALL emission for inherited-
- * member access rewriting.) */
-
 /* For a ctor with mem-initializers and/or class members needing
  * default construction, emit member ctor calls at the top of the
  * body — N4659 §15.6.2/13.3, in DECLARATION order. Members listed
@@ -10303,14 +10295,13 @@ static void emit_func_body(Node *func) {
  * call sites produce the same bytes. N4659 §16.5 [over.oper] on
  * overloaded names; the C-level encoding is our own. */
 
-/* Overload detection uses the same canonical signature key that
- * the dedup tables use (func_sig_key). See the FreeFuncSig
- * comment block below for the full rationale. */
 /* Overload-detection scratch table.
  *
- * Pre-pass walks the TU collecting (name, sig_key) pairs for every
- * free function decl/def. After the walk, a name is "overloaded"
- * iff the table contains 2+ DISTINCT sig keys for that name.
+ * Uses the same canonical signature key as the dedup tables
+ * (func_sig_key). Pre-pass walks the TU collecting (name, sig_key)
+ * pairs for every free function decl/def. After the walk, a name is
+ * "overloaded" iff the table contains 2+ DISTINCT sig keys for that
+ * name.
  *
  * The sig key uses func_sig_key (the same canonical mangler-output
  * encoding used for emit-time dedup), so the equality check is a
@@ -11449,11 +11440,12 @@ static void emit_class_def(Node *n) {
     if (g_emit_phase == PHASE_STRUCTS) return;
 methods_phase:;
     /* Dedup methods phase: template instantiation can leave multiple
-     * ND_CLASS_DEF nodes pointing at the same logical class (the
-     * struct-body dedup at line 3452 catches them via codegen_emitted,
-     * but PHASE_METHODS skips that check by goto). Use a separate
-     * pointer-set on ND_CLASS_DEF identity so a class's methods only
-     * emit once even if instantiation produced several copies. */
+     * ND_CLASS_DEF nodes pointing at the same logical class. The
+     * struct-body dedup in PHASE_STRUCTS catches them via
+     * codegen_emitted, but the PHASE_METHODS entry skips that check
+     * by goto. Use a separate pointer-set on ND_CLASS_DEF identity
+     * so a class's methods only emit once even if instantiation
+     * produced several copies. */
     {
         enum { METHODS_EMIT_CAP = 256 };
         static Node *seen[METHODS_EMIT_CAP];

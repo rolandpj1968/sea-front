@@ -466,10 +466,12 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
                 /* Qualified operator: Foo::operator[] */
                 parser_advance(p);  /* :: */
                 /* Stash the class scope BEFORE the goto — the normal
-                 * post-loop stash at line ~393 is skipped by the jump.
-                 * Without this, OOL operator definitions like
-                 * 'DI::operator++()' lose their class_type and codegen
-                 * emits them as free functions (no 'this' param). */
+                 * post-loop stash that records qualified_decl_scope
+                 * for `Class::name` patterns is skipped by this jump
+                 * out of the loop. Without the stash here, OOL
+                 * operator definitions like 'DI::operator++()' lose
+                 * their class_type and codegen emits them as free
+                 * functions (no 'this' param). */
                 if (qscope) p->qualified_decl_scope = wrap_qscope(p, qscope);
                 if (leading_tid) p->qualified_decl_tid = leading_tid;
                 goto parse_operator_id;

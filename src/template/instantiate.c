@@ -3103,12 +3103,13 @@ void template_instantiate(Node *tu, Arena *arena) {
              * codegen emits the correct function name. */
             /* Only rewrite FUNCTION template calls to mangled idents.
              * For a class template's constructor-call form 'vec<T>()',
-             * the collect path at line ~590 creates a request with
-             * usage_type=NULL, but the rewrite below would mangle
-             * the callee as if it were a function template — a name
-             * that doesn't match the class's actual ctor mangling.
-             * Skip the rewrite when the template's inner decl is a
-             * class. Pattern: gcc 4.8 ipa-cp.c 'return vec<T,A,L>();'. */
+             * the collect path creates a request with usage_type=NULL,
+             * but the rewrite below would mangle the callee as if it
+             * were a function template — a name that doesn't match
+             * the class's actual ctor mangling. Skip the rewrite when
+             * the template's inner decl is a class. Pattern: a
+             * template-id at expression position constructing a
+             * temporary, e.g. 'return vec<T,A,L>();'. */
             Node *tmpl_inner = req->tmpl_def ? req->tmpl_def->template_decl.decl : NULL;
             bool is_class_tmpl = tmpl_inner && tmpl_inner->kind == ND_CLASS_DEF;
             if (req->template_id->kind == ND_TEMPLATE_ID &&

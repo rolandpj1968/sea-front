@@ -1524,16 +1524,14 @@ static Declaration *resolve_free_function_overload(
              * return value — when it returns false (no bindings made,
              * or a per-pair unification failed), drop this candidate
              * before it can pollute viability via an empty SubstMap.
-             *
-             * Discarding the return previously let candidates whose
-             * template args couldn't bind (e.g. arity mismatch on
-             * inner template-args: 'vec<T,A,vl_embed>*' vs
-             * 'vec<X,Y>*') become "viable" with no bindings, win
-             * resolution by falling through to ICS_PTR_SAME_TAG, then
-             * skip the rewrite-to-template-id (build_template_id_from_
-             * deduced bails on the unbound T). The emitted call
-             * mangled bare and missed the actual instantiation's
-             * symbol. */
+             * Without this, candidates whose template args couldn't
+             * bind (e.g. arity mismatch on inner template-args:
+             * 'vec<T,A,vl_embed>*' vs 'vec<X,Y>*') would become
+             * "viable" with no bindings, win resolution by falling
+             * through to ICS_PTR_SAME_TAG, then skip the rewrite to
+             * template-id (build_template_id_from_deduced bails on
+             * the unbound T) — the emitted call mangles bare and
+             * misses the actual instantiation's symbol. */
             if (!deduce_template_args(inner, arg_types, nargs, &map))
                 continue;
             /* Substitute the deduced bindings into the param types. */
@@ -1782,11 +1780,12 @@ static void visit_call(Sema *s, Node *n) {
              * head re-states the outer class's template params; the
              * method itself is not a free function template. If we
              * synthesise here, the call gets routed through the
-             * free-fn-template instantiation path (instantiate.c
-             * around line 1880), which mangles the symbol as
+             * free-fn-template instantiation path in instantiate.c,
+             * which mangles the symbol as
              * 'name_t_<args>_te__p_<params>_pe_' with no class
-             * scope — exactly the bug pattern from gcc 4.8 vec.h
-             * 'splice (src)' inside vec<T,A,vl_ptr>::safe_splice.
+             * scope — a member-template call inside the enclosing
+             * class body would link against a non-existent free
+             * function instead of the synthesised member.
              * Detect via inner func's class_type / qual_tid and
              * skip — the implicit-this method-call lowering in
              * codegen handles these correctly. N4659 §17.5.2/2
