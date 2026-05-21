@@ -10427,6 +10427,47 @@ static void emit_ctor_mem_init_one(Node *func, Node *m) {
             }
         }
 
+        /* Array-of-class member (no user mem-init): C++ §15.6.2/9
+         * default-initialises each element, so the element class's
+         * default ctor runs on every slot. Mirrors the array-dtor
+         * loop emitted by the synthesised Class__dtor. Without
+         * this, throw-unwinding before a body statement would skip
+         * constructing the array members entirely — observable
+         * when the element class's ctor has side effects (e.g.
+         * setting ptr=this for self-check). Pattern:
+         * g++.dg/init/ctor1.C `volatile B b[1];`. */
+        if (mty->kind == TY_ARRAY && !found) {
+            int dims[8]; int ndims = 0;
+            Type *elem = mty;
+            while (elem && elem->kind == TY_ARRAY && ndims < 8) {
+                dims[ndims++] = elem->array_len;
+                elem = elem->base;
+            }
+            if (elem &&
+                (elem->kind == TY_STRUCT || elem->kind == TY_UNION) &&
+                elem->has_default_ctor) {
+                emit_indent();
+                for (int d = 0; d < ndims; d++)
+                    fprintf(stdout,
+                        "for (int __sf_ci%d = 0; __sf_ci%d < %d; __sf_ci%d++) ",
+                        d, d, dims[d], d);
+                Type **pty = NULL;
+                int np = resolve_overload(elem, /*name=*/NULL,
+                                           /*is_ctor=*/true, NULL, 0,
+                                           /*receiver_is_const=*/false,
+                                           &pty, /*out_best=*/NULL);
+                if (np < 0) np = 0;  /* synth default ctor */
+                mangle_class_ctor(elem, pty, np);
+                fputs("((struct ", stdout);
+                mangle_class_tag(elem);
+                fprintf(stdout, " *)&this->%.*s",
+                        m->var_decl.name->len, m->var_decl.name->loc);
+                for (int d = 0; d < ndims; d++)
+                    fprintf(stdout, "[__sf_ci%d]", d);
+                fputs(");\n", stdout);
+                return;
+            }
+        }
         if (mty->kind == TY_STRUCT) {
             /* Class member: ctor call with the user's args, or
              * default ctor if not listed. */
@@ -12505,12 +12546,50 @@ methods_phase:;
         for (int i = n->class_def.nmembers - 1; i >= 0; i--) {
             Node *m = n->class_def.members[i];
             if (!m || m->kind != ND_VAR_DECL) continue;
-            if (!m->var_decl.ty || m->var_decl.ty->kind != TY_STRUCT) continue;
-            if (!m->var_decl.ty->has_dtor) continue;
-            if (!m->var_decl.name) continue;
+            if (!m->var_decl.ty || !m->var_decl.name) continue;
+            Type *mty = m->var_decl.ty;
+            /* Class-array member (possibly multi-dimensional) — emit
+             * nested loops in REVERSE element order calling the
+             * element class's dtor on each. N4659 §15.4 [class.dtor]/9.
+             * Without this, `B b[N]` member's destructors are skipped
+             * when the synthesised dtor runs (notably during throw
+             * unwinding from a ctor; see g++.dg/init/ctor1.C). */
+            if (mty->kind == TY_ARRAY) {
+                int dims[8]; int ndims = 0;
+                Type *elem = mty;
+                while (elem && elem->kind == TY_ARRAY && ndims < 8) {
+                    dims[ndims++] = elem->array_len;
+                    elem = elem->base;
+                }
+                if (!elem ||
+                    (elem->kind != TY_STRUCT && elem->kind != TY_UNION))
+                    continue;
+                if (!elem->has_dtor) continue;
+                /* Reverse order across all dims via descending loops. */
+                for (int d = 0; d < ndims; d++)
+                    fprintf(stdout,
+                        "    for (int __sf_di%d = %d - 1; __sf_di%d >= 0; --__sf_di%d) ",
+                        d, dims[d], d, d);
+                mangle_class_dtor(elem);
+                fprintf(stdout, "((struct ", stdout);
+                mangle_class_tag(elem);
+                fprintf(stdout, " *)&this->%.*s",
+                        m->var_decl.name->len, m->var_decl.name->loc);
+                for (int d = 0; d < ndims; d++)
+                    fprintf(stdout, "[__sf_di%d]", d);
+                fputs(");\n", stdout);
+                continue;
+            }
+            if (mty->kind != TY_STRUCT) continue;
+            if (!mty->has_dtor) continue;
             emit_indent();
-            mangle_class_dtor(m->var_decl.ty);
-            fprintf(stdout, "(&this->%.*s);\n",
+            mangle_class_dtor(mty);
+            /* Cast away any cv-qualification so the dtor signature
+             * (plain struct *) matches even for `volatile T m;`
+             * members. Pattern: g++.dg/init/ctor1.C `A volatile a;`. */
+            fprintf(stdout, "((struct ");
+            mangle_class_tag(mty);
+            fprintf(stdout, " *)&this->%.*s);\n",
                     m->var_decl.name->len, m->var_decl.name->loc);
         }
         /* Base subobject destruction — reverse declaration order. */
@@ -12666,6 +12745,36 @@ methods_phase:;
                 mangle_class_ctor(m->var_decl.ty, NULL, 0);
                 fprintf(stdout, "(&this->%.*s);\n",
                         m->var_decl.name->len, m->var_decl.name->loc);
+                continue;
+            }
+            /* Array-of-class member in a synthesised default ctor:
+             * default-construct each element. Same shape as the
+             * emit_ctor_mem_init_one array branch but for the no-
+             * user-ctor synthesis path here. */
+            if (m->var_decl.ty->kind == TY_ARRAY) {
+                int dims[8]; int ndims = 0;
+                Type *elem = m->var_decl.ty;
+                while (elem && elem->kind == TY_ARRAY && ndims < 8) {
+                    dims[ndims++] = elem->array_len;
+                    elem = elem->base;
+                }
+                if (!elem ||
+                    (elem->kind != TY_STRUCT && elem->kind != TY_UNION) ||
+                    !elem->has_default_ctor)
+                    continue;
+                emit_indent();
+                for (int d = 0; d < ndims; d++)
+                    fprintf(stdout,
+                        "for (int __sf_ci%d = 0; __sf_ci%d < %d; __sf_ci%d++) ",
+                        d, d, dims[d], d);
+                mangle_class_ctor(elem, NULL, 0);
+                fputs("((struct ", stdout);
+                mangle_class_tag(elem);
+                fprintf(stdout, " *)&this->%.*s",
+                        m->var_decl.name->len, m->var_decl.name->loc);
+                for (int d = 0; d < ndims; d++)
+                    fprintf(stdout, "[__sf_ci%d]", d);
+                fputs(");\n", stdout);
                 continue;
             }
             /* NSDMI for scalar / pointer / enum members — apply the

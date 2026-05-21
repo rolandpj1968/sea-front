@@ -726,6 +726,25 @@ DeclSpec parse_type_specifiers(Parser *p) {
                             any_member_needs_default = true;
                         }
                     }
+                    /* Array-of-class member propagation (has_dtor /
+                     * has_default_ctor from element through container)
+                     * is INTENTIONALLY not done here. Propagating
+                     * either flag triggers the chain machinery
+                     * around the containing class, but the chain's
+                     * partial-destruction unwind for array elements
+                     * isn't emitted (the medium slice tracked by
+                     * eh/new1 / array16). Classes whose array
+                     * elements need construction or destruction via
+                     * an EXPLICIT ctor get the per-element loop via
+                     * emit_ctor_mem_init_one's array branch + the
+                     * synthesised dtor's array branch — covers
+                     * g++.dg/init/ctor1.C. Classes with NO user ctor
+                     * (e.g. g++.dg/init/array5.C `struct Array { A
+                     * array[2][2][2]; };`) currently skip element
+                     * construction at the declaration site to avoid
+                     * the partial-destruction crash; the medium
+                     * slice will land the proper unwind and the
+                     * propagation can be added back then. */
                     /* NSDMI — N4659 §12.6.2/9 [class.base.init]/9: a
                      * default-member-initializer on a non-static data
                      * member contributes to default-ctor synthesis;
