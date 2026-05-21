@@ -709,7 +709,7 @@ static void emit_arg_for_param(Node *arg, Type *param_ty) {
      * picks up sizeof(T) bytes from a sizeof(S) storage region:
      * silent partial-uninitialized read.
      *
-     * Concrete shape:'s
+     * Concrete shape:
      *   static int undefined_vect_el_value;
      *   ...
      *   vla_hwint_t vect;       // vec<long>
@@ -6268,7 +6268,7 @@ static void emit_expr(Node *n) {
             /* Preserve array bounds in sizeof — emit_type would decay
              * TY_ARRAY to '*' giving sizeof(T*) for a typedef'd array
              * type. C's sizeof never decays; '\''sizeof(int[5])'\'' is 20.
-             * Real-world shape:'\''s '\''XNEWVEC(move_table, N)'\'' where
+             * Real-world shape: 'XNEWVEC(move_table, N)' where
              * 'typedef unsigned short move_table[N_REG_CLASSES]'.
              * N4659 §8.3.3 [expr.sizeof]/2. */
             Type *st = n->sizeof_.ty;
@@ -6291,7 +6291,25 @@ static void emit_expr(Node *n) {
                 emit_type(st);
             }
         } else if (n->sizeof_.expr) {
-            emit_expr(n->sizeof_.expr);
+            /* Enumerator of a packed enum — C makes enumerator
+             * constants type `int` (sizeof 4), C++ makes them the
+             * enum type (sizeof matches the packed underlying type).
+             * Cast to the enum type so sizeof sees the right one.
+             * N4659 §10.2/8 [dcl.enum]: enumerators have the
+             * enumeration type. Pattern: g++.dg/ext/packed7.C. */
+            Node *e = n->sizeof_.expr;
+            if (e && e->kind == ND_IDENT && e->ident.resolved_decl &&
+                e->ident.resolved_decl->entity == ENTITY_ENUMERATOR &&
+                e->ident.resolved_decl->type &&
+                e->ident.resolved_decl->type->kind == TY_ENUM &&
+                e->ident.resolved_decl->type->is_packed) {
+                fputs("(enum ", stdout);
+                Token *tag = e->ident.resolved_decl->type->tag;
+                if (tag) fprintf(stdout, "%.*s", tag->len, tag->loc);
+                fputs("){0}", stdout);
+            } else {
+                emit_expr(e);
+            }
         }
         fputc(')', stdout);
         return;
