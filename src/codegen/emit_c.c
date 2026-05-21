@@ -2797,6 +2797,121 @@ static int resolve_overload(Type *class_type, Token *name, bool is_ctor,
 /* Look up a 0-arg method's return type on a class. Used by the
  * range-for desugar to determine the iterator type from begin()/end().
  * Returns NULL if no matching method is found. */
+static int emit_class_op_mangled_name(Type *class_ty, OperatorKind op,
+                                       Type **arg_types, int narg_types,
+                                       bool receiver_is_const,
+                                       Type ***out_param_types,
+                                       Node **out_best_member);
+
+/* Emit a stmt-expr that implements implicit memberwise op= for
+ * CLASS_TYPE, dispatching A::op= per element of every class-array
+ * member. Bitwise copy of the whole struct comes first (covers
+ * scalar / non-array fields); then per-element op= overwrites
+ * each class-array element with the proper side-effecting call.
+ * Yields the destination lvalue so `b = b` keeps assign's value-
+ * of semantics for chained `a = b = c`. */
+static void emit_memberwise_assign_stmt_expr(Type *cls, Node *lhs, Node *rhs);
+
+/* True if CLASS_TYPE declares a non-static method named `operator=`.
+ * Iterates members rather than using lookup_in_scope so a plain
+ * `operator=` (any signature) qualifies. Used by the implicit
+ * memberwise op= synthesis path. */
+static bool class_has_user_op_assign(Type *class_type) {
+    if (!class_type || !class_type->class_def) return false;
+    Node *cd = class_type->class_def;
+    for (int i = 0; i < cd->class_def.nmembers; i++) {
+        Node *m = cd->class_def.members[i];
+        if (!m) continue;
+        Token *mn = NULL;
+        if (m->kind == ND_FUNC_DEF) mn = m->func.name;
+        else if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
+                 m->var_decl.ty->kind == TY_FUNC) mn = m->var_decl.name;
+        if (!mn) continue;
+        if (getenv("SF_DBG_MA"))
+            fprintf(stderr, "    has_user: member name=%.*s len=%d\n",
+                    mn->len, mn->loc, mn->len);
+        /* Method names tokenize as `operator=` (the lexer joins
+         * 'operator' with the operator suffix into one TK_IDENT). */
+        if (mn->len == 8 && memcmp(mn->loc, "operator", 8) == 0 &&
+            operator_kind_from_method_name(mn) == OP_ASSIGN)
+            return true;
+    }
+    return false;
+}
+
+/* True if CLASS_TYPE has any member that is an array (possibly
+ * multi-dimensional) of a class-type which carries a user op=.
+ * Triggers synthesis of a memberwise op= so `b = b` calls A::op=
+ * per element. N4659 §15.8.2/12 [class.copy.assign]. */
+static bool class_needs_array_memberwise_assign(Type *class_type) {
+    if (!class_type || !class_type->class_def) return false;
+    Node *cd = class_type->class_def;
+    for (int i = 0; i < cd->class_def.nmembers; i++) {
+        Node *m = cd->class_def.members[i];
+        if (!m || m->kind != ND_VAR_DECL || !m->var_decl.ty) continue;
+        Type *t = m->var_decl.ty;
+        if (t->kind != TY_ARRAY) continue;
+        while (t && t->kind == TY_ARRAY) t = t->base;
+        if (!t) continue;
+        if (t->kind == TY_STRUCT || t->kind == TY_UNION) {
+            if (class_has_user_op_assign(t)) return true;
+        }
+    }
+    return false;
+}
+
+static void emit_memberwise_assign_stmt_expr(Type *cls, Node *lhs, Node *rhs) {
+    fputs("({ ", stdout);
+    emit_type(cls);
+    fputs(" *__sf_d = &(", stdout);
+    emit_expr(lhs);
+    fputs("); ", stdout);
+    emit_type(cls);
+    fputs(" *__sf_s = &(", stdout);
+    emit_expr(rhs);
+    fputs("); *__sf_d = *__sf_s; ", stdout);
+    Node *cd = cls->class_def;
+    if (cd) {
+        for (int i = 0; i < cd->class_def.nmembers; i++) {
+            Node *m = cd->class_def.members[i];
+            if (!m || m->kind != ND_VAR_DECL || !m->var_decl.ty) continue;
+            Type *t = m->var_decl.ty;
+            if (t->kind != TY_ARRAY) continue;
+            /* Walk array dims, recording per-dim bounds. */
+            int dims[8]; int ndims = 0;
+            Type *elem = t;
+            while (elem && elem->kind == TY_ARRAY && ndims < 8) {
+                dims[ndims++] = elem->array_len;
+                elem = elem->base;
+            }
+            if (!elem || (elem->kind != TY_STRUCT && elem->kind != TY_UNION))
+                continue;
+            if (!class_has_user_op_assign(elem)) continue;
+            for (int d = 0; d < ndims; d++)
+                fprintf(stdout, "for (int __sf_i%d = 0; __sf_i%d < %d; __sf_i%d++) ",
+                        d, d, dims[d], d);
+            Type *args[1] = { elem };
+            Type **pty = NULL;
+            int np = emit_class_op_mangled_name(elem, OP_ASSIGN, args, 1,
+                                                 /*receiver_const=*/false,
+                                                 &pty, NULL);
+            (void)np;
+            fputs("(&__sf_d->", stdout);
+            fprintf(stdout, "%.*s",
+                    m->var_decl.name->len, m->var_decl.name->loc);
+            for (int d = 0; d < ndims; d++)
+                fprintf(stdout, "[__sf_i%d]", d);
+            fputs(", &__sf_s->", stdout);
+            fprintf(stdout, "%.*s",
+                    m->var_decl.name->len, m->var_decl.name->loc);
+            for (int d = 0; d < ndims; d++)
+                fprintf(stdout, "[__sf_i%d]", d);
+            fputs("); ", stdout);
+        }
+    }
+    fputs("*__sf_d; })", stdout);
+}
+
 static Type *class_method_return_type(Type *class_type, const char *name,
                                        int name_len) {
     if (!class_type || !class_type->class_def) return NULL;
@@ -4073,6 +4188,28 @@ static void emit_expr(Node *n) {
                 fputs(") = ", stdout);
                 emit_expr(n->binary.rhs);
                 fputs(")", stdout);
+                return;
+            }
+        }
+        /* Implicit memberwise assignment for a class B with array-of-
+         * class members where the element class A carries a user
+         * op= — N4659 §15.8.2/12 [class.copy.assign]. C struct
+         * assignment is bitwise and would skip A::op='s side
+         * effects. Emit a stmt-expr that does the bitwise copy
+         * first (covers non-class scalar members) then loops
+         * A::op= per element of each class-array member. Gated on:
+         *   - plain `=` (compound ops handled elsewhere).
+         *   - class LHS without its OWN user op= (a user op= would
+         *     have been dispatched above the regular path).
+         *   - the array-memberwise pattern actually applies. */
+        if (n->binary.op == TK_ASSIGN && n->binary.lhs && n->binary.rhs) {
+            Type *cls = n->binary.lhs->resolved_type;
+            if (ty_is_ref(cls)) cls = cls->base;
+            if (cls && (cls->kind == TY_STRUCT || cls->kind == TY_UNION) &&
+                cls->tag && !class_has_user_op_assign(cls) &&
+                class_needs_array_memberwise_assign(cls)) {
+                emit_memberwise_assign_stmt_expr(cls, n->binary.lhs,
+                                                  n->binary.rhs);
                 return;
             }
         }
