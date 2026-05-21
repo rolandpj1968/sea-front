@@ -1539,9 +1539,41 @@ static int type_specialization_compare(Type *a, Type *b) {
  * the SubstMap deduced against the winner IF the winner is a
  * template (so the caller can build the ND_TEMPLATE_ID to drive
  * instantiation); otherwise out_deduced is left untouched. */
+/* Bind explicit template-args from a `name<args>(...)` call into the
+ * SubstMap so subsequent deduction sees them as already-bound. Each
+ * arg is a Node carrying a Type (for typename params) or a literal
+ * (for NTTPs). This mirrors subst_map_bind_args but tolerates a
+ * count smaller than the template's nparams (the remaining params
+ * are deduced from call args).  N4659 §17.8.1 [temp.arg.explicit]. */
+static void seed_explicit_targs(SubstMap *map,
+                                 Node **tparams, int ntparams,
+                                 Node **targs, int ntargs) {
+    int n = ntargs < ntparams ? ntargs : ntparams;
+    if (n <= 0) return;
+    subst_map_bind_args(map, tparams, n, targs, n);
+}
+
+static Declaration *resolve_free_function_overload_with_explicit(
+        Declaration **cands, int ncands,
+        Type **arg_types, int nargs,
+        Node **explicit_targs, int n_explicit_targs,
+        Arena *arena,
+        SubstMap *out_deduced, bool *out_is_template);
+
 static Declaration *resolve_free_function_overload(
         Declaration **cands, int ncands,
         Type **arg_types, int nargs,
+        Arena *arena,
+        SubstMap *out_deduced, bool *out_is_template) {
+    return resolve_free_function_overload_with_explicit(
+        cands, ncands, arg_types, nargs, NULL, 0,
+        arena, out_deduced, out_is_template);
+}
+
+static Declaration *resolve_free_function_overload_with_explicit(
+        Declaration **cands, int ncands,
+        Type **arg_types, int nargs,
+        Node **explicit_targs, int n_explicit_targs,
         Arena *arena,
         SubstMap *out_deduced, bool *out_is_template) {
     if (out_is_template) *out_is_template = false;
@@ -1580,6 +1612,20 @@ static Declaration *resolve_free_function_overload(
             int cap = ntp > np ? ntp : np;
             if (cap < 1) cap = 1;
             SubstMap map = subst_map_new(arena, cap);
+            /* Pre-seed with explicit template-args from `f<T1,T2>(args)`
+             * so deduce_template_args sees them already-bound. Required
+             * for candidates whose template-params don't appear in the
+             * function-param list — without the seed, deduction adds
+             * zero entries and the candidate is dropped, leaving an
+             * over-general sibling to win by default. Pattern:
+             * g++.dg/template/spec21.C `f<int>(1)` with `T f(int)` vs
+             * `T f(U)` — T is explicit, A's param has nothing to
+             * deduce from. */
+            if (explicit_targs && n_explicit_targs > 0)
+                seed_explicit_targs(&map,
+                                     c->tmpl_node->template_decl.params,
+                                     ntp,
+                                     explicit_targs, n_explicit_targs);
             Type **pp = NULL;
             if (np > 0) {
                 pp = arena_alloc(arena, np * sizeof(Type *));
@@ -1943,9 +1989,12 @@ static void visit_call(Sema *s, Node *n) {
                 at[i] = n->call.args[i] ? n->call.args[i]->resolved_type : NULL;
             SubstMap deduced = {0};
             bool winner_is_template = false;
-            Declaration *winner = resolve_free_function_overload(
+            Declaration *winner = resolve_free_function_overload_with_explicit(
                 (Declaration **)ov.data, ov.len,
-                at, na, s->arena,
+                at, na,
+                n->call.callee->template_id.args,
+                n->call.callee->template_id.nargs,
+                s->arena,
                 &deduced, &winner_is_template);
             /* Skip when the winner is a class member (in-class member
              * template or OOL member method). Stamping resolved_tmpl
