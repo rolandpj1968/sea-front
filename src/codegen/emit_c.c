@@ -2466,6 +2466,19 @@ static int collect_call_arg_types(Node **args, int nargs, Type ***out_types) {
  * real-world templated container header has overloaded 'iterate(unsigned, T*)' and
  * 'iterate(unsigned, T**)'; sea-front was always picking the first
  * regardless of the actual third-argument's pointer depth. */
+/* True for any scalar kind on the "integer-rank" side: any
+ * integral type, bool, char family, enum. */
+static bool kind_is_integer(TypeKind k) {
+    return k == TY_BOOL || k == TY_CHAR || k == TY_CHAR16 ||
+           k == TY_CHAR32 || k == TY_WCHAR || k == TY_SHORT ||
+           k == TY_INT || k == TY_LONG || k == TY_LLONG || k == TY_ENUM;
+}
+
+/* True for any floating-point scalar kind. */
+static bool kind_is_floating(TypeKind k) {
+    return k == TY_FLOAT || k == TY_DOUBLE || k == TY_LDOUBLE;
+}
+
 static int score_type_pair(Type *pt, Type *at) {
     if (!pt || !at) return 0;
     if (pt->kind == at->kind) {
@@ -2493,6 +2506,15 @@ static int score_type_pair(Type *pt, Type *at) {
             s++;
         return s;
     }
+    /* Same arithmetic family (integer↔integer or floating↔floating
+     * differing only in width / signedness) is a promotion or
+     * standard conversion — ranks BELOW exact kind match but ABOVE
+     * a cross-family conversion. Without this score, picking
+     * between `f(float)` and `f(int)` for a `double` arg ties at
+     * zero and falls to first-found. N4659 §16.3.3.2.1
+     * [over.ics.rank] groups promotions/conversions into ranks. */
+    if (kind_is_floating(pt->kind) && kind_is_floating(at->kind)) return 1;
+    if (kind_is_integer(pt->kind)  && kind_is_integer(at->kind))  return 1;
     return 0;
 }
 
@@ -2626,9 +2648,20 @@ static bool same_template_instantiation(Type *a, Type *b) {
 /* Collect same-named candidate methods from a class AND all its
  * base classes (recursive). Inherited methods need to be reachable
  * through the same-name lookup. Caller's 'found' vector accumulates. */
+static void collect_overload_candidates_with_origin(
+        Type *class_type, Token *name, bool is_ctor,
+        Node **found, Type **origin, int *nfound, int cap);
+
 static void collect_overload_candidates(Type *class_type, Token *name,
                                          bool is_ctor,
                                          Node **found, int *nfound, int cap) {
+    collect_overload_candidates_with_origin(class_type, name, is_ctor,
+                                             found, NULL, nfound, cap);
+}
+
+static void collect_overload_candidates_with_origin(
+        Type *class_type, Token *name, bool is_ctor,
+        Node **found, Type **origin, int *nfound, int cap) {
     if (!class_type) return;
     /* class_def may be unset on a Type obtained via a method return
      * type or function param, even when class_region IS set. Fall
@@ -2673,7 +2706,11 @@ static void collect_overload_candidates(Type *class_type, Token *name,
             if (mn->len != name->len) continue;
             if (memcmp(mn->loc, name->loc, name->len) != 0) continue;
         }
-        if (*nfound < cap) found[(*nfound)++] = m;
+        if (*nfound < cap) {
+            found[*nfound] = m;
+            if (origin) origin[*nfound] = class_type;
+            (*nfound)++;
+        }
     }
     /* Inherited methods — N4659 §13.5.2 [class.member.lookup].
      * Ctors are not inherited (§15.1 [class.ctor]). */
@@ -2681,8 +2718,10 @@ static void collect_overload_candidates(Type *class_type, Token *name,
         for (int i = 0; i < class_type->class_region->nbases; i++) {
             DeclarativeRegion *br = class_type->class_region->bases[i];
             if (br && br->owner_type)
-                collect_overload_candidates(br->owner_type, name, is_ctor,
-                                             found, nfound, cap);
+                collect_overload_candidates_with_origin(br->owner_type, name,
+                                                         is_ctor,
+                                                         found, origin,
+                                                         nfound, cap);
         }
     }
 }
@@ -2741,23 +2780,46 @@ static bool candidate_is_static(Node *m) {
     return false;
 }
 
+static int resolve_overload_with_origin(
+        Type *class_type, Token *name, bool is_ctor,
+        Type **arg_types, int nargs,
+        bool receiver_is_const,
+        Type ***out_param_types,
+        Node **out_best,
+        Type **out_origin);
+
 static int resolve_overload(Type *class_type, Token *name, bool is_ctor,
                              Type **arg_types, int nargs,
                              bool receiver_is_const,
                              Type ***out_param_types,
                              Node **out_best) {
+    return resolve_overload_with_origin(class_type, name, is_ctor,
+                                         arg_types, nargs, receiver_is_const,
+                                         out_param_types, out_best, NULL);
+}
+
+static int resolve_overload_with_origin(
+        Type *class_type, Token *name, bool is_ctor,
+        Type **arg_types, int nargs,
+        bool receiver_is_const,
+        Type ***out_param_types,
+        Node **out_best,
+        Type **out_origin) {
     static Type *pool[64];
     *out_param_types = NULL;
     if (out_best) *out_best = NULL;
+    if (out_origin) *out_origin = NULL;
     enum { MAX_CAND = 32 };
     Node *cands[MAX_CAND];
+    Type *origins[MAX_CAND];
     int ncands = 0;
-    collect_overload_candidates(class_type, name, is_ctor,
-                                 cands, &ncands, MAX_CAND);
+    collect_overload_candidates_with_origin(class_type, name, is_ctor,
+                                             cands, origins, &ncands, MAX_CAND);
     if (ncands == 0) return -1;  /* caller may still error — see above */
     if (ncands == 1) {
         *out_param_types = pool;
         if (out_best) *out_best = cands[0];
+        if (out_origin) *out_origin = origins[0];
         return copy_member_param_types(cands[0], pool);
     }
     /* Pick by kind-match score, then break ties by const-qualification
@@ -2767,6 +2829,7 @@ static int resolve_overload(Type *class_type, Token *name, bool is_ctor,
      * viable for both const and non-const receivers; a non-const
      * method is viable only for non-const receivers. */
     Node *best = NULL;
+    Type *best_origin = NULL;
     int best_score = -1;
     for (int i = 0; i < ncands; i++) {
         Node *c = cands[i];
@@ -2783,12 +2846,14 @@ static int resolve_overload(Type *class_type, Token *name, bool is_ctor,
              candidate_is_const(c) == receiver_is_const &&
              candidate_is_const(best) != receiver_is_const)) {
             best = c;
+            best_origin = origins[i];
             best_score = s;
         }
     }
     if (!best) return -1;
     *out_param_types = pool;
     if (out_best) *out_best = best;
+    if (out_origin) *out_origin = best_origin;
     return copy_member_param_types(best, pool);
 }
 
@@ -5324,6 +5389,24 @@ static void emit_expr(Node *n) {
                     class_type->n_template_args) {
                 class_type = g_current_method_class;
             }
+            /* When the call originates inside a method body and the
+             * resolved class is a base of the current class, use the
+             * CURRENT class as the lookup root so collect_overload_
+             * candidates walks all bases — bringing in
+             * using-declaration-introduced inherited methods from
+             * sibling bases. Without this, sema's resolution to a
+             * specific base member would limit the overload set to
+             * that base's hierarchy, missing methods of equal name
+             * in sibling bases.  N4659 §13.5.2 [class.member.lookup].
+             * Pattern: g++.dg/template/using4.C. */
+            if (g_current_method_class && class_type != g_current_method_class) {
+                int base_path_probe[8];
+                int probe_len = find_base_path(g_current_method_class,
+                                                class_type,
+                                                base_path_probe, 8);
+                if (probe_len > 0)
+                    class_type = g_current_method_class;
+            }
             Token *mname = callee->ident.name;
             /* If the method belongs to a base class of the current
              * class, we need to pass &this->__sf_base.<...> instead
@@ -5349,14 +5432,33 @@ static void emit_expr(Node *n) {
                 int na = collect_call_arg_types(n->call.args,
                                                  n->call.nargs, &at);
                 Node *winner = NULL;
-                int np = resolve_overload(class_type, mname,
+                Type *winner_origin = NULL;
+                int np = resolve_overload_with_origin(class_type, mname,
                                            /*is_ctor=*/false,
                                            at, na,
                                            g_current_method_is_const,
-                                           &call_pty, &winner);
+                                           &call_pty, &winner,
+                                           &winner_origin);
                 if (np < 0)
                     die_no_overload(class_type, mname, na, "ND_CALL implicit-this");
                 call_np = np;
+                /* When the winner lives in a base class (reached via
+                 * collect_overload_candidates' base walk — most often
+                 * because a using-declaration brought the inherited
+                 * method into the derived's name set), route the
+                 * mangle + base-path through the WINNER's class, not
+                 * the lookup root. Without this, the mangled symbol
+                 * encodes the derived class but no such method exists
+                 * there; the base subobject also gets the wrong
+                 * offset. Pattern: g++.dg/template/using4.C. */
+                if (winner_origin && winner_origin != class_type) {
+                    class_type = winner_origin;
+                    if (g_current_class_def) {
+                        Type *cur = g_current_class_def->class_def.ty;
+                        base_len = find_base_path(cur, class_type,
+                                                   base_path, 8);
+                    }
+                }
                 /* Member-template candidates have TY_DEPENDENT
                  * components — at the top level (e.g. T) or nested
                  * inside TY_REF/TY_PTR/TY_ARRAY chains, OR inside
