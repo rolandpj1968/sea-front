@@ -167,6 +167,10 @@ typedef enum {
     OP_SUBSCRIPT,      /* [] */
     OP_CALL,           /* () */
     OP_ARROW,          /* -> */
+    OP_NEW,            /* operator new       — N4659 §16.5 [over.oper] */
+    OP_NEW_ARRAY,      /* operator new[]     — same § */
+    OP_DELETE,         /* operator delete    — same § */
+    OP_DELETE_ARRAY,   /* operator delete[]  — same § */
     OP_UNKNOWN,        /* fallback for unrecognised operator names */
 } OperatorKind;
 

@@ -574,6 +574,10 @@ static const char *const op_human_suffix[] = {
     [OP_SUBSCRIPT]       = "__subscript",
     [OP_CALL]            = "__call",
     [OP_ARROW]           = "__arrow",
+    [OP_NEW]             = "__new",
+    [OP_NEW_ARRAY]       = "__new_array",
+    [OP_DELETE]          = "__delete",
+    [OP_DELETE_ARRAY]    = "__delete_array",
     [OP_UNKNOWN]         = "__operator",
 };
 
@@ -581,6 +585,22 @@ OperatorKind operator_kind_from_method_name(Token *name) {
     if (!name) return OP_UNKNOWN;
     const char *after = name->loc + name->len;
     while (*after == ' ' || *after == '\t') after++;
+    /* Word-form operators new / delete with optional `[]` suffix —
+     * N4659 §16.5 [over.oper]. Recognised before the symbol matches
+     * so `new[` doesn't get misread as `[` (operator subscript). */
+    if (after[0] == 'n' && after[1] == 'e' && after[2] == 'w') {
+        const char *p = after + 3;
+        while (*p == ' ' || *p == '\t') p++;
+        if (p[0] == '[' && p[1] == ']') return OP_NEW_ARRAY;
+        return OP_NEW;
+    }
+    if (after[0] == 'd' && after[1] == 'e' && after[2] == 'l' &&
+        after[3] == 'e' && after[4] == 't' && after[5] == 'e') {
+        const char *p = after + 6;
+        while (*p == ' ' || *p == '\t') p++;
+        if (p[0] == '[' && p[1] == ']') return OP_DELETE_ARRAY;
+        return OP_DELETE;
+    }
     /* Three-char patterns first to avoid prefix-shadowing. */
     if (after[0] == '<' && after[1] == '<' && after[2] == '=') return OP_LSHIFT_ASSIGN;
     if (after[0] == '>' && after[1] == '>' && after[2] == '=') return OP_RSHIFT_ASSIGN;

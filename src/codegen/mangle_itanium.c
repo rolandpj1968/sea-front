@@ -730,6 +730,10 @@ static const char *itan_op_id(OperatorKind op, int nparams) {
     case OP_SUBSCRIPT:      return "ix";
     case OP_CALL:           return "cl";
     case OP_ARROW:          return "pt";
+    case OP_NEW:            return "nw";  /* operator new      */
+    case OP_NEW_ARRAY:      return "na";  /* operator new[]    */
+    case OP_DELETE:         return "dl";  /* operator delete   */
+    case OP_DELETE_ARRAY:   return "da";  /* operator delete[] */
     case OP_UNKNOWN:        return NULL;  /* caller falls back to source-name */
     }
     return NULL;
