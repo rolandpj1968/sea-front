@@ -1290,6 +1290,45 @@ static int ics_rank(Type *param, Type *arg) {
      * int) for an int arg. */
     if (param->is_complex != arg->is_complex)
         return ICS_COMPLEX_CONV;
+    /* Cv-only differences on fundamental types — types_equivalent's
+     * default arm rejects (int, int const) because it requires
+     * is_const match. For ICS purposes, after the ref-binding strip
+     * above, an `int` arg to a `T const` parameter is an exact
+     * match (the reference binding's qualification conversion is
+     * §16.3.3.1.4/3 [over.ics.ref] "bound directly", rank Identity).
+     * Same for pointer levels: `int*` to `int const*` is a
+     * qualification conversion (§7.5 [conv.qual]). N4659
+     * §16.3.3.2.1 [over.ics.scs] ranks both as Identity for
+     * best-viable purposes; differentiated only against an exact
+     * non-cv match via tie-break rules not yet modelled. */
+    if (param->kind == arg->kind &&
+        param->is_unsigned == arg->is_unsigned &&
+        param->kind != TY_STRUCT && param->kind != TY_UNION &&
+        param->kind != TY_ENUM && param->kind != TY_PTR &&
+        param->kind != TY_REF && param->kind != TY_RVALREF &&
+        param->kind != TY_ARRAY && param->kind != TY_FUNC)
+        return ICS_EXACT;
+    /* Pointer pair whose bases differ only in cv-qualifiers — N4659
+     * §7.5 [conv.qual] / §16.3.3.2.1 [over.ics.scs]: T* → T const*
+     * is a qualification conversion (rank QUAL_CONV). types_
+     * equivalent's recursive base check rejects on the cv mismatch,
+     * so we re-check by structurally stripping cv at the base
+     * level. Same-direction only (add const to pointee, not
+     * remove). */
+    if (param->kind == TY_PTR && arg->kind == TY_PTR &&
+        param->base && arg->base &&
+        param->base->kind == arg->base->kind &&
+        param->base->is_unsigned == arg->base->is_unsigned) {
+        bool p_const = param->base->is_const;
+        bool a_const = arg->base->is_const;
+        if (p_const && !a_const) return ICS_QUAL_CONV;
+        if (!p_const && a_const) return ICS_INCOMPATIBLE;
+        if (p_const == a_const) {
+            /* Same cv but types_equivalent failed → kind diff at base
+             * (e.g. int* vs long*). Falls through to integer-conv at
+             * the bottom; let it. */
+        }
+    }
     if (types_equivalent(param, arg)) {
         /* types_equivalent ignores cv-qualifiers on the pointee
          * (TY_STRUCT / fundamental types compare by tag/kind only).

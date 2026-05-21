@@ -790,6 +790,33 @@ static void emit_arg_for_param(Node *arg, Type *param_ty) {
             return;
         }
     }
+    /* Reference binding to a packed-struct member is illegal in C++:
+     * the member may be misaligned, so the language requires the
+     * compiler to materialise a properly-aligned temporary and bind
+     * the reference to it (N4659 §11.6.3 [dcl.init.ref] read with
+     * the platform alignment requirement of a `T&`). Detect
+     * arg.kind == ND_MEMBER where the receiving struct has the
+     * packed attribute and emit `&((T){src.member})` instead of
+     * `&(src.member)`. Without this, the call site passes a
+     * (potentially) misaligned T* — the C compiler warns
+     * `-Waddress-of-packed-member` and at runtime the callee
+     * observes the same address as the source (the test pattern
+     * `&p == ptr` returning true). Pattern: g++.dg/ext/packed4.C. */
+    if (arg->kind == ND_MEMBER && arg->member.obj &&
+        arg->member.obj->resolved_type) {
+        Type *recv = arg->member.obj->resolved_type;
+        if (recv->kind == TY_REF || recv->kind == TY_RVALREF || recv->kind == TY_PTR)
+            recv = recv->base;
+        if (recv && (recv->kind == TY_STRUCT || recv->kind == TY_UNION) &&
+            recv->is_packed && param_ty->base) {
+            fputs("&((", stdout);
+            emit_type(param_ty->base);
+            fputs("){", stdout);
+            emit_expr(arg);
+            fputs("})", stdout);
+            return;
+        }
+    }
     fputs("&(", stdout);
     emit_expr(arg);
     fputc(')', stdout);
