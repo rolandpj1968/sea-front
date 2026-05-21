@@ -12934,10 +12934,22 @@ methods_phase:;
                 for (int k = 0; k < n->class_def.nmembers; k++) {
                     Node *dm = n->class_def.members[k];
                     if (!dm) continue;
-                    bool d_funcdef = (dm->kind == ND_FUNC_DEF && dm->func.is_virtual);
-                    bool d_decl = (dm->kind == ND_VAR_DECL && dm->var_decl.is_virtual &&
-                                   dm->var_decl.ty && dm->var_decl.ty->kind == TY_FUNC);
+                    /* Implicit-virtual override: a derived-class method
+                     * with the same name + arity as a base's virtual
+                     * IS itself virtual, even without the keyword.
+                     * N4659 §13.3/2 [class.virtual]. Drop the
+                     * is_virtual gate here; the base loop is already
+                     * iterating ONLY base virtuals, so any name+arity
+                     * match in the derived class is an override.
+                     * Pattern: g++.dg/inherit/thunk10.C — D::foo1 /
+                     * D::foo2 are declared without `virtual`. */
+                    bool d_funcdef = (dm->kind == ND_FUNC_DEF);
+                    bool d_decl = (dm->kind == ND_VAR_DECL &&
+                                   dm->var_decl.ty &&
+                                   dm->var_decl.ty->kind == TY_FUNC);
                     if (!d_funcdef && !d_decl) continue;
+                    if (d_funcdef && dm->func.is_constructor) continue;
+                    if (d_funcdef && dm->func.is_destructor) continue;
                     Token *dn = d_funcdef ? dm->func.name : dm->var_decl.name;
                     int d_np = d_funcdef ? dm->func.nparams : dm->var_decl.ty->nparams;
                     if (!dn || !bname) continue;
@@ -13006,8 +13018,64 @@ methods_phase:;
                     emit_type(pty);
                     fprintf(stdout, " __a%d", p);
                 }
+                /* Covariant return — the override returns a more-
+                 * derived pointer/reference than the base's slot
+                 * type. The thunk's slot signature uses the base
+                 * type so callers see the contract they expect.
+                 * N4659 §10.3/5 [class.virtual]. Detect by checking
+                 * pointer-to-class on both sides with distinct
+                 * pointee classes. Adjust the return value by the
+                 * offset of the matching subobject inside the
+                 * override's class: if `class_type` (override's
+                 * class) inherits the slot's class as base #N, add
+                 * offsetof(class_type, __sf_baseN) before returning
+                 * so a B*-typed slot really receives the address
+                 * of the B subobject. Pattern:
+                 * g++.dg/inherit/covariant1.C. */
+                Type *override_ret = override_is_funcdef
+                                       ? override_m->func.ret_ty
+                                       : override_m->var_decl.ty->ret;
+                bool need_ret_adjust = false;
+                int  ret_adjust_base = -1;
+                Type *ret_adjust_cls = NULL;
+                if (ret_ty && override_ret &&
+                    ret_ty->kind == TY_PTR && override_ret->kind == TY_PTR &&
+                    ret_ty->base && override_ret->base &&
+                    (ret_ty->base->kind == TY_STRUCT ||
+                     ret_ty->base->kind == TY_UNION) &&
+                    (override_ret->base->kind == TY_STRUCT ||
+                     override_ret->base->kind == TY_UNION)) {
+                    Type *cb = ret_ty->base;          /* base's return pointee */
+                    Type *cd = override_ret->base;    /* override's return pointee */
+                    /* Walk cd's base chain to find cb. If found at index N,
+                     * adjust by offsetof(cd, __sf_baseN). Base index 0 is
+                     * `__sf_base` (first/primary base, no offset adjustment
+                     * needed at all — they share offset 0). */
+                    if (cd != cb && cd->class_region) {
+                        for (int ci = 0; ci < cd->class_region->nbases; ci++) {
+                            Type *cbi = cd->class_region->bases[ci]->owner_type;
+                            if (cbi && cb->tag && cbi->tag &&
+                                tokens_equal(cb->tag, cbi->tag)) {
+                                if (ci > 0) {
+                                    need_ret_adjust = true;
+                                    ret_adjust_base = ci;
+                                    ret_adjust_cls  = cd;
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
                 fputs(") {\n    ", stdout);
-                if (ret_ty && ret_ty->kind != TY_VOID) fputs("return ", stdout);
+                if (need_ret_adjust) {
+                    /* Stash override's return into __r, then cast +
+                     * offset-adjust before returning. */
+                    fputs("struct ", stdout);
+                    mangle_class_tag(ret_adjust_cls);
+                    fputs(" *__r = ", stdout);
+                } else if (ret_ty && ret_ty->kind != TY_VOID) {
+                    fputs("return ", stdout);
+                }
                 /* Const-ness mirrors the derived class's override: a
                  * 'B *clone() const' in the base demands an override
                  * that's also const, so the derived's symbol carries
@@ -13028,7 +13096,15 @@ methods_phase:;
                 fprintf(stdout, ", __sf_base%d))", bi);
                 for (int p = 0; p < b_np; p++)
                     fprintf(stdout, ", __a%d", p);
-                fputs(");\n}\n", stdout);
+                fputs(");\n", stdout);
+                if (need_ret_adjust) {
+                    fputs("    return (struct ", stdout);
+                    mangle_class_tag(ret_ty->base);
+                    fputs(" *)((char *)__r + offsetof(struct ", stdout);
+                    mangle_class_tag(ret_adjust_cls);
+                    fprintf(stdout, ", __sf_base%d));\n", ret_adjust_base);
+                }
+                fputs("}\n", stdout);
                 (void)override_is_funcdef;
             }
             /* Pass 2: emit the secondary vtable instance. Same struct

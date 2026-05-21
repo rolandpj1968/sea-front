@@ -801,6 +801,76 @@ DeclSpec parse_type_specifiers(Parser *p) {
                             ty->has_virtual_methods = true;
                     }
                 }
+                /* Implicit-virtual overrides — N4659 §13.3/2
+                 * [class.virtual]: a derived-class method with the
+                 * same name + same parameter types as a base virtual
+                 * IS itself virtual, even when the source omits the
+                 * `virtual` keyword. Sea-front's vtable struct /
+                 * instance / thunk emit gates on is_virtual, so the
+                 * gate has to be widened at this point. Walk our
+                 * members, look for a matching base virtual (anywhere
+                 * up the chain), and set is_virtual on the override.
+                 * Pattern: g++.dg/inherit/thunk10.C — D::foo1 and
+                 * D::foo2 declared without `virtual`. */
+                if (ty->class_region && ty->has_virtual_methods) {
+                    for (int mi = 0; mi < members.len; mi++) {
+                        Node *m = ((Node **)members.data)[mi];
+                        if (!m) continue;
+                        bool m_funcdef = (m->kind == ND_FUNC_DEF);
+                        bool m_decl    = (m->kind == ND_VAR_DECL &&
+                                           m->var_decl.ty &&
+                                           m->var_decl.ty->kind == TY_FUNC);
+                        if (!m_funcdef && !m_decl) continue;
+                        if (m_funcdef && (m->func.is_constructor ||
+                                          m->func.is_destructor)) continue;
+                        bool already_virt = m_funcdef ? m->func.is_virtual
+                                                      : m->var_decl.is_virtual;
+                        if (already_virt) continue;
+                        Token *mname = m_funcdef ? m->func.name
+                                                 : m->var_decl.name;
+                        int m_np = m_funcdef ? m->func.nparams
+                                             : m->var_decl.ty->nparams;
+                        if (!mname) continue;
+                        /* Walk base classes looking for a matching
+                         * virtual. Single-level scan; transitive
+                         * inheritance is handled because each base
+                         * already had its own implicit-virtual pass
+                         * run when ITS class_def was finalized. */
+                        bool found_match = false;
+                        for (int bi = 0; bi < ty->class_region->nbases &&
+                                          !found_match; bi++) {
+                            Type *bt = ty->class_region->bases[bi]->owner_type;
+                            if (!bt || !bt->class_def) continue;
+                            Node *bd = bt->class_def;
+                            for (int bj = 0; bj < bd->class_def.nmembers; bj++) {
+                                Node *bm = bd->class_def.members[bj];
+                                if (!bm) continue;
+                                bool bm_funcdef = (bm->kind == ND_FUNC_DEF &&
+                                                    bm->func.is_virtual);
+                                bool bm_decl    = (bm->kind == ND_VAR_DECL &&
+                                                    bm->var_decl.is_virtual &&
+                                                    bm->var_decl.ty &&
+                                                    bm->var_decl.ty->kind == TY_FUNC);
+                                if (!bm_funcdef && !bm_decl) continue;
+                                Token *bn = bm_funcdef ? bm->func.name
+                                                       : bm->var_decl.name;
+                                int b_np = bm_funcdef ? bm->func.nparams
+                                                      : bm->var_decl.ty->nparams;
+                                if (!bn) continue;
+                                if (bn->len != mname->len) continue;
+                                if (memcmp(bn->loc, mname->loc,
+                                            mname->len) != 0) continue;
+                                if (b_np != m_np) continue;
+                                found_match = true;
+                                break;
+                            }
+                        }
+                        if (found_match) {
+                            if (m_funcdef) m->func.is_virtual = true;
+                            else           m->var_decl.is_virtual = true;
+                        }
+                    }
+                }
             }
 
             /* Trailing cv-qualifiers between the struct body and the
