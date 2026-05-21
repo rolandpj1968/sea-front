@@ -83,6 +83,12 @@ static Type *g_current_func_ret_ty = NULL;
  * Patterns: g++.dg/ext/fnname{1,2,3}.C. */
 static Token *g_current_func_src_name = NULL;
 static bool   g_current_func_is_dtor   = false;
+/* Target attribute string of the function currently being emitted
+ * (NULL if none). Used by the multi-versioning call-resolution path
+ * in emit_free_func_symbol: when a call has multiple candidates
+ * carrying target attributes, prefer the one whose target matches
+ * this caller's. Pattern: g++.dg/ext/mv3.C. */
+static Token *g_current_func_target = NULL;
 /* Class type of the OOL method currently being emitted. Used by
  * ND_OFFSETOF to substitute unresolvable local typedefs. */
 static Type *g_current_method_class = NULL;
@@ -3187,6 +3193,7 @@ static int emit_class_op_mangled_name(Type *class_ty, OperatorKind op,
  * inline. Callers just pass the full param set. */
 static void emit_param_declarator(Type *ty, Token *name, int idx);
 static void emit_param_list(Node **params, int nparams, bool variadic);
+static int emit_target_suffix_to(FILE *out, Token *target);
 static void emit_func_header(Type *ret_ty, Token *name,
                               Node **params, int nparams, bool variadic) {
     /* Pointer-to-array return type — N4659 §11.3 [dcl.meaning]: the
@@ -3232,8 +3239,11 @@ static void emit_func_header(Type *ret_ty, Token *name,
     }
     emit_type(ret_ty);
     fputc(' ', stdout);
-    if (name)
+    if (name) {
         fprintf(stdout, "%.*s", name->len, name->loc);
+        if (g_current_func_target)
+            emit_target_suffix_to(stdout, g_current_func_target);
+    }
     emit_param_list(params, nparams, variadic);
 }
 
@@ -3338,6 +3348,12 @@ static void emit_param_declarator(Type *ty, Token *name, int idx) {
 
 static void emit_expr(Node *n);
 static bool free_func_name_is_overloaded(Token *name);
+
+/* TU-walk: find the ND_FUNC_DEF named NAME with attr_target equal
+ * to TARGET. Returns NULL if no such version exists. Used at call
+ * sites inside a target-bearing function to bind to the matching
+ * version of an overloaded callee. */
+static Node *find_target_versioned_func(Token *name, Token *target);
 static bool emit_free_func_ident_via_ffsig(Token *name);
 static bool ffsig_is_first_c_linkage(Token *name, Type **params, int nparams);
 static void emit_free_func_symbol(Token *name, Token *asm_name,
@@ -3390,6 +3406,21 @@ static void emit_asm_name(Token *asm_tok) {
 static void emit_free_func_symbol(Token *name, Token *asm_name,
                                    bool c_linkage,
                                    Type **params, int nparams) {
+    /* Multi-versioning dispatch: when the callee exists in
+     * target-versioned form, bind to the matching version. Inside a
+     * function with a target attribute, the caller's target picks
+     * the version; from a non-target caller, fall back to the only
+     * versioned form (if unique) so the link resolves. Bypasses
+     * asm_name / c_linkage / overload-mangling because the target
+     * suffix is the discriminator here. */
+    if (name) {
+        Node *versioned = find_target_versioned_func(name, g_current_func_target);
+        if (versioned) {
+            fprintf(stdout, "%.*s", name->len, name->loc);
+            emit_target_suffix_to(stdout, versioned->func.attr_target);
+            return;
+        }
+    }
     if (asm_name) {
         emit_asm_name(asm_name);
     } else if (c_linkage) {
@@ -10576,6 +10607,98 @@ static void emit_free_func_mangled_name(Token *name, Type **param_types,
 
 /* Emit the function signature part AFTER storage-class keywords —
  * handles the overload-mangling decision. */
+/* For a function with `__attribute__((target("X")))`, emit the
+ * sanitized suffix `__target_<X-sanitized>` so multi-versioned
+ * overloads of the same source name don't collide at the C level.
+ * Non-identifier characters in the target string become '_'.
+ * Pattern: g++.dg/ext/mv3.C. */
+static int emit_target_suffix_to(FILE *out, Token *target) {
+    if (!target) return 0;
+    const char *p = target->loc;
+    int len = target->len;
+    if (len >= 2 && p[0] == '"' && p[len-1] == '"') { p++; len -= 2; }
+    fputs("__target_", out);
+    for (int i = 0; i < len; i++) {
+        char c = p[i];
+        bool ident_ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+                     || (c >= '0' && c <= '9') || c == '_';
+        fputc(ident_ok ? c : '_', out);
+    }
+    return len + 9;
+}
+
+/* True if the TU contains a forward declaration of NAME (a
+ * ND_VAR_DECL of function type, no body, no target attribute). If
+ * so, we treat NAME as having a "merged default" entry-point and
+ * skip the target-suffix machinery — the bare name is what callers
+ * and linkers expect. This keeps gcc-style ifunc multi-versioning
+ * tests (mv1/mv2/mv5) at their pre-existing E_RUN bucket rather
+ * than regressing to E_CC by suffixing every def. */
+static bool has_unsuffixed_func_decl(Token *name) {
+    if (!g_tu || g_tu->kind != ND_TRANSLATION_UNIT || !name) return false;
+    for (int i = 0; i < g_tu->tu.ndecls; i++) {
+        Node *d = g_tu->tu.decls[i];
+        if (!d) continue;
+        if (d->kind == ND_VAR_DECL && d->var_decl.name &&
+            d->var_decl.ty && d->var_decl.ty->kind == TY_FUNC &&
+            d->var_decl.name->len == name->len &&
+            memcmp(d->var_decl.name->loc, name->loc, name->len) == 0 &&
+            !d->var_decl.attr_weak)
+            return true;
+    }
+    return false;
+}
+
+/* True if NAME is `main` — a special entry-point the linker requires
+ * unsuffixed, regardless of target attributes. */
+static bool is_main_name(Token *name) {
+    return name && name->len == 4 && memcmp(name->loc, "main", 4) == 0;
+}
+
+static Node *find_target_versioned_func(Token *name, Token *target) {
+    if (!g_tu || g_tu->kind != ND_TRANSLATION_UNIT || !name) return NULL;
+    if (is_main_name(name)) return NULL;
+    if (has_unsuffixed_func_decl(name)) return NULL;
+    Node *match_any = NULL;       /* first versioned form (used as fallback) */
+    int   nversioned = 0;
+    for (int i = 0; i < g_tu->tu.ndecls; i++) {
+        Node *d = g_tu->tu.decls[i];
+        if (!d || d->kind != ND_FUNC_DEF) continue;
+        if (!d->func.name || !d->func.attr_target) continue;
+        if (d->func.name->len != name->len) continue;
+        if (memcmp(d->func.name->loc, name->loc, name->len) != 0) continue;
+        if (!match_any) match_any = d;
+        nversioned++;
+        if (!target) continue;
+        Token *t = d->func.attr_target;
+        if (t->len != target->len) continue;
+        if (memcmp(t->loc, target->loc, target->len) != 0) continue;
+        return d;   /* exact target match */
+    }
+    /* No exact match — but the callee EXISTS only in versioned form,
+     * so the unsuffixed name won't link. Pick a fallback:
+     *   - The target("default") version, if one was declared.
+     *   - Otherwise the single versioned form, if there's only one.
+     *   - Otherwise NULL — the call falls through to plain emit and
+     *     the resulting link error surfaces the missing dispatcher. */
+    if (target == NULL && match_any) {
+        for (int i = 0; i < g_tu->tu.ndecls; i++) {
+            Node *d = g_tu->tu.decls[i];
+            if (!d || d->kind != ND_FUNC_DEF) continue;
+            if (!d->func.name || !d->func.attr_target) continue;
+            if (d->func.name->len != name->len) continue;
+            if (memcmp(d->func.name->loc, name->loc, name->len) != 0) continue;
+            Token *t = d->func.attr_target;
+            const char *tp = t->loc;
+            int tlen = t->len;
+            if (tlen >= 2 && tp[0] == '"' && tp[tlen-1] == '"') { tp++; tlen -= 2; }
+            if (tlen == 7 && memcmp(tp, "default", 7) == 0) return d;
+        }
+        if (nversioned == 1) return match_any;
+    }
+    return NULL;
+}
+
 static void emit_free_func_header(Type *ret_ty, Token *name,
                                    Node **params, int nparams,
                                    bool variadic) {
@@ -10623,9 +10746,20 @@ static void emit_func_def(Node *n) {
     emit_source_comment(n->tok);
     cf_begin_function(n);
     Type *saved_ret = g_current_func_ret_ty;
+    Token *saved_target = g_current_func_target;
     Node *saved_lam = g_current_lambda_fn;
     Node *saved_cdef_for_lambda = g_current_class_def;
     g_current_func_ret_ty = n->func.ret_ty;
+    /* Suppress the target-suffix machinery for main (linker needs
+     * the bare symbol) and for any function name with an unsuffixed
+     * forward decl (the bare form is the "merged default" entry-
+     * point — keeping it lets gcc-style ifunc multi-versioning
+     * tests stay at their pre-fix bucket). */
+    g_current_func_target = n->func.attr_target;
+    if (g_current_func_target && n->func.name &&
+        (is_main_name(n->func.name) ||
+         has_unsuffixed_func_decl(n->func.name)))
+        g_current_func_target = NULL;
     if (n->func.is_lambda_fn) {
         g_current_lambda_fn = n;
         /* Lambda body with '[this]' capture: implicit-this references
@@ -10675,6 +10809,20 @@ static void emit_func_def(Node *n) {
         else
             fputs("__attribute__((destructor)) ", stdout);
     }
+    /* GNU multi-versioning — emit `__attribute__((target("X")))`
+     * so the C compiler activates the matching ISA features for the
+     * body. The C name is suffixed with `__target_<X>` to keep
+     * distinct versions from colliding under gcc-as-C which (unlike
+     * gcc-as-C++) rejects multi-versioned same-name defs. The
+     * suffix emit is gated on g_current_func_target (suppressed for
+     * `main` / forward-declared names — see above), so emit the
+     * attribute on the same condition to keep the def cohesive. */
+    if (g_current_func_target) {
+        fputs("__attribute__((target(", stdout);
+        fprintf(stdout, "%.*s",
+                g_current_func_target->len, g_current_func_target->loc);
+        fputs("))) ", stdout);
+    }
     /* Namespace-scoped free function: emit using the same Itanium-
      * style mangling the call site (ND_QUALIFIED with parts
      * [ns, fn]) uses. Otherwise the def emits bare 'ab6' while the
@@ -10722,6 +10870,7 @@ static void emit_func_def(Node *n) {
     fputc(' ', stdout);
     emit_func_body(n);
     g_current_func_ret_ty = saved_ret;
+    g_current_func_target = saved_target;
     g_current_lambda_fn   = saved_lam;
     g_current_class_def   = saved_cdef_for_lambda;
 }
@@ -12276,8 +12425,22 @@ static void emit_top_level(Node *n) {
                 params[i] = (n->func.params[i] &&
                              n->func.params[i]->kind == ND_PARAM)
                               ? n->func.params[i]->param.ty : NULL;
-            bool dup = func_def_dedup_check_sig(n->func.name, params, np,
-                                                 n->func.storage_flags);
+            /* Multi-versioning: skip the by-name dedup when the
+             * function carries a `target("...")` attribute AND will
+             * actually be suffixed (i.e. emit_func_def's gating
+             * conditions hold — no main, no unsuffixed forward
+             * decl). If the suffix is suppressed, dedup must still
+             * fire or duplicate same-named defs land in the C
+             * output. Pattern: g++.dg/ext/mv3.C (suffix kicks in),
+             * g++.dg/ext/mv1.C (unsuffixed forward decl present,
+             * suffix suppressed, dedup must still collapse). */
+            bool will_be_suffixed = n->func.attr_target &&
+                !is_main_name(n->func.name) &&
+                !has_unsuffixed_func_decl(n->func.name);
+            bool dup = false;
+            if (!will_be_suffixed)
+                dup = func_def_dedup_check_sig(n->func.name, params, np,
+                                                n->func.storage_flags);
             free(params);
             if (dup) return;
             emit_func_def(n);
@@ -13069,9 +13232,14 @@ static void emit_fwd_decl_methods_only(Node *n) {
             int sf = n->func.storage_flags;
             if (sf & DECL_CONSTEXPR) sf |= DECL_INLINE;
             emit_storage_flags_for_def(sf);
+            /* Set current-func target so emit_free_func_header
+             * appends the matching suffix on the forward decl. */
+            Token *saved_t = g_current_func_target;
+            g_current_func_target = n->func.attr_target;
             emit_free_func_header(n->func.ret_ty, n->func.name,
                                   n->func.params, n->func.nparams,
                                   n->func.is_variadic);
+            g_current_func_target = saved_t;
             fputs(";\n", stdout);
         }
         break;

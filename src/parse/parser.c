@@ -329,6 +329,17 @@ void parser_skip_gnu_attributes_full(Parser *p,
                     p->pending_init_priority =
                         (int)parser_peek_ahead(p, 2)->ival;
             }
+            /* target("<string>") — gcc multi-versioning. Stash the
+             * string-literal token on the parser latch; the function-
+             * def promotion path in decl.c copies it to func.attr_
+             * target. Pattern: g++.dg/ext/mv3.C. */
+            if (parser_at(p, TK_IDENT) &&
+                (token_equal(parser_peek(p), "target") ||
+                 token_equal(parser_peek(p), "__target__"))) {
+                if (parser_peek_ahead(p, 1)->kind == TK_LPAREN &&
+                    parser_peek_ahead(p, 2)->kind == TK_STR)
+                    p->pending_attr_target = parser_peek_ahead(p, 2);
+            }
             if (parser_at(p, TK_LPAREN)) depth++;
             else if (parser_at(p, TK_RPAREN)) { depth--; if (depth == 0) break; }
             parser_advance(p);

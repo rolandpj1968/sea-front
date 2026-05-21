@@ -1654,6 +1654,10 @@ Node *parse_declaration(Parser *p) {
         func->func.ctor_priority    = decl->var_decl.ctor_priority;
         func->func.dtor_priority    = decl->var_decl.dtor_priority;
         func->func.attr_weak        = decl->var_decl.attr_weak;
+        /* Drain the target("...") latch — see pending_attr_target
+         * docstring. Reset so subsequent function defs don't inherit. */
+        func->func.attr_target      = p->pending_attr_target;
+        p->pending_attr_target      = NULL;
         /* No-throw spec from consume_trailing_qualifiers. Latched on
          * the parser; copy to the ND_FUNC_DEF so codegen's epilogue
          * can emit the terminate check. */

@@ -882,6 +882,15 @@ struct Node {
              * ahead of the function definition. Pattern:
              * g++.dg/eh/weak1.C. */
             bool             attr_weak;
+            /* GNU target attribute — e.g. `target("sse")`,
+             * `target("popcnt")`, `target("default")` — used for
+             * multi-versioning. Sea-front can't emit duplicate
+             * names in C (gcc-as-C rejects), so mangling appends
+             * the target string to distinguish the versions, and
+             * overload resolution prefers the candidate whose
+             * target matches the enclosing function's. Pattern:
+             * g++.dg/ext/mv3.C. */
+            Token           *attr_target;
             /* Innermost enclosing namespace name token. NULL for
              * free functions at global scope. Set at parse time by
              * walking p->region's enclosing chain. Codegen uses this
@@ -1579,6 +1588,11 @@ struct Parser {
      * g++.dg/eh/weak1.C with the matching weak1-a.cc that strong-
      * overrides f. */
     bool pending_attr_weak;
+    /* Side channel: GNU `target("...")` attribute string. Token
+     * points at the string-literal argument, e.g. "popcnt".
+     * Captured by parser_skip_gnu_attributes_full, drained by
+     * parse_declaration into func.attr_target. */
+    Token *pending_attr_target;
     /* Side channel: `__attribute__((init_priority(N)))` on a variable
      * definition. Controls cross-TU global ctor execution order
      * (lower = earlier). Pattern: g++.dg/special/conpr-{2,3,4}.C. */
