@@ -296,6 +296,29 @@ static void visit_ident(Sema *s, Node *n) {
             n->resolved_type = n->ident.resolved_decl->type;
         return;
     }
+    /* Two-phase name lookup (N4659 §17.5.6 [temp.res]): a non-
+     * dependent name inside a template body is bound at template
+     * definition time (phase 1). If phase-1 bound this ident to a
+     * NAMESPACE-scope entity (a free function or namespace
+     * variable) and phase-2 now finds an inherited CLASS member
+     * made visible only because a previously-dependent base
+     * became concrete, that rebind is the classic two-phase
+     * failure — keep the phase-1 binding. We DON'T apply the
+     * rule when phase-1's own binding was already a class member:
+     * there phase-2 is just picking the instantiated version of
+     * the same lookup (e.g. `using B<T>::foo;` rebinds to the
+     * instantiated B<int>::foo at phase 2). Pattern:
+     * g++.dg/lookup/template1.C. */
+    if (n->ident.resolved_decl &&
+        n->ident.resolved_decl->home &&
+        n->ident.resolved_decl->home->kind != REGION_CLASS &&
+        d && d->home &&
+        d->home->kind == REGION_CLASS &&
+        d->home->owner_type != s->cur_class_type) {
+        if (!already_typed && n->ident.resolved_decl->type)
+            n->resolved_type = n->ident.resolved_decl->type;
+        return;
+    }
     n->ident.resolved_decl = d;
     /* N4659 §6.4.1/1 [basic.lookup.unqual] + §16.3 [over.match]:
      * don't collapse overloaded names at lookup time — carry the
