@@ -7775,6 +7775,26 @@ static bool stmt_has_class_temp(Node *s) {
     }
 }
 
+static void push_user_var_cleanup(Node *s);
+
+/* Bracket the body of a decl-as-cond (if/while/for/switch with a
+ * class-with-dtor variable in the condition slot) so any early
+ * `return` / `break` / `continue` / `throw` inside the body chains
+ * through the var's cleanup label, firing the dtor. Without this,
+ * the switch case `default: return;` jumps straight to the function
+ * epilogue and the dtor never runs. Pattern: g++.dg/eh/scope1.C. */
+static int decl_cond_cleanup_open(Node *decl_node) {
+    int saved = g_cf.nlive;
+    push_user_var_cleanup(decl_node);
+    return saved;   /* may equal g_cf.nlive if no cleanup was pushed */
+}
+
+static void decl_cond_cleanup_close(int saved_nlive) {
+    if (g_cf.nlive == saved_nlive) return;
+    emit_cleanup_chain_for_added(saved_nlive);
+    g_cf.nlive = saved_nlive;
+}
+
 /* `T v = T(args);` — copy-init from a temp constructed inline —
  * should invoke T's ctor on v (with elision). The C-level
  * `T v = (T){0};` is bitwise zero, skipping T's ctor side effects.
@@ -8647,6 +8667,7 @@ static void emit_stmt(Node *n) {
             ident_stub.kind = ND_IDENT;
             ident_stub.ident.name = nm;
             ident_stub.resolved_type = n->if_.cond->var_decl.ty;
+            int dc_saved = decl_cond_cleanup_open(n->if_.cond);
             fputs("if (", stdout);
             emit_bool_context_expr(&ident_stub);
             fputs(") ", stdout);
@@ -8656,6 +8677,7 @@ static void emit_stmt(Node *n) {
                 fputs("else ", stdout);
                 emit_if_body_with_hoist(n->if_.else_);
             }
+            decl_cond_cleanup_close(dc_saved);
             g_indent--;
             emit_indent();
             fputs("}", stdout);
@@ -8710,10 +8732,12 @@ static void emit_stmt(Node *n) {
             ident_stub.kind = ND_IDENT;
             ident_stub.ident.name = nm;
             ident_stub.resolved_type = n->while_.cond->var_decl.ty;
+            int dc_saved = decl_cond_cleanup_open(n->while_.cond);
             fputs("while (", stdout);
             emit_bool_context_expr(&ident_stub);
             fputs(") ", stdout);
             emit_stmt(body);
+            decl_cond_cleanup_close(dc_saved);
             g_indent--;
             emit_indent();
             fputs("}\n", stdout);
@@ -8956,6 +8980,7 @@ static void emit_stmt(Node *n) {
             ident_stub.kind = ND_IDENT;
             ident_stub.ident.name = nm;
             ident_stub.resolved_type = n->for_.cond->var_decl.ty;
+            int dc_saved = decl_cond_cleanup_open(n->for_.cond);
             fputs("while (", stdout);
             emit_bool_context_expr(&ident_stub);
             fputs(") ", stdout);
@@ -8969,6 +8994,7 @@ static void emit_stmt(Node *n) {
                 fputs(";\n", stdout);
             }
             emit_close_brace();
+            decl_cond_cleanup_close(dc_saved);
             g_indent--;
             emit_indent();
             fputs("}\n", stdout);
@@ -9369,11 +9395,13 @@ static void emit_stmt(Node *n) {
             ident_stub.kind = ND_IDENT;
             ident_stub.ident.name = nm;
             ident_stub.resolved_type = n->switch_.expr->var_decl.ty;
+            int dc_saved = decl_cond_cleanup_open(n->switch_.expr);
             fputs("switch (", stdout);
             emit_bool_context_expr(&ident_stub);
             fputs(") ", stdout);
             if (n->switch_.body) emit_stmt(n->switch_.body);
             else fputs(";\n", stdout);
+            decl_cond_cleanup_close(dc_saved);
             g_indent--;
             emit_indent();
             fputs("}\n", stdout);
@@ -9426,9 +9454,20 @@ static void emit_stmt(Node *n) {
              * the next chain target; the chain itself terminates
              * at __SF_loop_break_<n> for the innermost CL_LOOP. */
             int target = break_target();
-            char buf[32];
-            snprintf(buf, sizeof(buf), "__SF_cleanup_%d", target);
-            fprintf(stdout, "__SF_BREAK(%s);\n", buf);
+            if (target < 0) {
+                /* CL_VAR on the stack but no enclosing CL_LOOP. The
+                 * `break` is in a switch (no CL_LOOP push for plain
+                 * switch) but we have a class-typed condition var
+                 * pushing CL_VAR — its dtor runs after the C-level
+                 * switch via the decl-cond cleanup chain emit. The
+                 * break itself stays plain C. Pattern:
+                 * g++.dg/eh/scope1.C f4. */
+                fputs("break;\n", stdout);
+            } else {
+                char buf[32];
+                snprintf(buf, sizeof(buf), "__SF_cleanup_%d", target);
+                fprintf(stdout, "__SF_BREAK(%s);\n", buf);
+            }
         } else {
             fputs("break;\n", stdout);
         }
@@ -10603,6 +10642,25 @@ static void emit_func_def(Node *n) {
      * one. Pattern: g++.dg/eh/weak1.C. */
     if (n->func.attr_weak)
         fputs("__attribute__((weak)) ", stdout);
+    /* GNU __attribute__((constructor)) / ((destructor)) on a free
+     * function: the loader runs ctor functions before main and dtor
+     * functions at process teardown. Priority N orders within the
+     * group (lower = earlier for ctors, later for dtors). Pattern:
+     * g++.dg/ext/initpri-2.C. */
+    if (n->func.attr_constructor) {
+        if (n->func.ctor_priority > 0)
+            fprintf(stdout, "__attribute__((constructor(%d))) ",
+                    n->func.ctor_priority);
+        else
+            fputs("__attribute__((constructor)) ", stdout);
+    }
+    if (n->func.attr_destructor) {
+        if (n->func.dtor_priority > 0)
+            fprintf(stdout, "__attribute__((destructor(%d))) ",
+                    n->func.dtor_priority);
+        else
+            fputs("__attribute__((destructor)) ", stdout);
+    }
     /* Namespace-scoped free function: emit using the same Itanium-
      * style mangling the call site (ND_QUALIFIED with parts
      * [ns, fn]) uses. Otherwise the def emits bare 'ab6' while the
