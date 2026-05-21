@@ -7547,8 +7547,21 @@ static void emit_cxx_type(Type *t) {
         else fputs("?", stdout);
         break;
     case TY_DEPENDENT:
-        if (t->tag) fprintf(stdout, "%.*s", t->tag->len, t->tag->loc);
-        else fputs("?", stdout);
+        /* `typename T::member` keeps both the dependent base tag
+         * and the member name so __PRETTY_FUNCTION__ prints the
+         * source-level form. Bare `T` (no dep_member) just prints
+         * the tag. Pattern: g++.dg/diagnostic/bindings1.C — foo's
+         * second param is `typename T::type c`; the printer must
+         * show that, not just "T". */
+        if (t->dep_member && t->tag) {
+            fprintf(stdout, "typename %.*s::%.*s",
+                    t->tag->len, t->tag->loc,
+                    t->dep_member->len, t->dep_member->loc);
+        } else if (t->tag) {
+            fprintf(stdout, "%.*s", t->tag->len, t->tag->loc);
+        } else {
+            fputs("?", stdout);
+        }
         break;
     default:
         fputs("?", stdout); break;
@@ -7666,6 +7679,36 @@ static void emit_pretty_function_literal(void) {
                     fprintf(stdout, "%.*s = ",
                             p->param.name->len, p->param.name->loc);
                 emit_cxx_type(g_current_func_node->func.template_args[i]);
+            }
+            /* gcc's __PRETTY_FUNCTION__ also lists nested
+             * `typename T::member = <resolved>` entries for each
+             * qualified dependent name used in the parameter
+             * list. Walk the cloned func's PARAMS — their resolved
+             * types are the substituted forms — and find each
+             * dep_member that appears in the source params at the
+             * matching position. Pattern: bindings1.C expects
+             * `; typename T::type = int` after `T = x`. */
+            Node *src_func = src_tpl->template_decl.decl;
+            if (src_func && (src_func->kind == ND_FUNC_DEF ||
+                             src_func->kind == ND_FUNC_DECL)) {
+                int sn = src_func->func.nparams;
+                int cn = g_current_func_node->func.nparams;
+                int n  = sn < cn ? sn : cn;
+                for (int i = 0; i < n; i++) {
+                    Node *sp = src_func->func.params[i];
+                    Node *cp = g_current_func_node->func.params[i];
+                    if (!sp || sp->kind != ND_PARAM) continue;
+                    if (!cp || cp->kind != ND_PARAM) continue;
+                    Type *st = sp->param.ty;
+                    Type *ct = cp->param.ty;
+                    if (!st || st->kind != TY_DEPENDENT) continue;
+                    if (!st->dep_member || !st->tag) continue;
+                    fputs("; typename ", stdout);
+                    fprintf(stdout, "%.*s::%.*s = ",
+                            st->tag->len, st->tag->loc,
+                            st->dep_member->len, st->dep_member->loc);
+                    emit_cxx_type(ct);
+                }
             }
         }
     }
