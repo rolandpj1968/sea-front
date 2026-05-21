@@ -671,6 +671,26 @@ static void emit_arg_for_param(Node *arg, Type *param_ty) {
     if (arg->kind == ND_UNARY && arg->unary.op == TK_STAR) {
         emit_expr(arg->unary.operand); return;
     }
+    /* Comma-expression yielding an lvalue: C++ §8.20/1 [expr.comma]
+     * makes the comma operator return its rhs unchanged (including
+     * lvalueness). C makes comma always rvalue, so `&(side, m)` is
+     * invalid C. Push the `&` INSIDE the comma so the lhs runs for
+     * its side effects and the rhs's address is the result:
+     *   `&(Foo(), m)`  →  `(Foo(), &m)`
+     * Without this, sea-front used to materialise a copy via a
+     * compound literal — wrong semantics, since the reference must
+     * bind to the actual m. Pattern: g++.dg/other/init2.C
+     *   `int &r((Foo(), m));`  AND
+     *   `C::C() : r((Foo(), m)) {}` */
+    if (arg->kind == ND_COMMA && arg->comma.rhs &&
+        arg->comma.rhs->resolved_type) {
+        fputc('(', stdout);
+        emit_expr(arg->comma.lhs);
+        fputs(", ", stdout);
+        emit_arg_for_param(arg->comma.rhs, param_ty);
+        fputc(')', stdout);
+        return;
+    }
     /* Non-lvalue rvalue passed to a reference param: '&(a + b)' is
      * illegal C. For scalar-type args (int, long, ptr, etc.), wrap
      * in a C99 compound literal '(T){expr}' which IS an lvalue and
@@ -3935,6 +3955,7 @@ static void emit_expr(Node *n) {
          * become '__sf_anon_inst_<id>.member'. */
         if (n->ident.name && emit_anon_member_rewrite(n->ident.name))
             return;
+        bool implicit_this_ref_deref = false;
         if (n->ident.implicit_this && !g_current_method_is_static) {
             /* Static data members (§10.1.1/4 [dcl.stc]) lower to a
              * TU-scope variable 'sf__<class>__<name>', not a struct
@@ -3948,6 +3969,19 @@ static void emit_expr(Node *n) {
                 emit_token_text(n->ident.name);
                 return;
             }
+            /* Class member of reference type — N4659 §11.3.2
+             * [dcl.ref]: a reference data member is lowered to a
+             * pointer in C, so `this->r` reads back as `T*`. In an
+             * rvalue position we want the referent's value, so wrap
+             * the whole `this->r` in `(*...)`. Skipped when used
+             * with `&` (address-of) or as an assignment target
+             * (callers manage g_suppress_ref_deref). Pattern:
+             * g++.dg/other/init2.C `if (r != m)` with `int &r;`. */
+            Declaration *rd_for_deref = n->ident.resolved_decl;
+            bool member_is_ref = rd_for_deref &&
+                rd_for_deref->type && ty_is_ref(rd_for_deref->type);
+            implicit_this_ref_deref = member_is_ref && !g_suppress_ref_deref;
+            if (implicit_this_ref_deref) fputs("(*", stdout);
             /* Inside a capturing lambda with '[this]' (§8.1.5.2/8),
              * implicit-this references go through the closure's
              * '__this' member instead of the lambda's non-existent
@@ -3977,8 +4011,16 @@ static void emit_expr(Node *n) {
          * pointers in C. When used as a value (rvalue), deref them.
          * Skip deref when the ident is the LHS of an assignment
          * (handled by the caller) or when used with & (address-of). */
+        /* Non-implicit-this reference variable read: deref the
+         * lowered T* to recover the referent's value. Catches both
+         * function parameters (tracked in g_ref_params) and local
+         * variables whose declared type is TY_REF (the
+         * resolved_decl carries the source-level type). */
+        bool ref_local = !n->ident.implicit_this && n->ident.resolved_decl &&
+                         n->ident.resolved_decl->type &&
+                         ty_is_ref(n->ident.resolved_decl->type);
         if (!n->ident.implicit_this && !g_suppress_ref_deref &&
-            is_ref_param(n->ident.name)) {
+            (is_ref_param(n->ident.name) || ref_local)) {
             fputs("(*", stdout);
             emit_token_text(n->ident.name);
             fputc(')', stdout);
@@ -4023,6 +4065,7 @@ static void emit_expr(Node *n) {
                 emit_token_text(n->ident.name);
             }
         }
+        if (implicit_this_ref_deref) fputc(')', stdout);
         return;
     case ND_BINARY: {
         /* Pointer-to-data-member access — N4659 §8.5 [expr.mptr.oper].
@@ -7760,8 +7803,22 @@ static void emit_var_decl_inner(Node *n) {
             g_suppress_ref_deref = saved_supp;
             fputc(')', stdout);
         } else if (var_is_ref && !init_is_ref && !init_is_ptr) {
-            fputc('&', stdout);
-            emit_init_with_target(n->var_decl.init, n->var_decl.ty);
+            /* Comma-expr init for a reference var: `int &r = (E, m);`
+             * binds r to the comma's rhs (m), since C++ §8.20/1
+             * preserves lvalueness through comma. C makes comma
+             * always rvalue, so `&(E, m)` is invalid — push the `&`
+             * inside the comma's rhs: `(E, &m)`. Pattern:
+             * g++.dg/other/init2.C `int &r ((Foo(),m));`. */
+            if (init_e && init_e->kind == ND_COMMA && init_e->comma.rhs) {
+                fputc('(', stdout);
+                emit_expr(init_e->comma.lhs);
+                fputs(", &", stdout);
+                emit_expr(init_e->comma.rhs);
+                fputc(')', stdout);
+            } else {
+                fputc('&', stdout);
+                emit_init_with_target(n->var_decl.init, n->var_decl.ty);
+            }
         } else if (var_is_ref && init_e && init_e->kind == ND_IDENT &&
                    is_ref_param(init_e->ident.name)) {
             /* Ref var bound to another ref-param: both lower to T*,
@@ -7789,7 +7846,29 @@ static void emit_var_decl_inner(Node *n) {
          * args land here. We use the first arg as a copy-init
          * source. Multi-arg forms aren't meaningful for scalars. */
         fputs(" = ", stdout);
-        emit_expr(n->var_decl.ctor_args[0]);
+        Node *init_e = n->var_decl.ctor_args[0];
+        Type *init_rt = init_e ? init_e->resolved_type : NULL;
+        bool var_is_ref = ty_is_ref(n->var_decl.ty);
+        bool init_is_ref = ty_is_ref(init_rt);
+        bool init_is_ptr = init_rt && init_rt->kind == TY_PTR;
+        if (var_is_ref && !init_is_ref && !init_is_ptr) {
+            /* Same as the var_decl.init ref-binding path — wrap the
+             * lvalue in `&`, with comma-expr push-inside so
+             * `int &r((Foo(), m));` emits `(Foo(), &m)` rather than
+             * invalid C `&(Foo(), m)`. Pattern: g++.dg/other/init2.C. */
+            if (init_e->kind == ND_COMMA && init_e->comma.rhs) {
+                fputc('(', stdout);
+                emit_expr(init_e->comma.lhs);
+                fputs(", &", stdout);
+                emit_expr(init_e->comma.rhs);
+                fputc(')', stdout);
+            } else {
+                fputc('&', stdout);
+                emit_expr(init_e);
+            }
+        } else {
+            emit_expr(init_e);
+        }
     }
 }
 
