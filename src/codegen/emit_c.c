@@ -6474,7 +6474,31 @@ static void emit_expr(Node *n) {
                         emit_arg_for_param(n->cast.new_ctor_args[i],
                                             i < np ? pty[i] : NULL);
                     }
-                    fputs("); __sf_new_tmp; })", stdout);
+                    /* Throw chain after the ctor — if the new-expr's
+                     * ctor (or its array-mem-init's element ctor)
+                     * threw, propagate to the enclosing function's
+                     * try-handler (if inside a try) or epilogue.
+                     * Pattern: g++.dg/init/array16.C — foo's ctor
+                     * throws mid-element-construction. Without this
+                     * the new-expr's stmt-expr returns the malloc'd
+                     * pointer regardless and the post-`new` code
+                     * runs as if construction succeeded. */
+                    fputs("); ", stdout);
+                    if (g_cf.func_has_cleanups) {
+                        bool in_try = false;
+                        int tt = find_throw_target_from(g_cf.nlive, &in_try);
+                        char tbuf[32];
+                        if (tt >= 0) {
+                            snprintf(tbuf, sizeof(tbuf),
+                                     in_try ? "__SF_try_%d_handler"
+                                            : "__SF_cleanup_%d",
+                                     tt);
+                            fprintf(stdout, "__SF_CHAIN_THROW(%s); ", tbuf);
+                        } else {
+                            fputs("__SF_CHAIN_THROW(__SF_epilogue); ", stdout);
+                        }
+                    }
+                    fputs("__sf_new_tmp; })", stdout);
                     return;
                 }
             }
@@ -9163,6 +9187,22 @@ static void emit_stmt(Node *n) {
             mangle_class_ctor(n->var_decl.ty, NULL, 0);
             fprintf(stdout, "(&%.*s);\n",
                     n->var_decl.name->len, n->var_decl.name->loc);
+            /* A CHAIN_THROW here would be tempting (ctor may throw
+             * and we want to propagate before running the post-
+             * decl code) but it interacts badly with the cleanup
+             * chain's local-var dtor: a throw from a ctor whose
+             * partial-construction was handled INSIDE the ctor
+             * would still register the var for full destruction at
+             * scope exit, double-destroying. Sea-front currently
+             * relies on the SAME chain at scope exit handling
+             * both normal cleanup and throw propagation; adding a
+             * separate post-ctor chain check breaks ctor1's
+             * pattern where the ctor body throws AFTER members
+             * are fully constructed (members destroyed by the
+             * var's cleanup-chain dtor at scope exit, then chain
+             * propagates the throw outward). The new-expr path
+             * doesn't have this concern because the new'd object
+             * isn't registered for scope-exit cleanup. */
         }
         return;
     case ND_IF:
@@ -10210,6 +10250,27 @@ static void cf_begin_function(Node *func) {
      * a bare braceless block. N4659 §18.4 [except.spec]. */
     if (func && func->kind == ND_FUNC_DEF && func->func.is_nothrow)
         g_cf.func_has_cleanups = true;
+    /* Constructors with array-of-class-with-dtor members need the
+     * cleanup scaffolding so the array-mem-init's partial-
+     * destruction unwind (emit_ctor_mem_init_one's TY_ARRAY branch)
+     * can `goto __SF_epilogue` and propagate the throw. Pattern:
+     * g++.dg/init/array16.C. */
+    if (func && func->kind == ND_FUNC_DEF && func->func.is_constructor &&
+        g_current_class_def) {
+        Node *cd = g_current_class_def;
+        for (int i = 0; i < cd->class_def.nmembers; i++) {
+            Node *m = cd->class_def.members[i];
+            if (!m || m->kind != ND_VAR_DECL || !m->var_decl.ty) continue;
+            if (m->var_decl.ty->kind != TY_ARRAY) continue;
+            Type *e = m->var_decl.ty;
+            while (e && e->kind == TY_ARRAY) e = e->base;
+            if (e && (e->kind == TY_STRUCT || e->kind == TY_UNION) &&
+                e->has_dtor) {
+                g_cf.func_has_cleanups = true;
+                break;
+            }
+        }
+    }
     /* Latch the source-name for __func__ rewrites in ND_IDENT. For
      * a destructor the source name token is the class name (no
      * leading '~'), so we prepend it at emit time. */
@@ -10654,7 +10715,13 @@ static void emit_ctor_mem_init_one(Node *func, Node *m) {
          * when the element class's ctor has side effects (e.g.
          * setting ptr=this for self-check). Pattern:
          * g++.dg/init/ctor1.C `volatile B b[1];`. */
-        if (mty->kind == TY_ARRAY && !found) {
+        /* TY_ARRAY mem-init: triggers when either the user wrote no
+         * mem-init for this member (so default-construction kicks in,
+         * !found path) OR wrote `: arr()` with empty args (value-
+         * init — found with nargs==0). Both shapes default-construct
+         * each element. Pattern: g++.dg/init/array16.C foo's
+         * `: buffer()`. */
+        if (mty->kind == TY_ARRAY && (!found || found->nargs == 0)) {
             int dims[8]; int ndims = 0;
             Type *elem = mty;
             while (elem && elem->kind == TY_ARRAY && ndims < 8) {
@@ -10664,17 +10731,64 @@ static void emit_ctor_mem_init_one(Node *func, Node *m) {
             if (elem &&
                 (elem->kind == TY_STRUCT || elem->kind == TY_UNION) &&
                 elem->has_default_ctor) {
-                emit_indent();
-                for (int d = 0; d < ndims; d++)
-                    fprintf(stdout,
-                        "for (int __sf_ci%d = 0; __sf_ci%d < %d; __sf_ci%d++) ",
-                        d, d, dims[d], d);
                 Type **pty = NULL;
                 int np = resolve_overload(elem, /*name=*/NULL,
                                            /*is_ctor=*/true, NULL, 0,
                                            /*receiver_is_const=*/false,
                                            &pty, /*out_best=*/NULL);
                 if (np < 0) np = 0;  /* synth default ctor */
+                /* Single-dim array of class-with-dtor: emit the ctor
+                 * loop with partial-destruction unwind. If element K
+                 * throws, destroy elements [0..K-1] in reverse then
+                 * propagate to the function's throw chain target
+                 * (currently __SF_epilogue since we're in the ctor
+                 * mem-init prologue, before any user-pushed cleanup
+                 * vars). N4659 §15.2/2 [except.ctor]. Pattern:
+                 * g++.dg/init/array16.C foo's `: buffer()` mem-init
+                 * with throwing element ctor. */
+                if (ndims == 1 && elem->has_dtor) {
+                    static int g_arr_unwind_id = 0;
+                    int uid = g_arr_unwind_id++;
+                    emit_indent();
+                    fprintf(stdout, "{ int __sf_arr_k%d = 0;\n", uid);
+                    emit_indent();
+                    fprintf(stdout,
+                        "for (; __sf_arr_k%d < %d; __sf_arr_k%d++) {\n",
+                        uid, dims[0], uid);
+                    g_indent++; emit_indent();
+                    mangle_class_ctor(elem, pty, np);
+                    fputs("((struct ", stdout);
+                    mangle_class_tag(elem);
+                    fprintf(stdout, " *)&this->%.*s[__sf_arr_k%d]);\n",
+                            m->var_decl.name->len, m->var_decl.name->loc, uid);
+                    emit_indent();
+                    fprintf(stdout,
+                        "if (__sf_exc_state.state == __SF_UNWIND_THROW) {\n");
+                    g_indent++; emit_indent();
+                    fprintf(stdout, "while (__sf_arr_k%d-- > 0) ", uid);
+                    mangle_class_dtor(elem);
+                    fprintf(stdout, "((struct ", stdout);
+                    mangle_class_tag(elem);
+                    fprintf(stdout, " *)&this->%.*s[__sf_arr_k%d]);\n",
+                            m->var_decl.name->len, m->var_decl.name->loc, uid);
+                    emit_indent();
+                    fputs("__SF_unwind = __SF_UNWIND_THROW; ", stdout);
+                    fputs("goto __SF_epilogue;\n", stdout);
+                    g_indent--; emit_indent();
+                    fputs("}\n", stdout);
+                    g_indent--; emit_indent();
+                    fputs("} }\n", stdout);
+                    return;
+                }
+                /* Plain loop (no partial-destruction unwind): used
+                 * for trivial-dtor elements and multi-dim arrays
+                 * (the multi-dim partial-destruction shape is
+                 * complex and uncommon in the bootstrap target). */
+                emit_indent();
+                for (int d = 0; d < ndims; d++)
+                    fprintf(stdout,
+                        "for (int __sf_ci%d = 0; __sf_ci%d < %d; __sf_ci%d++) ",
+                        d, d, dims[d], d);
                 mangle_class_ctor(elem, pty, np);
                 fputs("((struct ", stdout);
                 mangle_class_tag(elem);
