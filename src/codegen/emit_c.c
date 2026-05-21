@@ -6142,6 +6142,44 @@ static void emit_expr(Node *n) {
                                        !n->call.callee->ident.implicit_this)
                                        ? n->call.callee->ident.resolved_decl
                                        : NULL;
+            /* Fast path for direct calls to `::operator new(size_t)`,
+             * `::operator new[](size_t)`, `::operator delete(void*)`
+             * or `::operator delete[](void*)`: emit the Itanium ABI
+             * symbol directly. Sea-front's overload picker keys on
+             * the source name "operator" and can't fully
+             * disambiguate the new vs delete vs new[] vs delete[]
+             * keyword suffix; a call like `operator delete(p)`
+             * inside a user-defined `::operator delete[]` may
+             * resolve to a different operator overload from the
+             * <new> header, and the resulting mangle picks up that
+             * overload's params instead. The call's source token
+             * tells us the kind unambiguously; the call's arg
+             * type tells us the signature. Pattern:
+             * g++.dg/eh/new1.C. */
+            if (n->call.callee && n->call.callee->kind == ND_IDENT &&
+                !n->call.callee->ident.implicit_this &&
+                n->call.callee->ident.name &&
+                n->call.callee->ident.name->len == 8 &&
+                memcmp(n->call.callee->ident.name->loc, "operator", 8) == 0 &&
+                n->call.nargs == 1 && n->call.args[0]) {
+                OperatorKind ck = operator_kind_from_method_name(
+                                       n->call.callee->ident.name);
+                Type *at0 = n->call.args[0]->resolved_type;
+                bool is_size_t = at0 &&
+                    ((at0->kind == TY_LONG || at0->kind == TY_LLONG)
+                       && at0->is_unsigned);
+                bool is_void_ptr = at0 && at0->kind == TY_PTR && at0->base &&
+                                   at0->base->kind == TY_VOID;
+                const char *itan = NULL;
+                if (ck == OP_NEW          && is_size_t)   itan = "_Znwm";
+                if (ck == OP_NEW_ARRAY    && is_size_t)   itan = "_Znam";
+                if (ck == OP_DELETE       && is_void_ptr) itan = "_ZdlPv";
+                if (ck == OP_DELETE_ARRAY && is_void_ptr) itan = "_ZdaPv";
+                if (itan) {
+                    fputs(itan, stdout);
+                    emitted_mangled = true;
+                }
+            }
             Token *asm_callee = rd_callee ? rd_callee->asm_name : NULL;
             /* Only mangle the callee name when it actually denotes a
              * function. Function-pointer variables resolve to a
@@ -6272,6 +6310,27 @@ static void emit_expr(Node *n) {
                     if (arity_matches) {
                         mangle_pty = rd_callee->type->params;
                         mangle_np  = rd_callee->type->nparams;
+                    }
+                }
+                /* For multi-arg `operator new` / `operator delete`
+                 * calls (placement-new and friends), sema's
+                 * overload picker can't fully disambiguate by
+                 * source name "operator" alone — for an N-arg
+                 * call to placement-new (size_t, ...), it may
+                 * resolve to placement-delete (void*, ...) which
+                 * has different param types but same arity. Force
+                 * the mangle to use the call's actual arg types so
+                 * the user's def (mangled with the same arg types)
+                 * is the link target. Pattern:
+                 * g++.dg/init/placement2.C. */
+                Token *cn = n->call.callee->ident.name;
+                if (cn && cn->len == 8 &&
+                    memcmp(cn->loc, "operator", 8) == 0) {
+                    OperatorKind ck = operator_kind_from_method_name(cn);
+                    if (ck == OP_NEW || ck == OP_NEW_ARRAY ||
+                        ck == OP_DELETE || ck == OP_DELETE_ARRAY) {
+                        mangle_pty = at;
+                        mangle_np  = na;
                     }
                 }
                 emit_free_func_symbol(n->call.callee->ident.name,
@@ -6493,14 +6552,77 @@ static void emit_expr(Node *n) {
                                      in_try ? "__SF_try_%d_handler"
                                             : "__SF_cleanup_%d",
                                      tt);
-                            fprintf(stdout, "__SF_CHAIN_THROW(%s); ", tbuf);
                         } else {
-                            fputs("__SF_CHAIN_THROW(__SF_epilogue); ", stdout);
+                            snprintf(tbuf, sizeof(tbuf), "__SF_epilogue");
                         }
+                        /* On ctor-throw, the new-expr must deallocate
+                         * via the matching operator delete before
+                         * propagating the throw (N4659 §15.2/2
+                         * [except.ctor]). For non-placement scalar /
+                         * array new, that's `_ZdlPv` / `_ZdaPv` —
+                         * the libstdc++ defaults (or a user-defined
+                         * Itanium-aliasing override). For placement
+                         * new the storage is the caller's, so no
+                         * automatic deallocation; the matching
+                         * placement-delete (if any) would need the
+                         * same placement args and sea-front doesn't
+                         * yet thread those through. */
+                        const char *opdel = NULL;
+                        if (n->cast.new_placement_nargs == 0 &&
+                            n->cast.operand &&
+                            n->cast.operand->kind == ND_CALL &&
+                            n->cast.operand->call.callee &&
+                            n->cast.operand->call.callee->kind == ND_IDENT &&
+                            n->cast.operand->call.callee->ident.name) {
+                            Token *an = n->cast.operand->call.callee->ident.name;
+                            if (an->len == 5 &&
+                                memcmp(an->loc, "_Znam", 5) == 0)
+                                opdel = "_ZdaPv";
+                            else if (an->len == 5 &&
+                                     memcmp(an->loc, "_Znwm", 5) == 0)
+                                opdel = "_ZdlPv";
+                        }
+                        if (opdel)
+                            fprintf(stdout,
+                                "if (__sf_exc_state.state == __SF_UNWIND_THROW) "
+                                "{ %s(__sf_new_tmp); __SF_unwind = __SF_UNWIND_THROW; "
+                                "goto %s; } ", opdel, tbuf);
+                        else
+                            fprintf(stdout, "__SF_CHAIN_THROW(%s); ", tbuf);
                     }
                     fputs("__sf_new_tmp; })", stdout);
                     return;
                 }
+            }
+            /* POD value-init for `new T()` / `new (p) T[N]()` where
+             * T has no user ctor: zero the allocated storage. N4659
+             * §8.5.1/8 [dcl.init]: value-initialization of a non-
+             * class type zero-initializes the object. Pattern:
+             * g++.dg/expr/anew3.C — `new (p) X[n]()` where X is a
+             * POD struct, expected to leave all fields zero.
+             * Detect via na==0 (empty ctor-init list) AND need_ctor
+             * false (which the surrounding if-block leaves us in).
+             * Use the same stmt-expr shape so the result is the
+             * allocated pointer. */
+            if (na == 0 && p_resolved && !p_resolved->has_default_ctor) {
+                fputs("({ ", stdout);
+                emit_type(n->cast.ty);
+                fputs(" __sf_new_tmp = (", stdout);
+                emit_type(n->cast.ty);
+                fputc(')', stdout);
+                emit_expr(n->cast.operand);
+                /* Size for the memset comes from the malloc-call's
+                 * first arg (always size or size*count). */
+                fputs("; memset(__sf_new_tmp, 0, ", stdout);
+                if (n->cast.operand && n->cast.operand->kind == ND_CALL &&
+                    n->cast.operand->call.nargs >= 1 &&
+                    n->cast.operand->call.args[0]) {
+                    emit_expr(n->cast.operand->call.args[0]);
+                } else {
+                    fputs("sizeof(*__sf_new_tmp)", stdout);
+                }
+                fputs("); __sf_new_tmp; })", stdout);
+                return;
             }
         }
         /* Cast TO a reference type — target lowers to T*. The cast
@@ -10728,6 +10850,25 @@ static void emit_ctor_mem_init_one(Node *func, Node *m) {
                 dims[ndims++] = elem->array_len;
                 elem = elem->base;
             }
+            /* `: m()` on an array-of-class explicitly value-init's
+             * each element. C++ value-init for class types is
+             * "zero-init then default-construct" (N4659 §11.6/8
+             * [dcl.init]), so the data-member bytes must be zero
+             * before the ctor sets vtable / runs body. Without the
+             * pre-zero, a class with a virtual function gets its
+             * vtable set by the synth ctor but its non-static data
+             * members keep whatever the storage already held —
+             * fails for placement-new into a non-zero buffer.
+             * Pattern: g++.dg/init/array25.C. Skip when there's no
+             * explicit mem-init (the `!found` path is implicit
+             * default-init, which doesn't zero per the standard). */
+            if (found && found->nargs == 0 && elem &&
+                (elem->kind == TY_STRUCT || elem->kind == TY_UNION)) {
+                emit_indent();
+                fprintf(stdout, "memset(this->%.*s, 0, sizeof(this->%.*s));\n",
+                        m->var_decl.name->len, m->var_decl.name->loc,
+                        m->var_decl.name->len, m->var_decl.name->loc);
+            }
             if (elem &&
                 (elem->kind == TY_STRUCT || elem->kind == TY_UNION) &&
                 elem->has_default_ctor) {
@@ -10908,6 +11049,35 @@ static void emit_ctor_mem_init_one(Node *func, Node *m) {
                 emit_expr(m->var_decl.init);
                 fputs(";\n", stdout);
             }
+            /* `: m()` on a non-class member — value-init per
+             * N4659 §15.6.2/8 [class.base.init]. For arithmetic /
+             * pointer types, value-init zeroes the member. For
+             * arrays of non-class type, zero each element (a
+             * memset is the natural lowering). Pattern:
+             * g++.dg/init/array15.C `unsigned char buffer[N]` with
+             * `: buffer()` mem-init expected to zero-fill;
+             * g++.dg/init/array16.C `char c` with `: c()`. */
+            if (found && found->nargs == 0 && mty->kind != TY_ARRAY) {
+                emit_indent();
+                fprintf(stdout, "this->%.*s = 0;\n",
+                        m->var_decl.name->len, m->var_decl.name->loc);
+            } else if (found && found->nargs == 0 && mty->kind == TY_ARRAY) {
+                /* Array-of-non-class with no per-element ctor: just
+                 * memset the whole storage. Multi-dim arrays of
+                 * non-class scalars work the same way (the C
+                 * `sizeof(this->m)` covers the full nested storage). */
+                Type *elem = mty;
+                while (elem && elem->kind == TY_ARRAY) elem = elem->base;
+                bool elem_is_class = elem &&
+                    (elem->kind == TY_STRUCT || elem->kind == TY_UNION) &&
+                    elem->has_default_ctor;
+                if (!elem_is_class) {
+                    fputs("    memset(this->", stdout);
+                    fprintf(stdout, "%.*s, 0, sizeof(this->%.*s));\n",
+                            m->var_decl.name->len, m->var_decl.name->loc,
+                            m->var_decl.name->len, m->var_decl.name->loc);
+                }
+            }
             if (found && found->nargs >= 1) {
                 /* N4659 §15.6.2 [class.base.init]/9: a mem-initializer
                  * initialises (not assigns to) the named member, which
@@ -10980,6 +11150,22 @@ static void emit_func_body(Node *func) {
             fputs(");\n", stdout);
         }
     }
+    /* For noexcept / throw() functions, snapshot the entry-time
+     * exception state. The epilogue's "state==THROW → terminate"
+     * check should fire ONLY when the function INTERNALLY raised
+     * an exception, not when the caller was already in unwind
+     * propagation when entering us (e.g. a partial-destruction
+     * dtor or a `delete` invoked from the cleanup chain). N4659
+     * §18.4 [except.spec] — a function called *while* an
+     * exception is propagating doesn't itself violate its no-
+     * throw spec just by inheriting that state. Pattern:
+     * g++.dg/eh/new1.C — `operator delete[]` is throw() and is
+     * called from the new-expression's on-throw chain. */
+    if (func->func.is_nothrow) {
+        emit_indent();
+        fputs("int __sf_entry_throw = "
+              "(__sf_exc_state.state == __SF_UNWIND_THROW);\n", stdout);
+    }
     if (has_member_inits) emit_ctor_member_inits(func);
     /* Skip emitting the user body block entirely when it has zero
      * statements — the wrapper's own braces are already emitted, so
@@ -11006,7 +11192,8 @@ static void emit_func_body(Node *func) {
              * g++.dg/eh/spec10.C. */
             fputs("__SF_epilogue: ;\n", stdout);
             emit_indent();
-            fputs("if (__sf_exc_state.state == __SF_UNWIND_THROW) "
+            fputs("if (__sf_exc_state.state == __SF_UNWIND_THROW && "
+                  "!__sf_entry_throw) "
                   "__sf_terminate();\n", stdout);
             emit_indent();
             fputs(void_ret ? "return;\n" : "return __SF_retval;\n", stdout);
@@ -11248,10 +11435,26 @@ static bool free_func_name_is_overloaded(Token *name) {
  * but the init-list idents emitted bare → "undeclared" link error. */
 static bool emit_free_func_ident_via_ffsig(Token *name) {
     if (!name) return false;
+    /* When the lookup name is "operator", multiple ffsig entries
+     * may share the bare name (operator new, delete, new[],
+     * delete[], placement variants, ...). Match the OPERATOR KIND
+     * peeked from the call's source-buffer suffix so the lookup
+     * lands on the right overload. The peek requires the name
+     * token's loc to point at "operator <op>" — parse_new arranges
+     * this for synthetic new-expr callees. */
+    bool name_is_operator = (name->len == 8 &&
+                             memcmp(name->loc, "operator", 8) == 0);
+    OperatorKind want_kind = name_is_operator
+                                ? operator_kind_from_method_name(name)
+                                : OP_UNKNOWN;
     for (int i = 0; i < g_n_ffsig_seen; i++) {
         FreeFuncSig *e = &g_ffsig_seen[i];
         if (e->name->len != name->len) continue;
         if (memcmp(e->name->loc, name->loc, name->len) != 0) continue;
+        if (name_is_operator) {
+            OperatorKind have = operator_kind_from_method_name(e->name);
+            if (want_kind != have) continue;
+        }
         emit_free_func_symbol(name, NULL, e->c_linkage,
                                e->params, e->nparams);
         return true;
@@ -11292,6 +11495,71 @@ static bool ffsig_is_first_c_linkage(Token *name, Type **params, int nparams) {
 static void emit_free_func_mangled_name(Token *name, Type **param_types,
                                          int nparams) {
     if (!name) return;
+    /* Global operator new / delete / new[] / delete[] with the
+     * standard single-arg signatures (size_t for new, void* for
+     * delete) emit as their Itanium ABI symbols — `_Znwm`,
+     * `_Znam`, `_ZdlPv`, `_ZdaPv`. libstdc++ exports these; a
+     * user-defined free overload that mangles the same way
+     * aliases-overrides the library default at link time. Without
+     * this, `new T[N]` (which parse_new lowers to a call named
+     * `_Znam`) goes straight to libstdc++ and the user's
+     * `::operator new[]` sits unused. Multi-arg operators
+     * (placement-new, sized-delete, etc.) fall through to the
+     * tag-based disambiguator below. N4659 §8.3.4/8 [expr.new] +
+     * Itanium ABI §5.1.4.1. Pattern: g++.dg/eh/new1.C. */
+    if (name->len == 8 && memcmp(name->loc, "operator", 8) == 0) {
+        OperatorKind k = operator_kind_from_method_name(name);
+        if (nparams >= 1 && param_types && param_types[0]) {
+            Type *p0 = param_types[0];
+            bool is_size_t = (p0->kind == TY_LONG || p0->kind == TY_LLONG)
+                              && p0->is_unsigned;
+            bool is_void_ptr = p0->kind == TY_PTR && p0->base &&
+                               p0->base->kind == TY_VOID;
+            /* 2-arg placement-new with `(size_t, void*)` aliases
+             * libstdc++'s placement-new (`_ZnwmPv` / `_ZnamPv`).
+             * Same alias-override rationale as the 1-arg form. */
+            bool is_placement_new = nparams == 2 && is_size_t &&
+                                    param_types[1] &&
+                                    param_types[1]->kind == TY_PTR &&
+                                    param_types[1]->base &&
+                                    param_types[1]->base->kind == TY_VOID;
+            bool is_placement_del = nparams == 2 && is_void_ptr &&
+                                    param_types[1] &&
+                                    param_types[1]->kind == TY_PTR &&
+                                    param_types[1]->base &&
+                                    param_types[1]->base->kind == TY_VOID;
+            if (nparams == 1) {
+                if (k == OP_NEW          && is_size_t)   { fputs("_Znwm", stdout); return; }
+                if (k == OP_NEW_ARRAY    && is_size_t)   { fputs("_Znam", stdout); return; }
+                if (k == OP_DELETE       && is_void_ptr) { fputs("_ZdlPv", stdout); return; }
+                if (k == OP_DELETE_ARRAY && is_void_ptr) { fputs("_ZdaPv", stdout); return; }
+            }
+            if (is_placement_new) {
+                if (k == OP_NEW)       { fputs("_ZnwmPv", stdout); return; }
+                if (k == OP_NEW_ARRAY) { fputs("_ZnamPv", stdout); return; }
+            }
+            if (is_placement_del) {
+                if (k == OP_DELETE)       { fputs("_ZdlPvS_", stdout); return; }
+                if (k == OP_DELETE_ARRAY) { fputs("_ZdaPvS_", stdout); return; }
+            }
+        }
+        /* Multi-arg placement-new / placement-delete — disambiguate
+         * by op-kind via a tag so the param-suffix mangling alone
+         * doesn't collide `operator new(size_t, void*)` with
+         * `operator delete(size_t, void*)`. */
+        const char *tag = NULL;
+        switch (k) {
+        case OP_NEW:           tag = "_new";    break;
+        case OP_NEW_ARRAY:     tag = "_new_a";  break;
+        case OP_DELETE:        tag = "_del";    break;
+        case OP_DELETE_ARRAY:  tag = "_del_a";  break;
+        default: break;
+        }
+        fprintf(stdout, "%.*s", name->len, name->loc);
+        if (tag) fputs(tag, stdout);
+        mangle_param_suffix(param_types, nparams);
+        return;
+    }
     fprintf(stdout, "%.*s", name->len, name->loc);
     mangle_param_suffix(param_types, nparams);
 }
@@ -13692,10 +13960,179 @@ static void emit_typeid_sentinels(void) {
     fputc('\n', stdout);
 }
 
+/* Check one node for a matching operator definition; recurses
+ * into ND_BLOCK (namespace bodies are flat blocks) so a def
+ * inside `namespace std { ... }` (from a system header) is
+ * discovered. */
+static bool node_defines_op(Node *n, OperatorKind want_kind,
+                             int want_nparams,
+                             int p0_kind, bool p0_is_ptr) {
+    if (!n) return false;
+    if (n->kind == ND_FUNC_DEF && n->func.body) {
+        Token *nm = n->func.name;
+        if (nm && nm->len == 8 && memcmp(nm->loc, "operator", 8) == 0 &&
+            operator_kind_from_method_name(nm) == want_kind &&
+            n->func.nparams == want_nparams) {
+            Type *p0 = n->func.params && n->func.params[0]
+                         ? n->func.params[0]->var_decl.ty : NULL;
+            if (p0) {
+                if (p0_is_ptr) {
+                    if (p0->kind == TY_PTR && p0->base &&
+                        p0->base->kind == p0_kind) return true;
+                } else {
+                    if (p0->kind == p0_kind) return true;
+                }
+            }
+        }
+    }
+    if (n->kind == ND_BLOCK) {
+        for (int i = 0; i < n->block.nstmts; i++)
+            if (node_defines_op(n->block.stmts[i], want_kind,
+                                 want_nparams, p0_kind, p0_is_ptr))
+                return true;
+    }
+    return false;
+}
+
+static bool tu_defines_op_with_kind(Node *tu, OperatorKind want_kind,
+                                     int want_nparams,
+                                     int p0_kind, bool p0_is_ptr) {
+    if (!tu || tu->kind != ND_TRANSLATION_UNIT) return false;
+    for (int i = 0; i < tu->tu.ndecls; i++) {
+        if (node_defines_op(tu->tu.decls[i], want_kind, want_nparams,
+                             p0_kind, p0_is_ptr))
+            return true;
+    }
+    return false;
+}
+
+/* Same as node_defines_op but ignores param-0 type entirely —
+ * useful for the multi-arg placement variants where param-1
+ * type discrimination (void* vs const nothrow_t&) doesn't
+ * affect whether we should emit the prelude fallback. */
+static bool node_defines_op_any_p0(Node *n, OperatorKind want_kind,
+                                    int want_nparams) {
+    if (!n) return false;
+    if (n->kind == ND_FUNC_DEF) {
+        Token *nm = n->func.name;
+        if (nm && nm->len == 8 && memcmp(nm->loc, "operator", 8) == 0 &&
+            operator_kind_from_method_name(nm) == want_kind &&
+            n->func.nparams == want_nparams &&
+            n->func.body)
+            return true;
+    }
+    if (n->kind == ND_BLOCK) {
+        for (int i = 0; i < n->block.nstmts; i++)
+            if (node_defines_op_any_p0(n->block.stmts[i], want_kind, want_nparams))
+                return true;
+    }
+    return false;
+}
+
+static bool scan_op_def_any_arity(Node *tu, OperatorKind want_kind,
+                                   int want_nparams) {
+    if (!tu || tu->kind != ND_TRANSLATION_UNIT) return false;
+    for (int i = 0; i < tu->tu.ndecls; i++)
+        if (node_defines_op_any_p0(tu->tu.decls[i], want_kind, want_nparams))
+            return true;
+    return false;
+}
+
 static void emit_prelude(void) {
     fputs("/* generated by sea-front --emit-c */\n", stdout);
     fputs("#include <stdint.h>\n", stdout);
     fputs("#include <stddef.h>\n", stdout);  /* wchar_t, size_t, NULL */
+    /* memset is used by value-init mem-init (`: arr()`) and the
+     * synth ctor for array-of-class members. Declare directly
+     * rather than #include <string.h> to avoid pulling in libc's
+     * `strchr` etc., which conflicts with tests that redeclare
+     * those symbols with subtly different signatures. */
+    fputs("extern void *memset(void *, int, unsigned long);\n", stdout);
+    /* Sea-front's new-expression lowering (parse_new) emits calls
+     * to the Itanium ABI symbols `_Znwm` / `_Znam` / `_ZdlPv` /
+     * `_ZdaPv`. cc would implicit-decl these as `int f()` (which
+     * truncates the pointer on 64-bit) without an explicit decl;
+     * libstdc++ provides them when -lstdc++ is on the link line
+     * but the unit-test runner doesn't pass it. Provide static-
+     * inline TU-local forwards over libc malloc/free as the
+     * fallback. Skip the fallback when the user defines their own
+     * (their static-inline would clash with this one). Pattern:
+     * g++.dg/opt/alias4.C, g++.dg/init/new26.C. */
+    bool u_nw = tu_defines_op_with_kind(g_tu, OP_NEW, 1, TY_LONG, false) ||
+                tu_defines_op_with_kind(g_tu, OP_NEW, 1, TY_LLONG, false);
+    bool u_na = tu_defines_op_with_kind(g_tu, OP_NEW_ARRAY, 1, TY_LONG, false) ||
+                tu_defines_op_with_kind(g_tu, OP_NEW_ARRAY, 1, TY_LLONG, false);
+    bool u_dl = tu_defines_op_with_kind(g_tu, OP_DELETE, 1, TY_VOID, true);
+    bool u_da = tu_defines_op_with_kind(g_tu, OP_DELETE_ARRAY, 1, TY_VOID, true);
+    fputs("extern void *malloc(unsigned long);\n", stdout);
+    fputs("extern void  free(void *);\n", stdout);
+    /* Static-inline forwards over libc malloc/free so cc resolves
+     * the new-expression's calls even without -lstdc++ on the link
+     * line (the unit-test runner doesn't pass -lstdc++). When
+     * -lstdc++ IS on the line (the dg runner does pass it), gcc's
+     * link semantics prefer libstdc++'s strong _Znwm etc. over
+     * static-inline TU-local copies — see GCC's static-inline
+     * inlining heuristic, which lets the strong external override
+     * the inline for any TU that actually calls the function.
+     * Skip the fallback when the user defines their own (their
+     * static-inline would clash with this one). */
+    if (!u_nw)
+        fputs("static inline void *_Znwm(unsigned long __sf_n) "
+              "__attribute__((malloc));\n"
+              "static inline void *_Znwm(unsigned long __sf_n) "
+              "{ return malloc(__sf_n); }\n", stdout);
+    if (!u_na)
+        fputs("static inline void *_Znam(unsigned long __sf_n) "
+              "__attribute__((malloc));\n"
+              "static inline void *_Znam(unsigned long __sf_n) "
+              "{ return malloc(__sf_n); }\n", stdout);
+    if (!u_dl)
+        fputs("static inline void _ZdlPv(void *__sf_p) "
+              "{ free(__sf_p); }\n", stdout);
+    if (!u_da)
+        fputs("static inline void _ZdaPv(void *__sf_p) "
+              "{ free(__sf_p); }\n", stdout);
+    /* Placement new / delete variants. The 2-arg `(size_t, void*)`
+     * forms are defined inline in <new> as `return p` (new) and a
+     * no-op (delete) — they have no out-of-line library symbol,
+     * so an extern decl would fail to link. Provide a static-
+     * inline TU-local copy so the new-expression's call resolves.
+     * Skip when the user defined their own (their inline def
+     * would clash with this one). Pattern: g++.dg/expr/anew3.C,
+     * g++.dg/init/new5.C — `new (std::nothrow_t&) T[]` and
+     * friends call into the placement variants. */
+    /* Match ANY 2-arg user-defined operator new/delete to skip the
+     * prelude fallback. Sea-front's type-stripping of unused params
+     * means a user `operator delete(void*, const std::nothrow_t&)`
+     * emits as `(void*, void*)` and would collide with our
+     * placement-delete fallback otherwise. */
+    /* Always emit fallback for the placement-new[] / -delete[]
+     * variants from <new>: sea-front's emit drops the inline
+     * body for these (probably the overload-dedup pass collapsing
+     * `operator new[](size_t, void*)` and
+     * `operator new(size_t, void*)` to one entry). User-defined
+     * overrides for the 2-arg array form are rare; if they exist
+     * the duplicate-static-inline conflict is preferable to
+     * silently undefined symbols. The 1-arg and scalar 2-arg
+     * variants are still detection-gated. */
+    bool u_pnw = scan_op_def_any_arity(g_tu, OP_NEW, 2);
+    bool u_pna = false;
+    bool u_pdl = scan_op_def_any_arity(g_tu, OP_DELETE, 2);
+    bool u_pda = false;
+    if (!u_pnw)
+        fputs("static inline void *_ZnwmPv(unsigned long __sf_unused_0, "
+              "void *__p) { (void)__sf_unused_0; return __p; }\n", stdout);
+    if (!u_pna)
+        fputs("static inline void *_ZnamPv(unsigned long __sf_unused_0, "
+              "void *__p) { (void)__sf_unused_0; return __p; }\n", stdout);
+    if (!u_pdl)
+        fputs("static inline void _ZdlPvS_(void *__sf_unused_0, "
+              "void *__sf_unused_1) { (void)__sf_unused_0; (void)__sf_unused_1; }\n",
+              stdout);
+    if (!u_pda)
+        fputs("static inline void _ZdaPvS_(void *__sf_unused_0, "
+              "void *__sf_unused_1) { (void)__sf_unused_0; (void)__sf_unused_1; }\n",
+              stdout);
     fputs("\n", stdout);
     fputs("/* sea-front cleanup protocol — see emit_c.c.\n", stdout);
     fputs(" * The goto-chain destructor cleanup (N4659 §15.4 [class.dtor]/9)\n",

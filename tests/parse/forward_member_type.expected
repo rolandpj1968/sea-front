@@ -5,5 +5,5 @@
   (class-def "C"
     (func-def void "f" (params)
       (block
-        (var-decl struct uptr<struct MR> "p" (ctor-args (cast (ptr struct MR) (call (ident "malloc") (sizeof struct MR)))))))
+        (var-decl struct uptr<struct MR> "p" (ctor-args (cast (ptr struct MR) (call (ident "_Znwm") (sizeof struct MR)))))))
     (class-def "MR")))

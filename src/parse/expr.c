@@ -2424,9 +2424,15 @@ static Node *unary_expr(Parser *p) {
          * it's the type. Otherwise it's placement args.
          * For a bootstrap tool, we try placement first (tentative),
          * then fall through to type parsing. */
+        /* Placement args, captured onto the cast Node so codegen can
+         * route the allocation through the user's matching
+         * `operator new(size_t, <placement-types>)`. The tentative
+         * pre-parse is unchanged; on success we re-parse and store
+         * the comma-separated args. */
+        Node **placement_args = NULL;
+        int    placement_nargs = 0;
         if (parser_at(p, TK_LPAREN) &&
             !(parser_peek_ahead(p, 1)->kind == TK_RPAREN)) {
-            /* Tentative: try as placement args */
             ParseState saved = parser_save(p);
             bool prev_tentative = p->tentative;
             p->tentative = true;
@@ -2435,11 +2441,20 @@ static Node *unary_expr(Parser *p) {
             bool ok = parser_at(p, TK_RPAREN);
             p->tentative = prev_tentative;
             if (ok) {
-                /* Check: after ), does a type follow? If so, it was placement. */
                 parser_restore(p, saved);
                 parser_advance(p);  /* ( */
-                parse_expr(p);
+                Vec pargs = vec_new(p->arena);
+                if (!parser_at(p, TK_RPAREN)) {
+                    Node *e0 = parse_assign_expr(p);
+                    if (e0) vec_push(&pargs, e0);
+                    while (parser_consume(p, TK_COMMA)) {
+                        Node *en = parse_assign_expr(p);
+                        if (en) vec_push(&pargs, en);
+                    }
+                }
                 parser_expect(p, TK_RPAREN);
+                placement_args  = (Node **)pargs.data;
+                placement_nargs = pargs.len;
             } else {
                 parser_restore(p, saved);
             }
@@ -2552,8 +2567,40 @@ static Node *unary_expr(Parser *p) {
             Node *callee = new_node(p, ND_IDENT, tok);
             callee->ident.name = arena_alloc(p->arena, sizeof(Token));
             *callee->ident.name = *tok;
-            callee->ident.name->loc = (char *)"malloc";
-            callee->ident.name->len = 6;
+            /* Pick the allocation function based on shape:
+             *   - With placement args: emit a literal "operator"
+             *     ident; codegen routes through the standard
+             *     overload-mangling path with the placement arg
+             *     types appended (mangles to the user's
+             *     `operator new(size_t, <placement-types>)`).
+             *   - Without placement args, scalar `new T`: use
+             *     `_Znwm` so a user-defined `::operator new(size_t)`
+             *     aliases via Itanium with libstdc++'s default.
+             *   - Without placement args, array `new T[N]`:
+             *     `_Znam` for the same alias-override reason.
+             * N4659 §8.3.4/8 [expr.new]. */
+            bool is_array_new = (ty && ty->kind == TY_ARRAY);
+            const char *opnew;
+            int          opnew_len;
+            if (placement_nargs > 0) {
+                /* loc points at "operator new" / "operator new[]"
+                 * so operator_kind_from_method_name's peek past
+                 * loc+len returns the correct keyword for sema
+                 * overload resolution and the
+                 * emit_free_func_mangled_name tag fallback.
+                 * len stays at 8 ("operator") so name-based
+                 * lookup matches the user's def. */
+                opnew = is_array_new ? "operator new[]" : "operator new";
+                opnew_len = 8;
+            } else if (is_array_new) {
+                opnew = "_Znam";
+                opnew_len = 5;
+            } else {
+                opnew = "_Znwm";
+                opnew_len = 5;
+            }
+            callee->ident.name->loc = (char *)opnew;
+            callee->ident.name->len = opnew_len;
             callee->ident.name->kind = TK_IDENT;
             /* For `new T[N]` ty is TY_ARRAY whose base is the element
              * type and whose array_size_expr is the per-call size
@@ -2571,6 +2618,18 @@ static Node *unary_expr(Parser *p) {
             Node *sizeof_arg = new_node(p, ND_SIZEOF, tok);
             sizeof_arg->sizeof_.ty = elem_for_sizeof;
             sizeof_arg->sizeof_.is_type = true;
+            /* sizeof yields size_t per N4659 §8.3.3/6 [expr.sizeof].
+             * Set the resolved_type explicitly because sea-front's
+             * visit_sizeof doesn't (the result type for sizeof
+             * expressions is otherwise inferred late and stays
+             * NULL on the AST node, breaking overload-resolution
+             * and call-site mangling for `new` /
+             * `operator new(size_t, ...)` placement calls). */
+            {
+                Type *sz_ty = new_type(p, TY_LONG);
+                sz_ty->is_unsigned = true;
+                sizeof_arg->resolved_type = sz_ty;
+            }
             Node *malloc_arg = sizeof_arg;
             if (size_mul) {
                 Node *mul = new_node(p, ND_BINARY, tok);
@@ -2581,9 +2640,14 @@ static Node *unary_expr(Parser *p) {
             }
             malloc_call = new_node(p, ND_CALL, tok);
             malloc_call->call.callee = callee;
-            malloc_call->call.args = arena_alloc(p->arena, sizeof(Node *));
+            /* Args: size first, then placement args (if any). For
+             * non-placement new only the size is passed. */
+            int total = 1 + placement_nargs;
+            malloc_call->call.args = arena_alloc(p->arena, total * sizeof(Node *));
             malloc_call->call.args[0] = malloc_arg;
-            malloc_call->call.nargs = 1;
+            for (int i = 0; i < placement_nargs; i++)
+                malloc_call->call.args[1 + i] = placement_args[i];
+            malloc_call->call.nargs = total;
         }
         /* Cast target: `T *` (element pointer) regardless of whether
          * the source was `new T` or `new T[N]` — C++ §8.3.4/4
@@ -2598,6 +2662,8 @@ static Node *unary_expr(Parser *p) {
         cast->cast.is_new_expr = true;
         cast->cast.new_ctor_args = ctor_args;
         cast->cast.new_ctor_nargs = ctor_nargs;
+        cast->cast.new_placement_args = placement_args;
+        cast->cast.new_placement_nargs = placement_nargs;
         return cast;
     }
 

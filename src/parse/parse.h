@@ -471,6 +471,14 @@ struct Node {
             Node *operand;
             Node **new_ctor_args;
             int    new_ctor_nargs;
+            /* Placement-new args: `new (p1, p2, ...) T(...)` carries
+             * the placement expression list here. Empty / NULL for
+             * non-placement new and for plain casts. Codegen routes
+             * the allocation through the user's matching
+             * `operator new(size_t, <placement-types>)` rather than
+             * the default `::operator new(size_t)`. */
+            Node **new_placement_args;
+            int    new_placement_nargs;
             bool   is_new_expr;
         } cast;
 

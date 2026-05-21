@@ -1363,6 +1363,17 @@ static int ics_rank(Type *param, Type *arg) {
     if (param->kind == TY_PTR && arg->kind == TY_PTR && arg->base &&
         arg->base->kind == TY_VOID)
         return ICS_PTR_SAME_TAG;  /* null → any pointer */
+    /* Any T* → void* — C++ §4.10/2 [conv.ptr] allows the implicit
+     * conversion. ICS_QUAL_CONV ranks it BELOW an exact same-type
+     * pointer match so overload resolution prefers a more
+     * specific overload when both are viable. Pattern:
+     * g++.dg/init/placement2.C — `new (heap) A;` where heap is
+     * char[N], decays to char*, and the user's `operator new
+     * (size_t, void*)` takes void*. */
+    if (param->kind == TY_PTR && param->base &&
+        param->base->kind == TY_VOID &&
+        arg->kind == TY_PTR && arg->base)
+        return ICS_QUAL_CONV;
     /* Pointer-to-same-tag: T* vs T* where both Ts are class types
      * with matching tag but distinct Type* identity. Catches the
      * common case where two free-function overloads differ only in
