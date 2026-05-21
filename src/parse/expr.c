@@ -1406,8 +1406,7 @@ static Node *primary_expr(Parser *p) {
     /* GCC __builtin_va_arg(ap, type) — variadic-arg extraction.
      * The second argument is a TYPE, not an expression — non-standard
      * call syntax that the generic call parser would mis-handle.
-     * Codegen re-emits verbatim for gcc. Pattern: gcc 4.8
-     * tree-data-ref.c conflict_fn's va_arg loop. */
+     * Codegen re-emits verbatim for gcc. */
     if (tok->kind == TK_IDENT && tok->len == 16 &&
         memcmp(tok->loc, "__builtin_va_arg", 16) == 0 &&
         parser_peek_ahead(p, 1)->kind == TK_LPAREN) {
@@ -1515,10 +1514,10 @@ static Node *primary_expr(Parser *p) {
      * and return an integer (not bool). Sea-front doesn't track
      * alignment precisely; emit an opaque '1' to satisfy the parse
      * and downstream comparisons (most uses are in default template
-     * args / static_assert that gcc 4.8 never actually instantiates).
-     * Handled separately from the type-trait path because the trait
-     * path eagerly calls parse_type_name, which fails on expression
-     * arguments. */
+     * args / static_assert that the source compiler never actually
+     * instantiates). Handled separately from the type-trait path
+     * because the trait path eagerly calls parse_type_name, which
+     * fails on expression arguments. */
     bool is_alignof_ext =
         tok->kind == TK_IDENT &&
         ((tok->len == 9  && memcmp(tok->loc, "__alignof",   9)  == 0) ||
@@ -2519,10 +2518,11 @@ static Node *unary_expr(Parser *p) {
 
         /* Lower 'new T' to '(T *)malloc(sizeof(T))'. C++03 default-
          * initializes T (no-op for class-with-trivial-ctor / POD;
-         * non-trivial ctor isn't modelled here yet). For the bootstrap
-         * path the storage allocation is the load-bearing piece —
-         * gcc 4.8's vec.h does 'new vec<T>; v->create(n)', so the
-         * ctor is replaced by an explicit init call right after.
+         * non-trivial ctor isn't modelled here yet). For real-world
+         * code where this fires, the storage allocation is the load-
+         * bearing piece — the common pattern is
+         * 'new C<T>; p->init(...)', where the ctor is replaced by an
+         * explicit init call right after.
          *
          * TODO(seafront#new-ctor): run the ctor on the allocated
          * storage when T has a non-trivial one. */

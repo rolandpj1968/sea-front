@@ -502,7 +502,7 @@ static void emit_arg_for_param(Node *arg, Type *param_ty) {
      * same issue as the ND_ASSIGN / return paths — ND_IDENT vNULL
      * lowers to '{0}' which C only accepts in init-declarators.
      * Emit a compound literal using the param type. Pattern:
-     * gcc 4.8 function.c 'convert_jumps_to_returns(bb, false, vNULL)'. */
+     * 'convert_jumps_to_returns(bb, false, vNULL)'. */
     if (arg->kind == ND_IDENT && arg->ident.name &&
         arg->ident.name->len == 5 &&
         memcmp(arg->ident.name->loc, "vNULL", 5) == 0 &&
@@ -521,7 +521,7 @@ static void emit_arg_for_param(Node *arg, Type *param_ty) {
      * is already the address (ref-params are lowered to T**).
      *
      * Why this comes BEFORE the param_ty == NULL early return:
-     * for member-template qualified calls (e.g. gcc 4.8 vec.h's
+     * for member-template qualified calls (e.g. real-world templated container header's
      * 'A::reserve(v, ...)' inside a cloned vec_safe_reserve body),
      * sema can't resolve the member-template name so callee_ft is
      * NULL and pty falls through as NULL — emit_arg_for_param
@@ -672,7 +672,7 @@ static void emit_arg_for_param(Node *arg, Type *param_ty) {
      * handled earlier via hoist_temps_in_expr's force-hoist; if we
      * get one here it means the hoist missed it — still wrap in
      * '&(...)' below which will error, giving a clear diagnostic.
-     * Pattern: gcc 4.8 cfgexpand.c
+     * Real-world shape:
      *   data->asan_vec.safe_push(offset + stack_vars[i].size);
      * N4659 §7.2.1 [basic.lval] / C11 §6.5.2.5 compound literals. */
     if (!is_addressable_lvalue(arg)) {
@@ -709,7 +709,7 @@ static void emit_arg_for_param(Node *arg, Type *param_ty) {
      * picks up sizeof(T) bytes from a sizeof(S) storage region:
      * silent partial-uninitialized read.
      *
-     * Concrete: gcc 4.8 genautomata's
+     * Concrete shape:'s
      *   static int undefined_vect_el_value;
      *   ...
      *   vla_hwint_t vect;       // vec<long>
@@ -813,7 +813,7 @@ static void emit_return_expr(Node *e) {
      * vNULL lowers to '{0}', valid in init-declarators only. For a
      * return expression we need a compound literal '(struct T){0}'.
      * Mirrors the ND_ASSIGN branch that does the same for 'x = vNULL'.
-     * Pattern: gcc 4.8 dominance.c get_dominated_by '  return vNULL;' */
+     * Real-world shape: get_dominated_by '  return vNULL;' */
     if (e && e->kind == ND_IDENT && e->ident.name &&
         e->ident.name->len == 5 &&
         memcmp(e->ident.name->loc, "vNULL", 5) == 0 &&
@@ -1276,7 +1276,7 @@ static void hoist_emit_decl(Node *call, bool in_shortcircuit) {
          * operand (in_shortcircuit), defer the assignment to the use
          * site so the call only runs when the gate actually reaches
          * it. ISO C comma at the use; no GNU stmt-expr dependency.
-         * Pattern: gcc 4.8 cgraph.c
+         * Real-world shape:
          *   gcc_checking_assert(!virtual_offset
          *                       || tree_to_double_int(virtual_offset)...)
          * — eager hoist crashed cc1plus on NULL virtual_offset. */
@@ -1322,9 +1322,9 @@ static void hoist_temps_in_expr(Node *n, bool in_shortcircuit) {
             hoist_temps_in_expr(n->call.args[i], in_shortcircuit);
         /* 'obj(args)' where obj is a class value with operator() →
          * dispatch will take '&obj'. If obj is an rvalue (call,
-         * operator overload result), hoist it first. Pattern: gcc
-         * 4.8 expr.c '(*genfun)(to1, from1)' — '*genfun' is operator*
-         * returning insn_gen_fn; then (...)(args) is operator(). */
+         * operator overload result), hoist it first. Real-world
+         * shape: '(*genfun)(to1, from1)' — '*genfun' is operator*
+         * returning a callable; then (...)(args) is operator(). */
         if (n->call.callee && !n->call.callee->codegen_temp_name) {
             Node *callee_ = n->call.callee;
             Type *cty = callee_->resolved_type;
@@ -1351,7 +1351,7 @@ static void hoist_temps_in_expr(Node *n, bool in_shortcircuit) {
          * Force-hoist the arg call so it lands in a named local.
          * Works for any element type — hoist_emit_decl prints
          * 'T __tmp = call();' and tags the call for emit_expr to
-         * substitute the temp name. Pattern: gcc 4.8 cgraphunit.c
+         * substitute the temp name. Real-world shape:
          *   vargs.quick_push(thunk_adjust(&bsi, a, 1, ...));
          * — thunk_adjust returns tree (pointer); quick_push's 2nd
          * param is T& (→ tree*&). N4659 §11.3.2 [dcl.ref]. */
@@ -1406,7 +1406,7 @@ static void hoist_temps_in_expr(Node *n, bool in_shortcircuit) {
          * through an overloaded operator: 'a == b' → 'sf__T__eq(&a, b)'.
          * If lhs is an rvalue call 'f() == b', the emitted '&f()' is
          * illegal C. Force-hoist same as the ND_MEMBER case below.
-         * Pattern: gcc 4.8 cgraph.c cgraph_add_thunk
+         * Real-world shape: cgraph_add_thunk
          *   tree_to_double_int(virtual_offset) == double_int::from_shwi(...) */
         /* C++17 sequencing: ND_ASSIGN is RHS-before-LHS (N4659 §8.18/1),
          * but C leaves the order unspecified. Hoist RHS into a fresh
@@ -1469,7 +1469,7 @@ static void hoist_temps_in_expr(Node *n, bool in_shortcircuit) {
                 hoist_emit_decl(op, in_shortcircuit);
             /* Nested struct-operator '~(a op b)': infer from operand's
              * own lhs since sema leaves the binary's resolved_type NULL
-             * for struct operands. Pattern: gcc 4.8 tree-vrp.c
+             * for struct operands. Real-world shape:
              * 'complement = ~(bound - double_int_one);'. */
             else if (ok == ND_BINARY) {
                 Type *sub_ty = op->binary.lhs ?
@@ -1508,14 +1508,14 @@ static void hoist_temps_in_expr(Node *n, bool in_shortcircuit) {
             /* Operator-overload rvalue: '(a op b).method()' where 'op'
              * is an overloaded binary/unary on struct operands. sema's
              * resolved_type is often NULL for this; infer from an
-             * operand. Pattern: gcc 4.8 gimple-fold.c '(a - b).sext(p)'.
+             * operand. Real-world shape: '(a - b).sext(p)'.
              * Exclude pointer dereference: '(*p).method()' has an
              * lvalue receiver — '&(*p) == p' — and force-hoisting copies
              * the entire struct via a stack temp. For vec<T,A,vl_embed>
              * (which is a flexible-array-style container) the copy
              * truncates the trailing data, so iterate(&copy, i, ...)
              * reads garbage past the first element. N4659 §8.2.5
-             * [expr.ref] / §8.3.1 [expr.unary.op]. Pattern: gcc 4.8
+             * [expr.ref] / §8.3.1 [expr.unary.op]. Pattern: real-world code
              * 'FOR_EACH_VEC_ELT (*level->class_shadowed, i, cb)'. */
             else if (k == ND_BINARY || k == ND_UNARY || k == ND_POSTFIX) {
                 bool is_deref = (k == ND_UNARY && obj->unary.op == TK_STAR);
@@ -1529,7 +1529,7 @@ static void hoist_temps_in_expr(Node *n, bool in_shortcircuit) {
                 }
             }
             /* Ternary rvalue: '(c ? a : b).method()' where both
-             * branches return struct. Pattern: gcc 4.8 tree-ssa-ccp.c
+             * branches return struct. Real-world shape:
              * '(cond ? mask(prec) : from_shwi(-1)).and_not(...)'. */
             else if (k == ND_TERNARY) {
                 Type *ty = obj->resolved_type;
@@ -1628,7 +1628,7 @@ static void hoist_stmt_temps(Node *s) {
          *
          * Was: 'hoist_stmt_temps(s->case_.stmt)' here, which emitted
          * the temp decl at the OUTER (switch-body) scope, past the
-         * case label. gcc 4.8 genextract.c walk_rtx then read
+         * case label. real-world walk_rtx then read
          * uninitialised stack memory through the temp — the path
          * pushed into oplocs/duplocs ended up pointing into the
          * .text section, gen-tool aborted in print_path on the
@@ -1888,14 +1888,14 @@ static bool func_def_dedup_check_sig(Token *name, Type **params, int nparams,
          * declares a hint; a later non-extern non-inline definition
          * is the strong OOL.
          *
-         * Concrete: gcc 4.8 tree.h declares
+         * Concrete shape: header declares
          *   extern inline __attribute__((__gnu_inline__)) HOST_WIDE_INT
          *   tree_low_cst (const_tree, int) { ... }
-         * tree.c then provides the strong OOL
+         * A separate .c then provides the strong OOL
          *   HOST_WIDE_INT tree_low_cst (const_tree, int) { ... }
-         * Without distinguishing, the strong def was deduped away
-         * and tree.o had only the gnu_inline hint (no exported
-         * symbol) — 211 cc1plus link errors. */
+         * Without distinguishing, the strong def gets deduped away
+         * and the .o has only the gnu_inline hint (no exported
+         * symbol) — link fails with many unresolved refs. */
         if (fs->is_def && !fs->is_gnu_inline_def) return true;
         if (fs->is_def && fs->is_gnu_inline_def && is_gnu_inline)
             return true;  /* both gnu_inline: still a duplicate */
@@ -2179,7 +2179,7 @@ static void emit_type(Type *ty) {
         /* GCC __builtin_va_list — opaque builtin type. The parser
          * resolves it to TY_INT (unknown ident fallback) but tags
          * it; emit the tag verbatim so gcc handles va_arg natively.
-         * Pattern: gcc 4.8 tree-data-ref.c conflict_fn. */
+         * Real-world shape: conflict_fn. */
         if (ty->tag && ty->tag->len == 17 &&
             memcmp(ty->tag->loc, "__builtin_va_list", 17) == 0) {
             fputs("__builtin_va_list", stdout);
@@ -2303,7 +2303,7 @@ static void emit_storage_flags_impl(int flags, bool for_definition) {
      * actually called from this TU (standard dead-code elimination),
      * which matters when a header-defined inline references a
      * function that lives in a library not linked into THIS .o
-     * (gcc 4.8's bitmap.h inline 'dump_bitmap' calls bitmap_print —
+     * (real-world inline 'dump_bitmap' calls bitmap_print —
      * not linked into the small gen-tools; libstdc++ c++config.h
      * inline '__terminate' calls 'terminate' — same story).
      *
@@ -2430,7 +2430,7 @@ static int collect_call_arg_types(Node **args, int nargs, Type ***out_types) {
  * 'int **' — the previous kind-only check rated both as equal-score
  * because both arg+param were TY_PTR at the top, picking the first
  * candidate by table order rather than the better match. Pattern:
- * gcc 4.8 vec.h has overloaded 'iterate(unsigned, T*)' and
+ * real-world templated container header has overloaded 'iterate(unsigned, T*)' and
  * 'iterate(unsigned, T**)'; sea-front was always picking the first
  * regardless of the actual third-argument's pointer depth. */
 static int score_type_pair(Type *pt, Type *at) {
@@ -2623,7 +2623,7 @@ static void collect_overload_candidates(Type *class_type, Token *name,
          * var-decl. The inner candidate is what we score against arg
          * types — its params have TY_DEPENDENT for the template-
          * parameter positions, which the existing match scorer treats
-         * as wildcards. Pattern: gcc 4.8 vec.h va_heap::release<T>
+         * as wildcards. Real-world shape: va_heap::release<T>
          * called as bare release(v) inside va_heap::reserve<T>. */
         if (m->kind == ND_TEMPLATE_DECL && m->template_decl.decl)
             m = m->template_decl.decl;
@@ -2883,8 +2883,7 @@ static Node *find_class_def_by_tag_only(Type *class_type) {
              * layers). Sea-front parses these as ND_TYPEDEF whose
              * declared type contains the class def's class_region.
              * Without picking up this shape, qualified-call
-             * mangling can't find the struct's bases (gcc 4.8
-             * tree-ssa-pre.c pre_expr_d / expr_pred_trans_d). */
+             * mangling can't find the struct's bases. */
             Type *ty = d->var_decl.ty;
             while (ty && (ty->kind == TY_PTR || ty->kind == TY_ARRAY))
                 ty = ty->base;
@@ -3026,7 +3025,7 @@ static void collect_operator_candidates(Type *class_type,
      * op that came from a hoisted struct-returning call can miss its
      * class def and resolve_operator_overload returns -1, emitting an
      * unmangled 'sf__T__bitor(...)' that doesn't match any definition.
-     * Pattern: gcc 4.8 combine.c 'o = o.and_not(m) | i' — the hoist
+     * Real-world shape: 'o = o.and_not(m) | i' — the hoist
      * materializes o.and_not(m) as __SF_temp_0, whose Type's class_def
      * is unhooked. */
     if (!cd && class_type->class_region &&
@@ -3278,9 +3277,9 @@ static void emit_param_declarator(Type *ty, Token *name, int idx) {
         /* Bare function-type parameter: in C these decay to function
          * pointers at the ABI, but the declarator still needs the
          * '(*name)(params)' syntax — plain 'ret name(params)' in a
-         * param list would be a nested function. Pattern: gcc 4.8
-         * sel-sched-ir.h _succ_iter_cond's 'bool check(edge, succ*)'
-         * parameter. N4659 §11.3.5/5 [dcl.fct]. */
+         * param list would be a nested function. Real-world shape:
+         * a struct member of function-typed callback parameter, e.g.
+         * 'bool check(edge, succ*)'. N4659 §11.3.5/5 [dcl.fct]. */
         if (!fty && t && t->kind == TY_FUNC) {
             fty = t;
             ptr_depth = 1;  /* emit as '(*name)(...)'; C decays to this. */
@@ -3473,7 +3472,7 @@ static void emit_token_text(Token *t) {
  * Enum bodies are captured as raw token ranges and re-emitted
  * verbatim, so C++ keywords 'true' / 'false' would land in the
  * C output unresolved. Substitute them with their numeric values.
- * Pattern: gcc 4.8 cp/semantics.c
+ * Real-world shape:
  *   enum { any = false, rval = true }; */
 static void emit_enum_body_token(Token *t) {
     if (!t) { fputs("?", stdout); return; }
@@ -3682,11 +3681,11 @@ static void emit_expr(Node *n) {
                 return;
             }
         }
-        /* SHORTCUT (ours, not the standard): gcc vec.h defines
-         * 'extern vnull vNULL;' with a template conversion operator
-         * (N4659 §16.3.2 [class.conv.fct]). In C there are no
-         * conversion operators; emit '{0}' (C99 §6.7.8/21) which
-         * zero-initializes the struct (null pointer member). */
+        /* SHORTCUT (ours, not the standard): some templated container
+         * libraries define 'extern vnull vNULL;' with a template
+         * conversion operator (N4659 §16.3.2 [class.conv.fct]). In
+         * C there are no conversion operators; emit '{0}' (C99
+         * §6.7.8/21) which zero-initializes the struct. */
         if (n->ident.name && n->ident.name->len == 5 &&
             memcmp(n->ident.name->loc, "vNULL", 5) == 0) {
             fputs("{0}", stdout);
@@ -3754,8 +3753,8 @@ static void emit_expr(Node *n) {
              * the asm/mangle/bare resolver, since only functions can
              * be in the free-func overload table.
              *
-             * Without this gate, a local 'int index;' (shadowing
-             * libc's index() in genautomata.c) gets mangled to
+             * Without this gate, a local 'int index;' shadowing
+             * libc's index() function would be mangled to
              * 'index_p_void_pe_' because the libc index is in the
              * overload table. */
             Declaration *rd = n->ident.resolved_decl;
@@ -3775,7 +3774,7 @@ static void emit_expr(Node *n) {
                  * through emit_free_func_symbol so the call matches
                  * the def's mangled emit. Critically, this branch
                  * only fires when rd is NULL: a local variable
-                 * shadowing a same-named function (legal C; gcc 4.8
+                 * shadowing a same-named function (legal C; real-world code
                  * genrecog.c's 'static struct decision *new_decision
                  * (...) { struct decision *new_decision = ...; ... }')
                  * must keep the local-var bare emit path. */
@@ -3824,7 +3823,7 @@ static void emit_expr(Node *n) {
         /* Operator-overload rvalue LHS like '(a + b) == c' where the
          * + is an overloaded operator on structs: sema leaves the
          * ND_BINARY+'s resolved_type NULL (common_arith_type bails).
-         * Infer from an operand. Pattern: gcc 4.8 fold-const.c
+         * Infer from an operand. Real-world shape:
          * 'c1.bitand(c2) == c1' — lhs is ND_CALL already (its
          * resolved_type is set); but '(a op b) == c' where the op
          * is struct-operator gets caught here. */
@@ -4090,7 +4089,7 @@ static void emit_expr(Node *n) {
                 /* Method call returning ref: the call-emit path already
                  * wraps with '(*...)' to convert T* → T (unless the
                  * current function also returns a ref). Don't double-
-                 * wrap here. Pattern: gcc 4.8 lto-cgraph.c
+                 * wrap here. Real-world shape:
                  *   last_node = encoder->nodes.pop();
                  * where vec::pop() returns T&. */
                 bool is_ref_method_call = false;
@@ -4128,14 +4127,15 @@ static void emit_expr(Node *n) {
                        n->binary.rhs->ident.name &&
                        n->binary.rhs->ident.name->len == 5 &&
                        memcmp(n->binary.rhs->ident.name->loc, "vNULL", 5) == 0) {
-                /* gcc vec.h defines 'extern vnull vNULL;' with a
-                 * template conversion operator to vec<T,A,L>. The
-                 * ident emit path lowers vNULL to '{0}', valid in
-                 * an init-declarator but NOT in an assignment RHS
-                 * (C: initializer lists appear only in declarators).
-                 * Emit the equivalent compound literal here, mirroring
-                 * the 'struct = 0' branch above. Pattern: gcc 4.8
-                 * cfgexpand.c 'data.asan_vec = vNULL;'. */
+                /* Some templated container libraries define
+                 * 'extern vnull vNULL;' with a template conversion
+                 * operator to vec<T,A,L>. The ident emit path lowers
+                 * vNULL to '{0}', valid in an init-declarator but
+                 * NOT in an assignment RHS (C: initializer lists
+                 * appear only in declarators). Emit the equivalent
+                 * compound literal here, mirroring the 'struct = 0'
+                 * branch above. Real-world shape:
+                 * 'data.asan_vec = vNULL;'. */
                 fputc('(', stdout);
                 emit_type(lhs_t);
                 fputs("){0}", stdout);
@@ -4159,7 +4159,7 @@ static void emit_expr(Node *n) {
          * struct operator-, returns struct, then '~' dispatches to
          * operator~). sema's common_arith_type returns NULL for
          * struct ND_BINARY, so the operand's resolved_type is missing
-         * — infer from the operand's own lhs. Pattern: gcc 4.8
+         * — infer from the operand's own lhs. Pattern: real-world code
          * tree-vrp.c 'complement = ~(bound - double_int_one);'. */
         if (!ot && n->unary.operand &&
             (n->unary.operand->kind == ND_BINARY ||
@@ -4206,7 +4206,7 @@ static void emit_expr(Node *n) {
          * pointer holding that address, so the whole expression is
          * just the bare ident — emit no '&' and no deref.
          *
-         * Pattern that surfaced this: gcc 4.8 gengtype-generated
+         * Real-world shape:
          *   void gt_ggc_mx (struct foo_s& x_r) {
          *     struct foo_s *x = &x_r;       // C++: address of referent
          *     gt_ggc_m_9tree_node ((*x).field);
@@ -4440,7 +4440,7 @@ static void emit_expr(Node *n) {
         }
         /* 'obj(args)' where obj is a class value with operator() →
          * dispatch to the class's operator() method. N4659 §16.5
-         * [over.oper]. Pattern: gcc 4.8 expr.h insn_gen_fn and
+         * [over.oper]. Real-world shape: insn_gen_fn and
          * expr.c '(*genfun)(to1, from1)'. */
         {
             Node *callee_ = n->call.callee;
@@ -4491,7 +4491,7 @@ static void emit_expr(Node *n) {
          * no args. Emit a compound literal of the instantiated struct:
          *   (struct sf__vec_t_..._te_){0}
          * Only handle the 0-arg form — ctor-with-args would need
-         * hoisting to a temp + ctor call. Pattern: gcc 4.8 ipa-cp.c
+         * hoisting to a temp + ctor call. Real-world shape:
          *   return vec<ipa_agg_jf_item, va_heap, vl_ptr>();
          * N4659 §8.2.3/2 [expr.type.conv]. */
         if (n->call.callee && n->call.callee->kind == ND_TEMPLATE_ID &&
@@ -4563,9 +4563,9 @@ static void emit_expr(Node *n) {
             }
             /* Struct/union T() → '(struct sf__T){0}' compound literal.
              * Happens when T is a TYPEDEF to a class template instance
-             * (e.g. 'typedef vec<T> name;' in gcc 4.8 value-prof.h),
+             * (e.g. 'typedef vec<T> name;'),
              * called as 'name()' in a function-call expression.
-             * Pattern: gcc 4.8 profile.c 'histogram_values values =
+             * Real-world shape: 'histogram_values values =
              * histogram_values();'. */
             if (!conc) conc = n->call.callee->ident.resolved_decl->type;
             if (conc && (conc->kind == TY_STRUCT || conc->kind == TY_UNION) &&
@@ -4715,7 +4715,7 @@ static void emit_expr(Node *n) {
                     /* Base-class member lookup: when the named class
                      * doesn't define the method directly but inherits
                      * it from a base, the def is mangled with the
-                     * BASE class's tag. gcc 4.8 hash_table::dispose
+                     * BASE class's tag. real-world hash_table::dispose
                      * calls Descriptor::remove where Descriptor
                      * inherits remove() from typed_noop_remove<T>;
                      * pointer_hash<X> has the same shape (inherits
@@ -5171,7 +5171,7 @@ static void emit_expr(Node *n) {
                  * cloned/instantiated body, the call args are
                  * concrete; swap them in wholesale so the mangled
                  * name matches the instantiated method. Pattern:
-                 * gcc 4.8 vec.h va_heap::reserve<T> calling
+                 * real-world templated container header va_heap::reserve<T> calling
                  * release(v) where v has type
                  * 'vec<T, va_heap, vl_embed>*&'. */
                 bool any_dep = ty_contains_dependent(call_pty, np);
@@ -5268,7 +5268,7 @@ static void emit_expr(Node *n) {
             /* Struct-operator-overload rvalue: for '(a op b).method()'
              * the obj is ND_BINARY with NULL resolved_type (sema's
              * common_arith_type returns NULL for struct operands).
-             * Infer from an operand. Pattern: gcc 4.8 gimple-fold.c
+             * Infer from an operand. Real-world shape:
              * '(a - b).sext(p)'. */
             if (!ot && obj && (obj->kind == ND_BINARY ||
                                 obj->kind == ND_UNARY ||
@@ -5315,7 +5315,7 @@ static void emit_expr(Node *n) {
                  * instantiated Type carries class_region. Walk the TU
                  * by (tag, template_args) to find the canonical
                  * class_def, then use ITS Type's class_region.
-                 * Pattern: gcc 4.8 vec.h va_heap::release's cloned
+                 * Real-world shape: va_heap::release's cloned
                  * body has 'v->vecpfx_.release_overhead()' where v's
                  * resolved_type is a substituted Type copy whose
                  * class_region wasn't patched. */
@@ -5347,7 +5347,7 @@ static void emit_expr(Node *n) {
              * more level so 'ot' lands on the struct. The ARROW token
              * tells us the source-level intent: the user wrote `->`
              * so the receiver is conceptually a pointer-to-class.
-             * Pattern: gcc 4.8 vec.h vec_safe_grow_cleared / vec_safe_
+             * Real-world shape: vec_safe_grow_cleared / vec_safe_
              * push, free function templates with `vec<T,A,vl_embed>*&`
              * params. */
             if (ot && ot->kind == TY_PTR && ot->base &&
@@ -5685,7 +5685,7 @@ static void emit_expr(Node *n) {
                     /* Use '->' not '.' when obj is a pointer (source
                      * 'p->method()' with p being a pointer to a class
                      * inheriting from the method's owner). Pattern:
-                     * gcc 4.8 web.c 'entry->unionfind_root()' where
+     * 'entry->unionfind_root()' where
                      * unionfind_root is inherited from web_entry_base. */
                     fputs("&(", stdout);
                     emit_expr(obj);
@@ -5705,7 +5705,7 @@ static void emit_expr(Node *n) {
                      * we DO want the deref here — emitting `(*h)`
                      * gives T*. Detect by checking the raw obj type:
                      * TY_REF(TY_PTR(struct)) means we want the deref.
-                     * Pattern: gcc 4.8 vec.h vec_safe_push body —
+                     * Real-world shape: vec_safe_push body —
                      * 'v->quick_push(obj)' on `vec<T>*&v` param. */
                     Type *raw_ot = obj ? obj->resolved_type : NULL;
                     bool ref_to_ptr = ty_is_ref(raw_ot) && raw_ot->base &&
@@ -5806,7 +5806,7 @@ static void emit_expr(Node *n) {
                  * match the resolved overload's nparams. The mangled
                  * name MUST include the injected param types so it
                  * matches the def's signature, not just the user-
-                 * written arg count. Pattern: gcc 4.8 gengtype.c
+                 * written arg count. Real-world shape:
                  *   set_gc_used_type(o->info.type, GC_POINTED_TO, NULL)
                  * (3 args, decl has 4 with bool default → emit 4
                  * args; mangled name needs the 4th param's type).
@@ -5927,7 +5927,7 @@ static void emit_expr(Node *n) {
              * param count doesn't match the call's arg count. Our
              * sema doesn't do full C++ overload resolution for free-
              * function calls and may pick a same-named-but-different-
-             * arity overload (e.g. gcc 4.8 has 'gt_pch_nx(T&)' 1-arg
+             * arity overload (e.g. real-world has 'gt_pch_nx(T&)' 1-arg
              * and 'gt_pch_nx(T*, op, cookie)' 3-arg; we sometimes
              * resolve the 3-arg call to the 1-arg overload). Using
              * its param types for ref-adaptation is wrong — the 1-arg
@@ -5990,7 +5990,7 @@ static void emit_expr(Node *n) {
          * (parser reuses the CAST node — see expr.c new-expression
          * handling). Emit as `((T*)0)` — typed null. Stub: doesn't
          * actually allocate; suitable when the call site never runs
-         * (most gcc 4.8 vec_alloc<T> single-template-param invocations
+         * (most real-world vec_alloc<T> single-template-param invocations
          * are unreachable in cc1plus). A proper fix would emit
          * `((T*)__builtin_malloc(sizeof(T)))` plus a ctor call.
          * TODO(seafront#new-expr): real allocation. */
@@ -6241,7 +6241,7 @@ static void emit_expr(Node *n) {
             /* Preserve array bounds in sizeof — emit_type would decay
              * TY_ARRAY to '*' giving sizeof(T*) for a typedef'd array
              * type. C's sizeof never decays; '\''sizeof(int[5])'\'' is 20.
-             * Pattern: gcc 4.8 ira.c'\''s '\''XNEWVEC(move_table, N)'\'' where
+             * Real-world shape:'\''s '\''XNEWVEC(move_table, N)'\'' where
              * 'typedef unsigned short move_table[N_REG_CLASSES]'.
              * N4659 §8.3.3 [expr.sizeof]/2. */
             Type *st = n->sizeof_.ty;
@@ -6275,7 +6275,7 @@ static void emit_expr(Node *n) {
         return;
     case ND_STMT_EXPR:
         /* GCC statement-expression — emit the inner block inside
-         * '({ ... })'. Target compilers (gcc 4.7 / gcc 4.8) accept
+         * '({ ... })'. Target compilers (gcc 4.7 / real-world code) accept
          * the extension. Non-standard; needed for glibc / libiberty
          * macros (obstack_alloc, XOBNEW, etc.). */
         fputc('(', stdout);
@@ -6380,7 +6380,7 @@ static void emit_expr(Node *n) {
          * access on that wrapped value must use '.' not '->'.
          * Without this, '(*call())->field' ends up emitted but
          * '*' dereffed to a struct value which has no '->'.
-         * Pattern: gcc 4.8 dwarf2out.c 'files->last().info'. */
+         * Real-world shape: 'files->last().info'. */
         bool obj_is_ref_call_unwrapped = false;
         if (ty_is_ref(raw_obj_ty) && n->member.obj &&
             n->member.obj->kind == ND_CALL) {
@@ -6389,7 +6389,7 @@ static void emit_expr(Node *n) {
              * itself a struct/union (then '.' works on the unwrapped
              * value). If the ref is to a pointer (vec<T>::last() with
              * T = tree = tree_node*, returning tree&), unwrapping gives
-             * a pointer and we still need '->'. Pattern: gcc 4.8 stmt.c
+             * a pointer and we still need '->'. Real-world shape:
              * 'dispatch_table.last().exp' where T=tree is a pointer. */
             Type *referent = raw_obj_ty ? raw_obj_ty->base : NULL;
             bool referent_is_struct_value = referent &&
@@ -6408,7 +6408,7 @@ static void emit_expr(Node *n) {
          * rewriting works. Without this, 'agg->contains_variable'
          * on an 'ipcp_agg_lattice' (which inherits contains_variable
          * from ipcp_lattice) emits as the raw member access and
-         * fails at the C compiler. Pattern: gcc 4.8 ipa-cp.c. */
+         * fails at the C compiler. Real-world shape: */
         Type *resolved_obj_ty = obj_ty;
         if (obj_ty && (obj_ty->kind == TY_STRUCT || obj_ty->kind == TY_UNION) &&
             !obj_ty->class_region && obj_ty->tag) {
@@ -6505,7 +6505,7 @@ static void emit_expr(Node *n) {
              * T& param lowered to T* emits correctly as 'a->x'. For
              * T*& (ref to pointer) the param is lowered to T**, and
              * source 'a->x' needs '(*a)->x' — don't suppress the
-             * deref there. Pattern: gcc 4.8 tree-ssa-structalias.c
+             * deref there. Real-world shape:
              * 'constraint_less(const constraint_t &a, ...)' with
              * typedef constraint* constraint_t. */
             bool suppress_for_member = false;
@@ -6548,7 +6548,7 @@ static void emit_expr(Node *n) {
          * referent's operator[] — refs have value semantics in C++.
          * In our C lowering the ref is a T*, and ND_IDENT emit adds
          * the '(*...)' wrap, so the emitted base IS a value of the
-         * referent class. N4659 §11.3.2 [dcl.ref]. Pattern: gcc 4.8
+         * referent class. N4659 §11.3.2 [dcl.ref]. Pattern: real-world code
          * ipa-prop.c 'descriptors[i]' where descriptors is vec<T>&. */
         if (base_ty && (base_ty->kind == TY_REF || base_ty->kind == TY_RVALREF) &&
             base_ty->base)
@@ -6632,7 +6632,7 @@ static void emit_expr(Node *n) {
          * local/class shadows. Inside class methods this matters: e.g.
          * 'vec<T>::qsort' calls '::qsort' from libc, NOT recursively
          * dispatching to the same member. Emit parts[0] verbatim
-         * (target is C linkage in every gcc 4.8 site we hit). */
+         * (target is C linkage in every real-world site we hit). */
         if (n->qualified.global_scope && n->qualified.nparts == 1 &&
             n->qualified.parts[0]) {
             Token *nm = n->qualified.parts[0];
@@ -7029,7 +7029,7 @@ static void emit_var_decl_inner(Node *n) {
      * us via emit_stmt's ND_VAR_DECL case. Without this pre-check,
      * emit_type would print only 'enum bb_state' and the body would
      * be silently dropped, leaving the enumerators undeclared.
-     * Pattern: gcc 4.8 cfgrtl.c print_rtl_with_bb local enum. */
+     * Real-world shape: print_rtl_with_bb local enum. */
     if (ty && ty->kind == TY_ENUM && ty->enum_tokens &&
         ty->enum_ntokens > 0 && !n->var_decl.name) {
         if (enum_body_already_emitted(ty->enum_tokens)) return;
@@ -7155,9 +7155,9 @@ static void emit_var_decl_inner(Node *n) {
      * grouped declarator. Walking the TY_ARRAY chain handles
      * arbitrary rank. N4659 §11.3.4 [dcl.array] + §11.3.5 [dcl.fct].
      * Patterns:
-     *   gcc 4.8 tree-vect-patterns.c — 1D
+     *   real-world — 1D
      *     static vect_recog_func_ptr vect_vect_recog_func_ptrs[10]
-     *   gcc 4.8 i386.c — 2D
+     *   real-world — 2D
      *     static rtx (*gen_extract[6][2])(rtx, rtx) = ... */
     {
         Type *t = ty;
@@ -7199,10 +7199,10 @@ static void emit_var_decl_inner(Node *n) {
      * and loses the inner array bounds.
      *
      * Real-world bites:
-     *   gcc 4.8 ira-int.h: move_table *x_..._[MAX_MACHINE_MODE]
-     *     (1 PTR + 1 inner-array — indexing depends on the layout)
-     *   gcc 4.8 cgraph.h: cgraph_node **node_pointers[N]
-     *     (2 PTRs — pointer-to-pointer-to-array shape)
+     *   `move_table *x[MAX_MACHINE_MODE]` (1 PTR + 1 inner-array —
+     *      indexing depends on the layout)
+     *   `cgraph_node **node_pointers[N]` (2 PTRs — pointer-to-
+     *      pointer-to-array shape)
      *
      * Detect: zero-or-more leading TY_ARRAY, then ONE-OR-MORE TY_PTR,
      * then ONE-OR-MORE TY_ARRAY, then a non-array/non-ptr element. */
@@ -7217,7 +7217,7 @@ static void emit_var_decl_inner(Node *n) {
          * followed by all dimensions in source order. emit_type would
          * decay TY_ARRAY to pointer (used in expression contexts) and
          * give us 'T* name[N1]' — wrong layout, breaks &arr[0][0] as
-         * a constant initializer. Pattern: gcc 4.8 emit-rtl.c
+         * a constant initializer. Real-world shape:
          *   rtx const_tiny_rtx[4][(int) MAX_MACHINE_MODE]; */
         Type *elem = ty;
         while (elem->kind == TY_ARRAY && elem->base) elem = elem->base;
@@ -7225,7 +7225,7 @@ static void emit_var_decl_inner(Node *n) {
          *   'enum X { A, B, C } arr[N];'
          * Emit the full enum body instead of just the type name, so
          * the enumerators are declared alongside the array. Pattern:
-         * gcc 4.8 reload.c 'enum reload_usage { RELOAD_READ, ... }
+     * 'enum reload_usage { RELOAD_READ, ... }
          * modified[MAX_RECOG_OPERANDS];' — a block-scope local. */
         if (elem && elem->kind == TY_ENUM && elem->enum_tokens &&
             elem->enum_ntokens > 0 &&
@@ -7328,7 +7328,7 @@ static void emit_var_decl_inner(Node *n) {
          * Gate on: callee's ident name matches the var's type's tag
          * OR resolved_decl is ENTITY_TYPE — otherwise this is a real
          * function call ('Point b = make();') that must pass through.
-         * Pattern: gcc 4.8 sel-sched-ir.c
+         * Real-world shape:
          *   static vinsn_vec_t vec_bookkeeping_blocked_vinsns
          *     = vinsn_vec_t(); */
         if (n->var_decl.init->kind == ND_CALL &&
@@ -7406,7 +7406,7 @@ static void emit_var_decl_inner(Node *n) {
         /* Method call returning T&: emit_call already wraps the call
          * in '(*...)' to deref the lowered T* — see the ND_CALL case
          * around 'method_returns_ref'. Don't double-wrap here.
-         * Pattern: gcc 4.8 gimple-low.c
+         * Real-world shape:
          *   return_statements_t t = data.return_statements.pop ();
          * where vec::pop returns T&. */
         if (init_is_ref && init_e && init_e->kind == ND_CALL &&
@@ -7633,7 +7633,7 @@ static bool expr_has_class_temp(Node *e) {
          * hoisting: the emit path does 'op(&lhs, rhs)' which can't
          * take '&' of an rvalue call. Mirror the force-hoist branch
          * in hoist_temps_in_expr's ND_BINARY/ND_ASSIGN case.
-         * Pattern: gcc 4.8 fold-const.c 'c1.bitand(c2) == c1' AND
+         * Real-world shape: 'c1.bitand(c2) == c1' AND
          * '(c1 & c2) == c1' (nested struct operators). */
         if (e->binary.lhs) {
             Node *lhs = e->binary.lhs;
@@ -7696,7 +7696,7 @@ static bool expr_has_class_temp(Node *e) {
         /* Also true when the member access is on a struct-valued
          * RVALUE (call result, operator overload result, ternary) —
          * the ND_MEMBER emit will take '&expr' which needs the value
-         * hoisted into a named temp first. Pattern: gcc 4.8
+         * hoisted into a named temp first. Pattern: real-world code
          * gimple-fold.c '(a - b).sext(p)' — the operator- overload
          * returns struct, then .sext() needs an addressable receiver. */
         if (e->member.obj) {
@@ -8052,7 +8052,7 @@ static void emit_fwd_decl_methods_only(Node *n);
  * in '{ }' so hoist_stmt_temps can emit the temp decl before the
  * statement inside the block. For ND_BLOCK bodies, emit_block
  * handles per-statement hoisting itself — just delegate.
- * Pattern: gcc 4.8 cgraphunit.c assemble_thunk 'if (this_adjusting)
+ * Real-world shape: assemble_thunk 'if (this_adjusting)
  * vargs.quick_push(thunk_adjust(...));'. */
 /* Emit a condition expression in a Boolean context (if/while/for/?:).
  *
@@ -8345,7 +8345,7 @@ static void emit_stmt(Node *n) {
                     n->class_def.ty->anon_id);
             return;
         }
-        /* Block-scope struct — gcc 4.8 calls.c emit_library_call_value_1
+        /* Block-scope struct — real-world emit_library_call_value_1
          * defines 'struct arg' inside the function body. In C this is a
          * valid block-scope declaration, but the two-phase emit only
          * walks top-level decls for PHASE_STRUCTS, so the body was never
@@ -8363,7 +8363,7 @@ static void emit_stmt(Node *n) {
         /* Block-scope typedef — e.g. 'typedef enum { A, B } T;' inside
          * a function body. C accepts block-scope typedefs.  Emit the
          * enum body if present, then 'typedef enum X <name>;'. Pattern:
-         * gcc 4.8 omega.c omega_pretty_print_problem's local
+     * omega_pretty_print_problem's local
          * 'typedef enum { none, le, lt } partial_order_type;'. */
         Type *uty = n->var_decl.ty;
         Type *enum_ty = uty;
@@ -8401,7 +8401,7 @@ static void emit_stmt(Node *n) {
          * in a function body hangs T's body off var_decl.ty's class_def
          * with no separate ND_CLASS_DEF. Emit the struct body in-place
          * so the var-decl that references it has a complete type.
-         * Pattern: gcc 4.8 builtins.c expand_builtin_nonlocal_goto
+         * Real-world shape: expand_builtin_nonlocal_goto
          *   static const struct elims {const int from, to;} elim_regs[] = ...; */
         {
             Type *dep = n->var_decl.ty;
@@ -8419,12 +8419,11 @@ static void emit_stmt(Node *n) {
         /* Block-scope storage-class qualifiers (static, register, etc.)
          * are meaningful at function-body scope too — N4659 §10.1.1
          * [dcl.stc]. Without this, 'static int counter = 0;' inside a
-         * function emits as a plain auto local; gcc 4.8 read-rtl.c
-         * relied on a function-local 'static rtx queue_head;' for
-         * once-only initialization, and dropping the static turned
-         * each call into an uninitialized auto whose stack-garbage
-         * value bypassed the init guard, leaving codes.iterators NULL
-         * → segfault. */
+         * function emits as a plain auto local. Real-world bites:
+         * code relying on a function-local 'static rtx queue_head;'
+         * for once-only initialization sees each call turned into an
+         * uninitialized auto whose stack-garbage value bypasses the
+         * init guard, leaving the cached pointer NULL → segfault. */
         {
             /* `static const T name = expr;` at block scope is legal in
              * C++ even when `expr` isn't a constant expression — N1570
@@ -8584,7 +8583,7 @@ static void emit_stmt(Node *n) {
             /* Wrap the entire decl + mini-block + if sequence in an
              * outer block so the caller sees a single statement. This
              * matters when the if-stmt is the body of an unbraced
-             * for/while/else (gcc 4.8 c-ada-spec.c collect_ada_nodes:
+             * for/while/else (real-world collect_ada_nodes:
              *   for (n = t; n; n = TREE_CHAIN (n))
              *     if (LOCATION_LINE (...) > 0 && expand_location(...).file == s)
              * — the for-body must be one statement; without the wrap
@@ -9013,7 +9012,7 @@ static void emit_stmt(Node *n) {
                      * into ND_BLOCK. C supports multiple declarators
                      * with the SAME base type but different declarator
                      * suffixes; emit them as a comma-separated list.
-                     * Pattern: gcc 4.8 valtrack.c
+                     * Real-world shape:
                      *   for (struct dead_debug_use *head = debug->head,
                      *        **headp = &debug->head; head; head = *headp) */
                     bool first = true;
@@ -9800,7 +9799,7 @@ static void emit_ctor_member_inits(Node *func) {
         /* Also pick up OOL virtual definitions — same shape as the
          * vtable struct emit. An in-class 'virtual void foo();'
          * (ND_VAR_DECL) paired with an out-of-class body
-         * (ND_FUNC_DEF in g_tu->tu.decls) is the gcc 4.8
+         * (ND_FUNC_DEF in g_tu->tu.decls) is the real-world code
          * g++.dg/ipa/pr46287 pattern; without this the vtable is
          * never installed and dispatch lands on uninitialised
          * memory. */
@@ -10473,7 +10472,7 @@ static bool free_func_name_is_overloaded(Token *name) {
  * the ND_IDENT value-context path when sema didn't resolve the
  * decl (file-scope aggregate initializers etc.) — lets sea-front
  * still mangle 'add_one' to match the def even though
- * resolved_decl is NULL. Pattern: gcc 4.8 gengtype.c
+ * resolved_decl is NULL. Real-world shape:
  *   static const struct file_rule_st files_rules[] = {
  *     ..., source_dot_c_frul,   // ND_IDENT, rd=NULL after sema
  *     ..., header_dot_h_frul,
@@ -10865,7 +10864,7 @@ static void emit_class_def(Node *n) {
          * in-class virtual declarations instead. Without this scan a
          * class whose virtuals are only OOL gets no vptr field, breaking
          * any in-TU dispatch (e.g. a non-virtual method calling the
-         * virtual one — pattern from gcc 4.8 g++.dg/ipa/devirt-2.C). */
+         * virtual one — pattern++.dg/ipa/devirt-2.C). */
         if (!any_virtual_has_body && g_tu) {
             for (int i = 0; i < n->class_def.nmembers && !any_virtual_has_body; i++) {
                 Node *m = n->class_def.members[i];
@@ -10925,7 +10924,7 @@ static void emit_class_def(Node *n) {
      * may be a copy without class_def hooked (the instantiation
      * pass only patches the usage_type it was given). Fall back to
      * a TU tag+template_args lookup so we still emit the definition
-     * first. Pattern: gcc 4.8 tree-data-ref.h
+     * first. Real-world shape:
      *   struct rdg_vertex { vec<data_reference_p> datarefs; ... };
      * where the vec instantiation's class_def isn't on this Type copy. */
     /* Hoist nested class/struct definitions first — N4659 §12.1
@@ -11752,7 +11751,7 @@ methods_phase:;
                 /* Pure-virtual override (ND_VAR_DECL with no in-TU
                  * body) — no concrete symbol exists for the thunk
                  * to call. Skip emitting the thunk and let the
-                 * secondary-vtable slot fall back to 0 below (gcc 4.8
+                 * secondary-vtable slot fall back to 0 below (real-world code
                  * g++.dg/abi/covariant4 — RA::clone() is = 0). */
                 if (override_m->kind == ND_VAR_DECL && g_tu) {
                     Token *on = override_m->var_decl.name;
@@ -12245,7 +12244,7 @@ static void emit_top_level(Node *n) {
          * nodes in both passes, so vars inside extern "C" blocks /
          * multi-declarator groups get visited twice. Per-node bool
          * flag — replaces a fixed-size static array that overflowed on
-         * large TUs (gcc 4.8 i386.c has > 1024 file-scope vars,
+         * large TUs (real-world has > 1024 file-scope vars,
          * causing duplicate emissions of ix86_first_cycle_multipass_data
          * et al). */
         if (n->var_decl.name) {
@@ -12409,7 +12408,7 @@ static void emit_top_level(Node *n) {
          * this the C output references 'struct __sf_anon_N' that was
          * never defined. Also peel TY_PTR — the 'static struct X
          * { ... } *p;' idiom defines X inline but declares a pointer.
-         * Pattern: gcc 4.8 tree-cfg.c label_for_bb, tree-eh.c labels. */
+         * Real-world shape: label_for_bb, tree-eh.c labels. */
         {
             Type *dep = n->var_decl.ty;
             while (dep && (dep->kind == TY_ARRAY || dep->kind == TY_PTR)
@@ -12428,7 +12427,7 @@ static void emit_top_level(Node *n) {
                  * That would emit method bodies referencing OTHER
                  * still-incomplete instantiations, producing
                  * 'invalid use of undefined type' chains across the
-                 * gcc 4.8 vec.h instantiations. */
+                 * real-world templated container header instantiations. */
                 int saved_phase = g_emit_phase;
                 g_emit_phase = PHASE_STRUCTS;
                 emit_class_def(dep->class_def);
@@ -12919,7 +12918,7 @@ static void emit_prelude(void) {
      * 'static inline' — each TU gets its own private copy. The C
      * compiler can drop the body if it's not called from this TU,
      * which matters when a header-defined inline calls a function
-     * that isn't linked into THIS executable (e.g. gcc 4.8's
+     * that isn't linked into THIS executable (e.g. real-world code's
      * dump_bitmap inline calls bitmap_print which lives in libbackend
      * but isn't linked into the small gen-tools). Per-TU dead-code
      * elimination drops the unused body; the call site never resolves

@@ -151,14 +151,13 @@ Type *subst_type(Type *ty, SubstMap *map, Arena *arena) {
          * find the typedef in the template's class body and
          * substitute against concrete's template_args.
          *
-         * Pattern: gcc 4.8 hash-table.h
-         *   hash_table<pointer_hash<gimple_d>>::find_slot —
-         * the outer hash_table body uses 'const T::value_type *',
-         * with T bound to pointer_hash<gimple_d>. pointer_hash
-         * carries 'typedef Type value_type', which resolves to
-         * gimple_d here. Without this fallback, the param mangles
-         * with T itself (pointer_hash<...>) instead of the typedef
-         * target — producing link-time mismatches against the
+         * Real-world shape: a hash-table template parameterised on
+         * a hasher, where the OOL method body uses 'const T::value_
+         * type *'. With T bound to an instantiated 'pointer_hash<X>'
+         * carrying 'typedef Type value_type', the typedef resolves
+         * to X. Without this fallback, the param mangles with T
+         * itself instead of the typedef target — producing link-
+         * time mismatches against the
          * actual definition's mangling. N4659 §17.7.1 [temp.inst]
          * — instantiation must resolve dependent member-typedefs. */
         if (ty->dep_member && !concrete->class_region &&

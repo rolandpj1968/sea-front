@@ -211,7 +211,7 @@ static void visit_bool_lit(Sema *s, Node *n) {
  * would see arg3 as having no resolved type, fail to find a viable
  * candidate, and fall through to the historical 'first found' decl
  * — which is wrong when the matching overload is later in the
- * overload set. Pattern: gcc 4.8 cp/parser.c. */
+ * overload set. */
 static void visit_nullptr(Sema *s, Node *n) {
     Type *p = sema_new_type(s, TY_PTR);
     p->base = sema_new_type(s, TY_VOID);
@@ -305,8 +305,8 @@ static void visit_ident(Sema *s, Node *n) {
      *
      * Arena-allocate a small copy so the caller doesn't have to
      * retain scope tables. Cap at 16 which comfortably covers
-     * everything gcc 4.8 throws at us — gt_pch_nx has 4 overloads,
-     * vec's operator[] has 2, etc. */
+     * real-world C++ overload sets (4-5 overloads per name is
+     * typical even in heavily-overloaded library code). */
     /* Populate overload_set when the name could be overloaded — i.e.
      * is a function (d->type TY_FUNC) OR a function template (ENTITY_
      * TEMPLATE whose tmpl_node wraps a function). Non-function kinds
@@ -401,8 +401,8 @@ static void visit_binary(Sema *s, Node *n) {
      * a struct/union, look up the operator method on the class and
      * use its return type. Without this, '(a - b).method()' on a
      * value-type struct loses its type at the binary node, breaking
-     * downstream member resolution. Pattern: gcc 4.8 tree-vrp.c
-     *   (maxv - minv).zext (nprec) != double_int::mask (nprec) */
+     * downstream member resolution. Real-world shape:
+     *   (maxv - minv).zext(nprec) != double_int::mask(nprec) */
     if (!n->resolved_type && lt &&
         (lt->kind == TY_STRUCT || lt->kind == TY_UNION) && lt->tag) {
         int op_len = 0;
@@ -645,11 +645,11 @@ static void visit_var_decl(Sema *s, Node *n) {
  * scope here, local variable declarations in the cloned body never
  * land in any region and references to them fall through to the
  * enclosing class scope — sema then incorrectly inserts 'this->'
- * on a 'local'-shadowing class member. gcc 4.8 hash_table::dispose
- * 'size_t size = htab->size; for (int i = size - 1; ...)' produced
- * 'this->size' on the second 'size' reference — the struct doesn't
- * have a 'size' member, link/compile fails downstream. N4659
- * §6.3.3 [basic.scope.block] + §6.3.10 [basic.scope.hiding]. */
+ * on a 'local'-shadowing class member. Shape:
+ *   'size_t size = htab->size; for (int i = size - 1; ...)'
+ * would produce 'this->size' on the second 'size' reference,
+ * which the struct doesn't have — link/compile fails downstream.
+ * N4659 §6.3.3 [basic.scope.block] + §6.3.10 [basic.scope.hiding]. */
 static void visit_block(Sema *s, Node *n) {
     DeclarativeRegion *saved = s->cur_scope;
     bool created = false;
@@ -1244,8 +1244,9 @@ static int ics_rank(Type *param, Type *arg) {
      * register first. The other args' ICS scores still discriminate
      * between candidates; only the wildcard slot doesn't contribute.
      *
-     * Concrete: gcc 4.8 reginfo.c record_subregs_of_mode calls
+     * Concrete shape:
      *   bitmap_set_bit(subregs_of_mode, regno*NUM_MACHINE_MODES + (unsigned)mode)
+     * where bitmap_set_bit has overloads on sbitmap* and bitmap*.
      * The 2nd arg's resolved_type was NULL, ics_rank returned
      * INCOMPATIBLE for both bitmap_set_bit overloads (sbitmap and
      * bitmap), the picker returned NULL, and codegen fell back to
@@ -1303,17 +1304,17 @@ static int ics_rank(Type *param, Type *arg) {
      *   f(parser, false, true, NULL)
      * would fail to find a viable candidate and fall back to the
      * historical first-found resolved_decl (which may be the wrong
-     * arity overload). Pattern: gcc 4.8 cp/parser.c. */
+     * arity overload). */
     if (param->kind == TY_PTR && arg->kind == TY_PTR && arg->base &&
         arg->base->kind == TY_VOID)
         return ICS_PTR_SAME_TAG;  /* null → any pointer */
     /* Pointer-to-same-tag: T* vs T* where both Ts are class types
      * with matching tag but distinct Type* identity. Catches the
      * common case where two free-function overloads differ only in
-     * their struct-pointer parameter type (e.g. gcc 4.8's
-     * dump_bitmap(bitmap_head_def*) vs dump_bitmap(simple_bitmap_def*)
+     * their struct-pointer parameter type (e.g.
+     * dump_bitmap(bitmap_head_def*) vs dump_bitmap(simple_bitmap_def*))
      * — at the call site we want the overload whose pointee tag
-     * matches the argument's pointee tag). */
+     * matches the argument's pointee tag. */
     if (param->kind == TY_PTR && arg->kind == TY_PTR &&
         param->base && arg->base) {
         Type *pb = param->base;
@@ -1731,8 +1732,9 @@ static Node *build_template_id_from_deduced(Sema *s, Token *tname,
     tid->template_id.nargs = ntp;
     /* Carry the specific template the overload resolver picked, so
      * the instantiation pass uses it instead of doing a name-only
-     * registry lookup that may return a different overload (e.g.
-     * gcc 4.8 vec.h's two `vec_alloc` templates). */
+     * registry lookup that may return a different overload (real-
+     * world shape: a templated container header with multiple
+     * template overloads of an allocation helper). */
     tid->template_id.resolved_tmpl = tmpl;
     return tid;
 }
@@ -1809,14 +1811,13 @@ static void visit_call(Sema *s, Node *n) {
     /* Bare-ident call to a single-overload function template — N4659
      * §17.8.2.1 [temp.deduct.call]. visit_ident only populates
      * overload_set when n_overloads > 1, so single-template-candidate
-     * calls (vec_alloc(p), vec_safe_length(p), va_heap::reserve, etc.
-     * in gcc 4.8 vec.h) miss the multi-overload rewrite above. Run
-     * deduction directly against the lone template and synthesize
-     * ND_TEMPLATE_ID so the instantiation pass picks it up.
-     *
-     * The previous skip caused ~770 unique undefined references when
-     * building gcc 4.8 via sea-front-cc — the templates were never
-     * instantiated, so the call sites referenced un-emitted symbols. */
+     * calls (helper templates with one viable form, e.g. an
+     * `alloc<T>(n)` family with one specialisation) miss the
+     * multi-overload rewrite above. Run deduction directly against
+     * the lone template and synthesize ND_TEMPLATE_ID so the
+     * instantiation pass picks it up. Without this branch the
+     * templates are never instantiated and the call sites reference
+     * un-emitted symbols at link time. */
     if (n->call.callee && n->call.callee->kind == ND_IDENT &&
         !n->call.callee->ident.implicit_this &&
         n->call.callee->ident.n_overloads <= 1 &&
@@ -2185,8 +2186,7 @@ static void visit(Sema *s, Node *n) {
          * the element types. Without this, an expression like
          * 'CONSTRUCTOR_ELT(arg0, i)->value' nested inside a struct
          * initializer never has its subscript-on-class dispatched
-         * and emits as literal '[]' on a struct value. Pattern:
-         * gcc 4.8 fold-const.c. */
+         * and emits as literal '[]' on a struct value. */
         for (int i = 0; i < n->init_list.nelems; i++)
             visit(s, n->init_list.elems[i]);
         break;

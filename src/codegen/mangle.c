@@ -428,12 +428,12 @@ void mangle_class_tag(Type *class_type) {
  * Itanium C++ ABI §5.1.5: top-level cv on parameter types is
  * dropped (a function declared 'f(int)' and 'f(const int)' is the
  * SAME function — they overload-resolve identically and link to the
- * same symbol). Without stripping, gcc 4.8's
+ * same symbol). Without stripping, a definition like
  *   void mangle_decl (const tree decl);
- * mangled as '_p_const_tree_node_ptr_pe_' on the def, but every
- * caller that passes a non-const tree mangled as '_p_tree_node_ptr_pe_'
- * — link failed with 8+ unresolved 'mangle_decl' refs. The const on
- * the pointer is top-level (the pointer itself is const, not the
+ * mangles as '_p_const_tree_node_ptr_pe_' on the def, but every
+ * caller passing a non-const tree mangles as '_p_tree_node_ptr_pe_'
+ * — link fails with unresolved refs. The const on the pointer
+ * parameter is top-level (the pointer itself is const, not the
  * pointee); ABI says drop it. */
 static Type g_stripped_param_buf[16];
 static Type *strip_top_cv(Type *ty, int slot) {

@@ -268,11 +268,10 @@ int lookup_overload_set_from(DeclarativeRegion *start,
      * definition lookup.
      *
      * This is correct for valid programs where the outer and inner
-     * decls refer to the same overload family (the common case,
-     * including all of gcc 4.8's template patterns). It would mis-
-     * accept programs that deliberately shadow a namespace-scope
-     * function with a block-scope extern of different semantics —
-     * we haven't seen those in the bootstrap target.
+     * decls refer to the same overload family (the common case). It
+     * would mis-accept programs that deliberately shadow a namespace-
+     * scope function with a block-scope extern of different semantics
+     * — uncommon outside deliberately adversarial code.
      * TODO(seafront#two-phase-lookup): proper §17.7.2 two-phase
      * lookup; revert the widening once instantiation-point name
      * lookup runs. */

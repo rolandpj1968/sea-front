@@ -958,7 +958,7 @@ DeclSpec parse_type_specifiers(Parser *p) {
      *
      * We scan past the balanced '<...>' template-args and check for
      * '::Name(' (ctor) or '::~Name(' (dtor) where Name matches the
-     * leading template name. Pattern from gcc 4.8 hash-table.h:
+     * leading template name. Real-world shape:
      *   template<T, template<typename> class A>
      *   hash_table<T, A>::hash_table() : htab(NULL) { } */
     if (!seen_any && parser_peek(p)->kind == TK_IDENT &&

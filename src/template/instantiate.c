@@ -742,8 +742,8 @@ static void collect_from_node(InstCollector *col, Node *n) {
          * body off var_decl.ty->class_def — no separate top-level
          * ND_CLASS_DEF. Same shape as the ND_TYPEDEF case below;
          * without descent, template-ids inside the anon body are
-         * missed. Pattern from gcc 4.8 calls.c internal_arg_pointer_
-         * exp_state.
+         * missed. Real-world shape: a file-scope anonymous struct
+         * holding template-container members.
          *
          * Limit to *anonymous* structs: named types already have a
          * top-level ND_CLASS_DEF (walked elsewhere) and descending
@@ -767,9 +767,9 @@ static void collect_from_node(InstCollector *col, Node *n) {
          * struct body is only accessible through the Type's class_def
          * — the TU has no separate ND_CLASS_DEF node. Walk the class_def
          * members so template-id types inside get collected. Peel
-         * through TY_PTR/TY_ARRAY to find the struct. Pattern: gcc 4.8
-         * tree-outof-ssa.c 'typedef struct _elim_graph { vec<int>
-         * nodes; ... } *elim_graph;'. */
+         * through TY_PTR/TY_ARRAY to find the struct. Real-world
+         * shape: 'typedef struct _elim_graph { vec<int> nodes; ... }
+         * *elim_graph;'. */
         {
             Type *tyw = n->var_decl.ty;
             while (tyw && (tyw->kind == TY_PTR || tyw->kind == TY_ARRAY) && tyw->base)
@@ -1012,8 +1012,8 @@ static void collect_from_node(InstCollector *col, Node *n) {
          * where method is a member template. N4659 §17.5.2 [temp.mem] +
          * §16.3.1.1 [over.match.call.general]. The receiver carries
          * the enclosing class instantiation; we look up the method
-         * name in that class's member-template registry. Pattern from
-         * gcc 4.8 vec.h: 'v.splice<T2,A2>(src)'. */
+         * name in that class's member-template registry. Real-world
+         * shape: 'v.splice<T2,A2>(src)' on a templated container. */
         if (n->call.callee && n->call.callee->kind == ND_MEMBER &&
             n->call.callee->member.member &&
             n->call.callee->member.obj) {
@@ -1255,7 +1255,8 @@ static bool deduce_from_pair(Type *P, Type *A, SubstMap *map) {
      * resolved_type, but the argument-type for deduction is the
      * non-reference type. Without stripping A, deduction fails when
      * a cloned template body passes its own `T&` parameter to another
-     * function template (gcc 4.8 vec.h `vec_alloc` body calling
+     * function template (real-world shape: one function template
+     * forwarding a reference param to a sibling template, e.g.
      * `vec_safe_reserve(v, n, false)` with v of type `vec<T,A>*&`). */
     if (P->kind == TY_REF || P->kind == TY_RVALREF)
         P = P->base;
@@ -1312,10 +1313,9 @@ static bool deduce_from_pair(Type *P, Type *A, SubstMap *map) {
      * instantiation, template_args is set too. Handle both shapes so
      * deduction works at both stages.
      *
-     * Handles the gcc 4.8 pattern 'template<T,A> gt_pch_nx(
-     * vec<T,A,vl_embed>*)' called with vec<ipa_set, va_gc, vl_embed>*
-     * — PTR strips to struct, then we unify template args here to
-     * bind T=ipa_set, A=va_gc. */
+     * Real-world shape: 'template<T,A> f(vec<T,A,vl_embed>*)' called
+     * with 'vec<X, Y, vl_embed>*' — PTR strips to struct, then we
+     * unify template args here to bind T=X, A=Y. */
     if ((P->kind == TY_STRUCT || P->kind == TY_UNION) &&
         (A->kind == TY_STRUCT || A->kind == TY_UNION)) {
         /* Tag mismatch is unification failure. Deduction is checking
@@ -1653,11 +1653,11 @@ static bool template_ids_unify(Node *a, Node *b) {
         Type *at = (aa && aa->kind == ND_VAR_DECL) ? aa->var_decl.ty : NULL;
         Type *bt = (bb && bb->kind == ND_VAR_DECL) ? bb->var_decl.ty : NULL;
         /* NULL on either side = wildcard. Template-template parameters
-         * (gcc 4.8 hash_table's 'template<typename T> class Allocator')
-         * carry no Type — sea-front parses them but doesn't model the
-         * inner template-parameter-list. Treating NULL as a wildcard
-         * lets the OOL of 'hash_table<D,A>::create' bind to the
-         * instantiated 'hash_table<asan_mem_ref_hasher>' (where the
+         * (e.g. a class template carrying 'template<typename T> class
+         * Allocator' as one of its parameters) carry no Type —
+         * sea-front parses them but doesn't model the inner template-
+         * parameter-list. Treating NULL as a wildcard lets the OOL of
+         * 'C<D,A>::create' bind to the instantiated 'C<X>' (where the
          * default Allocator was filled in at usage). N4659 §17.2/3
          * [temp.param]: a template-template parameter accepts any
          * argument that itself names a class template. */
@@ -1745,7 +1745,7 @@ static bool ool_method_matches(Node *method, Type *target_class) {
          * [temp.param] — a template-template parameter accepts any
          * argument that names a class template; from the OOL's
          * perspective it's a bindable variable, just like a regular
-         * type parameter. gcc 4.8 hash_table:
+         * type parameter. Real-world shape:
          *   template<typename Descriptor,
          *            template<typename T> class Allocator = xcallocator>
          *   class hash_table { ... };
@@ -2016,15 +2016,14 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
              *
              * Bind the TT-param's name to the actual class-template
              * name token from the usage arg, or the default if the
-             * user omitted it. gcc 4.8 hash_table<D, A=xcallocator>
-             * with usage hash_table<asan_mem_ref_hasher>: A defaults
-             * to xcallocator. The cloned body's
-             * Allocator<value_type>::data_alloc(...) will be
+             * user omitted it. Real-world shape:
+             * hash_table<D, A=xcallocator> with usage
+             * hash_table<X>: A defaults to xcallocator. The cloned
+             * body's Allocator<value_type>::data_alloc(...) will be
              * rewritten to xcallocator<value_type>::data_alloc by
-             * clone.c's ND_QUALIFIED handler, so the call mangles
-             * to sf__xcallocator_t_..._te___data_alloc_* matching
-             * the actual definition. N4659 §17.2/3 [temp.param] +
-             * §17.7.1 [temp.inst]. */
+             * clone.c's ND_QUALIFIED handler, so the call mangles to
+             * a symbol matching the actual definition. N4659 §17.2/3
+             * [temp.param] + §17.7.1 [temp.inst]. */
             if (param->tok && param->tok->kind == TK_KW_TEMPLATE) {
                 Token *bound_name = NULL;
                 if (i < nargs) {
@@ -2065,7 +2064,8 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
             /* Non-type template parameter — N4659 §17.1/4 [temp.param].
              * The arg is an expression. Two flavors are common:
              *   - ND_IDENT naming a function/object (function-pointer
-             *     NTTP shape used by gcc 4.8 vec.h xcallocator).
+             *     NTTP, e.g. an allocator-function defaulted on a
+             *     container template).
              *   - Literal: ND_NUM, ND_BOOL_LIT, ND_CHAR, ND_NULLPTR
              *     (libstdc++ <type_traits> integral_constant pattern —
              *     'integral_constant<bool, true>' has V=true).
@@ -2082,8 +2082,7 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
                  * unsubstituted ident. Tried first because for
                  * ND_IDENT the legacy fallback would bind to the
                  * ident's own name, which works only for the
-                 * function-pointer NTTP shape (gcc 4.8 vec.h
-                 * xcallocator), not for value NTTPs. */
+                 * function-pointer NTTP shape, not for value NTTPs. */
                 bound_tok = nttp_ident_to_literal_tok(tu, a);
                 if (!bound_tok && a) {
                     switch (a->kind) {
@@ -2321,10 +2320,10 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
         pos += snprintf(buf + pos, bufsize - pos, "_te_");
         /* Param suffix — distinguishes overloaded function templates
          * whose template-arg substitution alone produces the same
-         * key. Pattern: gcc 4.8 vec.h has two `vec_alloc` templates,
+         * key. Real-world shape: two `vec_alloc` templates,
          *   template<T,A> vec_alloc(vec<T,A,vl_embed>*&, unsigned)
          *   template<T>   vec_alloc(vec<T>*&, unsigned)
-         * which both mangle to `vec_alloc_t_<T>_te_` without a param
+         * both mangle to `vec_alloc_t_<T>_te_` without a param
          * suffix → C-symbol collision. */
         pos += snprintf(buf + pos, bufsize - pos, "_p_");
         for (int i = 0; i < cloned->func.nparams; i++) {
@@ -2361,8 +2360,8 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
          * Without this, the ND_CALL emit path can't see the param
          * types and skips ref-param adaptation — passing a `T*` arg
          * to a `T*&` (now `T**` in C) param without taking address.
-         * Pattern: gcc 4.8 vec.h `vec_safe_grow_cleared(vec, n)` —
-         * the `vec<...> *&v` param needs `&vec` at the call site. */
+         * Real-world shape: `grow_helper(vec, n)` where the
+         * `vec<...> *&v` param needs `&vec` at the call site. */
         template_id->resolved_type = build_func_type_from_node(cloned, arena);
 
         /* Set up param scope for sema. The enclosing must be the
@@ -2695,9 +2694,9 @@ void template_instantiate(Node *tu, Arena *arena) {
              * source template-decl's TY_DEPENDENT params and emits
              * a bogus 'name_p_Argument_pe_' symbol that doesn't
              * match the unique definition's
-             * 'name_p_<concrete>_pe_'. Pattern: gcc 4.8 tree-ssa-
-             * threadupdate.c three identical 'redirection_data
-             * .traverse<ssa_local_info_t*, ...>(&local_info)' calls.
+             * 'name_p_<concrete>_pe_'. Real-world shape: multiple
+             * identical 'container.traverse<T*, ...>(&info)' calls
+             * sharing one instantiated specialization.
              * N4659 §17.7.1 [temp.inst]: each unique
              * specialization is one entity; identical (template,
              * args) calls all reach it. */
@@ -2729,7 +2728,7 @@ void template_instantiate(Node *tu, Arena *arena) {
          * or we get two defs of the same mangled symbol. N4659
          * §17.8.4 [temp.expl.spec]: an explicit specialization is a
          * distinct entity — the primary template is not used to
-         * generate it. gcc 4.8 cgraph.h has
+         * generate it. Real-world shape:
          *   template<> template<>
          *   inline bool is_a_helper<cgraph_node>::test(symtab_node_def *p);
          */
@@ -3029,8 +3028,8 @@ void template_instantiate(Node *tu, Arena *arena) {
          * For FUNCTION templates we also include the ND_TEMPLATE_DECL
          * pointer in the key, so two same-named function templates
          * with the same template args but different function
-         * signatures (e.g. gcc 4.8 vec.h's gt_pch_nx<T,A>(vec*) and
-         * gt_pch_nx<T,A>(vec*, op, cookie)) don't dedup-collide.
+         * signatures (e.g. `gt_pch_nx<T,A>(vec*)` and
+         * `gt_pch_nx<T,A>(vec*, op, cookie)`) don't dedup-collide.
          * Class-template requests skip this — only one ND_TEMPLATE_
          * DECL exists per class-template name in scope, and including
          * the pointer would prevent later same-(name,args) class
@@ -3421,11 +3420,10 @@ void template_instantiate(Node *tu, Arena *arena) {
      * check the dedup set for bases that were instantiated.
      *
      * ALSO: plain (non-template) classes that inherit from a template
-     * instantiation (e.g. 'struct asan_hasher : typed_noop_remove<int>'
-     * in gcc 4.8 hash_table users) have the same problem — at parse
-     * time the base's class_region was NULL because the template
-     * hadn't been instantiated. Walk top-level plain ND_CLASS_DEFs
-     * too. N4659 §13.1 [class.derived]. */
+     * instantiation (e.g. 'struct D : typed_helper<int>') have the
+     * same problem — at parse time the base's class_region was NULL
+     * because the template hadn't been instantiated. Walk top-level
+     * plain ND_CLASS_DEFs too. N4659 §13.1 [class.derived]. */
     Node *all_class_defs[1024];
     int n_all_class_defs = 0;
     for (int i = 0; i < all_instantiated.len; i++) {
@@ -3448,9 +3446,8 @@ void template_instantiate(Node *tu, Arena *arena) {
              * Without this, the post-instantiation base-region
              * patching skips the class and its inheritance link
              * from the template base never gets set — qualified
-             * static calls 'pre_expr_d::remove' end up mangled
-             * with the derived prefix and fail to link
-             * (gcc 4.8 tree-ssa-pre.c). N4659 §13.1 [class.derived]. */
+             * static calls end up mangled with the derived prefix
+             * and fail to link. N4659 §13.1 [class.derived]. */
             Type *ty = d->var_decl.ty;
             while (ty && (ty->kind == TY_PTR || ty->kind == TY_ARRAY))
                 ty = ty->base;

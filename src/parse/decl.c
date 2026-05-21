@@ -319,9 +319,8 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
              * array, the function-suffix wraps the array as the
              * return type — wrong shape (function returning array,
              * which is invalid). N4659 §11.3 [dcl.meaning] precedence
-             * is what this re-stack restores. Pattern: gcc 4.8
-             * internal-fn.c
-             *   static void (*const internal_fn_expanders[])(gimple) */
+             * is what this re-stack restores. Real-world shape:
+             *   static void (*const expander_table[])(gimple) */
             while (pending_nwrap < 16 && ty != base_ty &&
                    (ty->kind == TY_PTR || ty->kind == TY_REF ||
                     ty->kind == TY_RVALREF || ty->kind == TY_ARRAY)) {
@@ -996,8 +995,8 @@ parse_suffixes:
             ty = new_func_type(p, ty, (Type **)param_types.data,
                                param_types.len, variadic);
             /* Capture per-param defaults — same as the other
-             * new_func_type call site. Pattern: gcc 4.8 rtl.h
-             * 'extern rtx *strip_address_mutations(rtx*, enum* = 0);'. */
+             * new_func_type call site. Real-world shape:
+             * 'extern T *fn(U*, enum* = 0);'. */
             {
                 bool any_default = false;
                 for (int i = 0; i < param_types.len; i++) {
@@ -2119,8 +2118,8 @@ Node *parse_declaration(Parser *p) {
              * 'int a; int b;' — the missing extern flips both into
              * tentative definitions, breaking link with 'multiple
              * definition' errors when several TUs include the
-             * declaration. Pattern: gcc 4.8 rtl.h's
-             * 'extern location_t prologue_location, epilogue_location;'. */
+             * declaration. Real-world shape:
+             * 'extern location_t prologue_loc, epilogue_loc;'. */
             next_decl->var_decl.storage_flags |= spec.flags;
             if (p->extern_c_depth > 0)
                 next_decl->var_decl.storage_flags |= DECL_C_LINKAGE;
