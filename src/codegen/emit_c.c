@@ -83,6 +83,10 @@ static Type *g_current_func_ret_ty = NULL;
  * Patterns: g++.dg/ext/fnname{1,2,3}.C. */
 static Token *g_current_func_src_name = NULL;
 static bool   g_current_func_is_dtor   = false;
+/* The ND_FUNC_DEF currently being emitted — needed by the
+ * __PRETTY_FUNCTION__ pretty-printer to access the function's
+ * params and return type. NULL outside a function emit. */
+static Node  *g_current_func_node = NULL;
 /* Target attribute string of the function currently being emitted
  * (NULL if none). Used by the multi-versioning call-resolution path
  * in emit_free_func_symbol: when a call has multiple candidates
@@ -3549,6 +3553,15 @@ static void emit_param_declarator(Type *ty, Token *name, int idx) {
 static void emit_expr(Node *n);
 static bool free_func_name_is_overloaded(Token *name);
 
+/* Pretty-print a Type for __PRETTY_FUNCTION__'s C++-source form
+ * (NOT the C lowering). Covers primitives by name, pointers as
+ * `T *`, refs as `T &`, structs/unions/enums by tag, and TY_
+ * DEPENDENT by its parameter-name token. Used only to format
+ * the substitution list (template_args) and the return type. */
+static void emit_cxx_type(Type *t);
+static void emit_pretty_function_literal(void);
+static Node *find_source_class_template(Token *class_tag);
+
 /* TU-walk: find the ND_FUNC_DEF named NAME with attr_target equal
  * to TARGET. Returns NULL if no such version exists. Used at call
  * sites inside a target-bearing function to bind to the matching
@@ -3896,6 +3909,22 @@ static void emit_expr(Node *n) {
                     g_current_func_src_name->len,
                     g_current_func_src_name->loc);
             fputc('"', stdout);
+            return;
+        }
+        /* __PRETTY_FUNCTION__ — N4659 §8.4.1/8 [dcl.fct.def]: an
+         * implementation-defined string that "describes" the function.
+         * gcc's format is:
+         *   <ret-ty> <class-qualifier>::<name>(<params>)
+         *   [with <param-name> = <concrete>; ...]
+         * Ctors omit the return type. For member methods of a class
+         * template, the qualifier uses the source-level template-param
+         * NAMES (e.g. `X<T>`), with the substitutions listed in the
+         * `[with ...]` suffix. Pattern: g++.dg/template/pretty1.C,
+         * g++.dg/diagnostic/bindings1.C. */
+        if (n->ident.name && g_current_func_src_name &&
+            n->ident.name->len == 19 &&
+            memcmp(n->ident.name->loc, "__PRETTY_FUNCTION__", 19) == 0) {
+            emit_pretty_function_literal();
             return;
         }
         /* Lambda capture rewrite — N4659 §8.1.5.2 [expr.prim.lambda
@@ -7307,6 +7336,150 @@ static void emit_expr(Node *n) {
                 0);
         abort();
     }
+}
+
+/* Walk the TU for the source class template whose inner ND_CLASS_
+ * DEF has the given tag. The cloned instantiation lives in the TU
+ * too, but with template_args populated; the source primary has
+ * the template_decl wrapper with the parameter NAMES (T, U, ...).
+ * Used by __PRETTY_FUNCTION__ to reconstruct `X<T>` style class
+ * qualifiers. Returns NULL when not found. */
+static Node *find_source_class_template(Token *class_tag) {
+    if (!g_tu || g_tu->kind != ND_TRANSLATION_UNIT || !class_tag) return NULL;
+    for (int i = 0; i < g_tu->tu.ndecls; i++) {
+        Node *d = g_tu->tu.decls[i];
+        if (!d || d->kind != ND_TEMPLATE_DECL) continue;
+        Node *inner = d->template_decl.decl;
+        if (!inner || inner->kind != ND_CLASS_DEF) continue;
+        Type *ty = inner->class_def.ty;
+        if (!ty || !ty->tag) continue;
+        if (ty->tag->len != class_tag->len) continue;
+        if (memcmp(ty->tag->loc, class_tag->loc, class_tag->len) != 0) continue;
+        return d;
+    }
+    return NULL;
+}
+
+static void emit_cxx_type(Type *t) {
+    if (!t) { fputs("?", stdout); return; }
+    if (t->is_const && t->kind != TY_PTR) fputs("const ", stdout);
+    switch (t->kind) {
+    case TY_VOID:   fputs("void", stdout); break;
+    case TY_BOOL:   fputs("bool", stdout); break;
+    case TY_CHAR:
+        fputs(t->is_unsigned ? "unsigned char" : "char", stdout); break;
+    case TY_CHAR16: fputs("char16_t", stdout); break;
+    case TY_CHAR32: fputs("char32_t", stdout); break;
+    case TY_WCHAR:  fputs("wchar_t", stdout); break;
+    case TY_SHORT:
+        fputs(t->is_unsigned ? "short unsigned int" : "short int", stdout); break;
+    case TY_INT:
+        fputs(t->is_unsigned ? "unsigned int" : "int", stdout); break;
+    case TY_LONG:
+        fputs(t->is_unsigned ? "long unsigned int" : "long int", stdout); break;
+    case TY_LLONG:
+        fputs(t->is_unsigned ? "long long unsigned int" : "long long int", stdout); break;
+    case TY_FLOAT:  fputs("float", stdout); break;
+    case TY_DOUBLE: fputs("double", stdout); break;
+    case TY_LDOUBLE: fputs("long double", stdout); break;
+    case TY_PTR:
+        emit_cxx_type(t->base);
+        if (t->is_const) fputs("* const", stdout);
+        else             fputs("*", stdout);
+        break;
+    case TY_REF:    emit_cxx_type(t->base); fputs("&", stdout); break;
+    case TY_RVALREF: emit_cxx_type(t->base); fputs("&&", stdout); break;
+    case TY_ARRAY:
+        emit_cxx_type(t->base);
+        if (t->array_len >= 0) fprintf(stdout, "[%d]", t->array_len);
+        else                   fputs("[]", stdout);
+        break;
+    case TY_STRUCT:
+    case TY_UNION:
+    case TY_ENUM:
+        if (t->tag) fprintf(stdout, "%.*s", t->tag->len, t->tag->loc);
+        else fputs("?", stdout);
+        break;
+    case TY_DEPENDENT:
+        if (t->tag) fprintf(stdout, "%.*s", t->tag->len, t->tag->loc);
+        else fputs("?", stdout);
+        break;
+    default:
+        fputs("?", stdout); break;
+    }
+}
+
+/* Emit a C string literal of the form expected by gcc for
+ * __PRETTY_FUNCTION__:
+ *   <ret-ty> <class-qual>::<name>(<params>) [with <T> = <type>; ...]
+ * Ctors/dtors omit the return type. For free functions, no class
+ * qualifier. For instantiated class templates, lists the
+ * substitutions. Pattern: g++.dg/template/pretty1.C. */
+static void emit_pretty_function_literal(void) {
+    fputc('"', stdout);
+    bool is_ctor = g_current_func_node && g_current_func_node->func.is_constructor;
+    bool is_dtor = g_current_func_node && g_current_func_node->func.is_destructor;
+    if (!is_ctor && !is_dtor) {
+        emit_cxx_type(g_current_func_ret_ty);
+        fputc(' ', stdout);
+    }
+    Node *cls_tpl = NULL;
+    if (g_current_method_class && g_current_method_class->tag) {
+        Type *cls = g_current_method_class;
+        fprintf(stdout, "%.*s", cls->tag->len, cls->tag->loc);
+        cls_tpl = find_source_class_template(cls->tag);
+        if (cls_tpl && cls_tpl->template_decl.nparams > 0) {
+            fputc('<', stdout);
+            for (int i = 0; i < cls_tpl->template_decl.nparams; i++) {
+                if (i > 0) fputs(", ", stdout);
+                Node *p = cls_tpl->template_decl.params[i];
+                if (p && p->kind == ND_PARAM && p->param.name)
+                    fprintf(stdout, "%.*s",
+                            p->param.name->len, p->param.name->loc);
+                else fputc('?', stdout);
+            }
+            fputc('>', stdout);
+        }
+        fputs("::", stdout);
+    }
+    if (is_dtor) fputc('~', stdout);
+    if (g_current_func_src_name)
+        fprintf(stdout, "%.*s",
+                g_current_func_src_name->len,
+                g_current_func_src_name->loc);
+    fputc('(', stdout);
+    if (g_current_func_node) {
+        int np = g_current_func_node->func.nparams;
+        for (int i = 0; i < np; i++) {
+            if (i > 0) fputs(", ", stdout);
+            Node *p = g_current_func_node->func.params[i];
+            if (p && p->kind == ND_PARAM)
+                emit_cxx_type(p->param.ty);
+            else fputc('?', stdout);
+        }
+    }
+    fputc(')', stdout);
+    /* Substitution list: only for instantiated class templates here.
+     * Free-function template substitutions (bindings1.C-style) need
+     * the source-template params + the per-instantiation arg map,
+     * which sea-front carries on the cloned func but doesn't yet
+     * thread to this emit context — deferred. */
+    if (g_current_method_class &&
+        g_current_method_class->n_template_args > 0 &&
+        cls_tpl && cls_tpl->template_decl.nparams ==
+            g_current_method_class->n_template_args) {
+        fputs(" [with ", stdout);
+        for (int i = 0; i < g_current_method_class->n_template_args; i++) {
+            if (i > 0) fputs("; ", stdout);
+            Node *p = cls_tpl->template_decl.params[i];
+            if (p && p->kind == ND_PARAM && p->param.name)
+                fprintf(stdout, "%.*s = ",
+                        p->param.name->len, p->param.name->loc);
+            emit_cxx_type(g_current_method_class->template_args[i]);
+        }
+        fputc(']', stdout);
+    }
+    fputc('"', stdout);
 }
 
 /* ------------------------------------------------------------------ */
@@ -11108,7 +11281,9 @@ static void emit_func_def(Node *n) {
     Token *saved_target = g_current_func_target;
     Node *saved_lam = g_current_lambda_fn;
     Node *saved_cdef_for_lambda = g_current_class_def;
+    Node *saved_func_node = g_current_func_node;
     g_current_func_ret_ty = n->func.ret_ty;
+    g_current_func_node = n;
     /* Suppress the target-suffix machinery for main (linker needs
      * the bare symbol) and for any function name with an unsuffixed
      * forward decl (the bare form is the "merged default" entry-
@@ -11232,6 +11407,7 @@ static void emit_func_def(Node *n) {
     g_current_func_target = saved_target;
     g_current_lambda_fn   = saved_lam;
     g_current_class_def   = saved_cdef_for_lambda;
+    g_current_func_node   = saved_func_node;
 }
 
 /* Method DEF dispatcher for overloaded operators. The mangling
@@ -11343,10 +11519,12 @@ static void emit_method_as_free_fn(Node *func, Type *class_type, bool emit_inlin
     Type *saved_mc = g_current_method_class;
     bool saved_mconst = g_current_method_is_const;
     bool saved_mstatic = g_current_method_is_static;
+    Node *saved_func_node = g_current_func_node;
     g_current_func_ret_ty = func->func.ret_ty;
     g_current_method_class = class_type;
     g_current_method_is_const = func->func.is_const_method;
     g_current_method_is_static = (func->func.storage_flags & DECL_STATIC) != 0;
+    g_current_func_node = func;
     emit_method_signature(func, class_type, emit_inline);
     fputc(' ', stdout);
     emit_func_body(func);
@@ -11354,6 +11532,7 @@ static void emit_method_as_free_fn(Node *func, Type *class_type, bool emit_inlin
     g_current_method_is_static = saved_mstatic;
     g_current_func_ret_ty = saved_ret;
     g_current_method_class = saved_mc;
+    g_current_func_node = saved_func_node;
 }
 
 static void emit_class_def(Node *n) {
