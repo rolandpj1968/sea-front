@@ -583,9 +583,7 @@ DeclSpec parse_type_specifiers(Parser *p) {
 
                     /* Skip preprocessor leftovers inside class body */
                     if (parser_at(p, TK_HASH)) {
-                        int line = parser_peek(p)->line;
-                        while (!parser_at_eof(p) && parser_peek(p)->line == line)
-                            parser_advance(p);
+                        parser_skip_rest_of_line(p);
                         continue;
                     }
 

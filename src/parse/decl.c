@@ -2224,9 +2224,7 @@ Node *parse_top_level_decl(Parser *p) {
      * in independent mode passes through unknown pragmas. We skip
      * everything from # to the end of its line. */
     if (parser_at(p, TK_HASH)) {
-        int line = parser_peek(p)->line;
-        while (!parser_at_eof(p) && parser_peek(p)->line == line)
-            parser_advance(p);
+        parser_skip_rest_of_line(p);
         return NULL;
     }
 
@@ -2497,9 +2495,7 @@ Node *parse_top_level_decl(Parser *p) {
         /* Terminates: each iteration parses a declaration or hits } / EOF */
         while (!parser_at(p, TK_RBRACE) && !parser_at_eof(p)) {
             if (parser_at(p, TK_HASH)) {
-                int line = parser_peek(p)->line;
-                while (!parser_at_eof(p) && parser_peek(p)->line == line)
-                    parser_advance(p);
+                parser_skip_rest_of_line(p);
                 continue;
             }
             Node *decl = parse_top_level_decl(p);
@@ -3058,9 +3054,7 @@ Node *parse_template_id(Parser *p, Token *name) {
             /* Skip preprocessor leftovers (#line) that mcpp may emit
              * inside multi-line template-argument-lists. */
             while (parser_at(p, TK_HASH)) {
-                int line = parser_peek(p)->line;
-                while (!parser_at_eof(p) && parser_peek(p)->line == line)
-                    parser_advance(p);
+                parser_skip_rest_of_line(p);
             }
 
             /* template-argument: type-id or constant-expression or id-expression.
@@ -3085,9 +3079,7 @@ Node *parse_template_id(Parser *p, Token *name) {
 
                 /* Skip any #line directives before the , or > follows. */
                 while (parser_at(p, TK_HASH)) {
-                    int line = parser_peek(p)->line;
-                    while (!parser_at_eof(p) && parser_peek(p)->line == line)
-                        parser_advance(p);
+                    parser_skip_rest_of_line(p);
                 }
 
                 if (ty_ok && (parser_at(p, TK_COMMA) || parser_at(p, TK_GT) ||
@@ -3114,9 +3106,7 @@ Node *parse_template_id(Parser *p, Token *name) {
             parser_consume(p, TK_ELLIPSIS);
 
             while (parser_at(p, TK_HASH)) {
-                int line = parser_peek(p)->line;
-                while (!parser_at_eof(p) && parser_peek(p)->line == line)
-                    parser_advance(p);
+                parser_skip_rest_of_line(p);
             }
 
             if (!parser_consume(p, TK_COMMA))

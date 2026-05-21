@@ -7011,6 +7011,15 @@ static void emit_init_with_target(Node *init, Type *target_ty) {
     else           fprintf(stdout, "__sf_base%d", last);
 }
 
+/* If the var-decl has an initializer, emit " = <init>" (suffix used
+ * by every emit_var_decl_inner exit path that doesn't ctor-call
+ * the value into existence). */
+static void emit_var_decl_init_suffix(Node *n) {
+    if (!n->var_decl.init) return;
+    fputs(" = ", stdout);
+    emit_init_with_target(n->var_decl.init, n->var_decl.ty);
+}
+
 static void emit_var_decl_inner(Node *n) {
     Type *ty = n->var_decl.ty;
     /* Bare enum definition without a variable:
@@ -7050,10 +7059,7 @@ static void emit_var_decl_inner(Node *n) {
                 fprintf(stdout, "%.*s ", ty->tag->len, ty->tag->loc);
             fprintf(stdout, "%.*s",
                     n->var_decl.name->len, n->var_decl.name->loc);
-            if (n->var_decl.init) {
-                fputs(" = ", stdout);
-                emit_init_with_target(n->var_decl.init, n->var_decl.ty);
-            }
+            emit_var_decl_init_suffix(n);
             return;
         }
         mark_enum_body_emitted(ty->enum_tokens);
@@ -7065,10 +7071,7 @@ static void emit_var_decl_inner(Node *n) {
         emit_enum_body(ty);
         fprintf(stdout, " } %.*s",
                 n->var_decl.name->len, n->var_decl.name->loc);
-        if (n->var_decl.init) {
-            fputs(" = ", stdout);
-            emit_init_with_target(n->var_decl.init, n->var_decl.ty);
-        }
+        emit_var_decl_init_suffix(n);
         return;
     }
     /* Array declarations: C requires 'int arr[10]' not 'int* arr'.
@@ -7182,10 +7185,7 @@ static void emit_var_decl_inner(Node *n) {
             fputs(")(", stdout);
             emit_func_param_types(fty);
             fputc(')', stdout);
-            if (n->var_decl.init) {
-                fputs(" = ", stdout);
-                emit_init_with_target(n->var_decl.init, n->var_decl.ty);
-            }
+            emit_var_decl_init_suffix(n);
             return;
         }
     }
@@ -7208,10 +7208,7 @@ static void emit_var_decl_inner(Node *n) {
      * then ONE-OR-MORE TY_ARRAY, then a non-array/non-ptr element. */
     if (ty && n->var_decl.name &&
         emit_pointer_to_array_declarator(ty, n->var_decl.name)) {
-        if (n->var_decl.init) {
-            fputs(" = ", stdout);
-            emit_init_with_target(n->var_decl.init, n->var_decl.ty);
-        }
+        emit_var_decl_init_suffix(n);
         return;
     }
     if (ty && ty->kind == TY_ARRAY) {
@@ -7261,10 +7258,7 @@ static void emit_var_decl_inner(Node *n) {
             }
         }
         /* Array init (if any) */
-        if (n->var_decl.init) {
-            fputs(" = ", stdout);
-            emit_init_with_target(n->var_decl.init, n->var_decl.ty);
-        }
+        emit_var_decl_init_suffix(n);
         return;
     }
     /* Anonymous local struct: emit the body inline since no top-level
@@ -7290,10 +7284,7 @@ static void emit_var_decl_inner(Node *n) {
         }
         fprintf(stdout, "} %.*s",
                 n->var_decl.name->len, n->var_decl.name->loc);
-        if (n->var_decl.init) {
-            fputs(" = ", stdout);
-            emit_init_with_target(n->var_decl.init, n->var_decl.ty);
-        }
+        emit_var_decl_init_suffix(n);
         return;
     }
     emit_type(ty);
@@ -7776,6 +7767,21 @@ static bool stmt_has_class_temp(Node *s) {
 }
 
 static void push_user_var_cleanup(Node *s);
+
+/* Allocate break/continue label ids and push a CL_LOOP marker so
+ * the cleanup chain knows where the enclosing loop's break/continue
+ * lands. Used by while/do/for emit paths whose bodies have cleanups
+ * (body_wrap). */
+static void push_loop_marker(int *out_brk, int *out_cnt) {
+    *out_brk = g_cf.next_label_id++;
+    *out_cnt = g_cf.next_label_id++;
+    cleanup_live_reserve(1);
+    g_cf.live[g_cf.nlive].kind = CL_LOOP;
+    g_cf.live[g_cf.nlive].label_id = *out_brk;
+    g_cf.live[g_cf.nlive].cont_label_id = *out_cnt;
+    g_cf.live[g_cf.nlive].var_decl = NULL;
+    g_cf.nlive++;
+}
 
 /* Bracket the body of a decl-as-cond (if/while/for/switch with a
  * class-with-dtor variable in the condition slot) so any early
@@ -8772,16 +8778,7 @@ static void emit_stmt(Node *n) {
          * so body break/continue chains terminate at the loop's
          * synthetic boundary labels. */
         int brk = -1, cnt = -1;
-        if (body_wrap) {
-            brk = g_cf.next_label_id++;
-            cnt = g_cf.next_label_id++;
-            cleanup_live_reserve(1);
-            g_cf.live[g_cf.nlive].kind = CL_LOOP;
-            g_cf.live[g_cf.nlive].label_id = brk;
-            g_cf.live[g_cf.nlive].cont_label_id = cnt;
-            g_cf.live[g_cf.nlive].var_decl = NULL;
-            g_cf.nlive++;
-        }
+        if (body_wrap) push_loop_marker(&brk, &cnt);
         if (cond_wrap) {
             /* Slice D-cond: cond contains a class temp. Lower to
              *   while (1) {
@@ -8872,16 +8869,7 @@ static void emit_stmt(Node *n) {
             return;
         }
         int brk = -1, cnt = -1;
-        if (body_wrap) {
-            brk = g_cf.next_label_id++;
-            cnt = g_cf.next_label_id++;
-            cleanup_live_reserve(1);
-            g_cf.live[g_cf.nlive].kind = CL_LOOP;
-            g_cf.live[g_cf.nlive].label_id = brk;
-            g_cf.live[g_cf.nlive].cont_label_id = cnt;
-            g_cf.live[g_cf.nlive].var_decl = NULL;
-            g_cf.nlive++;
-        }
+        if (body_wrap) push_loop_marker(&brk, &cnt);
         if (cond_wrap) {
             /* Slice D-cond for do-while: the synth must be declared
              * OUTSIDE the do body because the 'while (synth)' is
@@ -9090,16 +9078,7 @@ static void emit_stmt(Node *n) {
             return;
         }
         int brk = -1, cnt = -1;
-        if (body_wrap) {
-            brk = g_cf.next_label_id++;
-            cnt = g_cf.next_label_id++;
-            cleanup_live_reserve(1);
-            g_cf.live[g_cf.nlive].kind = CL_LOOP;
-            g_cf.live[g_cf.nlive].label_id = brk;
-            g_cf.live[g_cf.nlive].cont_label_id = cnt;
-            g_cf.live[g_cf.nlive].var_decl = NULL;
-            g_cf.nlive++;
-        }
+        if (body_wrap) push_loop_marker(&brk, &cnt);
         if (cond_wrap) {
             /* Slice D-cond for for-loop: lower to a while(1) form
              * because the for-loop's cond slot can't hold the

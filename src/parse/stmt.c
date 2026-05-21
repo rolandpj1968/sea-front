@@ -145,9 +145,7 @@ Node *parse_compound_stmt(Parser *p) {
         /* Skip preprocessor leftovers (#line directives etc.) — mcpp
          * emits these on their own lines. */
         if (parser_at(p, TK_HASH)) {
-            int line = parser_peek(p)->line;
-            while (!parser_at_eof(p) && parser_peek(p)->line == line)
-                parser_advance(p);
+            parser_skip_rest_of_line(p);
             continue;
         }
         Node *s = parse_stmt(p);

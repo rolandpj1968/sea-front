@@ -1687,6 +1687,13 @@ void parser_skip_gnu_attributes_full(
     bool *out_is_ctor, bool *out_is_dtor);
 void parser_skip_cxx_attributes(Parser *p);
 
+/* Skip the rest of the current source line — used after spotting a
+ * preprocessor leftover token (TK_HASH for `#line N "file"` and
+ * similar). Advances past every token sharing the current line
+ * number. The caller is expected to have already verified there's
+ * something to skip. */
+void parser_skip_rest_of_line(Parser *p);
+
 /* Node constructors (arena-allocated) */
 Node *new_node(Parser *p, NodeKind kind, Token *tok);
 Node *new_num_node(Parser *p, Token *tok);

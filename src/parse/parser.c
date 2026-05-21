@@ -203,6 +203,12 @@ void parser_restore(Parser *p, ParseState saved) {
  * have no impact on the parser's understanding of the type
  * system, so we recognise them and drop them on the floor.
  */
+void parser_skip_rest_of_line(Parser *p) {
+    int line = parser_peek(p)->line;
+    while (!parser_at_eof(p) && parser_peek(p)->line == line)
+        parser_advance(p);
+}
+
 void parser_skip_cxx_attributes(Parser *p) {
     while (parser_at(p, TK_LBRACKET) &&
            parser_peek_ahead(p, 1)->kind == TK_LBRACKET) {
