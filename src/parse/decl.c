@@ -1356,9 +1356,36 @@ static void skip_extension(Parser *p) {
  *       braced-init-list               (handled)
  */
 Node *parse_declaration(Parser *p) {
-    /* Leading C++11 attributes and GCC __extension__. */
+    /* Leading C++11 attributes and GCC __extension__. Capture
+     * constructor/destructor into FUNCTION-LOCAL vars (rather than
+     * the parser-pending latch) so an early-return path
+     * (using-decl, static_assert, ...) doesn't leak the attribute
+     * onto the next decl. The decl-emit path below transfers from
+     * local → var_decl after parse_declarator succeeds. */
     parser_skip_cxx_attributes(p);
-    parser_skip_gnu_attributes(p);
+    bool entry_attr_ctor = false, entry_attr_dtor = false;
+    int  entry_ctor_pri = 0, entry_dtor_pri = 0;
+    /* Save+restore parser latches so the call below scribbles into
+     * local-mirror semantics. parser_skip_gnu_attributes_full
+     * writes into both the latch and pending_*_priority; we grab
+     * those then clear so downstream parse doesn't see them. */
+    bool saved_attr_ctor = p->pending_attr_constructor;
+    bool saved_attr_dtor = p->pending_attr_destructor;
+    int  saved_ctor_pri  = p->pending_ctor_priority;
+    int  saved_dtor_pri  = p->pending_dtor_priority;
+    p->pending_attr_constructor = false;
+    p->pending_attr_destructor  = false;
+    p->pending_ctor_priority    = 0;
+    p->pending_dtor_priority    = 0;
+    parser_skip_gnu_attributes_full(p, NULL, NULL,
+                                    &entry_attr_ctor,
+                                    &entry_attr_dtor);
+    entry_ctor_pri = p->pending_ctor_priority;
+    entry_dtor_pri = p->pending_dtor_priority;
+    p->pending_attr_constructor = saved_attr_ctor;
+    p->pending_attr_destructor  = saved_attr_dtor;
+    p->pending_ctor_priority    = saved_ctor_pri;
+    p->pending_dtor_priority    = saved_dtor_pri;
     skip_extension(p);
 
     Token *start_tok = parser_peek(p);
@@ -1550,7 +1577,9 @@ Node *parse_declaration(Parser *p) {
 
     /* Reset the parser-side ctor/dtor attribute latch before parsing
      * the declarator; consume_trailing_qualifiers writes into it when
-     * it sees the function-shape trailing attributes. */
+     * it sees the function-shape trailing attributes. (Leading-
+     * position attributes were captured into entry_* at the top of
+     * this function and aren't disturbed here.) */
     p->pending_attr_constructor = false;
     p->pending_attr_destructor  = false;
     p->pending_ctor_priority    = 0;
@@ -1564,15 +1593,22 @@ Node *parse_declaration(Parser *p) {
 
     /* Latch into the parsed decl so the function-def promotion path
      * (below) and the trailing-attribute path (further below) both
-     * see them. */
+     * see them. Either leading-position (saved into entry_* at the
+     * top of this function) or trailing-position
+     * (consume_trailing_qualifiers populated pending_*) counts —
+     * pick whichever is set. */
     if (decl) {
-        if (p->pending_attr_constructor) {
+        if (entry_attr_ctor || p->pending_attr_constructor) {
             decl->var_decl.attr_constructor = true;
-            decl->var_decl.ctor_priority = p->pending_ctor_priority;
+            decl->var_decl.ctor_priority =
+                entry_attr_ctor ? entry_ctor_pri
+                                : p->pending_ctor_priority;
         }
-        if (p->pending_attr_destructor) {
+        if (entry_attr_dtor || p->pending_attr_destructor) {
             decl->var_decl.attr_destructor = true;
-            decl->var_decl.dtor_priority = p->pending_dtor_priority;
+            decl->var_decl.dtor_priority =
+                entry_attr_dtor ? entry_dtor_pri
+                                : p->pending_dtor_priority;
         }
         if (p->pending_attr_weak)
             decl->var_decl.attr_weak = true;
