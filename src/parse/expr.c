@@ -2476,10 +2476,31 @@ static Node *unary_expr(Parser *p) {
             while (parser_consume(p, TK_STAR) || parser_consume(p, TK_AMP) ||
                    parser_consume(p, TK_LAND))
                 ;
-            /* Optional array extents: new T[n] / new T[n][m] */
+            /* Optional array extents: new T[n] / new T[n][m]. Capture
+             * the outermost (first) extent's expression — the array-
+             * length multiplier on the malloc. Inner extents
+             * contribute to the per-element size as `T[m]`. Pattern:
+             * g++.dg/template/new1.C `new T[Blksize()]` — the size
+             * call must run for its side effect. */
+            Node *array_size = NULL;
+            int extent_idx = 0;
             while (parser_consume(p, TK_LBRACKET)) {
-                if (!parser_at(p, TK_RBRACKET)) parse_assign_expr(p);
+                if (!parser_at(p, TK_RBRACKET)) {
+                    Node *e = parse_assign_expr(p);
+                    if (extent_idx == 0) array_size = e;
+                }
                 parser_expect(p, TK_RBRACKET);
+                extent_idx++;
+            }
+            /* Stash on the type-walker output so the lowering site
+             * below sees it. (parse_type_name's path doesn't yet
+             * capture extents — that's an orthogonal slice.) */
+            if (array_size && ty) {
+                Type *arr = new_type(p, TY_ARRAY);
+                arr->base = ty;
+                arr->array_size_expr = array_size;
+                arr->array_len = -1;
+                ty = arr;
             }
         } else {
             ty = parse_type_name(p);
@@ -2534,17 +2555,45 @@ static Node *unary_expr(Parser *p) {
             callee->ident.name->loc = (char *)"malloc";
             callee->ident.name->len = 6;
             callee->ident.name->kind = TK_IDENT;
+            /* For `new T[N]` ty is TY_ARRAY whose base is the element
+             * type and whose array_size_expr is the per-call size
+             * expression. The C-level allocation uses
+             * `N * sizeof(elem)` so the size expression's side
+             * effects run (e.g. a virtual call returning the length)
+             * and the storage is correctly sized for the run-time
+             * element count. Pattern: g++.dg/template/new1.C. */
+            Type *elem_for_sizeof = ty;
+            Node *size_mul = NULL;
+            if (ty && ty->kind == TY_ARRAY && ty->array_size_expr) {
+                elem_for_sizeof = ty->base;
+                size_mul = ty->array_size_expr;
+            }
             Node *sizeof_arg = new_node(p, ND_SIZEOF, tok);
-            sizeof_arg->sizeof_.ty = ty;
+            sizeof_arg->sizeof_.ty = elem_for_sizeof;
             sizeof_arg->sizeof_.is_type = true;
+            Node *malloc_arg = sizeof_arg;
+            if (size_mul) {
+                Node *mul = new_node(p, ND_BINARY, tok);
+                mul->binary.op = TK_STAR;
+                mul->binary.lhs = size_mul;
+                mul->binary.rhs = sizeof_arg;
+                malloc_arg = mul;
+            }
             malloc_call = new_node(p, ND_CALL, tok);
             malloc_call->call.callee = callee;
             malloc_call->call.args = arena_alloc(p->arena, sizeof(Node *));
-            malloc_call->call.args[0] = sizeof_arg;
+            malloc_call->call.args[0] = malloc_arg;
             malloc_call->call.nargs = 1;
         }
+        /* Cast target: `T *` (element pointer) regardless of whether
+         * the source was `new T` or `new T[N]` — C++ §8.3.4/4
+         * [expr.new] says array-new returns a pointer to the first
+         * element. */
+        Type *cast_target = ty;
+        if (cast_target && cast_target->kind == TY_ARRAY)
+            cast_target = cast_target->base;
         Type *ptr_ty = new_type(p, TY_PTR);
-        ptr_ty->base = ty;
+        ptr_ty->base = cast_target;
         Node *cast = new_cast_node(p, ptr_ty, malloc_call, tok);
         cast->cast.is_new_expr = true;
         cast->cast.new_ctor_args = ctor_args;
