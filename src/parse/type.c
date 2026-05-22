@@ -6,6 +6,7 @@
  */
 
 #include "parse.h"
+#include "../template/clone.h"
 
 /* ------------------------------------------------------------------ */
 /* Type constructors                                                   */
@@ -1433,16 +1434,90 @@ DeclSpec parse_type_specifiers(Parser *p) {
              * namespaces are modelled. */
             if (parser_at(p, TK_LT)) {
                 Node *tid = parse_template_id(p, name_tok);  /* consumes <args> */
-                /* Trailing nested-name: enable_if<...>::type, possibly chained.
-                 * Each segment may itself be a template-id. */
+                /* Trailing nested-name: enable_if<...>::type, possibly
+                 * chained. If the LAST segment names a typedef in
+                 * the template's body, resolve it by substituting
+                 * the template-id args into the typedef target's
+                 * dependent type. This is the C++98 workhorse
+                 * `S<T>::type` pattern (N4659 §17.7.2 [temp.point]).
+                 * Without resolution, sea-front emits the entire
+                 * class as the type — `sizeof(S<int>::type)` becomes
+                 * `sizeof(struct sf__S_t_int_te_)`. Pattern:
+                 * g++.dg/ext/tmplattr5.C and any STL-style
+                 * `Container::iterator` access. */
+                Token *trailing_member = NULL;
                 while (parser_consume(p, TK_SCOPE)) {
                     /* N4659 §17.2/4 [temp.names]: 'template' keyword
                      * disambiguates a dependent member template-id. */
                     parser_consume(p, TK_KW_TEMPLATE);
                     if (parser_at(p, TK_IDENT)) {
                         Token *seg = parser_advance(p);
-                        if (parser_at(p, TK_LT))
+                        if (parser_at(p, TK_LT)) {
                             parse_template_id(p, seg);
+                            trailing_member = NULL;
+                        } else {
+                            trailing_member = seg;
+                        }
+                    }
+                }
+                /* Resolve template-id::trailing_member when the
+                 * trailing member is a typedef in the primary
+                 * template's body. */
+                if (trailing_member && tid && tid->template_id.nargs > 0 &&
+                    p->region) {
+                    Node *tmpl = find_primary_template_in_scope(p->region,
+                                    name_tok->loc, name_tok->len);
+                    if (tmpl && tmpl->kind == ND_TEMPLATE_DECL &&
+                        tmpl->template_decl.decl &&
+                        tmpl->template_decl.decl->kind == ND_CLASS_DEF) {
+                        Node *cls = tmpl->template_decl.decl;
+                        Node *typedef_node = NULL;
+                        for (int mi = 0; mi < cls->class_def.nmembers; mi++) {
+                            Node *m = cls->class_def.members[mi];
+                            if (!m || m->kind != ND_TYPEDEF) continue;
+                            if (!m->var_decl.name) continue;
+                            if (m->var_decl.name->len == trailing_member->len &&
+                                memcmp(m->var_decl.name->loc,
+                                        trailing_member->loc,
+                                        trailing_member->len) == 0) {
+                                typedef_node = m;
+                                break;
+                            }
+                        }
+                        if (typedef_node && typedef_node->var_decl.ty) {
+                            /* Build SubstMap from template params →
+                             * template-id args. */
+                            int np = tmpl->template_decl.nparams;
+                            int na = tid->template_id.nargs;
+                            SubstMap map = subst_map_new(p->arena,
+                                np > 0 ? np : 1);
+                            for (int i = 0; i < np && i < na; i++) {
+                                Node *param = tmpl->template_decl.params[i];
+                                Node *arg   = tid->template_id.args[i];
+                                if (!param || !param->param.name) continue;
+                                Type *aty = (arg && arg->kind == ND_VAR_DECL)
+                                              ? arg->var_decl.ty : NULL;
+                                if (aty)
+                                    subst_map_add(&map, param->param.name, aty);
+                            }
+                            Type *resolved = subst_type(
+                                typedef_node->var_decl.ty, &map, p->arena);
+                            if (resolved) {
+                                while (parser_at(p, TK_KW_CONST) ||
+                                       parser_at(p, TK_KW_VOLATILE)) {
+                                    if (parser_consume(p, TK_KW_CONST))
+                                        is_const = true;
+                                    if (parser_consume(p, TK_KW_VOLATILE))
+                                        is_volatile = true;
+                                }
+                                Type *copy = arena_alloc(p->arena, sizeof(Type));
+                                *copy = *resolved;
+                                if (is_const)    copy->is_const = true;
+                                if (is_volatile) copy->is_volatile = true;
+                                result.type = copy;
+                                return result;
+                            }
+                        }
                     }
                 }
                 /* East-const after the template-id: 'X<int> const&'. */

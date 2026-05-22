@@ -9,7 +9,7 @@
       (typedef)))
   (func-def void "qualified_template_id_in_type" (params)
     (block
-      (var-decl struct e<struct s<int,struct C>> "x" (num 0))
+      (var-decl struct s<int,struct C> "x" (num 0))
       (cast void (ident "x"))))
   (func-def void "cast_vs_paren" (params)
     (block
