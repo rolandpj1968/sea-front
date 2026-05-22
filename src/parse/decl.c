@@ -2159,6 +2159,11 @@ Node *parse_declaration(Parser *p) {
         p->qualified_decl_scope->owner_type) {
         decl->var_decl.class_type = p->qualified_decl_scope->owner_type;
     }
+    /* Stash the qualified-decl class before the clear below — my
+     * defaulted-function rewrite at the end of parse_declaration
+     * needs it to bind the synthesised FUNC_DEF's class_type for
+     * OOL `A::~A() = default;` etc. */
+    DeclarativeRegion *saved_qds_for_defaulted = p->qualified_decl_scope;
     /* Drop any qualified_decl_scope set by parse_declarator — only the
      * function-def branch consumes it; for plain declarations (incl.
      * declare-only ctors/dtors) it must not leak into the next decl. */
@@ -2185,6 +2190,46 @@ Node *parse_declaration(Parser *p) {
         decl->var_decl.storage_flags |= spec.flags;
         if (p->extern_c_depth > 0)
             decl->var_decl.storage_flags |= DECL_C_LINKAGE;
+    }
+    /* OOL defaulted function definition — `A::~A() = default;`
+     * etc. N4659 §11.4.2 [dcl.fct.def.default]. The init parser
+     * stashed an ND_NULLPTR carrying the `default` keyword as a
+     * marker (see expr.c TK_KW_DEFAULT branch). Promote the
+     * function-typed var-decl to an ND_FUNC_DEF with an EMPTY
+     * body so a linkable symbol is exported — the auto-synth
+     * dtor/ctor wrappers already chain member dtors/ctors around
+     * the body, so empty body is the right lowering for defaulted
+     * dtors / default-ctors. Class linkage is recovered from
+     * p->qualified_decl_scope (set when the declarator parsed a
+     * qualified name like `A::~A`); without this the emitted
+     * symbol wouldn't carry the class tag and would clash with
+     * any same-named free function. Gated on non-class scope:
+     * in-class `A() = default;` stays a var-decl so the class-
+     * body machinery's synthesis path handles it. Pattern:
+     * g++.dg/cpp0x/defaulted1.C — `A::~A() = default;`. */
+    if (decl && decl->kind == ND_VAR_DECL && decl->var_decl.ty &&
+        decl->var_decl.ty->kind == TY_FUNC &&
+        decl->var_decl.init &&
+        decl->var_decl.init->kind == ND_NULLPTR &&
+        decl->var_decl.init->tok &&
+        decl->var_decl.init->tok->kind == TK_KW_DEFAULT &&
+        (!p->region || p->region->kind != REGION_CLASS)) {
+        Node *func = new_node(p, ND_FUNC_DEF, decl->tok);
+        func->func.ret_ty = decl->var_decl.ty->ret;
+        func->func.name = decl->var_decl.name;
+        func->func.params = decl->var_decl.fn_params;
+        func->func.nparams = decl->var_decl.fn_nparams;
+        func->func.is_variadic = decl->var_decl.fn_is_variadic;
+        func->func.body = new_node(p, ND_BLOCK, decl->tok);
+        func->func.body->block.stmts = NULL;
+        func->func.body->block.nstmts = 0;
+        func->func.is_destructor = decl->var_decl.is_destructor;
+        func->func.is_constructor = decl->var_decl.is_constructor;
+        func->func.class_type = NULL;
+        if (saved_qds_for_defaulted &&
+            saved_qds_for_defaulted->kind == REGION_CLASS)
+            func->func.class_type = saved_qds_for_defaulted->owner_type;
+        return func;
     }
     return decl;
 }
