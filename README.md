@@ -1,6 +1,6 @@
 # sea-front
 
-**v0.1.0 — Bootstrap I — gcc 4.8 fixed point** ([CHANGELOG](CHANGELOG.md))
+**v0.2.0 — C++98 dg compliance** ([CHANGELOG](CHANGELOG.md))
 
 A C++-to-C transpiler written in C, for trusted bootstrapping of GCC and Clang.
 
@@ -73,10 +73,16 @@ See [Trusted Bootstrap Design](docs/trusted-bootstrap-design.md).
 
 - 144 lexer unit tests
 - 43 parser integration tests
-- 348 emit-c end-to-end tests (C++ in → C out → compile → execute → verify)
+- 451 emit-c end-to-end tests (C++ in → C out → compile → execute → verify)
 - 4 multi-TU deduplication tests
 - 28/28 gated + 52/52 stretch libstdc++ header smoke tests
 - 2 gcc-standalone tests
+- **g++.dg `dg-do run` corpus: 381 PASS / 6 FAIL.** All 6 FAILs are
+  out-of-scope for C++98: 2 are deliberately so (`eh/sighandle.C` signal
+  handlers, `eh/simd-4.C` SIMD intrinsics), 3 are C++11 features
+  (`cpp0x/implicit2.C` implicit-move via inherited ctor, `cpp0x/initlist49.C`
+  std::initializer_list, `tls/thread_local6g.C` C++11 thread_local dtor),
+  and 1 is flag-only (`init/copy3.C` needs `-fno-elide-constructors`).
 - gcc 4.8 source: 403 of 404 .o files in cc1plus rebuild compile clean
   through cc1plus-built-by-sea-front
 - gcc 14 libcpp/ source: 5 of 16 .cc files transpile + compile cleanly

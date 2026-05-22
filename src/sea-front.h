@@ -6,8 +6,8 @@
 #ifndef SEA_FRONT_H
 #define SEA_FRONT_H
 
-#define SF_VERSION "0.1.0"
-#define SF_VERSION_NAME "Bootstrap I — gcc 4.8 fixed point"
+#define SF_VERSION "0.2.0"
+#define SF_VERSION_NAME "C++98 dg compliance"
 
 #include <stdbool.h>
 #include <stdint.h>

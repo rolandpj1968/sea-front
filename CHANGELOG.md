@@ -1,5 +1,91 @@
 # Changelog
 
+## 0.2.0 — C++98 dg compliance (2026-05-22)
+
+All C++98-relevant entries in gcc's g++.dg `dg-do run` corpus pass.
+The remaining 6 FAILs are explicitly out-of-scope:
+
+- `eh/sighandle.C`, `eh/simd-4.C` — signal handlers / SIMD intrinsics;
+  by-design out of scope for a portable bootstrap C transpiler.
+- `cpp0x/implicit2.C`, `cpp0x/initlist49.C`, `tls/thread_local6g.C` —
+  C++11 features (the cpp0x/ folder is gcc's pre-standardisation working
+  draft name for C++11). Future work.
+- `init/copy3.C` — flag-only test (`-fno-elide-constructors`);
+  sea-front already elides where the standard permits.
+
+### Highlights
+
+**C++98 grind, this release:**
+
+- **Multi-inheritance virtual dispatch + thunks** — implicit-virtual
+  overrides (a derived method matching a base virtual's name+arity is
+  virtual without the keyword) propagate at class finalization. Secondary
+  vtables for non-first bases emit this-adjusting thunks; covariant
+  returns get the additional return-value adjustment so a `B*`-typed
+  slot really receives the B subobject's address.
+- **Two-phase name lookup** — non-dependent names inside a template
+  body bind at template-definition-point (phase 1). A namespace-scope
+  phase-1 binding is not rebound at phase-2 by a class member that
+  becomes visible only because a previously-dependent base became
+  concrete. Class-member phase-1 bindings (incl. `using B<T>::foo;`
+  injected via using-declarations) DO get re-resolved at phase-2 to
+  the instantiated class's same member.
+- **typename T::member in __PRETTY_FUNCTION__** — qualified
+  dependent types render as `typename T::member` in the signature
+  AND emit `; typename T::member = <resolved>` in the `[with ...]`
+  substitution suffix.
+- **User copy ctor invocation** — `T u = v;` / `T u(v);` calls the
+  user-declared copy ctor when one exists; transitive cases (the
+  immediate class has no user copy ctor but a base or member does)
+  expand to an inline subobject-by-subobject copy chain. Flat-block
+  comma-separated declarators (`T u, v(u);`) now push cleanups so
+  the dtor fires at scope exit.
+- **Defaulted / aggregate-init shapes** — `T::~T() = default;`
+  out-of-class produces a linkable body symbol. Aggregate
+  initialisation `T x = {e1, e2, ...};` with class members that have
+  user copy ctors calls per-member copy ctors with partial-destruction
+  unwind on throw.
+- **Qualified template typedef** — `S<T>::type` (and any STL-shape
+  `Container::iterator` / `Container::value_type`) resolves at parse
+  by substituting the template-id's args into the typedef target's
+  dependent type.
+
+**Earlier in the session (still in this release):**
+
+- **Operator new dispatch slice** — `new T[N]` lowers to `_Znam`,
+  `new T` to `_Znwm`; user-defined `::operator new` / `::operator
+  delete` mangled to the matching Itanium symbol overrides the
+  libstdc++ default at link time. On-throw chain calls the matching
+  `_ZdlPv` / `_ZdaPv` with the original pointer. Placement-new
+  threads the placement args through. Prelude provides static-inline
+  fallbacks over libc malloc/free for cc-without-`-lstdc++` linkage.
+- **Array-mem-init partial-destruction unwind** — when an element
+  ctor throws mid-array-mem-init, elements `[0..k-1]` get destroyed
+  in reverse before the throw propagates. N4659 §15.2/2 [except.ctor].
+- **Value-init zero-fill** — `: m()` mem-init for non-class scalar /
+  array, polymorphic class arrays (zero-init then default-construct),
+  `new T()` / `new T[N]()` for POD types.
+- **Noexcept entry-state snapshot** — a throw()-spec function called
+  during in-flight unwind doesn't trip its no-throw guard merely by
+  inheriting the caller's exception state.
+
+### Test counts
+
+- 144 lexer unit tests
+- 43 parser integration tests
+- 451 emit-c end-to-end tests
+- 4 multi-TU dedup tests
+- 28 gated + 52 stretch libstdc++ header smoke tests
+- 2 gcc-standalone tests
+- **g++.dg dg-do run: 381 PASS / 6 FAIL** (all 6 out-of-scope by design
+  / post-C++98 — see above)
+- libcpp.a rebuild via `scripts/sea-front-cc` succeeds end-to-end
+
+### Demos
+
+`demo/*.c` regenerated against the current sea-front output. Each
+demo's C output matches g++'s exit-code behavior on the same source.
+
 ## 0.1.0 — Bootstrap I — gcc 4.8 fixed point (2026-05-06)
 
 First tagged release. Sea-front clears the canonical bootstrappable.org

@@ -38,4 +38,3 @@ g++.dg/cpp0x/regress/abi-empty7.C
 # also fail; tests where we PASS something gcc-xfails are surprising
 # good news and stay in the PASS bucket.
 
-g++.dg/cpp0x/lambda/lambda-eh.C
