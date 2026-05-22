@@ -7779,8 +7779,168 @@ static void emit_init_with_target(Node *init, Type *target_ty) {
 /* If the var-decl has an initializer, emit " = <init>" (suffix used
  * by every emit_var_decl_inner exit path that doesn't ctor-call
  * the value into existence). */
+/* Forward decls — defined later in the file. */
+static bool class_has_user_copy_ctor(Type *cls);
+static bool class_transitively_needs_copy_call(Type *cls);
+
+/* True when target class has any data member of class type with a
+ * user-defined copy ctor — i.e. aggregate init via bitwise C
+ * struct copy would skip user-written body work. Conservative —
+ * also true for bases / nested members that have one. */
+static bool class_aggregate_needs_per_member_ctor(Type *cls) {
+    if (!cls || !cls->class_def) return false;
+    Node *cdef = cls->class_def;
+    for (int i = 0; i < cdef->class_def.nmembers; i++) {
+        Node *m = cdef->class_def.members[i];
+        if (!m || m->kind != ND_VAR_DECL) continue;
+        if (m->var_decl.storage_flags & DECL_STATIC) continue;
+        if (!m->var_decl.ty || m->var_decl.ty->kind == TY_FUNC) continue;
+        Type *mt = m->var_decl.ty;
+        while (mt && mt->kind == TY_ARRAY) mt = mt->base;
+        if (mt && mt->kind == TY_STRUCT &&
+            class_transitively_needs_copy_call(mt))
+            return true;
+    }
+    return false;
+}
+
+/* Emit aggregate initialisation `T name = { e1, e2, ... };` as an
+ * uninitialised declaration plus per-member copy operations. Each
+ * member whose type has a user copy ctor gets a copy-ctor call;
+ * the rest get bitwise field assignment. Partial-destruction
+ * unwind: if an element ctor throws, run dtors on the already-
+ * constructed members in reverse, then propagate via the
+ * function's throw chain (N4659 §15.2/2 [except.ctor]). Pattern:
+ * g++.dg/eh/partial1.C — A(const A&) throws during the middle
+ * element copy; B's already-constructed copy must run ~B before
+ * the exception unwinds to the caller. */
+static void emit_aggregate_init_per_member(Node *var) {
+    Type *cls = var->var_decl.ty;
+    Node *cdef = cls->class_def;
+    Node *init_list = var->var_decl.init;
+    if (!cdef || !init_list ||
+        init_list->kind != ND_INIT_LIST) return;
+    int ne = init_list->init_list.nelems;
+    /* Pre-walk: which class data members are we about to fill? */
+    Node *members[64];
+    int nm = 0;
+    for (int i = 0; i < cdef->class_def.nmembers && nm < 64; i++) {
+        Node *m = cdef->class_def.members[i];
+        if (!m || m->kind != ND_VAR_DECL) continue;
+        if (m->var_decl.storage_flags & DECL_STATIC) continue;
+        if (!m->var_decl.ty || m->var_decl.ty->kind == TY_FUNC) continue;
+        if (!m->var_decl.name) continue;
+        members[nm++] = m;
+    }
+    int n_init = ne < nm ? ne : nm;
+    static int g_agg_id = 0;
+    int aid = g_agg_id++;
+    bool has_cleanups = g_cf.func_has_cleanups;
+    /* For each init-list element: emit either a copy ctor call
+     * (user copy ctor exists) or a bitwise field assign. After
+     * the call/assign, on-throw-chain-check + partial destruction
+     * of [0..i-1]. */
+    for (int i = 0; i < n_init; i++) {
+        Node *m = members[i];
+        Node *elem = init_list->init_list.elems[i];
+        if (!m || !elem) continue;
+        Type *mt = m->var_decl.ty;
+        bool member_is_class = mt && mt->kind == TY_STRUCT;
+        bool member_needs_ctor = member_is_class &&
+            class_has_user_copy_ctor(mt);
+        if (member_needs_ctor) {
+            /* Build a one-element pty for the ctor mangling. Same
+             * trick as emit_inline_copy_chain. */
+            Type *cref_ty = NULL;
+            for (int j = 0; mt->class_def &&
+                              j < mt->class_def->class_def.nmembers; j++) {
+                Node *cm = mt->class_def->class_def.members[j];
+                if (!cm) continue;
+                bool d = (cm->kind == ND_FUNC_DEF && cm->func.is_constructor);
+                bool e = (cm->kind == ND_VAR_DECL && cm->var_decl.is_constructor);
+                if (!d && !e) continue;
+                int cnp = d ? cm->func.nparams
+                            : (cm->var_decl.ty ? cm->var_decl.ty->nparams : 0);
+                if (cnp != 1) continue;
+                Type *p0 = NULL;
+                if (d) {
+                    Node *pp = cm->func.params ? cm->func.params[0] : NULL;
+                    if (pp && pp->kind == ND_PARAM) p0 = pp->param.ty;
+                } else if (cm->var_decl.ty && cm->var_decl.ty->params) {
+                    p0 = cm->var_decl.ty->params[0];
+                }
+                if (!p0) continue;
+                Type *base = p0;
+                if (base->kind == TY_REF || base->kind == TY_RVALREF) base = base->base;
+                if (!base || base->kind != TY_STRUCT) continue;
+                if (!base->tag || !mt->tag) continue;
+                if (base->tag->len != mt->tag->len) continue;
+                if (memcmp(base->tag->loc, mt->tag->loc, mt->tag->len) != 0) continue;
+                cref_ty = p0; break;
+            }
+            Type *pty_buf[1] = { cref_ty };
+            emit_indent();
+            mangle_class_ctor(mt, cref_ty ? pty_buf : NULL, cref_ty ? 1 : 0);
+            fprintf(stdout, "(&%.*s.%.*s, &(",
+                    var->var_decl.name->len, var->var_decl.name->loc,
+                    m->var_decl.name->len, m->var_decl.name->loc);
+            emit_expr(elem);
+            fputs("));\n", stdout);
+        } else {
+            emit_indent();
+            fprintf(stdout, "%.*s.%.*s = ",
+                    var->var_decl.name->len, var->var_decl.name->loc,
+                    m->var_decl.name->len, m->var_decl.name->loc);
+            emit_expr(elem);
+            fputs(";\n", stdout);
+        }
+        /* On throw: unwind already-constructed members in reverse,
+         * then propagate via the chain. */
+        if (has_cleanups && i + 1 < n_init) {
+            emit_indent();
+            fputs("if (__sf_exc_state.state == __SF_UNWIND_THROW) { ", stdout);
+            for (int k = i; k >= 0; k--) {
+                Node *km = members[k];
+                Type *kmt = km->var_decl.ty;
+                if (kmt && kmt->kind == TY_STRUCT && kmt->has_dtor) {
+                    mangle_class_dtor(kmt);
+                    fprintf(stdout, "(&%.*s.%.*s); ",
+                            var->var_decl.name->len, var->var_decl.name->loc,
+                            km->var_decl.name->len, km->var_decl.name->loc);
+                }
+            }
+            bool in_try = false;
+            int tt = find_throw_target_from(g_cf.nlive, &in_try);
+            if (tt >= 0)
+                fprintf(stdout,
+                        in_try ? "__SF_unwind = __SF_UNWIND_THROW; goto __SF_try_%d_handler; "
+                               : "__SF_unwind = __SF_UNWIND_THROW; goto __SF_cleanup_%d; ",
+                        tt);
+            else
+                fputs("__SF_unwind = __SF_UNWIND_THROW; goto __SF_epilogue; ",
+                      stdout);
+            fputs("}\n", stdout);
+        }
+    }
+    (void)aid;
+}
+
+static bool var_decl_needs_aggregate_per_member(Node *n) {
+    if (!n || n->kind != ND_VAR_DECL) return false;
+    if (!n->var_decl.ty || n->var_decl.ty->kind != TY_STRUCT) return false;
+    if (!n->var_decl.init || n->var_decl.init->kind != ND_INIT_LIST)
+        return false;
+    if (!n->var_decl.name) return false;
+    return class_aggregate_needs_per_member_ctor(n->var_decl.ty);
+}
+
 static void emit_var_decl_init_suffix(Node *n) {
     if (!n->var_decl.init) return;
+    /* Aggregate init with at least one user-copy-ctor member is
+     * lowered separately at the surrounding emit_stmt; here we
+     * skip the `= {...}` suffix and let the per-member emit
+     * follow the bare declaration. */
+    if (var_decl_needs_aggregate_per_member(n)) return;
     fputs(" = ", stdout);
     emit_init_with_target(n->var_decl.init, n->var_decl.ty);
 }
@@ -9517,6 +9677,14 @@ static void emit_stmt(Node *n) {
             fputs(" = {0}", stdout);
         }
         fputs(";\n", stdout);
+        /* Aggregate init `T x = {e1, e2, ...};` where T has class
+         * members with user copy ctors. The bare declaration above
+         * left the storage uninitialised; emit per-member copy
+         * ctor calls (with partial-destruction unwind on throw)
+         * here. N4659 §15.6.2/12 [class.base.init]. */
+        if (var_decl_needs_aggregate_per_member(n)) {
+            emit_aggregate_init_per_member(n);
+        }
         /* Direct-init 'T x(args)' lowers to a ctor call right
          * after the declaration. The class type's tag determines
          * the mangled name (mangle_class_ctor → sf__T__ctor under
