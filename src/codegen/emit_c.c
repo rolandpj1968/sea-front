@@ -8615,6 +8615,261 @@ static void decl_cond_cleanup_close(int saved_nlive) {
  * has_ctor_init emit path (`T v; T_ctor(&v, args);`) takes over.
  * N4659 §11.6/14 [dcl.init.aggr] — copy-init from a ctor-call
  * collapses to a single direct-init under elision. */
+/* True when class `cls` has a USER-DECLARED copy constructor — a
+ * ctor taking exactly one parameter of (const)? T& or T. N4659
+ * §15.1/5 [class.copy.ctor]. Sea-front's default behavior for
+ * `T u = v;` / `T u(v);` is to emit a C struct assignment
+ * (equivalent to the implicit copy ctor's memberwise copy); when
+ * the user wrote their own copy ctor we must call THAT instead so
+ * any side-effects in the body (e.g. p = new int(...)) actually
+ * run. Pattern: g++.dg/opt/alias4.C — VB(const VB&) does work
+ * inside; sea-front previously emitted `u = v` and skipped it. */
+static bool class_has_user_copy_ctor(Type *cls) {
+    if (!cls || !cls->class_def) return false;
+    Node *cdef = cls->class_def;
+    for (int i = 0; i < cdef->class_def.nmembers; i++) {
+        Node *m = cdef->class_def.members[i];
+        if (!m) continue;
+        bool is_ctor_def = (m->kind == ND_FUNC_DEF && m->func.is_constructor);
+        bool is_ctor_decl = (m->kind == ND_VAR_DECL && m->var_decl.is_constructor);
+        if (!is_ctor_def && !is_ctor_decl) continue;
+        int np = is_ctor_def ? m->func.nparams
+                             : (m->var_decl.ty ? m->var_decl.ty->nparams : 0);
+        if (np != 1) continue;
+        Type *p0 = NULL;
+        if (is_ctor_def) {
+            Node *p = m->func.params ? m->func.params[0] : NULL;
+            if (p && p->kind == ND_PARAM) p0 = p->param.ty;
+        } else if (m->var_decl.ty && m->var_decl.ty->params) {
+            p0 = m->var_decl.ty->params[0];
+        }
+        if (!p0) continue;
+        /* T& or const T& or T (by-value, rare). */
+        Type *base = p0;
+        if (base->kind == TY_REF || base->kind == TY_RVALREF) base = base->base;
+        if (!base || base->kind != TY_STRUCT) continue;
+        if (!base->tag || !cls->tag) continue;
+        if (base->tag->len != cls->tag->len) continue;
+        if (memcmp(base->tag->loc, cls->tag->loc, cls->tag->len) != 0) continue;
+        return true;
+    }
+    return false;
+}
+
+/* True when `cls` OR any of its bases / class members (recursively)
+ * has a user-declared copy ctor — i.e. the implicit copy ctor for
+ * `cls` would need to invoke a user body somewhere in the
+ * subobject chain. Used to decide whether `T u = v;` can stay as a
+ * bitwise struct copy or has to expand into a per-subobject copy
+ * sequence. */
+static bool class_transitively_needs_copy_call(Type *cls) {
+    if (!cls || !cls->class_def) return false;
+    if (class_has_user_copy_ctor(cls)) return true;
+    Node *cdef = cls->class_def;
+    if (cls->class_region) {
+        for (int bi = 0; bi < cls->class_region->nbases; bi++) {
+            Type *bt = cls->class_region->bases[bi]->owner_type;
+            if (bt && class_transitively_needs_copy_call(bt)) return true;
+        }
+    }
+    for (int i = 0; i < cdef->class_def.nmembers; i++) {
+        Node *m = cdef->class_def.members[i];
+        if (!m || m->kind != ND_VAR_DECL) continue;
+        if (m->var_decl.storage_flags & DECL_STATIC) continue;
+        if (m->var_decl.ty && m->var_decl.ty->kind == TY_FUNC) continue;
+        Type *mt = m->var_decl.ty;
+        while (mt && mt->kind == TY_ARRAY) mt = mt->base;
+        if (mt && mt->kind == TY_STRUCT &&
+            class_transitively_needs_copy_call(mt))
+            return true;
+    }
+    return false;
+}
+
+/* Emit an inline copy sequence to initialise `dst_path` from
+ * `src_path` for class type `cls`. When `cls` has a user copy
+ * ctor, call it directly (this is where user-written side effects
+ * happen). Otherwise recurse: copy each base subobject, then
+ * memberwise-copy non-class members and recurse into class
+ * members.
+ *
+ * `dst_path` and `src_path` are member-access expressions like
+ * `u`, `u.__sf_base`, `u.__sf_base.__sf_base`, etc. — emitted
+ * verbatim. */
+static void emit_inline_copy_chain(const char *dst_path,
+                                    const char *src_path,
+                                    Type *cls) {
+    if (!cls || !cls->class_def) return;
+    if (class_has_user_copy_ctor(cls)) {
+        /* Build a single-arg type list so the ctor mangle picks
+         * the (const T&) copy ctor and not a same-arity overload.
+         * The argument's resolved type for mangling is what the
+         * existing direct-init path uses — TY_REF(const T). */
+        Type *cref_ty = NULL;
+        for (int i = 0; cls->class_def &&
+                          i < cls->class_def->class_def.nmembers; i++) {
+            Node *m = cls->class_def->class_def.members[i];
+            if (!m) continue;
+            bool is_def = (m->kind == ND_FUNC_DEF && m->func.is_constructor);
+            bool is_decl = (m->kind == ND_VAR_DECL && m->var_decl.is_constructor);
+            if (!is_def && !is_decl) continue;
+            int np = is_def ? m->func.nparams
+                            : (m->var_decl.ty ? m->var_decl.ty->nparams : 0);
+            if (np != 1) continue;
+            Type *p0 = NULL;
+            if (is_def) {
+                Node *pp = m->func.params ? m->func.params[0] : NULL;
+                if (pp && pp->kind == ND_PARAM) p0 = pp->param.ty;
+            } else if (m->var_decl.ty && m->var_decl.ty->params) {
+                p0 = m->var_decl.ty->params[0];
+            }
+            if (!p0) continue;
+            Type *base = p0;
+            if (base->kind == TY_REF || base->kind == TY_RVALREF) base = base->base;
+            if (!base || base->kind != TY_STRUCT) continue;
+            if (!base->tag || !cls->tag) continue;
+            if (base->tag->len != cls->tag->len) continue;
+            if (memcmp(base->tag->loc, cls->tag->loc, cls->tag->len) != 0) continue;
+            cref_ty = p0;
+            break;
+        }
+        Type *pty_buf[1] = { cref_ty };
+        emit_indent();
+        mangle_class_ctor(cls, cref_ty ? pty_buf : NULL, cref_ty ? 1 : 0);
+        fprintf(stdout, "(&%s, &%s);\n", dst_path, src_path);
+        return;
+    }
+    Node *cdef = cls->class_def;
+    /* Bases first (sea-front lays them out at __sf_base /
+     * __sf_baseN, in declaration order). */
+    if (cls->class_region) {
+        for (int bi = 0; bi < cls->class_region->nbases; bi++) {
+            Type *bt = cls->class_region->bases[bi]->owner_type;
+            if (!bt) continue;
+            char dpath[256], spath[256];
+            const char *fld = (bi == 0) ? "__sf_base" : NULL;
+            char fbuf[24];
+            if (!fld) { snprintf(fbuf, sizeof(fbuf), "__sf_base%d", bi); fld = fbuf; }
+            snprintf(dpath, sizeof(dpath), "%s.%s", dst_path, fld);
+            snprintf(spath, sizeof(spath), "%s.%s", src_path, fld);
+            emit_inline_copy_chain(dpath, spath, bt);
+        }
+    }
+    /* Then own members (non-static, non-function). */
+    for (int i = 0; i < cdef->class_def.nmembers; i++) {
+        Node *m = cdef->class_def.members[i];
+        if (!m || m->kind != ND_VAR_DECL) continue;
+        if (m->var_decl.storage_flags & DECL_STATIC) continue;
+        if (!m->var_decl.name) continue;
+        Type *mt = m->var_decl.ty;
+        if (!mt || mt->kind == TY_FUNC) continue;
+        Type *element = mt;
+        while (element && element->kind == TY_ARRAY) element = element->base;
+        if (element && element->kind == TY_STRUCT &&
+            class_transitively_needs_copy_call(element) &&
+            mt->kind != TY_ARRAY) {
+            char dpath[256], spath[256];
+            snprintf(dpath, sizeof(dpath), "%s.%.*s", dst_path,
+                     m->var_decl.name->len, m->var_decl.name->loc);
+            snprintf(spath, sizeof(spath), "%s.%.*s", src_path,
+                     m->var_decl.name->len, m->var_decl.name->loc);
+            emit_inline_copy_chain(dpath, spath, element);
+        } else {
+            emit_indent();
+            fprintf(stdout, "%s.%.*s = %s.%.*s;\n",
+                    dst_path,
+                    m->var_decl.name->len, m->var_decl.name->loc,
+                    src_path,
+                    m->var_decl.name->len, m->var_decl.name->loc);
+        }
+    }
+}
+
+/* `T u = v;` where v has class type matching T and T has a user-
+ * defined copy ctor: rewrite to has_ctor_init form so the existing
+ * direct-init machinery emits `T u; T_copy_ctor(&u, &v);` instead
+ * of a bitwise struct assignment. The is_copy struct-assignment
+ * shortcut at the var_decl emit path covers the trivial-class
+ * case; this rewrite catches `T u = v` specifically and only when
+ * a user ctor exists. */
+static void rewrite_copy_init_user_copy_ctor(Node *n) {
+    if (!n || n->kind != ND_VAR_DECL) return;
+    if (n->var_decl.has_ctor_init) return;
+    if (!n->var_decl.init || !n->var_decl.ty) return;
+    if (n->var_decl.ty->kind != TY_STRUCT) return;
+    Node *init = n->var_decl.init;
+    /* Only rewrite when the source is an LVALUE — bare ident,
+     * member access, deref. A function-call rvalue can't have its
+     * address taken (`&(f())` is ill-formed C), and cc's struct
+     * return into the target storage already gives the test the
+     * value it expects. Skipping the rewrite here keeps the
+     * bitwise `T u = f();` shape for call-returns. Pattern:
+     * tests/emit_c/copy_ctor.cpp `Box c = b.add(7);` would have
+     * triggered the ctor-call path with arg = ND_CALL whose
+     * `&(call)` emit cc rejects. */
+    if (init->kind != ND_IDENT && init->kind != ND_MEMBER &&
+        init->kind != ND_UNARY) return;
+    Type *it = init->resolved_type;
+    if (!it) return;
+    /* The init's type must reduce to the same class. Allow REF
+     * forms (function returning T& degenerates to T at the call
+     * site, but resolved_type may still carry the reference). */
+    Type *icls = it;
+    if (icls->kind == TY_REF || icls->kind == TY_RVALREF) icls = icls->base;
+    if (!icls || icls->kind != TY_STRUCT) return;
+    if (!icls->tag || !n->var_decl.ty->tag) return;
+    if (icls->tag->len != n->var_decl.ty->tag->len) return;
+    if (memcmp(icls->tag->loc, n->var_decl.ty->tag->loc,
+                icls->tag->len) != 0) return;
+    /* Rewrite when the immediate class has a user copy ctor (so
+     * the ctor-call path runs the user body) OR when a base /
+     * member transitively does (so the inline-copy-chain path
+     * fires for `T u = v;` through the same has_ctor_init
+     * machinery). */
+    if (!class_has_user_copy_ctor(n->var_decl.ty) &&
+        !class_transitively_needs_copy_call(n->var_decl.ty))
+        return;
+    n->var_decl.has_ctor_init = true;
+    Node **slot = malloc(sizeof(Node *));
+    slot[0] = init;
+    n->var_decl.ctor_args = slot;
+    n->var_decl.ctor_nargs = 1;
+    n->var_decl.init = NULL;
+}
+
+/* Decide whether the var_decl needs an inline-copy-chain emit
+ * (instead of either bitwise C struct copy or a direct ctor call).
+ * Fires for `T u = v;` / `T u(v);` where T itself has NO user
+ * copy ctor (so my rewrite_copy_init_user_copy_ctor didn't fire)
+ * but a base/member transitively does. */
+static bool var_decl_needs_inline_copy_chain(Node *n) {
+    if (!n || n->kind != ND_VAR_DECL) return false;
+    if (!n->var_decl.ty || n->var_decl.ty->kind != TY_STRUCT) return false;
+    if (!n->var_decl.name) return false;
+    Type *cls = n->var_decl.ty;
+    if (class_has_user_copy_ctor(cls)) return false;
+    if (!class_transitively_needs_copy_call(cls)) return false;
+    /* Two surface shapes: `T u = v;` (init non-null) and `T u(v);`
+     * (has_ctor_init with single arg of same class type). */
+    Node *src = NULL;
+    if (n->var_decl.init && !n->var_decl.has_ctor_init) {
+        src = n->var_decl.init;
+    } else if (n->var_decl.has_ctor_init && n->var_decl.ctor_nargs == 1 &&
+               n->var_decl.ctor_args) {
+        src = n->var_decl.ctor_args[0];
+    }
+    if (!src) return false;
+    Type *st = src->resolved_type;
+    if (!st) return false;
+    Type *scls = st;
+    if (scls->kind == TY_REF || scls->kind == TY_RVALREF) scls = scls->base;
+    if (!scls || scls->kind != TY_STRUCT) return false;
+    if (!scls->tag || !cls->tag) return false;
+    if (scls->tag->len != cls->tag->len) return false;
+    if (memcmp(scls->tag->loc, cls->tag->loc, cls->tag->len) != 0) return false;
+    return true;
+}
+
 static void rewrite_copy_init_ctor_call(Node *n) {
     if (!n || n->kind != ND_VAR_DECL) return;
     if (!n->var_decl.init || n->var_decl.init->kind != ND_CALL) return;
@@ -8782,9 +9037,17 @@ static void emit_block(Node *n) {
      * emit their statements directly without wrapping { } braces, so
      * variables remain visible in the enclosing scope. */
     if (n->block.is_flat) {
+        /* Flat blocks emit their statements at the enclosing scope.
+         * Each statement's var-decl must still register on the
+         * cleanup chain so its dtor fires at the surrounding
+         * block's exit. Without this, comma-separated declarators
+         * (`V v, u(v);`) emit but their dtors never run. Pattern:
+         * g++.dg/opt/alias4.C where `V v, u(v);` and `W w;` share
+         * a scope but only `w` got a cleanup before this fix. */
         for (int i = 0; i < n->block.nstmts; i++) {
             emit_indent();
             emit_stmt(n->block.stmts[i]);
+            push_user_var_cleanup(n->block.stmts[i]);
         }
         return;
     }
@@ -9197,6 +9460,7 @@ static void emit_stmt(Node *n) {
     }
     case ND_VAR_DECL:
         rewrite_copy_init_ctor_call(n);
+        rewrite_copy_init_user_copy_ctor(n);
         /* Block-scope inline-struct dependency, same shape as the
          * top-level emit path: 'static const struct T { ... } arr[];'
          * in a function body hangs T's body off var_decl.ty's class_def
@@ -9284,7 +9548,47 @@ static void emit_stmt(Node *n) {
                            arg_ty->base->tag->len) == 0)
                     is_copy = true;
             }
-            if (is_copy) {
+            /* The struct-assignment shortcut is only safe when the
+             * implicit copy ctor is in use — i.e. NO user-declared
+             * copy ctor (and no transitive one through bases /
+             * members). With a user copy ctor:
+             *   - On THIS class: fall through to the ctor-call
+             *     path so the user body runs.
+             *   - On a base or member only: emit an inline copy
+             *     chain that recurses into the subobject hierarchy
+             *     and calls each user copy ctor it finds.
+             * N4659 §15.8/1 [class.copy] + §15.1/5. Pattern:
+             * g++.dg/opt/alias4.C. */
+            if (is_copy && class_has_user_copy_ctor(n->var_decl.ty))
+                is_copy = false;
+            bool inline_copy_chain = (is_copy &&
+                class_transitively_needs_copy_call(n->var_decl.ty));
+            if (inline_copy_chain) {
+                char dst[128], src[256];
+                snprintf(dst, sizeof(dst), "%.*s",
+                         n->var_decl.name->len, n->var_decl.name->loc);
+                Node *src_node = n->var_decl.ctor_args[0];
+                /* Bare-ident source can be used as-is; anything more
+                 * complex gets stashed in a const-pointer temp so
+                 * the source isn't re-evaluated per subobject. */
+                if (src_node && src_node->kind == ND_IDENT && src_node->ident.name) {
+                    snprintf(src, sizeof(src), "%.*s",
+                             src_node->ident.name->len, src_node->ident.name->loc);
+                    emit_inline_copy_chain(dst, src, n->var_decl.ty);
+                } else {
+                    static int g_inline_copy_id = 0;
+                    int id = g_inline_copy_id++;
+                    emit_indent();
+                    fputs("const struct ", stdout);
+                    mangle_class_tag(n->var_decl.ty);
+                    fprintf(stdout, " *__sf_cps_%d = &(", id);
+                    emit_expr(src_node);
+                    fputs(");\n", stdout);
+                    char sbuf[64];
+                    snprintf(sbuf, sizeof(sbuf), "(*__sf_cps_%d)", id);
+                    emit_inline_copy_chain(dst, sbuf, n->var_decl.ty);
+                }
+            } else if (is_copy) {
                 emit_indent();
                 fprintf(stdout, "%.*s = ",
                         n->var_decl.name->len, n->var_decl.name->loc);
