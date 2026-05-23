@@ -10377,16 +10377,18 @@ static void emit_stmt(Node *n) {
                      * ctor is what the outer try catches; emitting
                      * just '{0}' skips that throw entirely. */
                     Node *op = thr->throw_.operand;
-                    bool is_func_cast_zero =
-                        op && op->kind == ND_CALL && op->call.nargs == 0 &&
-                        op->call.callee &&
-                        op->call.callee->kind == ND_IDENT;
-                    bool needs_ctor_call = op_ty &&
-                        (op_ty->has_virtual_methods ||
-                         op_ty->has_default_ctor);
-                    if (is_func_cast_zero && needs_ctor_call) {
-                        /* Hoist the ctor temp as ISO statements
-                         * before the throw macro; no stmt-expr. */
+                    /* `throw T(args)` — operand is a ctor-call.
+                     * Hoist as statements: temp + ctor(&temp,
+                     * args) + chain-check + throw macro. Covers
+                     * both 0-arg (synth/user default ctor) and
+                     * n-arg ctor calls. cproc/QBE need this
+                     * because `&(T(args))` isn't valid ISO C —
+                     * there's no `T` function in the C output,
+                     * only the mangled ctor. */
+                    bool is_func_cast =
+                        op && op->kind == ND_CALL && op->call.callee &&
+                        op->call.callee->kind == ND_IDENT && op->resolved_type;
+                    if (is_func_cast) {
                         int tid = g_cf.next_label_id++;
                         char tname[32];
                         snprintf(tname, sizeof(tname),
@@ -10394,13 +10396,34 @@ static void emit_stmt(Node *n) {
                         emit_indent();
                         emit_type(op_ty);
                         fprintf(stdout, " %s = {0};\n", tname);
-                        emit_indent();
-                        mangle_class_ctor(op_ty, NULL, 0);
-                        fprintf(stdout, "(&%s);\n", tname);
+                        /* Resolve ctor overload from the call's
+                         * args. For 0-arg + has_default_ctor,
+                         * resolution returns 0; mangle_class_ctor
+                         * picks the synth default. */
+                        Type **at = NULL;
+                        int na = collect_call_arg_types(
+                            op->call.args, op->call.nargs, &at);
+                        Type **pty = NULL;
+                        int np = resolve_overload(op_ty, NULL, true,
+                                                   at, na, false,
+                                                   &pty, NULL);
+                        if (np < 0 && na == 0 && op_ty->has_default_ctor) {
+                            np = 0; pty = NULL;
+                        }
+                        if (np >= 0) {
+                            emit_indent();
+                            mangle_class_ctor(op_ty, pty, np);
+                            fprintf(stdout, "(&%s", tname);
+                            for (int i = 0; i < na; i++) {
+                                fputs(", ", stdout);
+                                emit_arg_for_param(op->call.args[i],
+                                                    i < np ? pty[i] : NULL);
+                            }
+                            fputs(");\n", stdout);
+                        }
                         /* The ctor body may itself throw; if so the
                          * outer __SF_THROW_CLASS must NOT clobber the
-                         * just-set exc_state. The CHAIN check skips
-                         * out via the same label the ctor used. */
+                         * just-set exc_state. */
                         emit_indent();
                         fprintf(stdout, "__SF_CHAIN_THROW(%s);\n", lbl);
                         emit_indent();
@@ -12103,9 +12126,22 @@ static void emit_ctor_member_inits(Node *func) {
             }
         }
         if (any_body) {
+            /* Primary vptr install. The lhs's static vptr-field
+             * type is the OWNER class's vtable struct (B's, if
+             * this class inherits B as polymorphic base); the
+             * rhs is THIS class's vtable instance. They're
+             * structurally compatible (both pointer-to-fn-table
+             * starting with __dtor + the base's slots) but
+             * lexically different struct types. Cast through
+             * to satisfy strict-typed C compilers (cproc) and
+             * silence gcc's -Wincompatible-pointer-types. */
+            Type *owner = vptr_owner_class(cdef->class_def.ty);
+            if (!owner) owner = cdef->class_def.ty;
             emit_indent();
             emit_vptr_lhs(cdef->class_def.ty);
-            fputs(" = &", stdout);
+            fputs(" = (const struct ", stdout);
+            mangle_class_vtable_type(owner);
+            fputs(" *)&", stdout);
             mangle_class_vtable_instance(cdef->class_def.ty);
             fputs(";\n", stdout);
             /* Secondary-vtable install for each non-first polymorphic
@@ -14966,9 +15002,19 @@ methods_phase:;
          * Skip for extern-only polymorphic classes (no in-TU virtual
          * body): the vtable instance isn't emitted. */
         if (class_type->has_virtual_methods && any_virtual_has_body) {
+            /* Cast through to the owner's vtable-pointer type;
+             * the lhs vptr field is typed by the polymorphic-
+             * base owner's vtable struct, and the rhs is THIS
+             * class's vtable instance. Same rationale as the
+             * matching emit in emit_ctor_member_inits — stricter
+             * C compilers (cproc) reject the bare assignment. */
+            Type *owner_p = vptr_owner_class(class_type);
+            if (!owner_p) owner_p = class_type;
             emit_indent();
             emit_vptr_lhs(class_type);
-            fputs(" = &", stdout);
+            fputs(" = (const struct ", stdout);
+            mangle_class_vtable_type(owner_p);
+            fputs(" *)&", stdout);
             mangle_class_vtable_instance(class_type);
             fputs(";\n", stdout);
             /* Secondary-vtable install for non-first poly bases. Same
