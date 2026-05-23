@@ -6,8 +6,8 @@
 #ifndef SEA_FRONT_H
 #define SEA_FRONT_H
 
-#define SF_VERSION "0.2.0"
-#define SF_VERSION_NAME "C++98 dg compliance"
+#define SF_VERSION "0.2.1"
+#define SF_VERSION_NAME "C++03 grind start"
 
 #include <stdbool.h>
 #include <stdint.h>

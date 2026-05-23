@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.2.1 — C++03 grind start (2026-05-23)
+
+Continuing from C++98 compliance into deeper g++.dg territory.
+Each slice clears one or two specific tests + sets up
+infrastructure for future grinding.
+
+### Slices
+
+- **using-decl method mangling** — `using Base::foo;` inside
+  Derived now resolves at the call site: mangle as `Base::foo`,
+  pass `&d.__sf_base` as `this`. Declaration grew
+  `using_decl_source_class` to record the source class at the
+  using-decl parse site. Pattern: g++.dg/inherit/using2.C.
+- **Aggregate init copy elision** — `B b = { T() }` constructs
+  T directly into the aggregate slot (calls T's default ctor on
+  the member, not a copy ctor). Required for tests where T's
+  ctor body records `this` for later identity checks. The
+  emit_var_decl_inner ` = ` path also gates on the
+  aggregate-per-member detector so the bitwise + per-member
+  emit pair doesn't double-fire. Pattern: g++.dg/init/aggr2.C.
+- **std::nothrow asm rename** — `extern const std::nothrow_t
+  nothrow;` gets an `__asm__("_ZSt7nothrow")` rename at the
+  canonical declaration so the emitted C symbol matches
+  libstdc++'s exported form. Pattern: g++.dg/init/new5.C.
+- **Singleton operator new/delete mangling** — a SINGLE user-
+  defined `::operator new` / `::operator delete` (no visible
+  overload set) now still routes through the mangler so the
+  Itanium aliasing fires and the def overrides libstdc++'s
+  default at link. Pattern: g++.dg/init/new41.C.
+
+### Result
+
+dg: 385 PASS / 6 FAIL (from 381/6 at v0.2.0). Same out-of-scope
+6 (2 signal/SIMD, 3 C++11, 1 flag-only) as before.
+
 ## 0.2.0 — C++98 dg compliance (2026-05-22)
 
 All C++98-relevant entries in gcc's g++.dg `dg-do run` corpus pass.

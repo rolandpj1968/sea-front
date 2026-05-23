@@ -1,6 +1,6 @@
 # sea-front
 
-**v0.2.0 — C++98 dg compliance** ([CHANGELOG](CHANGELOG.md))
+**v0.2.1 — C++03 grind start** ([CHANGELOG](CHANGELOG.md))
 
 A C++-to-C transpiler written in C — turns C++ source into portable C that
 any standard C compiler can build. Used in two complementary ways:
@@ -97,7 +97,7 @@ See [Trusted Bootstrap Design](docs/trusted-bootstrap-design.md).
 - 4 multi-TU deduplication tests
 - 28/28 gated + 52/52 stretch libstdc++ header smoke tests
 - 2 gcc-standalone tests
-- **g++.dg `dg-do run` corpus: 382 PASS / 6 FAIL.** All 6 FAILs are
+- **g++.dg `dg-do run` corpus: 385 PASS / 6 FAIL.** All 6 FAILs are
   out-of-scope for C++98: 2 are deliberately so (`eh/sighandle.C` signal
   handlers, `eh/simd-4.C` SIMD intrinsics), 3 are C++11 features
   (`cpp0x/implicit2.C` implicit-move via inherited ctor, `cpp0x/initlist49.C`
