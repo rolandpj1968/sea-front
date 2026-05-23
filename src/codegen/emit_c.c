@@ -12242,6 +12242,46 @@ static void emit_ctor_member_inits(Node *func) {
                         fputs(";\n", stdout);
                         continue;
                     }
+                    /* Aggregate-init mem-init for a base that has no
+                     * matching ctor: 'Derived(...) : Aggr{ args... }'
+                     * where Aggr is an aggregate (no user ctors).
+                     * Sea-front's MemInit struct doesn't distinguish
+                     * paren-vs-brace, so detect by structure: base
+                     * has no default ctor (so the {} form is the only
+                     * legal way to init with args), and the base's
+                     * class_def has at least 'na' data members. Emit
+                     * field-by-field assignment matching the aggregate-
+                     * init semantics (C++11 N4659 §11.6.1 [dcl.init.aggr]
+                     * + §15.6.2/4 — bases can be aggregate-initialised
+                     * in the mem-init list). Pattern: glibc's
+                     * <atomic_base.h> atomic_flag(bool i)
+                     *   : __atomic_flag_base{ _S_init(i) } {} */
+                    if (na > 0 && base->class_def) {
+                        Node *bcd = base->class_def;
+                        int data_mem_emitted = 0;
+                        for (int mi_ix = 0;
+                             mi_ix < bcd->class_def.nmembers &&
+                                 data_mem_emitted < na;
+                             mi_ix++) {
+                            Node *bm = bcd->class_def.members[mi_ix];
+                            if (!bm || bm->kind != ND_VAR_DECL) continue;
+                            if (bm->var_decl.ty &&
+                                bm->var_decl.ty->kind == TY_FUNC) continue;
+                            if (!bm->var_decl.name) continue;
+                            if (bm->var_decl.storage_flags & DECL_STATIC) continue;
+                            emit_indent();
+                            fputs("this->", stdout);
+                            if (b == 0) fputs("__sf_base", stdout);
+                            else        fprintf(stdout, "__sf_base%d", b);
+                            fputs(".", stdout);
+                            emit_token_text(bm->var_decl.name);
+                            fputs(" = ", stdout);
+                            emit_expr(base_mi->args[data_mem_emitted]);
+                            fputs(";\n", stdout);
+                            data_mem_emitted++;
+                        }
+                        if (data_mem_emitted == na) continue;
+                    }
                     if (na != 0)
                         die_no_overload(base, NULL, na,
                                          "base mem-init ctor call");
