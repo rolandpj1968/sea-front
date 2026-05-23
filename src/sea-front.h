@@ -6,8 +6,8 @@
 #ifndef SEA_FRONT_H
 #define SEA_FRONT_H
 
-#define SF_VERSION "0.2.2"
-#define SF_VERSION_NAME "C++03 grind continued"
+#define SF_VERSION "0.2.3"
+#define SF_VERSION_NAME "type traits + weak proto"
 
 #include <stdbool.h>
 #include <stdint.h>

@@ -1,6 +1,6 @@
 # sea-front
 
-**v0.2.2 — C++03 grind continued** ([CHANGELOG](CHANGELOG.md))
+**v0.2.3 — type traits + weak proto** ([CHANGELOG](CHANGELOG.md))
 
 A C++-to-C transpiler written in C — turns C++ source into portable C that
 any standard C compiler can build. Used in two complementary ways:

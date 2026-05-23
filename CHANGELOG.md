@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.2.3 — type traits + weak proto (2026-05-23)
+
+Two more slices, each clears a family of tests:
+
+- **__has_nothrow_copy / _constructor / _assign refined** — the
+  trait now finds the user-declared candidate (copy ctor /
+  default ctor / op=) and returns its is_nothrow flag, instead
+  of returning 0 whenever ANY user ctor was declared. Templates
+  are NEVER copy ctors (N4659 §15.8.1/2) so ND_TEMPLATE_DECL
+  members are skipped — the implicit copy ctor is still
+  generated. Pattern: g++.dg/ext/has_nothrow_copy-{2..7}.C.
+- **weak attribute on free-function prototype** — `extern void
+  f() __attribute__((weak))` is parsed as ND_VAR_DECL with
+  TY_FUNC; the proto-emit path passed ctor/dtor attributes
+  through but dropped attr_weak. The linker then errored on
+  unsatisfied weak symbols instead of leaving them null at run
+  time. Mirror the FUNC_DEF path. Pattern: g++.dg/warn/weak1.C.
+
+### Result
+
+dg: 398 PASS / 6 FAIL (from 391/6 at v0.2.2). Same 6 out-of-
+scope failures unchanged.
+
 ## 0.2.2 — C++03 grind continued (2026-05-23)
 
 More targeted slices through g++.dg. Each one clears one
