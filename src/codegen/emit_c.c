@@ -11961,6 +11961,21 @@ static bool free_func_name_is_overloaded(Token *name) {
      * N4659 §6.6.1 [basic.start.main]/3 leaves the linkage
      * implementation-defined, but the de-facto ABI is C linkage. */
     if (name->len == 4 && memcmp(name->loc, "main", 4) == 0) return false;
+    /* `operator new` / `operator delete` and friends ALWAYS go
+     * through the mangler so the Itanium aliasing in
+     * emit_free_func_mangled_name fires — a user-defined
+     * `::operator new[](size_t)` must end up emitted as `_Znam`
+     * so it overrides libstdc++'s default at link time.
+     * Otherwise, a single user-defined operator (no overload set
+     * visible to lookup) would emit as bare `operator` which
+     * isn't a real symbol. Pattern: g++.dg/init/new41.C — single
+     * user `operator new[]` and `new S[0]` must call it. */
+    if (name->len == 8 && memcmp(name->loc, "operator", 8) == 0) {
+        OperatorKind k = operator_kind_from_method_name(name);
+        if (k == OP_NEW || k == OP_NEW_ARRAY ||
+            k == OP_DELETE || k == OP_DELETE_ARRAY)
+            return true;
+    }
     /* Already-mangled name (template instantiation pre-bakes the full
      * '_p_..._pe_' suffix into the synthesized ident). Returning true
      * here would re-mangle, doubling the suffix. The pre-baked name
