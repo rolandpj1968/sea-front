@@ -13773,6 +13773,13 @@ static void emit_class_def(Node *n) {
 
     fputs((class_type && class_type->kind == TY_UNION) ? "union " : "struct ",
           stdout);
+    /* Packed attribute in leading position — N4659 doesn't cover GNU
+     * attributes; cproc accepts ATTRPACKED only on the declspec
+     * (between 'struct' and the tag), gcc/clang accept both leading
+     * and trailing. Emit leading for portability. The trailing
+     * '} __attribute__((packed));' shape was the previous form. */
+    if (class_type && class_type->is_packed)
+        fputs("__attribute__((packed)) ", stdout);
     if (class_type)
         emit_mangled_class_tag(class_type);
     else if (n->class_def.tag)
@@ -13960,14 +13967,11 @@ static void emit_class_def(Node *n) {
         fputs("char __sf_empty;\n", stdout);
     }
     g_indent--;
-    /* GNU __attribute__((packed)) — pass-through to the C compiler
-     * which packs the struct (no padding between fields). Goes
-     * between '}' and ';' on the struct definition. Pattern:
-     * g++.dg/ext/packed4.C. */
-    if (class_type && class_type->is_packed)
-        fputs("} __attribute__((packed));\n", stdout);
-    else
-        fputs("};\n", stdout);
+    /* GNU __attribute__((packed)) is emitted in leading position
+     * above (between 'struct' and the tag) so cproc accepts it; the
+     * gcc/clang-accepted trailing form '} __attribute__((packed));'
+     * worked for those back-ends but not cproc. */
+    fputs("};\n", stdout);
 
     /* Static data members — §11.4.9.2 [class.static.data]. Skipped
      * from the struct body above; emit here as TU-scope variables
