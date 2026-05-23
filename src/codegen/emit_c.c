@@ -2692,6 +2692,74 @@ static bool emit_pointer_to_array_declarator(Type *ty, Token *name) {
 }
 
 
+/* ================================================================== */
+/* Back-end traits                                                     */
+/* ================================================================== */
+
+/*
+ * Per-back-end capability matrix. Sea-front's emit code calls
+ * sf_require_backend_supports() at the point where a feature is about
+ * to be lowered — if the active back-end doesn't support it, we fail
+ * loudly rather than emit C that miscompiles or fails downstream with
+ * a confusing error.
+ *
+ * Extension model: add a 'supports_X' bool to BackendTraits, populate
+ * it in each preset (GCC_TRAITS, CPROC_TRAITS), and gate the relevant
+ * emit site with sf_require_backend_supports(traits()->supports_X, "X").
+ *
+ * Selection: SEA_BACKEND env var ("cproc" picks CPROC_TRAITS; anything
+ * else — including unset — defaults to GCC_TRAITS, which currently
+ * advertises support for everything since the gcc back-end accepts
+ * sea-front's full emit surface).
+ */
+typedef struct BackendTraits {
+    const char *name;
+    bool supports_long_double;       /* C99 long double type */
+    bool supports_complex;           /* C99 _Complex */
+    bool supports_cleanup_attribute; /* GCC __attribute__((cleanup(h))) */
+    bool supports_stmt_expr;         /* GCC ({ stmts; expr; }) */
+    /* Pending entries (cproc upstream items not yet wired into emit
+     * call sites — listed here as the traits surface we'll need):
+     *   supports_volatile_store, supports_weak_extern_decl,
+     *   supports_packed_enum, supports_section_attribute. */
+} BackendTraits;
+
+static const BackendTraits GCC_TRAITS = {
+    .name = "gcc",
+    .supports_long_double       = true,
+    .supports_complex           = true,
+    .supports_cleanup_attribute = true,
+    .supports_stmt_expr         = true,
+};
+
+static const BackendTraits CPROC_TRAITS = {
+    .name = "cproc",
+    .supports_long_double       = false,  /* cproc-qbe gap */
+    .supports_complex           = false,  /* cproc gap */
+    .supports_cleanup_attribute = false,  /* cproc silently drops */
+    .supports_stmt_expr         = false,  /* cproc rejects GNU stmt-expr */
+};
+
+static const BackendTraits *sf_backend_traits(void) {
+    static const BackendTraits *cached = NULL;
+    if (cached) return cached;
+    const char *backend = getenv("SEA_BACKEND");
+    cached = (backend && strcmp(backend, "cproc") == 0)
+             ? &CPROC_TRAITS : &GCC_TRAITS;
+    return cached;
+}
+
+static void sf_require_backend_supports(bool supported, const char *feature) {
+    if (supported) return;
+    const BackendTraits *t = sf_backend_traits();
+    fprintf(stderr,
+        "sea-front: '%s' is not supported by the '%s' back-end "
+        "(SEA_BACKEND=%s). Failing now to surface the gap rather "
+        "than emit C that miscompiles or fails downstream.\n",
+        feature, t->name, t->name);
+    exit(2);
+}
+
 static void emit_type(Type *ty) {
     if (!ty) { fputs("/*?*/ int", stdout); return; }
 
@@ -2714,12 +2782,21 @@ static void emit_type(Type *ty) {
     bool is_ptr = ty->kind == TY_PTR;
     if (!is_ptr) {
         if (ty->is_const)    fputs("const ", stdout);
+        /* Note: volatile is not gated by sf_require_backend_supports
+         * here. Sea-front's parser leaks is_volatile=true onto Type
+         * copies in some paths (the cv-poisoning hazard documented in
+         * feedback_type_copy_on_cv) — false-positive triggering. When
+         * that's tracked down, gate this site like the others. */
         if (ty->is_volatile) fputs("volatile ", stdout);
         /* _Complex prefix — C99/C11 §6.2.5/11. Only the scalar
          * arithmetic types are valid carriers; the parser preserves
          * the underlying real type (int/float/double/...) on the
          * base Type, and we re-emit _Complex here for round-trip. */
-        if (ty->is_complex)  fputs("_Complex ", stdout);
+        if (ty->is_complex) {
+            sf_require_backend_supports(
+                sf_backend_traits()->supports_complex, "_Complex");
+            fputs("_Complex ", stdout);
+        }
     }
 
     switch (ty->kind) {
@@ -2745,7 +2822,10 @@ static void emit_type(Type *ty) {
     case TY_LLONG:   fputs(ty->is_unsigned ? "unsigned long long" : "long long", stdout); return;
     case TY_FLOAT:   fputs("float", stdout); return;
     case TY_DOUBLE:  fputs("double", stdout); return;
-    case TY_LDOUBLE: fputs("long double", stdout); return;
+    case TY_LDOUBLE: sf_require_backend_supports(
+                         sf_backend_traits()->supports_long_double,
+                         "long double");
+                     fputs("long double", stdout); return;
     case TY_PTR:
         /* Function-pointer type in type-expression position.
          * Handles arbitrary pointer depth: T(*)(args) for single
@@ -2773,7 +2853,7 @@ static void emit_type(Type *ty) {
         emit_type(ty->base);
         fputs("*", stdout);
         if (ty->is_const)    fputs(" const", stdout);
-        if (ty->is_volatile) fputs(" volatile", stdout);
+        if (ty->is_volatile) fputs(" volatile", stdout);  /* see note on volatile leak above */
         return;
     /* References — emit as pointer in C (caller passes &x).
      * A reference to a function type (void(&)()) is also a single
@@ -8398,7 +8478,10 @@ static void emit_cxx_type(Type *t) {
         fputs(t->is_unsigned ? "long long unsigned int" : "long long int", stdout); break;
     case TY_FLOAT:  fputs("float", stdout); break;
     case TY_DOUBLE: fputs("double", stdout); break;
-    case TY_LDOUBLE: fputs("long double", stdout); break;
+    case TY_LDOUBLE: sf_require_backend_supports(
+                         sf_backend_traits()->supports_long_double,
+                         "long double");
+                     fputs("long double", stdout); break;
     case TY_PTR:
         emit_cxx_type(t->base);
         if (t->is_const) fputs("* const", stdout);
@@ -9168,29 +9251,11 @@ static void emit_var_decl_inner(Node *n) {
     }
     /* GCC cleanup attribute — pass through so the back-end cc handles
      * the cleanup semantics on the C-level variable. Goes between the
-     * declarator-id and the initializer in gcc's accepted grammar.
-     *
-     * Back-ends that don't honor __attribute__((cleanup)) — currently
-     * cproc — silently drop the attribute and never call the handler,
-     * which is a runtime miscompile with no diagnostic. When the env
-     * announces such a back-end, error loudly here instead. */
+     * declarator-id and the initializer in gcc's accepted grammar. */
     if (n->var_decl.cleanup_attr_name) {
-        const char *backend = getenv("SEA_BACKEND");
-        if (backend && strcmp(backend, "cproc") == 0) {
-            File *fl = n->var_decl.cleanup_attr_name->file;
-            const char *file = (fl && fl->name) ? fl->name : "<unknown>";
-            fprintf(stderr,
-                "sea-front: %s:%d: __attribute__((cleanup(%.*s))) is not "
-                "honored by the cproc back-end (SEA_BACKEND=cproc). "
-                "The handler would silently never run; failing the build "
-                "now to surface the gap. Either pick a back-end that "
-                "supports the cleanup attribute, or rewrite the source "
-                "to manage the resource explicitly.\n",
-                file, n->var_decl.cleanup_attr_name->line,
-                n->var_decl.cleanup_attr_name->len,
-                n->var_decl.cleanup_attr_name->loc);
-            exit(2);
-        }
+        sf_require_backend_supports(
+            sf_backend_traits()->supports_cleanup_attribute,
+            "__attribute__((cleanup))");
         fputs(" __attribute__((cleanup(", stdout);
         emit_token_text(n->var_decl.cleanup_attr_name);
         fputs(")))", stdout);
