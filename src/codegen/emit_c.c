@@ -6205,6 +6205,31 @@ static void emit_expr(Node *n) {
             callee->ident.resolved_decl->home &&
             callee->ident.resolved_decl->home->owner_type &&
             callee->ident.resolved_decl->home->owner_type->tag) {
+            /* Function-pointer data member called from inside a method
+             * body: 'fn(arg)' where fn is 'void(*)(void*)'. Sema
+             * resolves the unqualified name to the member Declaration
+             * (implicit-this), but the call should lower as
+             * 'this->fn(arg)' (data-member load + indirect call), not
+             * as a mangled method dispatch 'Class_fn(this, arg)'.
+             * Detect by the resolved decl's type being TY_PTR-to-FUNC
+             * (or bare TY_FUNC) and re-route as a member access call.
+             * Pattern: glibc's __pthread_cleanup_class::~dtor doing
+             * '__cancel_routine(__cancel_arg)'. */
+            Type *rdty = callee->ident.resolved_decl->type;
+            bool rd_is_fnptr_member =
+                rdty && rdty->kind == TY_PTR && rdty->base &&
+                rdty->base->kind == TY_FUNC;
+            if (rd_is_fnptr_member) {
+                fputs("this->", stdout);
+                emit_token_text(callee->ident.name);
+                fputc('(', stdout);
+                for (int i = 0; i < n->call.nargs; i++) {
+                    if (i > 0) fputs(", ", stdout);
+                    emit_expr(n->call.args[i]);
+                }
+                fputc(')', stdout);
+                return;
+            }
             Type *class_type = callee->ident.resolved_decl->home->owner_type;
             /* The resolved decl's home is the SOURCE template class
              * (no template args). When emitting inside a class-template
