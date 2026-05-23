@@ -836,38 +836,77 @@ DeclSpec parse_type_specifiers(Parser *p) {
                         int m_np = m_funcdef ? m->func.nparams
                                              : m->var_decl.ty->nparams;
                         if (!mname) continue;
-                        /* Walk base classes looking for a matching
-                         * virtual. Single-level scan; transitive
-                         * inheritance is handled because each base
-                         * already had its own implicit-virtual pass
-                         * run when ITS class_def was finalized. */
+                        /* Walk the FULL inheritance graph (depth-
+                         * first, including transitive bases) looking
+                         * for a virtual method with the same name +
+                         * nparams. Recursion is needed for cases
+                         * like `EQU : RA : R : virtual Model`
+                         * where the intermediate classes don't
+                         * redeclare a Model virtual but EQU
+                         * overrides it without the explicit
+                         * `virtual` keyword. Pattern:
+                         * g++.dg/abi/covariant4.C — `EQU::name()`
+                         * has no `virtual` keyword but Model::name
+                         * is virtual through 3 levels of bases. */
                         bool found_match = false;
-                        for (int bi = 0; bi < ty->class_region->nbases &&
-                                          !found_match; bi++) {
-                            Type *bt = ty->class_region->bases[bi]->owner_type;
-                            if (!bt || !bt->class_def) continue;
-                            Node *bd = bt->class_def;
-                            for (int bj = 0; bj < bd->class_def.nmembers; bj++) {
-                                Node *bm = bd->class_def.members[bj];
-                                if (!bm) continue;
-                                bool bm_funcdef = (bm->kind == ND_FUNC_DEF &&
-                                                    bm->func.is_virtual);
-                                bool bm_decl    = (bm->kind == ND_VAR_DECL &&
-                                                    bm->var_decl.is_virtual &&
-                                                    bm->var_decl.ty &&
-                                                    bm->var_decl.ty->kind == TY_FUNC);
-                                if (!bm_funcdef && !bm_decl) continue;
-                                Token *bn = bm_funcdef ? bm->func.name
-                                                       : bm->var_decl.name;
-                                int b_np = bm_funcdef ? bm->func.nparams
-                                                      : bm->var_decl.ty->nparams;
-                                if (!bn) continue;
-                                if (bn->len != mname->len) continue;
-                                if (memcmp(bn->loc, mname->loc,
-                                            mname->len) != 0) continue;
-                                if (b_np != m_np) continue;
-                                found_match = true;
-                                break;
+                        {
+                            Type *worklist[32];
+                            int  wl_n = 0;
+                            for (int bi = 0;
+                                 bi < ty->class_region->nbases && wl_n < 32;
+                                 bi++) {
+                                Type *bt = ty->class_region->bases[bi]->owner_type;
+                                if (bt) worklist[wl_n++] = bt;
+                            }
+                            int wi = 0;
+                            while (wi < wl_n && !found_match) {
+                                Type *bt = worklist[wi++];
+                                if (!bt || !bt->class_def) continue;
+                                Node *bd = bt->class_def;
+                                for (int bj = 0; bj < bd->class_def.nmembers; bj++) {
+                                    Node *bm = bd->class_def.members[bj];
+                                    if (!bm) continue;
+                                    bool bm_funcdef = (bm->kind == ND_FUNC_DEF &&
+                                                        bm->func.is_virtual);
+                                    bool bm_decl    = (bm->kind == ND_VAR_DECL &&
+                                                        bm->var_decl.is_virtual &&
+                                                        bm->var_decl.ty &&
+                                                        bm->var_decl.ty->kind == TY_FUNC);
+                                    if (!bm_funcdef && !bm_decl) continue;
+                                    Token *bn = bm_funcdef ? bm->func.name
+                                                           : bm->var_decl.name;
+                                    int b_np = bm_funcdef ? bm->func.nparams
+                                                          : bm->var_decl.ty->nparams;
+                                    if (!bn) continue;
+                                    if (bn->len != mname->len) continue;
+                                    if (memcmp(bn->loc, mname->loc,
+                                                mname->len) != 0) continue;
+                                    if (b_np != m_np) continue;
+                                    found_match = true;
+                                    break;
+                                }
+                                /* Enqueue bt's direct bases for the
+                                 * depth-first walk. Cap at 32 entries
+                                 * — sea-front hasn't seen wider
+                                 * inheritance graphs in practice; if
+                                 * it does, bump the cap. */
+                                if (!found_match && bt->class_region) {
+                                    for (int bi = 0;
+                                         bi < bt->class_region->nbases && wl_n < 32;
+                                         bi++) {
+                                        Type *bt2 = bt->class_region->bases[bi]->owner_type;
+                                        if (!bt2) continue;
+                                        /* Skip duplicates (vbase
+                                         * reachable via multiple
+                                         * paths). */
+                                        bool dup = false;
+                                        for (int wj = 0; wj < wl_n; wj++)
+                                            if (worklist[wj] == bt2) {
+                                                dup = true; break;
+                                            }
+                                        if (!dup) worklist[wl_n++] = bt2;
+                                    }
+                                }
                             }
                         }
                         if (found_match) {
