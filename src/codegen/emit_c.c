@@ -1446,6 +1446,17 @@ static void hoist_new_expr(Node *cast, bool in_shortcircuit) {
     Type *tcast = cast->cast.ty;
     if (!tcast) return;
     Type *pointee = tcast->base;
+    /* parse_new misreads `new T(arg)` for non-class T as a
+     * new-expression whose target is a function type `T(...)`
+     * rather than `T*` with ctor args. The resulting cast.ty is
+     * `T(*)(...)` which sea-front's emit_type can't interleave a
+     * decl name into (the variable name belongs INSIDE the
+     * parens of a function-pointer declarator: `T(*name)(...)`).
+     * Fall back to the existing emit_expr stmt-expr path for
+     * these — its raw cast doesn't need a named decl. The deeper
+     * fix is in parse_new; tracked separately. Pattern:
+     * g++.dg/opt/alias4.C `new int(va.q - va.p)`. */
+    if (pointee && pointee->kind == TY_FUNC) return;
 
     /* Class pointee: resolve through tag to catch the canonical
      * Type with has_default_ctor / class_region populated. */
@@ -1464,11 +1475,8 @@ static void hoist_new_expr(Node *cast, bool in_shortcircuit) {
     bool need_ctor = is_class &&
         ((na > 0) || p_resolved->has_default_ctor);
 
-    /* Skip paths the stmt-expr emit handles with control flow we
-     * can't (yet) lift out cleanly. */
-    if (cast->cast.new_array_count && need_ctor) return;            /* per-element for-loop */
+    /* Skip paths the stmt-expr emit still handles inline. */
     if (is_class && need_ctor && g_cf.func_has_cleanups) return;    /* throw chain */
-    if (cast->cast.new_array_count && na > 0) return;               /* braced array */
 
     /* Implicit-copy-ctor case (na==1, no matching ctor) — handled
      * by the stmt-expr emit's `*tmp = arg` path. Detect via the
@@ -1484,11 +1492,36 @@ static void hoist_new_expr(Node *cast, bool in_shortcircuit) {
 
     int id = g_cf.next_label_id++;
     char *name = make_codegen_temp_name("new", id);
+    bool array_loop = is_class && need_ctor && cast->cast.new_array_count && na == 0;
+    char nname[40];
+    if (array_loop)
+        snprintf(nname, sizeof(nname), "__sf_new_n_%d", id);
 
     /* Decl: `T *__sf_new_<id>;` */
     emit_indent();
     emit_type(tcast);
     fprintf(stdout, " %s;\n", name);
+
+    /* For array-new-with-ctor, evaluate N exactly once into a
+     * named local. Subsequent references — the malloc-call's
+     * size arg AND the loop bound — substitute the local via
+     * codegen_temp_name. Otherwise N would re-evaluate (with
+     * side effects). Pattern: g++.dg/template/new1.C
+     * `new T[Blksize()]` — Blksize() must run exactly once. */
+    if (array_loop) {
+        emit_indent();
+        fprintf(stdout, "unsigned long %s = ", nname);
+        emit_expr(cast->cast.new_array_count);
+        fputs(";\n", stdout);
+        cast->cast.new_array_count->codegen_temp_name = nname;
+        if (cast->cast.operand &&
+            cast->cast.operand->kind == ND_CALL &&
+            cast->cast.operand->call.nargs >= 1 &&
+            cast->cast.operand->call.args[0] &&
+            cast->cast.operand->call.args[0]->kind == ND_BINARY &&
+            cast->cast.operand->call.args[0]->binary.lhs)
+            cast->cast.operand->call.args[0]->binary.lhs->codegen_temp_name = nname;
+    }
 
     /* Allocation: `__sf_new_<id> = (T *)<malloc-call>;` */
     emit_indent();
@@ -1503,7 +1536,9 @@ static void hoist_new_expr(Node *cast, bool in_shortcircuit) {
         !class_has_user_default_ctor(p_resolved)) {
         emit_indent();
         fprintf(stdout, "memset(%s, 0, ", name);
-        if (cast->cast.operand &&
+        if (array_loop) {
+            fprintf(stdout, "%s * sizeof(*%s)", nname, name);
+        } else if (cast->cast.operand &&
             cast->cast.operand->kind == ND_CALL &&
             cast->cast.operand->call.nargs >= 1 &&
             cast->cast.operand->call.args[0]) {
@@ -1514,8 +1549,25 @@ static void hoist_new_expr(Node *cast, bool in_shortcircuit) {
         fputs(");\n", stdout);
     }
 
-    /* Ctor call, if applicable. */
-    if (is_class && need_ctor) {
+    /* Braced-init array — per-element direct-init with the
+     * matching single-arg ctor. */
+    if (is_class && cast->cast.new_array_count && na > 0) {
+        for (int i = 0; i < na; i++) {
+            Node *brace_arg = cast->cast.new_ctor_args[i];
+            Type *bat[1] = { brace_arg ? brace_arg->resolved_type : NULL };
+            Type **bpty = NULL;
+            int bnp = resolve_overload(p_resolved, NULL, true,
+                                        bat, 1, false, &bpty, NULL);
+            emit_indent();
+            mangle_class_ctor(p_resolved, bpty, bnp >= 0 ? bnp : 1);
+            fprintf(stdout, "(&%s[%d], ", name, i);
+            emit_arg_for_param(brace_arg,
+                                (bnp >= 0 && bpty) ? bpty[0] : NULL);
+            fputs(");\n", stdout);
+        }
+    }
+    /* Regular ctor call, if applicable. */
+    else if (is_class && need_ctor) {
         Type **at = NULL;
         int nat = collect_call_arg_types(cast->cast.new_ctor_args, na, &at);
         Type **pty = NULL;
@@ -1526,17 +1578,28 @@ static void hoist_new_expr(Node *cast, bool in_shortcircuit) {
         }
         if (np >= 0) {
             emit_indent();
-            mangle_class_ctor(p_resolved, pty, np);
-            fprintf(stdout, "(%s", name);
-            for (int i = 0; i < na; i++) {
-                fputs(", ", stdout);
-                emit_arg_for_param(cast->cast.new_ctor_args[i],
-                                    i < np ? pty[i] : NULL);
+            if (array_loop) {
+                fprintf(stdout, "{ unsigned long __sf_new_i; "
+                        "for (__sf_new_i = 0; __sf_new_i < %s; "
+                        "__sf_new_i++) ", nname);
+                mangle_class_ctor(p_resolved, pty, np);
+                fprintf(stdout, "(&%s[__sf_new_i]);", name);
+                fputs(" }\n", stdout);
+            } else {
+                mangle_class_ctor(p_resolved, pty, np);
+                fprintf(stdout, "(%s", name);
+                for (int i = 0; i < na; i++) {
+                    fputs(", ", stdout);
+                    emit_arg_for_param(cast->cast.new_ctor_args[i],
+                                        i < np ? pty[i] : NULL);
+                }
+                fputs(");\n", stdout);
             }
-            fputs(");\n", stdout);
         }
     }
 
+    if (array_loop)
+        cast->cast.new_array_count->codegen_temp_name = NULL;
     cast->codegen_temp_name = name;
 }
 
