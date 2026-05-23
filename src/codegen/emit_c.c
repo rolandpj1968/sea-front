@@ -1411,6 +1411,135 @@ hoist_done:
     }
 }
 
+/* Hoist a `new`-expression's setup statements out of its enclosing
+ * expression context, so the use site can substitute a bare temp
+ * name instead of the GNU stmt-expr `({ T* tmp = malloc; ctor(tmp);
+ * tmp; })` shape sea-front otherwise emits.
+ *
+ * Why: stmt-expr is a GCC extension; ISO-C-only backends (cproc /
+ * QBE / TCC / sdcc) reject it. Hoisting to statements + a bare
+ * temp at the use site keeps the output strictly ISO C99. See
+ * docs/cproc_compat.md and [[project_cproc_side_goal]].
+ *
+ * Scope: handles the common scalar new path (with or without value-
+ * init memset; with or without a user / synth ctor). Skips the
+ * paths that need control-flow (the throw-chain on ctor failure,
+ * the per-element ctor LOOP for array new) — for those the
+ * stmt-expr emit at the expression site still fires. Subsequent
+ * slices can hoist those too.
+ *
+ * In a short-circuit context (`cond && new T()`), hoisting eagerly
+ * would run the malloc/ctor unconditionally — so we leave the
+ * stmt-expr in place for those.
+ *
+ * Forward decls referenced in the body. */
+static bool class_has_user_default_ctor(Type *cls);
+static Node *find_class_def_by_tag_args(Type *probe);
+static Node *find_class_def_by_tag_only(Type *probe);
+static int collect_call_arg_types(Node **args, int nargs, Type ***out_types);
+
+static void hoist_new_expr(Node *cast, bool in_shortcircuit) {
+    if (in_shortcircuit) return;
+    if (!cast || !cast->cast.is_new_expr) return;
+    if (cast->codegen_temp_name) return;
+
+    Type *tcast = cast->cast.ty;
+    if (!tcast) return;
+    Type *pointee = tcast->base;
+
+    /* Class pointee: resolve through tag to catch the canonical
+     * Type with has_default_ctor / class_region populated. */
+    Type *p_resolved = pointee;
+    if (p_resolved && (p_resolved->kind == TY_STRUCT ||
+                       p_resolved->kind == TY_UNION) &&
+        !p_resolved->class_region && p_resolved->tag) {
+        Node *d = find_class_def_by_tag_args(p_resolved);
+        if (!d) d = find_class_def_by_tag_only(p_resolved);
+        if (d && d->class_def.ty) p_resolved = d->class_def.ty;
+    }
+
+    int na = cast->cast.new_ctor_nargs;
+    bool is_class = p_resolved &&
+        (p_resolved->kind == TY_STRUCT || p_resolved->kind == TY_UNION);
+    bool need_ctor = is_class &&
+        ((na > 0) || p_resolved->has_default_ctor);
+
+    /* Skip paths the stmt-expr emit handles with control flow we
+     * can't (yet) lift out cleanly. */
+    if (cast->cast.new_array_count && need_ctor) return;            /* per-element for-loop */
+    if (is_class && need_ctor && g_cf.func_has_cleanups) return;    /* throw chain */
+    if (cast->cast.new_array_count && na > 0) return;               /* braced array */
+
+    /* Implicit-copy-ctor case (na==1, no matching ctor) — handled
+     * by the stmt-expr emit's `*tmp = arg` path. Detect via the
+     * same shape gate. */
+    if (need_ctor && na == 1) {
+        Type **at = NULL;
+        int nat = collect_call_arg_types(cast->cast.new_ctor_args, na, &at);
+        Type **pty = NULL;
+        int np = resolve_overload(p_resolved, NULL, true, at, nat,
+                                   false, &pty, NULL);
+        if (np < 0 || np != na) return;
+    }
+
+    int id = g_cf.next_label_id++;
+    char *name = make_codegen_temp_name("new", id);
+
+    /* Decl: `T *__sf_new_<id>;` */
+    emit_indent();
+    emit_type(tcast);
+    fprintf(stdout, " %s;\n", name);
+
+    /* Allocation: `__sf_new_<id> = (T *)<malloc-call>;` */
+    emit_indent();
+    fprintf(stdout, "%s = (", name);
+    emit_type(tcast);
+    fputc(')', stdout);
+    emit_expr(cast->cast.operand);
+    fputs(";\n", stdout);
+
+    /* Value-init memset, when applicable. */
+    if (is_class && cast->cast.new_value_init && na == 0 &&
+        !class_has_user_default_ctor(p_resolved)) {
+        emit_indent();
+        fprintf(stdout, "memset(%s, 0, ", name);
+        if (cast->cast.operand &&
+            cast->cast.operand->kind == ND_CALL &&
+            cast->cast.operand->call.nargs >= 1 &&
+            cast->cast.operand->call.args[0]) {
+            emit_expr(cast->cast.operand->call.args[0]);
+        } else {
+            fprintf(stdout, "sizeof(*%s)", name);
+        }
+        fputs(");\n", stdout);
+    }
+
+    /* Ctor call, if applicable. */
+    if (is_class && need_ctor) {
+        Type **at = NULL;
+        int nat = collect_call_arg_types(cast->cast.new_ctor_args, na, &at);
+        Type **pty = NULL;
+        int np = resolve_overload(p_resolved, NULL, true, at, nat,
+                                   false, &pty, NULL);
+        if (np < 0 && na == 0 && p_resolved->has_default_ctor) {
+            np = 0; pty = NULL;
+        }
+        if (np >= 0) {
+            emit_indent();
+            mangle_class_ctor(p_resolved, pty, np);
+            fprintf(stdout, "(%s", name);
+            for (int i = 0; i < na; i++) {
+                fputs(", ", stdout);
+                emit_arg_for_param(cast->cast.new_ctor_args[i],
+                                    i < np ? pty[i] : NULL);
+            }
+            fputs(");\n", stdout);
+        }
+    }
+
+    cast->codegen_temp_name = name;
+}
+
 static void hoist_temps_in_expr(Node *n, bool in_shortcircuit) {
     if (!n) return;
     switch (n->kind) {
@@ -1655,6 +1784,8 @@ static void hoist_temps_in_expr(Node *n, bool in_shortcircuit) {
         return;
     case ND_CAST:
         hoist_temps_in_expr(n->cast.operand, in_shortcircuit);
+        if (n->cast.is_new_expr)
+            hoist_new_expr(n, in_shortcircuit);
         return;
     case ND_COMMA:
         hoist_temps_in_expr(n->comma.lhs, in_shortcircuit);
