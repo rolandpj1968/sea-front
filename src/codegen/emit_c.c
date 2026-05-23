@@ -4745,6 +4745,21 @@ static void emit_expr(Node *n) {
             }
             return;
         }
+        /* `&<call-returning-reference>` — at C++ level the call
+         * yields a `T&`; sea-front lowered the return type to `T*`
+         * already, so `&` is a no-op (the pointer-value IS the
+         * "reference's address"). Emitting `&<call>` would
+         * incorrectly take the address of an rvalue, which the C
+         * front rejects with "lvalue required as unary `&'
+         * operand". Pattern: g++.dg/abi/covariant5.C —
+         * `if (!&Bar(&c))` where Bar returns `B&`. */
+        if (n->unary.op == TK_AMP && n->unary.operand &&
+            n->unary.operand->kind == ND_CALL &&
+            n->unary.operand->resolved_type &&
+            ty_is_ref(n->unary.operand->resolved_type)) {
+            emit_expr(n->unary.operand);
+            return;
+        }
         /* For *(ref_param): deref the pointer, then deref again —
          * the user explicitly asked for indirection on a ref. */
         fputc('(', stdout);
@@ -13988,8 +14003,23 @@ methods_phase:;
                 bool need_ret_adjust = false;
                 int  ret_adjust_base = -1;
                 Type *ret_adjust_cls = NULL;
-                if (ret_ty && override_ret &&
-                    ret_ty->kind == TY_PTR && override_ret->kind == TY_PTR &&
+                /* TY_REF / TY_RVALREF returns lower to pointer storage
+                 * at C level, so the adjustment shape is identical to
+                 * pointer returns. The null-guard differs (refs can't
+                 * be null in well-defined C++); handled at the emit
+                 * below via the is_ref_return flag. */
+                bool is_ptr_like_ret =
+                    ret_ty &&
+                    (ret_ty->kind == TY_PTR ||
+                     ret_ty->kind == TY_REF || ret_ty->kind == TY_RVALREF);
+                bool is_ptr_like_override_ret =
+                    override_ret &&
+                    (override_ret->kind == TY_PTR ||
+                     override_ret->kind == TY_REF ||
+                     override_ret->kind == TY_RVALREF);
+                bool is_ref_return = ret_ty &&
+                    (ret_ty->kind == TY_REF || ret_ty->kind == TY_RVALREF);
+                if (is_ptr_like_ret && is_ptr_like_override_ret &&
                     ret_ty->base && override_ret->base &&
                     (ret_ty->base->kind == TY_STRUCT ||
                      ret_ty->base->kind == TY_UNION) &&
@@ -14048,11 +14078,24 @@ methods_phase:;
                     fprintf(stdout, ", __a%d", p);
                 fputs(");\n", stdout);
                 if (need_ret_adjust) {
-                    fputs("    return (struct ", stdout);
+                    /* Pointer-typed covariant return: null-guard so
+                     * `return 0;` from the override stays null after
+                     * the thunk's offset adjustment (the covariant
+                     * thunk wording in N4659 §10.3/5; gcc's thunk
+                     * follows the same rule). Reference returns skip
+                     * the null check — a null reference is UB
+                     * already, and g++.dg/abi/covariant5.C explicitly
+                     * relies on `*(C *)0` adjusting through the
+                     * thunk to a non-null pointer. */
+                    fputs("    return ", stdout);
+                    if (!is_ref_return) fputs("__r ? ", stdout);
+                    fputs("(struct ", stdout);
                     mangle_class_tag(ret_ty->base);
                     fputs(" *)((char *)__r + offsetof(struct ", stdout);
                     mangle_class_tag(ret_adjust_cls);
-                    fprintf(stdout, ", __sf_base%d));\n", ret_adjust_base);
+                    fprintf(stdout, ", __sf_base%d))", ret_adjust_base);
+                    if (!is_ref_return) fputs(" : 0", stdout);
+                    fputs(";\n", stdout);
                 }
                 fputs("}\n", stdout);
                 (void)override_is_funcdef;
