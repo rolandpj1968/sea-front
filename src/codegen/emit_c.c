@@ -2052,6 +2052,21 @@ static Type *class_base(Type *class_type, int i) {
     return class_type->class_region->bases[i]->owner_type;
 }
 
+/* True if the i-th direct base was declared with `virtual` — N4659
+ * §13.1/2 [class.derived]. Sea-front uses this to drive the C++
+ * construction-order rule (virtual bases construct FIRST, before
+ * any non-virtual base or member) and the mirroring destruction
+ * order. Layout-wise sea-front still emits virtual bases as direct
+ * inline fields — the storage-sharing aspect of VI is a separate
+ * (larger) slice; for now the rule applies only to ctor/dtor
+ * sequencing. */
+static bool class_base_is_virtual(Type *class_type, int i) {
+    if (!class_type || !class_type->class_region) return false;
+    if (i < 0 || i >= class_type->class_region->nbases) return false;
+    if (!class_type->class_region->bases_virtual) return false;
+    return class_type->class_region->bases_virtual[i];
+}
+
 /* Find the class that owns the __sf_vptr field for `t`. Sea-front
  * places the vptr in the first polymorphic ancestor that itself has
  * no polymorphic base, so a derived class reuses its base's vptr
@@ -11423,7 +11438,19 @@ static void emit_ctor_member_inits(Node *func) {
     if (cdef->class_def.ty) {
         Type *cty = cdef->class_def.ty;
         int nb = class_nbases(cty);
+        /* N4659 §15.6.2/13.2 [class.base.init]: VIRTUAL bases
+         * construct FIRST (depth-first left-to-right of the
+         * canonical inheritance graph — for sea-front's flat
+         * layout, declaration order), then non-virtual direct
+         * bases. Iterate twice so the emit order matches the
+         * standard even when the user's mem-init-list is in
+         * declaration order. Pattern: g++.dg/init/dtor1.C —
+         * `A : C1, C2, virtual D, virtual E` needs D, E ctors
+         * before C1, C2 so the ~A reverse-order checks pass. */
+        for (int pass = 0; pass < 2; pass++) {
+        bool want_virtual = (pass == 0);
         for (int b = 0; b < nb; b++) {
+            if (class_base_is_virtual(cty, b) != want_virtual) continue;
             Type *base = class_base(cty, b);
             if (!base) continue;
             /* Check the mem-init-list for an entry naming this base
@@ -11555,6 +11582,7 @@ static void emit_ctor_member_inits(Node *func) {
             else        fprintf(stdout, "__sf_base%d", b);
             fputs(");\n", stdout);
         }
+        }  /* end pass loop (virtual-first then non-virtual) */
     }
     /* Vptr install — N4659 §15.6.2/1 [class.base.init]: a polymorphic
      * class's virtual functions become callable through the object
@@ -14310,17 +14338,25 @@ methods_phase:;
             fprintf(stdout, " *)&this->%.*s);\n",
                     m->var_decl.name->len, m->var_decl.name->loc);
         }
-        /* Base subobject destruction — reverse declaration order. */
+        /* Base subobject destruction — N4659 §15.4 [class.dtor]/9
+         * mirrors the construction order (§15.6.2/13). Virtual
+         * bases destruct LAST, after all non-virtual direct
+         * bases. Two passes in reverse: non-virtual first, then
+         * virtual. Pattern: g++.dg/init/dtor1.C. */
         int nb_d = class_nbases(class_type);
-        for (int b = nb_d - 1; b >= 0; b--) {
-            Type *base = class_base(class_type, b);
-            if (!base || !base->has_dtor) continue;
-            emit_indent();
-            mangle_class_dtor(base);
-            fputs("(&this->", stdout);
-            if (b == 0) fputs("__sf_base", stdout);
-            else        fprintf(stdout, "__sf_base%d", b);
-            fputs(");\n", stdout);
+        for (int pass = 0; pass < 2; pass++) {
+            bool want_virtual = (pass == 0) ? false : true;
+            for (int b = nb_d - 1; b >= 0; b--) {
+                if (class_base_is_virtual(class_type, b) != want_virtual) continue;
+                Type *base = class_base(class_type, b);
+                if (!base || !base->has_dtor) continue;
+                emit_indent();
+                mangle_class_dtor(base);
+                fputs("(&this->", stdout);
+                if (b == 0) fputs("__sf_base", stdout);
+                else        fprintf(stdout, "__sf_base%d", b);
+                fputs(");\n", stdout);
+            }
         }
         g_indent--;
         fputs("}\n", stdout);
