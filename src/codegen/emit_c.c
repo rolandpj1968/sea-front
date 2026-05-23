@@ -4624,16 +4624,35 @@ static void emit_expr(Node *n) {
             Type *pt = opnd ? opnd->resolved_type : NULL;
             Type *pointee = NULL;
             if (pt && pt->kind == TY_PTR) pointee = pt->base;
-            /* Resolve pointee through tag if class_region is missing. */
+            /* Always re-resolve pointee through the canonical class
+             * def. The resolved_type on a member-field reference can
+             * be a stale Type copy from an earlier parse step before
+             * has_dtor / has_virtual_methods were stamped — using
+             * the stale copy silently drops the dtor call from the
+             * lowered delete. Pattern: g++.dg/opt/pr42508.C —
+             * `~A() { delete prev; }` where prev: A* resolves to a
+             * pre-finalisation A copy. */
             if (pointee && (pointee->kind == TY_STRUCT || pointee->kind == TY_UNION) &&
-                !pointee->class_region && pointee->tag) {
+                pointee->tag) {
                 Node *d = find_class_def_by_tag_args(pointee);
                 if (!d) d = find_class_def_by_tag_only(pointee);
                 if (d && d->class_def.ty) pointee = d->class_def.ty;
             }
             bool has_virt_dtor = pointee && class_has_virtual_dtor(pointee);
             bool has_dtor      = pointee && pointee->has_dtor;
+            /* `delete p` is a no-op when p is null per N4659 §8.3.5/2
+             * [expr.delete]. C's free(NULL) is already a no-op, but
+             * sea-front prepends a dtor call (and possibly a vptr
+             * dereference) which would crash on NULL. Gate the whole
+             * comma expression on a null check when there's any
+             * pre-free work to do. Pattern: g++.dg/opt/pr42508.C —
+             * `~A() { delete prev; }` reached with prev == NULL. */
+            bool null_guard = has_virt_dtor || has_dtor;
             fputc('(', stdout);
+            if (null_guard) {
+                emit_expr(opnd);
+                fputs(" ? (", stdout);
+            }
             if (has_virt_dtor) {
                 /* Vptr dispatch: read the vptr from the polymorphic
                  * root, then invoke its __dtor slot with the original
@@ -4656,7 +4675,13 @@ static void emit_expr(Node *n) {
             }
             fputs("__builtin_free(", stdout);
             emit_expr(opnd);
-            fputs("))", stdout);
+            if (null_guard) {
+                /* Close: `, free(p), 0) : 0)` — the comma yields 0
+                 * to match the else branch's type. */
+                fputs("), 0) : 0)", stdout);
+            } else {
+                fputs("))", stdout);
+            }
             return;
         }
         /* For *(ref_param): deref the pointer, then deref again —
