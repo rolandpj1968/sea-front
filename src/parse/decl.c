@@ -2064,6 +2064,13 @@ Node *parse_declaration(Parser *p) {
             if (p->region && p->region->kind == REGION_CLASS &&
                 (spec.flags & DECL_MUTABLE))
                 rd->is_mutable = true;
+            /* §10.1.1/3 [dcl.stc] — thread_local / __thread.
+             * Codegen consults the Declaration at ident-emit sites
+             * to route accesses through the per-thread lazy-init
+             * accessor when the var's type has a non-trivial ctor
+             * / dtor. POD TLS just keeps the storage class. */
+            if (spec.flags & DECL_THREAD_LOCAL)
+                rd->is_thread_local = true;
         }
     }
 

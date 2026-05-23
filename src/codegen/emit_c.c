@@ -2391,6 +2391,13 @@ static void emit_storage_flags_impl(int flags, bool for_definition) {
     if (is_extern)  fputs("extern ", stdout);
     if (is_static)  fputs("static ", stdout);
     if (is_inline)  fputs("inline ", stdout);
+    /* C11 / C++11 `_Thread_local` storage class. Sea-front's
+     * input may write `thread_local`, `__thread`, or
+     * `_Thread_local`; all map to the same flag. For class
+     * variables with non-trivial ctor/dtor, the per-thread
+     * lazy-init wrapper supplements the storage class (handled
+     * at the var-decl emit site, not here). */
+    if (flags & DECL_THREAD_LOCAL) fputs("_Thread_local ", stdout);
 }
 
 static void emit_storage_flags(int flags) {
@@ -15559,6 +15566,28 @@ void emit_c(Node *tu) {
             fprintf(stdout, "(&%.*s);\n}\n",
                     n->var_decl.name->len, n->var_decl.name->loc);
         }
+        /* Forward-decl the Itanium C++ ABI hook + DSO handle for
+         * any thread_local class var with a non-trivial dtor.
+         * libsupc++ / libstdc++ provides both. */
+        bool need_tls_cleanup = false;
+        for (int i = 0; i < tu->tu.ndecls; i++) {
+            Node *n = tu->tu.decls[i];
+            if (!n || n->kind != ND_VAR_DECL) continue;
+            if (!n->var_decl.ty) continue;
+            if (!(n->var_decl.storage_flags & DECL_THREAD_LOCAL)) continue;
+            Type *ty = n->var_decl.ty;
+            if ((ty->kind == TY_STRUCT || ty->kind == TY_UNION) &&
+                ty->has_dtor) {
+                need_tls_cleanup = true;
+                break;
+            }
+        }
+        if (need_tls_cleanup) {
+            fputs("\nextern int __cxa_thread_atexit"
+                  "(void (*)(void *), void *, void *);\n", stdout);
+            fputs("extern void *__dso_handle "
+                  "__attribute__((weak));\n", stdout);
+        }
         fputs("\nstatic void __sf_global_init(void) __attribute__((constructor));\n",
               stdout);
         fputs("static void __sf_global_init(void) {\n", stdout);
@@ -15598,6 +15627,25 @@ void emit_c(Node *tu) {
                 mangle_class_ctor(ty, NULL, 0);
                 fprintf(stdout, "(&%.*s);\n",
                         n->var_decl.name->len, n->var_decl.name->loc);
+                /* For `thread_local` class variables with a
+                 * non-trivial dtor, register the dtor via
+                 * __cxa_thread_atexit so it fires at THREAD
+                 * exit (not process exit / atexit). The ctor
+                 * call above already ran for the main thread's
+                 * TLS copy (sea-front's __sf_global_init is
+                 * called once at program start in the main
+                 * thread); other threads' TLS init is a future
+                 * slice (per-thread on-first-access). N4659
+                 * §6.7.4 [basic.stc.thread] + Itanium C++ ABI
+                 * §3.3.5. Pattern: g++.dg/tls/thread_local6g.C. */
+                if ((n->var_decl.storage_flags & DECL_THREAD_LOCAL) &&
+                    ty->has_dtor) {
+                    fputs("    __cxa_thread_atexit("
+                          "(void (*)(void *))", stdout);
+                    mangle_class_dtor(ty);
+                    fprintf(stdout, ", &%.*s, &__dso_handle);\n",
+                            n->var_decl.name->len, n->var_decl.name->loc);
+                }
             }
             if (is_class_direct_init) {
                 fputs("    ", stdout);

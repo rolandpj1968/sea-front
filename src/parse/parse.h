@@ -1115,6 +1115,20 @@ enum {
                                * declaration and call sites for these,
                                * so the symbol matches the C ABI name in
                                * libc / other C TUs. */
+    DECL_THREAD_LOCAL = 1 << 9, /* N4659 §10.1.1/3 [dcl.stc] — set when
+                                 * `thread_local` / `__thread` / GCC's
+                                 * `_Thread_local` appears in the
+                                 * decl-spec-seq. Codegen emits the
+                                 * `_Thread_local` storage class and
+                                 * synthesises a per-thread lazy-init
+                                 * accessor when the var's type is a
+                                 * class with a non-trivial ctor or
+                                 * dtor (the ctor must run on first
+                                 * access in each thread, and the dtor
+                                 * must register via
+                                 * __cxa_thread_atexit so it fires at
+                                 * thread teardown rather than process
+                                 * exit). */
 };
 
 /* ================================================================== */
@@ -1465,6 +1479,13 @@ struct Declaration {
      * emit_qualified consult this flag to rewrite the access from
      * 'obj.x' / 'this->x' / 'Class::x' to the TU-scope symbol. */
     bool         is_static_member;
+    /* True when this variable was declared `thread_local` / `__thread`
+     * / `_Thread_local`. Codegen consults this at ident-emit sites
+     * to route accesses through the per-thread lazy-init accessor
+     * (`<name>__sf_tls_get()`) when the variable's type has a
+     * non-trivial ctor / dtor. POD TLS just keeps the
+     * `_Thread_local` storage class and skips the accessor. */
+    bool         is_thread_local;
     /* True for class-member declarations marked 'mutable' — N4659
      * §10.1.1/8 [dcl.stc]. C has no mutable, so emit casts away
      * constness at the assignment site. */

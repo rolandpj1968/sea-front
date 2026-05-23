@@ -170,7 +170,11 @@ DeclSpec parse_type_specifiers(Parser *p) {
         if (tok->kind == TK_KW_VIRTUAL)   { parser_advance(p); result.flags |= DECL_VIRTUAL; continue; }
         if (tok->kind == TK_KW_EXPLICIT)  { parser_advance(p); result.flags |= DECL_EXPLICIT; continue; }
         if (tok->kind == TK_KW_MUTABLE)   { parser_advance(p); result.flags |= DECL_MUTABLE; continue; }
-        if (tok->kind == TK_KW_THREAD_LOCAL) { parser_advance(p); continue; }
+        if (tok->kind == TK_KW_THREAD_LOCAL) {
+            parser_advance(p);
+            result.flags |= DECL_THREAD_LOCAL;
+            continue;
+        }
         /* typename qualified-name — N4659 §17.6 [temp.res]
          * Disambiguates a dependent qualified name as a type. Consume the
          * keyword and let the following identifier/qualified-id be parsed
