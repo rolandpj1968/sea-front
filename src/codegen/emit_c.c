@@ -14381,11 +14381,21 @@ methods_phase:;
             Token *mname = is_virt_funcdef ? m->func.name : m->var_decl.name;
             int nparams = is_virt_funcdef ? m->func.nparams
                                           : m->var_decl.ty->nparams;
+            /* const-qualified method → its C signature takes
+             * 'const struct <tag> *' as the implicit this. Mirror that
+             * in the vtable slot type, otherwise storing the method's
+             * function pointer into the slot drops const and strict-C
+             * back-ends (cproc) reject the initializer with "base
+             * types of pointer assignment must be compatible". */
+            bool slot_this_const =
+                is_virt_funcdef ? m->func.is_const_method
+                                : (m->var_decl.ty && m->var_decl.ty->is_const);
 
             emit_indent();
             emit_type(ret_ty);
-            fprintf(stdout, " (*%.*s)(struct ",
-                    mname->len, mname->loc);
+            fprintf(stdout, " (*%.*s)(", mname->len, mname->loc);
+            if (slot_this_const) fputs("const ", stdout);
+            fputs("struct ", stdout);
             mangle_class_tag(class_type);
             fputs(" *", stdout);
             if (is_virt_funcdef) {
