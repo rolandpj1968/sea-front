@@ -2539,15 +2539,27 @@ static bool class_has_virtual_dtor(Type *class_type) {
     return false;
 }
 
-/* Emit `this->__sf_vptr` (when class_type owns the vptr) or
- * `((struct <owner-tag> *)this)->__sf_vptr` (when an ancestor owns it).
- * The cast is sound because sea-front lays the polymorphic base at
- * offset 0 of the derived struct, matching the Itanium-style ABI's
- * is-a-compatibility convention. */
+/* Emit `this->__sf_vptr` when class_type owns the vptr, or walk the
+ * base subobject chain via `this->__sf_base[.__sf_base...].__sf_vptr`
+ * when an ancestor owns it. The pointer-cast form
+ * '((struct <owner-tag> *)this)->__sf_vptr' was equivalent on gcc/clang
+ * (because the polymorphic base sits at offset 0 of the derived struct),
+ * but cproc enforces C's strict pointer-base-type-compatibility rule
+ * and rejects the cast. The base-chain form is the standards-compliant
+ * lowering of the same access. Falls back to the cast if no path is
+ * found (defensive — shouldn't happen for well-formed hierarchies). */
 static void emit_vptr_lhs(Type *class_type) {
     Type *owner = vptr_owner_class(class_type);
     if (!owner || owner == class_type) {
         fputs("this->__sf_vptr", stdout);
+        return;
+    }
+    int path[8];
+    int path_len = find_base_path(class_type, owner, path, 8);
+    if (path_len > 0) {
+        fputs("this->", stdout);
+        emit_base_chain(path, path_len);
+        fputs("__sf_vptr", stdout);
         return;
     }
     fputs("((struct ", stdout);
