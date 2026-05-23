@@ -487,28 +487,77 @@ int eval_type_trait(Token *name, Type *a, Type *b) {
     if (TOKEQ(name, "__has_nothrow_constructor") ||
         TOKEQ(name, "__has_nothrow_copy") ||
         TOKEQ(name, "__has_nothrow_assign")) {
-        /* §23.15.4.3 [meta.unary.prop] — nothrow_X. The library
-         * predicates require the operation to be well-formed AND
-         * known not to throw (no throwing call in the body, no
-         * throwing dtor in any subobject). Sea-front doesn't track
-         * noexcept per-member yet; trivial implies nothrow, so the
-         * approximation matches the trivial check above. */
+        /* §23.15.4.3 [meta.unary.prop] — nothrow_X. True iff the
+         * relevant operation is well-formed and known not to
+         * throw. Sea-front's tracking is per-function via the
+         * `is_nothrow` flag set by parse_decl when it sees
+         * `throw()` / `noexcept` on a ctor/dtor declarator.
+         *
+         * Find the candidate member (default ctor / copy ctor /
+         * copy assign) on the class. Two outcomes:
+         *
+         *   - No matching user-declared member → implicit / synth
+         *     version. Per N4659 §15.8.1/15 and §15.8.2/8 the
+         *     implicit copy ctor / op= is itself non-throwing iff
+         *     every base / member subobject's is non-throwing.
+         *     Conservative: return 1 (trivial implies nothrow,
+         *     and we don't yet trace bases/members).
+         *
+         *   - Matching member found → return its is_nothrow flag.
+         *     The flag is set when the source wrote `throw()` /
+         *     `noexcept` / `noexcept(true)`.
+         *
+         * Template ctors are NEVER copy ctors (N4659 §15.8.1/2),
+         * so a class with only template ctors still has an
+         * implicitly-declared copy ctor. Pattern:
+         * g++.dg/ext/has_nothrow_copy-{2,3}.C. */
         if (!a) return 0;
         if (!type_is_aggregate(a)) return 1;
         if (!a->class_def) return 1;
         Node *cd = a->class_def;
+        bool want_copy   = TOKEQ(name, "__has_nothrow_copy");
+        bool want_assign = TOKEQ(name, "__has_nothrow_assign");
+        bool want_default = TOKEQ(name, "__has_nothrow_constructor");
+        Node *match = NULL;
         for (int i = 0; i < cd->class_def.nmembers; i++) {
             Node *m = cd->class_def.members[i];
             if (!m) continue;
-            if (m->kind == ND_FUNC_DEF &&
-                (m->func.is_constructor || m->func.is_destructor))
-                return 0;
-            if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
-                m->var_decl.ty->kind == TY_FUNC &&
-                (m->var_decl.is_constructor || m->var_decl.is_destructor))
-                return 0;
+            /* Templates wrap in ND_TEMPLATE_DECL. A template ctor
+             * is NEVER a copy ctor (N4659 §15.8.1/2), and a
+             * template member op= is never the implicit copy
+             * assign — so skipping the wrapper is exactly right.
+             * The implicit copy ctor / op= is still generated. */
+            if (m->kind != ND_FUNC_DEF) continue;
+            bool is_ctor = m->func.is_constructor;
+            int  np = m->func.nparams;
+            Type *p0 = (np >= 1 && m->func.params && m->func.params[0])
+                         ? m->func.params[0]->param.ty : NULL;
+            if (want_default && is_ctor && np == 0) {
+                match = m; break;
+            }
+            if (want_copy && is_ctor && np == 1 && p0) {
+                Type *u = p0;
+                if (u->kind == TY_REF || u->kind == TY_RVALREF) u = u->base;
+                if (u && u->kind == TY_STRUCT && u->tag && a->tag &&
+                    u->tag->len == a->tag->len &&
+                    memcmp(u->tag->loc, a->tag->loc, a->tag->len) == 0) {
+                    match = m; break;
+                }
+            }
+            if (want_assign && !is_ctor && np == 1 && p0 && m->func.name &&
+                m->func.name->len == 8 &&
+                memcmp(m->func.name->loc, "operator", 8) == 0) {
+                Type *u = p0;
+                if (u->kind == TY_REF || u->kind == TY_RVALREF) u = u->base;
+                if (u && u->kind == TY_STRUCT && u->tag && a->tag &&
+                    u->tag->len == a->tag->len &&
+                    memcmp(u->tag->loc, a->tag->loc, a->tag->len) == 0) {
+                    match = m; break;
+                }
+            }
         }
-        return 1;
+        if (!match) return 1;     /* implicit / synthesised → trivial → nothrow */
+        return match->func.is_nothrow ? 1 : 0;
     }
     if (TOKEQ(name, "__is_base_of")) {
         /* N4659 §23.15.6/2 [meta.rel]: is_base_of<Base, Derived> is
