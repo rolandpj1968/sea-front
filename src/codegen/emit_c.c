@@ -630,7 +630,7 @@ static void emit_arg_for_param(Node *arg, Type *param_ty) {
          * still apply via this stmt-expr and no dtor counterbalance
          * is needed. TODO: hoist the copy temp out of the arg and
          * register its dtor after the call, then this gate can lift. */
-        if (param_ty &&
+        if (param_ty && !arg->codegen_temp_name &&
             (param_ty->kind == TY_STRUCT || param_ty->kind == TY_UNION) &&
             !param_ty->has_dtor &&
             arg->resolved_type && is_addressable_lvalue(arg)) {
@@ -1669,6 +1669,34 @@ static void hoist_new_expr(Node *cast, bool in_shortcircuit) {
     cast->codegen_temp_name = name;
 }
 
+/* Pass-by-value of a class-typed arg with a user copy ctor:
+ * hoist a temp + invoke the copy ctor as statements so the use
+ * site can emit just the temp name (no GNU stmt-expr). The
+ * caller (hoist_temps_in_expr's per-arg loop) checks the
+ * preconditions: param is class-by-value with no dtor, arg has
+ * matching class type, class has a (T&) / (const T&) ctor. */
+static void hoist_pass_by_value_copy(Node *arg, Type *param_ty,
+                                      Type **pty, int np,
+                                      bool in_shortcircuit) {
+    if (in_shortcircuit) return;
+    if (!arg || arg->codegen_temp_name) return;
+
+    int id = g_cf.next_label_id++;
+    char *name = make_codegen_temp_name("cpy", id);
+
+    emit_indent();
+    emit_type(param_ty);
+    fprintf(stdout, " %s;\n", name);
+
+    emit_indent();
+    mangle_class_ctor(param_ty, pty, np);
+    fprintf(stdout, "(&%s, &(", name);
+    emit_expr(arg);
+    fputs("));\n", stdout);
+
+    arg->codegen_temp_name = name;
+}
+
 static void hoist_temps_in_expr(Node *n, bool in_shortcircuit) {
     if (!n) return;
     switch (n->kind) {
@@ -1722,26 +1750,56 @@ static void hoist_temps_in_expr(Node *n, bool in_shortcircuit) {
                                        callee_ty->nparams == n->call.nargs;
             for (int i = 0; i < n->call.nargs; i++) {
                 Node *arg = n->call.args[i];
-                if (!arg || arg->kind != ND_CALL ||
-                    arg->codegen_temp_name || !arg->resolved_type ||
-                    ty_is_ref(arg->resolved_type))
-                    continue;
-                bool pass_by_ref;
-                if (have_free_fn_types) {
-                    /* Free function with arity match: only hoist when
-                     * the specific param is TY_REF. */
-                    pass_by_ref = ty_is_ref(callee_ty->params[i]);
-                } else if (is_method_call) {
-                    /* Method call: we don't have callee_ty's params
-                     * here (resolution lives at emit time), so we
-                     * can't tell which params are ref. Force-hoist
-                     * any call-valued arg — possible extra temp is
-                     * harmless; missing one yields invalid '&f()'. */
-                    pass_by_ref = true;
-                } else {
-                    pass_by_ref = false;
+                if (!arg) continue;
+                /* Pass-by-ref hoist: applies only when the arg is
+                 * an rvalue call (would emit `&f()` — illegal C).
+                 * Reference-typed args (already pointer-shaped at
+                 * C level) and args already hoisted are skipped. */
+                bool arg_is_call_lvalue_unfriendly =
+                    (arg->kind == ND_CALL && !arg->codegen_temp_name &&
+                     arg->resolved_type && !ty_is_ref(arg->resolved_type));
+                if (arg_is_call_lvalue_unfriendly) {
+                    bool pass_by_ref;
+                    if (have_free_fn_types) {
+                        pass_by_ref = ty_is_ref(callee_ty->params[i]);
+                    } else if (is_method_call) {
+                        pass_by_ref = true;
+                    } else {
+                        pass_by_ref = false;
+                    }
+                    if (pass_by_ref) hoist_emit_decl(arg, in_shortcircuit);
                 }
-                if (pass_by_ref) hoist_emit_decl(arg, in_shortcircuit);
+
+                /* Pass-by-value class with user copy ctor — hoist
+                 * the copy as statements instead of an in-call
+                 * stmt-expr `({ T tmp; T_cpy(&tmp, &arg); tmp; })`.
+                 * Same gate as emit_arg_for_param's copy-ctor path
+                 * (param is class-by-value, no dtor, arg matches
+                 * the class, class has a ref-taking ctor). */
+                if (have_free_fn_types && !arg->codegen_temp_name) {
+                    Type *pt = callee_ty->params[i];
+                    if (pt && !ty_is_ref(pt) &&
+                        (pt->kind == TY_STRUCT || pt->kind == TY_UNION) &&
+                        !pt->has_dtor && arg->resolved_type &&
+                        is_addressable_lvalue(arg)) {
+                        Type *src = arg->resolved_type;
+                        if (src->kind == TY_REF || src->kind == TY_RVALREF)
+                            src = src->base;
+                        if (src && src->tag && pt->tag &&
+                            tokens_equal(src->tag, pt->tag)) {
+                            Type *at[1] = { src };
+                            Type **pty = NULL;
+                            int np = resolve_overload(pt, NULL, true,
+                                                       at, 1, false,
+                                                       &pty, NULL);
+                            if (np >= 0 && pty && pty[0] &&
+                                ty_is_ref(pty[0])) {
+                                hoist_pass_by_value_copy(arg, pt, pty, np,
+                                                          in_shortcircuit);
+                            }
+                        }
+                    }
+                }
             }
         }
         if (is_class_temp_call(n)) hoist_emit_decl(n, in_shortcircuit);
