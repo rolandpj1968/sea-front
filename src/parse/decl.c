@@ -2428,6 +2428,18 @@ Node *parse_top_level_decl(Parser *p) {
             if (aliased && src) {
                 aliased->c_linkage = src->c_linkage;
                 aliased->asm_name  = src->asm_name;
+                /* When the using-decl injects a base-class method
+                 * into a derived class, record the SOURCE class so
+                 * codegen mangles `d.foo()` against the base and
+                 * passes &d.__sf_base as `this`. Without this,
+                 * sea-front mangles as Derived::foo and emits a
+                 * call to a non-existent symbol. Pattern:
+                 * g++.dg/inherit/using2.C. */
+                if (src->home && src->home->kind == REGION_CLASS &&
+                    src->home->owner_type &&
+                    p->region && p->region->kind == REGION_CLASS &&
+                    p->region != src->home)
+                    aliased->using_decl_source_class = src->home->owner_type;
             }
         }
         (void)tok;

@@ -1455,6 +1455,16 @@ struct Declaration {
      * §10.1.1/8 [dcl.stc]. C has no mutable, so emit casts away
      * constness at the assignment site. */
     bool         is_mutable;
+    /* For a using-declaration that injects a base-class member into
+     * a derived class's scope (`using Base::foo;` inside Derived),
+     * this points back to the Type of the class that actually
+     * declares the member. The using-decl entry lives in Derived's
+     * region (so unqualified lookup of `foo` finds it), but
+     * codegen must mangle calls as `Base::foo` and convert the
+     * implicit `this` from Derived* to Base* — both are recovered
+     * from this slot. NULL on non-using-decl entries. N4659
+     * §10.3.3 [namespace.udecl]. */
+    Type        *using_decl_source_class;
     Declaration *next;      /* hash chain within the declarative region */
 };
 

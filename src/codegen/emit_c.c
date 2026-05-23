@@ -5928,7 +5928,15 @@ static void emit_expr(Node *n) {
                         Token *mn = callee->member.member;
                         Declaration *own_d = region_lookup_own(
                             ot->class_region, mn->loc, mn->len);
-                        if (!own_d) {
+                        if (own_d && own_d->using_decl_source_class) {
+                            /* `using Base::foo;` in Derived injects an
+                             * own-scope entry whose source is Base.
+                             * Mangle against Base, treat the call as
+                             * inherited so the `this` arg adapts to
+                             * &obj.__sf_base. N4659 §10.3.3 + §16.3.
+                             * Pattern: g++.dg/inherit/using2.C. */
+                            method_class = own_d->using_decl_source_class;
+                        } else if (!own_d) {
                             for (int bi = 0; bi < ot->class_region->nbases; bi++) {
                                 DeclarativeRegion *br = ot->class_region->bases[bi];
                                 Declaration *bd = lookup_in_scope(br, mn->loc, mn->len);
@@ -6041,7 +6049,32 @@ static void emit_expr(Node *n) {
                     Token *mn = callee->member.member;
                     Declaration *own_d = region_lookup_own(
                         ot->class_region, mn->loc, mn->len);
-                    if (!own_d) {
+                    if (own_d && own_d->using_decl_source_class) {
+                        /* `using Base::foo;` injected entry — the
+                         * receiver must point at the Base subobject.
+                         * Match the source class against our base
+                         * list by Type identity. Pattern:
+                         * g++.dg/inherit/using2.C. */
+                        Type *src = own_d->using_decl_source_class;
+                        for (int bi = 0; bi < ot->class_region->nbases; bi++) {
+                            DeclarativeRegion *br = ot->class_region->bases[bi];
+                            if (br && br->owner_type == src) {
+                                base_idx_for_this = bi; break;
+                            }
+                        }
+                        if (base_idx_for_this < 0 && src->tag) {
+                            for (int bi = 0; bi < ot->class_region->nbases; bi++) {
+                                DeclarativeRegion *br = ot->class_region->bases[bi];
+                                Type *bt = br ? br->owner_type : NULL;
+                                if (bt && bt->tag &&
+                                    bt->tag->len == src->tag->len &&
+                                    memcmp(bt->tag->loc, src->tag->loc,
+                                            src->tag->len) == 0) {
+                                    base_idx_for_this = bi; break;
+                                }
+                            }
+                        }
+                    } else if (!own_d) {
                         for (int bi = 0; bi < ot->class_region->nbases; bi++) {
                             Declaration *bd = lookup_in_scope(
                                 ot->class_region->bases[bi],
