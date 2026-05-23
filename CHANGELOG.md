@@ -77,7 +77,7 @@ The remaining 6 FAILs are explicitly out-of-scope:
 - 4 multi-TU dedup tests
 - 28 gated + 52 stretch libstdc++ header smoke tests
 - 2 gcc-standalone tests
-- **g++.dg dg-do run: 381 PASS / 6 FAIL** (all 6 out-of-scope by design
+- **g++.dg dg-do run: 382 PASS / 6 FAIL** (all 6 out-of-scope by design
   / post-C++98 — see above)
 - libcpp.a rebuild via `scripts/sea-front-cc` succeeds end-to-end
 
