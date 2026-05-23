@@ -1249,16 +1249,43 @@ DeclSpec parse_type_specifiers(Parser *p) {
         {
             Declaration *first_d = lookup_unqualified_kind(
                 p, first->loc, first->len, ENTITY_TYPE);
-            if (first_d && first_d->type &&
-                first_d->type->kind == TY_DEPENDENT &&
-                last_seg != first) {
-                Type *dep = new_type(p, TY_DEPENDENT);
-                dep->tag = first;
-                dep->dep_member = last_seg;
-                dep->is_const = is_const;
-                dep->is_volatile = is_volatile;
-                result.type = dep;
-                return result;
+            if (first_d && first_d->type && last_seg != first) {
+                /* Two flavours of dependent qualifier:
+                 *  (a) first segment is a bare template param
+                 *      (TY_DEPENDENT) — record just the name + member;
+                 *      subst_type looks the name up in the subst map.
+                 *  (b) first segment is a template-id-with-dependent-
+                 *      args (TY_STRUCT/UNION) — e.g. _Alloc_traits
+                 *      typedef'd as AllocTraits<Alloc>. Stash the
+                 *      underlying type as dep_base so subst_type
+                 *      recursively substitutes into it before looking
+                 *      up the member in the resulting concrete class.
+                 *  N4659 §13.8.3 [temp.dep.type]. */
+                bool fst_is_param_dep =
+                    first_d->type->kind == TY_DEPENDENT;
+                bool fst_has_dep_targs = false;
+                if (!fst_is_param_dep &&
+                    (first_d->type->kind == TY_STRUCT ||
+                     first_d->type->kind == TY_UNION) &&
+                    first_d->type->n_template_args > 0) {
+                    for (int ti = 0; ti < first_d->type->n_template_args; ti++) {
+                        Type *a = first_d->type->template_args[ti];
+                        if (a && a->kind == TY_DEPENDENT) {
+                            fst_has_dep_targs = true; break;
+                        }
+                    }
+                }
+                if (fst_is_param_dep || fst_has_dep_targs) {
+                    Type *dep = new_type(p, TY_DEPENDENT);
+                    dep->tag = first;
+                    dep->dep_member = last_seg;
+                    if (fst_has_dep_targs)
+                        dep->dep_base = first_d->type;
+                    dep->is_const = is_const;
+                    dep->is_volatile = is_volatile;
+                    result.type = dep;
+                    return result;
+                }
             }
         }
         /* Opaque-tag fallback: the trailing name didn't resolve to a
@@ -1601,8 +1628,31 @@ DeclSpec parse_type_specifiers(Parser *p) {
              * resolve it once T becomes concrete. See N4659 §13.8.3
              * [temp.dep.type]; same shape as the IDENT :: branch above. */
             Token *dep_member_tok = NULL;
-            bool chain_is_dependent =
-                d->type && d->type->kind == TY_DEPENDENT;
+            /* Chain qualifier is dependent if:
+             *  (a) it's a bare template param (TY_DEPENDENT), OR
+             *  (b) it's a class/struct with dependent template args
+             *      (e.g. 'AllocTraits<Alloc>' inside basic_string<Alloc>).
+             * Case (b) covers 'typename _Alloc_traits::member' where
+             * _Alloc_traits is a typedef for an un-instantiated
+             * template-id. */
+            bool chain_is_dependent = false;
+            bool chain_qual_has_dep_args = false;
+            if (d->type) {
+                if (d->type->kind == TY_DEPENDENT)
+                    chain_is_dependent = true;
+                else if ((d->type->kind == TY_STRUCT ||
+                          d->type->kind == TY_UNION) &&
+                         d->type->n_template_args > 0) {
+                    for (int ti = 0; ti < d->type->n_template_args; ti++) {
+                        Type *a = d->type->template_args[ti];
+                        if (a && a->kind == TY_DEPENDENT) {
+                            chain_is_dependent = true;
+                            chain_qual_has_dep_args = true;
+                            break;
+                        }
+                    }
+                }
+            }
             while (parser_consume(p, TK_SCOPE)) {
                 parser_consume(p, TK_KW_TEMPLATE);
                 if (parser_at(p, TK_IDENT)) {
@@ -1631,11 +1681,18 @@ DeclSpec parse_type_specifiers(Parser *p) {
                 }
             }
             if (chain_is_dependent && dep_member_tok) {
-                /* Build a fresh TY_DEPENDENT carrying both the base
-                 * param tag and the qualified member name. */
+                /* Build a fresh TY_DEPENDENT carrying the qualified
+                 * member name. For bare-template-param qualifiers, the
+                 * substitution looks up by tag. For template-id-with-
+                 * dependent-args qualifiers (case b above), stash the
+                 * underlying type as dep_base so subst_type can
+                 * recursively substitute *into* it before looking up
+                 * the member in the resulting concrete class. */
                 Type *dep = new_type(p, TY_DEPENDENT);
                 dep->tag = d->type->tag;
                 dep->dep_member = dep_member_tok;
+                if (chain_qual_has_dep_args)
+                    dep->dep_base = d->type;
                 result.type = dep;
                 return result;
             }

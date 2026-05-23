@@ -1291,6 +1291,15 @@ struct Type {
      * disambiguates a dependent qualified name as naming a type. */
     Token *dep_member;
 
+    /* TY_DEPENDENT: when the qualifier is itself a template-id with
+     * dependent args (rather than a bare template param), the chain
+     * 'typename _Alloc_traits::difference_type' carries the underlying
+     * type 'AllocTraits<Alloc>' here. At substitution, the dep_base
+     * is recursively substituted (Alloc → concrete), then dep_member
+     * is looked up in the resulting concrete type's class_region.
+     * Mutually exclusive with the tag-based lookup path. */
+    Type *dep_base;
+
     /* TY_STRUCT, TY_UNION: the declarative region holding the members
      * of the class body (NULL for forward-declared / opaque types).
      * Set when the class definition '{ ... }' is parsed.

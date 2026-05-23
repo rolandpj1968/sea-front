@@ -610,9 +610,17 @@ DeclarativeRegion *region_build_class(Node *class_def, Type *owner,
             mtype = fty;
         }
         if (mname && mname->kind == TK_IDENT) {
+            /* Typedef class-members are ENTITY_TYPE (§10.1.3 [dcl.typedef]
+             * — typedef-names are type-names per §10.1.7.1/1). All other
+             * member kinds (data, methods) are ENTITY_VARIABLE. Without
+             * the kind-aware split, typedefs registered here looked like
+             * variables to overload resolution and to the cast-emit
+             * heuristic in emit_c.c, causing 'difference_type(x)' to
+             * route as an implicit-this method call. */
+            EntityKind ek = (m->kind == ND_TYPEDEF)
+                          ? ENTITY_TYPE : ENTITY_VARIABLE;
             Declaration *d = region_declare_raw(cr, arena, mname->loc,
-                                                 mname->len,
-                                                 ENTITY_VARIABLE, mtype);
+                                                 mname->len, ek, mtype);
             /* Stash the storage-class on the Declaration so emit can
              * tell static data members apart from instance members
              * (§10.1.1/4) and rewrite references through the TU-scope

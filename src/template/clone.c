@@ -119,8 +119,79 @@ bool type_has_dependent(Type *ty) {
     }
 }
 
+/* Resolve a dependent member-typedef 'concrete::member' once 'concrete'
+ * is a substitution result. Two strategies tried in order:
+ *  1. Fast path: concrete already has its class_region populated (its
+ *     instantiation was emitted earlier) — look up member directly.
+ *  2. Fallback: concrete is an un-emitted template-id — walk its
+ *     source template's class body for the typedef, then recursively
+ *     substitute its target type with concrete's template_args.
+ * Returns NULL if neither path resolves. N4659 §17.7.1 [temp.inst]. */
+static Type *resolve_dep_member(Type *concrete, Token *member,
+                                 SubstMap *map, Arena *arena) {
+    if (!concrete || !member) return NULL;
+    if (concrete->class_region) {
+        Declaration *md = lookup_in_scope(concrete->class_region,
+            member->loc, member->len);
+        if (md && md->type) return md->type;
+    }
+    if (!concrete->class_region && concrete->template_id_node &&
+        concrete->template_id_node->kind == ND_TEMPLATE_ID) {
+        Node *tid = concrete->template_id_node;
+        Node *tmpl = tid->template_id.resolved_tmpl;
+        if (!tmpl && tid->template_id.name && map->registry)
+            tmpl = registry_lookup_class_template(map->registry,
+                                            tid->template_id.name->loc,
+                                            tid->template_id.name->len);
+        if (tmpl && tmpl->kind == ND_TEMPLATE_DECL &&
+            tmpl->template_decl.decl &&
+            tmpl->template_decl.decl->kind == ND_CLASS_DEF) {
+            Node *cls = tmpl->template_decl.decl;
+            Node *typedef_node = NULL;
+            for (int i = 0; i < cls->class_def.nmembers; i++) {
+                Node *m = cls->class_def.members[i];
+                if (!m || m->kind != ND_TYPEDEF) continue;
+                if (!m->var_decl.name) continue;
+                if (tokens_equal(m->var_decl.name, member)) {
+                    typedef_node = m; break;
+                }
+            }
+            if (typedef_node && typedef_node->var_decl.ty) {
+                int np = tmpl->template_decl.nparams;
+                int na = concrete->n_template_args;
+                SubstMap inner = subst_map_new_with_registry(arena,
+                    np > 0 ? np : 1, map->registry);
+                for (int i = 0; i < np && i < na; i++) {
+                    Node *param = tmpl->template_decl.params[i];
+                    if (!param || !param->param.name) continue;
+                    if (concrete->template_args[i])
+                        subst_map_add(&inner, param->param.name,
+                                      concrete->template_args[i]);
+                }
+                return subst_type(typedef_node->var_decl.ty,
+                                  &inner, arena);
+            }
+        }
+    }
+    return NULL;
+}
+
 Type *subst_type(Type *ty, SubstMap *map, Arena *arena) {
     if (!ty) return NULL;
+
+    /* TY_DEPENDENT with dep_base: the qualifier was a template-id with
+     * dependent args (e.g. 'typename _Alloc_traits::difference_type'
+     * where _Alloc_traits = AllocTraits<Alloc>). Recursively substitute
+     * into the underlying type so its template args become concrete,
+     * then resolve dep_member against the result. Distinct from the
+     * tag-based path below — dep_base is the typedef'd underlying
+     * type, not a directly-mapped template-param name. */
+    if (ty->kind == TY_DEPENDENT && ty->dep_base && ty->dep_member) {
+        Type *base_concrete = subst_type(ty->dep_base, map, arena);
+        Type *r = resolve_dep_member(base_concrete, ty->dep_member, map, arena);
+        if (r) return r;
+        return ty;  /* couldn't resolve — leave dependent */
+    }
 
     /* TY_DEPENDENT → substitute if the name matches a map entry */
     if (ty->kind == TY_DEPENDENT && ty->tag) {
@@ -129,80 +200,13 @@ Type *subst_type(Type *ty, SubstMap *map, Arena *arena) {
             /* No match — leave as-is (still dependent for outer template) */
             return ty;
         }
-        /* Qualified dependent name 'typename T::member': once T
-         * resolves to a concrete class type, look up 'member' in its
-         * class region. Handles dependent defaults like
-         *   template<typename T, typename L = typename T::default_layout>
-         * where the substitution must resolve T::default_layout.
-         *
-         * N4659 §13.8.3 [temp.dep.type] — 'typename' nested-name is a
-         * dependent type until instantiation resolves the base. At
-         * instantiation (§17.7 [temp.inst]), the member is looked up
-         * in the (now concrete) enclosing type. */
-        if (ty->dep_member && concrete->class_region) {
-            Declaration *md = lookup_in_scope(concrete->class_region,
-                ty->dep_member->loc, ty->dep_member->len);
-            if (md && md->type) return md->type;
-            /* Fall through — leave dependent if we can't resolve. */
-        }
-        /* If concrete has no class_region yet (its instantiation
-         * hasn't been emitted), fall back to walking the source
-         * template definition cached on its template-id node. We
-         * find the typedef in the template's class body and
-         * substitute against concrete's template_args.
-         *
-         * Real-world shape: a hash-table template parameterised on
-         * a hasher, where the OOL method body uses 'const T::value_
-         * type *'. With T bound to an instantiated 'pointer_hash<X>'
-         * carrying 'typedef Type value_type', the typedef resolves
-         * to X. Without this fallback, the param mangles with T
-         * itself instead of the typedef target — producing link-
-         * time mismatches against the
-         * actual definition's mangling. N4659 §17.7.1 [temp.inst]
-         * — instantiation must resolve dependent member-typedefs. */
-        if (ty->dep_member && !concrete->class_region &&
-            concrete->template_id_node &&
-            concrete->template_id_node->kind == ND_TEMPLATE_ID) {
-            Node *tid = concrete->template_id_node;
-            Node *tmpl = tid->template_id.resolved_tmpl;
-            if (!tmpl && tid->template_id.name && map->registry) {
-                tmpl = registry_lookup_class_template(map->registry,
-                                                tid->template_id.name->loc,
-                                                tid->template_id.name->len);
-            }
-            if (tmpl && tmpl->kind == ND_TEMPLATE_DECL &&
-                tmpl->template_decl.decl &&
-                tmpl->template_decl.decl->kind == ND_CLASS_DEF) {
-                Node *cls = tmpl->template_decl.decl;
-                /* Walk class members for the typedef. */
-                Node *typedef_node = NULL;
-                for (int i = 0; i < cls->class_def.nmembers; i++) {
-                    Node *m = cls->class_def.members[i];
-                    if (!m || m->kind != ND_TYPEDEF) continue;
-                    if (!m->var_decl.name) continue;
-                    if (tokens_equal(m->var_decl.name, ty->dep_member)) {
-                        typedef_node = m;
-                        break;
-                    }
-                }
-                if (typedef_node && typedef_node->var_decl.ty) {
-                    /* Build inner SubstMap: template's params bound
-                     * to concrete's template_args. */
-                    int np = tmpl->template_decl.nparams;
-                    int na = concrete->n_template_args;
-                    SubstMap inner = subst_map_new_with_registry(arena,
-                        np > 0 ? np : 1, map->registry);
-                    for (int i = 0; i < np && i < na; i++) {
-                        Node *param = tmpl->template_decl.params[i];
-                        if (!param || !param->param.name) continue;
-                        if (concrete->template_args[i])
-                            subst_map_add(&inner, param->param.name,
-                                          concrete->template_args[i]);
-                    }
-                    return subst_type(typedef_node->var_decl.ty,
-                                      &inner, arena);
-                }
-            }
+        /* Qualified dependent name 'typename T::member': resolve via
+         * the shared helper (fast path through concrete's class_region,
+         * fallback through the source template's class body). */
+        if (ty->dep_member) {
+            Type *r = resolve_dep_member(concrete, ty->dep_member,
+                                          map, arena);
+            if (r) return r;
         }
         return concrete;
     }
