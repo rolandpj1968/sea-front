@@ -2203,6 +2203,7 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
         inst_ty->has_dtor = false;
         inst_ty->has_default_ctor = false;
         inst_ty->has_virtual_methods = false;
+        bool any_user_ctor = false;
         for (int i = 0; i < cloned->class_def.nmembers; i++) {
             Node *m = cloned->class_def.members[i];
             if (!m) continue;
@@ -2213,18 +2214,50 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
                         m->func.body->block.nstmts == 0;
                     if (!empty) inst_ty->has_dtor = true;
                 }
-                if (m->func.is_constructor && m->func.nparams == 0)
-                    inst_ty->has_default_ctor = true;
+                if (m->func.is_constructor) {
+                    any_user_ctor = true;
+                    if (m->func.nparams == 0)
+                        inst_ty->has_default_ctor = true;
+                }
                 if (m->func.is_virtual)
                     inst_ty->has_virtual_methods = true;
             } else if (m->kind == ND_VAR_DECL) {
                 if (m->var_decl.is_destructor)
                     inst_ty->has_dtor = true;
-                if (m->var_decl.is_constructor &&
-                    m->var_decl.ty && m->var_decl.ty->kind == TY_FUNC &&
-                    m->var_decl.ty->nparams == 0)
-                    inst_ty->has_default_ctor = true;
+                if (m->var_decl.is_constructor) {
+                    any_user_ctor = true;
+                    if (m->var_decl.ty && m->var_decl.ty->kind == TY_FUNC &&
+                        m->var_decl.ty->nparams == 0)
+                        inst_ty->has_default_ctor = true;
+                }
                 if (m->var_decl.is_virtual)
+                    inst_ty->has_virtual_methods = true;
+            }
+        }
+        /* Polymorphic-no-user-ctor: synthesise a default ctor so the
+         * vptr gets installed at construction. N4659 §15.1/4
+         * [class.ctor] — the implicit default ctor is defined as
+         * defaulted when no user ctor is declared. Sea-front's vptr
+         * install lives in the ctor wrapper; without a synthesised
+         * default ctor the vtable instance stays dormant and
+         * `TPL<int> i;` followed by `i.virtual_method()` jumps
+         * through an uninitialised vptr. Pattern:
+         * g++.dg/template/qual2.C — TPL<int> inherits B's virtuals,
+         * overrides `activate`, and the test calls `i.activate()`. */
+        if (!any_user_ctor && inst_ty->has_virtual_methods)
+            inst_ty->has_default_ctor = true;
+        /* A class with non-trivial members (transitive has_dtor /
+         * has_default_ctor through bases) also needs synthesised
+         * ones — mirror type.c's same rule for templates that
+         * inherit from such bases. */
+        if (cr) {
+            for (int bi = 0; bi < cr->nbases; bi++) {
+                Type *bt = cr->bases[bi] ? cr->bases[bi]->owner_type : NULL;
+                if (!bt) continue;
+                if (bt->has_dtor) inst_ty->has_dtor = true;
+                if (bt->has_default_ctor && !any_user_ctor)
+                    inst_ty->has_default_ctor = true;
+                if (bt->has_virtual_methods)
                     inst_ty->has_virtual_methods = true;
             }
         }
