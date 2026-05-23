@@ -1,5 +1,58 @@
 # Changelog
 
+## 0.2.2 — C++03 grind continued (2026-05-23)
+
+More targeted slices through g++.dg. Each one clears one
+test and exposes a real underlying bug — not just an isolated
+fix.
+
+### Slices
+
+- **Value-init memset for `new T()`** — when T has no user-
+  provided default ctor (synth only), zero the storage before
+  the synth ctor runs. N4659 §11.6/8 [dcl.init]: value-init of
+  such a class first zero-initialises, then default-initialises.
+  Threads a `new_value_init` flag through parse_new. Pattern:
+  g++.dg/init/value3.C.
+- **`__real__` / `__imag__` as scalar narrowers** — both
+  keywords had been aliased to TK_PLUS at lex time, so
+  `__imag__ z` lowered to `+z` and stayed complex. Introduce
+  proper TK_KW_IMAG / TK_KW_REAL token kinds and pass through
+  to C unchanged (gcc + clang both accept the keywords in C).
+  Pattern: g++.dg/other/complex1.C.
+- **Deferred-assign hoist on plain reads** — the deferred-
+  assign mechanism (hoist-without-init inside short-circuit
+  branches) used to materialise only at `&this` binding. Plain
+  reads via `.member` access read uninitialised memory.
+  Materialise `(name = call, name)` at every use site that
+  emits the captured temp. Pattern: g++.dg/opt/expect1.C.
+- **delete-pointee Type refresh + null-guard** — `~T() { delete
+  prev; }` resolved `prev: T*` to a stale T copy from before
+  T's has_dtor was stamped, dropping the recursive dtor call.
+  Always re-resolve the pointee through the canonical class
+  def. Plus null-guard the dtor invocation since `delete null`
+  is a no-op (N4659 §8.3.5/2 [expr.delete]). Pattern:
+  g++.dg/opt/pr42508.C.
+- **Per-element ctor loop for array new** — `new T[N]` and
+  `new (p) T[N]()` now run T's default ctor on EVERY element,
+  not just element 0. The element count N is captured into
+  `__sf_new_n` so its side effects fire exactly once across
+  the malloc-call's size arg AND the loop bound. Tag the
+  malloc-call's size-arg-lhs directly to handle template-
+  clone divergence (g++.dg/template/new1.C's
+  `new T[Blksize()]` case). Pattern: g++.dg/expr/anew4.C.
+- **sema/common_arith_type preserves signedness** — `int *
+  unsigned long` had been losing its is_unsigned flag in the
+  fresh result Type, causing the Itanium placement-new
+  aliasing path (which keys on size_t-ness) to skip
+  `_Znam` / `_ZnamPv` and emit unresolved tag-suffix names.
+  N4659 §7.6 [conv.prom] preserves the winner's signedness.
+
+### Result
+
+dg: 391 PASS / 6 FAIL (from 385/6 at v0.2.1). Same 6 out-of-
+scope failures.
+
 ## 0.2.1 — C++03 grind start (2026-05-23)
 
 Continuing from C++98 compliance into deeper g++.dg territory.
