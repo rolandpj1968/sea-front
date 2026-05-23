@@ -9087,8 +9087,29 @@ static void emit_var_decl_inner(Node *n) {
     }
     /* GCC cleanup attribute — pass through so the back-end cc handles
      * the cleanup semantics on the C-level variable. Goes between the
-     * declarator-id and the initializer in gcc's accepted grammar. */
+     * declarator-id and the initializer in gcc's accepted grammar.
+     *
+     * Back-ends that don't honor __attribute__((cleanup)) — currently
+     * cproc — silently drop the attribute and never call the handler,
+     * which is a runtime miscompile with no diagnostic. When the env
+     * announces such a back-end, error loudly here instead. */
     if (n->var_decl.cleanup_attr_name) {
+        const char *backend = getenv("SEA_BACKEND");
+        if (backend && strcmp(backend, "cproc") == 0) {
+            File *fl = n->var_decl.cleanup_attr_name->file;
+            const char *file = (fl && fl->name) ? fl->name : "<unknown>";
+            fprintf(stderr,
+                "sea-front: %s:%d: __attribute__((cleanup(%.*s))) is not "
+                "honored by the cproc back-end (SEA_BACKEND=cproc). "
+                "The handler would silently never run; failing the build "
+                "now to surface the gap. Either pick a back-end that "
+                "supports the cleanup attribute, or rewrite the source "
+                "to manage the resource explicitly.\n",
+                file, n->var_decl.cleanup_attr_name->line,
+                n->var_decl.cleanup_attr_name->len,
+                n->var_decl.cleanup_attr_name->loc);
+            exit(2);
+        }
         fputs(" __attribute__((cleanup(", stdout);
         emit_token_text(n->var_decl.cleanup_attr_name);
         fputs(")))", stdout);
@@ -16060,16 +16081,16 @@ static void emit_prelude(void) {
           stdout);
     /* __sf_terminate — invoked at the epilogue of a no-throw function
      * when an exception is in flight, N4659 §18.4 [except.spec]. When
-     * libstdc++ is linked, dispatches to std::terminate (which
-     * respects std::set_terminate). When the binary doesn't link
-     * libstdc++ — sea-front targets bare C too — the weak symbol
-     * resolves to NULL and we fall back to abort(). */
+     * libstdc++ is linked, its strong definition of _ZSt9terminatev
+     * (std::terminate, which respects std::set_terminate) overrides
+     * our weak fallback below per ELF strong-beats-weak rules. When
+     * the binary doesn't link libstdc++ — sea-front targets bare C
+     * too — the fallback definition is what runs, and just abort()s. */
     fputs("extern void abort(void);\n", stdout);
-    fputs("extern void _ZSt9terminatev(void) __attribute__((weak));\n",
+    fputs("__attribute__((weak)) void _ZSt9terminatev(void) { abort(); }\n",
           stdout);
     fputs("static inline void __sf_terminate(void) {\n"
-          "    if (_ZSt9terminatev) _ZSt9terminatev();\n"
-          "    abort();\n"
+          "    _ZSt9terminatev();\n"
           "}\n", stdout);
     /* __SF_INLINE — multi-TU dedup for inline-eligible functions
      * (in-class methods, synthesized ctor/dtor wrappers, dtor body

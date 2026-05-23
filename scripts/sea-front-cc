@@ -18,6 +18,16 @@ SEA_FRONT="${SEA_FRONT:-$(dirname "$0")/../build/sea-front}"
 SEA_CC="${SEA_CC:-cc}"
 SEA_CPP="${SEA_CPP:-g++}"
 SEA_VERBOSE="${SEA_VERBOSE:-0}"
+# Extra flags appended to the cc -c invocation on sea-front's emitted .c.
+# Used by wrappers (e.g. scripts/cproc++) to inject back-end-specific
+# defines like -D__GNUC__=4 that should NOT also flow to the g++ -E
+# preprocessing of the original .cpp (which already defines __GNUC__).
+SEA_CC_FLAGS="${SEA_CC_FLAGS:-}"
+# Linker flags passed to the final cc link step. Default '-no-pie' matches
+# the gcc 4.8 cc1plus/gen-tools-chain need to avoid R_X86_64_32S relocs
+# against modern PIE-default host linkers; back-ends that don't accept
+# -no-pie (cproc) can override to empty.
+SEA_LINK_FLAGS="${SEA_LINK_FLAGS--no-pie}"
 
 log() {
     [ "$SEA_VERBOSE" = "1" ] && echo "[sea-front-cc] $*" >&2 || true
@@ -174,7 +184,7 @@ done
 # If no C++ source files, this is a pure link or C compile — pass through
 if [ -z "$INPUTS" ]; then
     log "No source files — passthrough to $SEA_CC"
-    exec $SEA_CC -no-pie "$@" $SEA_AUTO_LIBS
+    exec $SEA_CC $SEA_LINK_FLAGS "$@" $SEA_AUTO_LIBS
 fi
 
 # Link mode with NO source files (just .o/.a/-l): passthrough to cc.
@@ -187,7 +197,7 @@ fi
 # instead of sea-front.
 if [ "$MODE" = "link" ] && [ -z "$INPUTS" ]; then
     log "Link mode (no sources) — passthrough to $SEA_CC"
-    exec $SEA_CC -no-pie "$@" $SEA_AUTO_LIBS
+    exec $SEA_CC $SEA_LINK_FLAGS "$@" $SEA_AUTO_LIBS
 fi
 
 # Unpack INPUTS (space-separated shell-quoted) into positional params
@@ -278,14 +288,22 @@ for src in "$@"; do
     # Step 2: Transpile C++ → C
     # SEA_FRONT_FLAGS lets callers pass through extra flags (e.g.
     # --mangling=human to revert to the pre-Itanium scheme).
+    # Stderr is captured to a tempfile so warnings stay silent on
+    # success but real errors (non-zero exit) surface to the caller.
+    sf_err="$TMPDIR/sf_err_${base}_$$.log"
     log "  Transpile: $SEA_FRONT --emit-c ${SEA_FRONT_FLAGS:-} $pp_file"
-    eval "$SEA_FRONT --emit-c ${SEA_FRONT_FLAGS:-} $qpp > $qcfile" 2>/dev/null
+    if ! eval "$SEA_FRONT --emit-c ${SEA_FRONT_FLAGS:-} $qpp > $qcfile 2> $(shell_quote "$sf_err")"; then
+        cat "$sf_err" >&2
+        rm -f "$sf_err"
+        exit 1
+    fi
+    rm -f "$sf_err"
 
     # Step 3: Compile C → .o
     # Use -std=c11 — sea-front emits u8"..." string-prefixes verbatim
     # (C11 §6.4.5) and _Thread_local in the EH lowering (C11 §6.7.1).
-    log "  Compile: $SEA_CC -std=c11 -c $CC_FLAGS -o $obj_file $c_file"
-    eval "$SEA_CC -std=c11 -c $CC_FLAGS -o $qobj $qcfile"
+    log "  Compile: $SEA_CC -std=c11 -c $SEA_CC_FLAGS $CC_FLAGS -o $obj_file $c_file"
+    eval "$SEA_CC -std=c11 -c $SEA_CC_FLAGS $CC_FLAGS -o $qobj $qcfile"
 
     # Cleanup (skip when SEA_KEEP_TMP is set, for debugging)
     if [ -z "$SEA_KEEP_TMP" ]; then
@@ -299,8 +317,8 @@ done
 # point.
 if [ "$MODE" = "link" ]; then
     qout=$(shell_quote "$OUTPUT")
-    log "  Link: $SEA_CC -no-pie $LINK_OBJS $CC_FLAGS -o $OUTPUT $SEA_AUTO_LIBS"
-    eval "$SEA_CC -no-pie $LINK_OBJS $CC_FLAGS -o $qout $SEA_AUTO_LIBS"
+    log "  Link: $SEA_CC $SEA_LINK_FLAGS $LINK_OBJS $CC_FLAGS -o $OUTPUT $SEA_AUTO_LIBS"
+    eval "$SEA_CC $SEA_LINK_FLAGS $LINK_OBJS $CC_FLAGS -o $qout $SEA_AUTO_LIBS"
     if [ -z "$SEA_KEEP_TMP" ]; then
         eval "rm -f $LINK_OBJS"
     fi

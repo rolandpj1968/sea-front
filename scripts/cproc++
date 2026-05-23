@@ -1,0 +1,71 @@
+#!/bin/sh
+# cproc++ — sea-front + cproc/QBE as a C++ compiler driver.
+#
+# Pipeline: g++ -E (C++ preprocess) → sea-front (C++ → C) → cproc → QBE → as → ld.
+#
+# Thin wrapper around scripts/sea-front-cc that sets the back-end to cproc
+# and adds the defines glibc's <sys/cdefs.h> needs to leave __attribute__
+# alone. Without those defines, glibc redefines __attribute__(xyz) to
+# /* Ignore */ at preprocess time and every attribute sea-front emits
+# (weak, packed, constructor, ...) is silently stripped before cproc sees
+# it — silent miscompiles and link errors for weak-dedup'd vague-linkage.
+#
+# Today's scope (verified):
+#   - weak (vars / functions / TLS): works end-to-end via cproc + QBE
+#   - packed: works (cproc lays out)
+#   - noreturn / malloc / target / gnu_inline: advisory, fine
+#
+# Today's gaps (cproc upstream pending):
+#   - constructor / destructor (with priority): cproc errors "not
+#     supported here". Blocks any TU with namespace-scope C++ objects
+#     whose ctors must run before main — i.e. real gcc 4.8 source.
+#   - cleanup(handler): cproc silently drops. Sea-front emits an emit-
+#     side error guard when input source uses this attribute under cproc.
+#
+# Environment:
+#   SEA_FRONT     path to sea-front binary (default: build/sea-front)
+#   SEA_CPROC     path to cproc binary (default: cproc on PATH)
+#   SEA_QBE_DIR   directory containing qbe binary (prepended to PATH so
+#                 cproc's posix_spawnp("qbe") finds it)
+#   SEA_VERBOSE   1 to enable debug logging
+#
+# Usage mirrors gcc / sea-front-cc:
+#   cproc++ -c -o out.o input.cpp
+#   cproc++ -o exe a.o b.o ...
+
+set -e
+
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+SEA_CPROC="${SEA_CPROC:-cproc}"
+
+# Make cproc's qbe spawn resolve. cproc invokes "qbe" via posix_spawnp
+# — bare name lookup against PATH. If the user pointed SEA_QBE_DIR at a
+# directory, prepend it. Otherwise trust whatever's already on PATH.
+if [ -n "$SEA_QBE_DIR" ]; then
+    PATH="$SEA_QBE_DIR:$PATH"
+    export PATH
+fi
+
+# Mimic clang's GCC-compat claim (4.2.1). Causes glibc's <sys/cdefs.h>
+# to skip the `#define __attribute__(xyz)` macro, so cproc's native
+# attribute parser actually sees __attribute__((weak)) etc. The "lie"
+# is bounded by sea-front's actual include surface (mostly <stdint.h>
+# and <stddef.h> — pure type defs, no inline bodies that use stmt-
+# exprs or attributes cproc doesn't accept). Expand carefully if
+# sea-front grows to include <string.h>, <math.h>, etc.
+#
+# These go to SEA_CC_FLAGS (cproc's preprocess of the emitted .c),
+# NOT into the user-args stream. Routing them via user args would
+# also feed them to the g++ -E preprocessing of the original .cpp,
+# which already defines __GNUC__ natively and would warn on redef.
+GNUC_DEFINES="-D__GNUC__=4 -D__GNUC_MINOR__=2 -D__GNUC_PATCHLEVEL__=1"
+
+# cproc rejects gcc's -no-pie linker flag. Override sea-front-cc's
+# default of '-no-pie' to empty for the link step. cproc's own ld
+# invocation already produces a working dynamic exe by default.
+exec env \
+    SEA_CC="$SEA_CPROC" \
+    SEA_CC_FLAGS="$GNUC_DEFINES ${SEA_CC_FLAGS:-}" \
+    SEA_LINK_FLAGS="" \
+    SEA_BACKEND=cproc \
+    "$SCRIPT_DIR/sea-front-cc" "$@"
