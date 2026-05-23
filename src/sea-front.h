@@ -6,8 +6,8 @@
 #ifndef SEA_FRONT_H
 #define SEA_FRONT_H
 
-#define SF_VERSION "0.2.6"
-#define SF_VERSION_NAME "transitive-virtual + new-expr ISO C"
+#define SF_VERSION "0.2.7"
+#define SF_VERSION_NAME "stmt-expr removal (all but throw-in-ternary)"
 
 #include <stdbool.h>
 #include <stdint.h>

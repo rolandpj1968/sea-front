@@ -1,6 +1,6 @@
 # sea-front
 
-**v0.2.6 — transitive-virtual + new-expr ISO C** ([CHANGELOG](CHANGELOG.md))
+**v0.2.7 — stmt-expr removal (all but throw-in-ternary)** ([CHANGELOG](CHANGELOG.md))
 
 A C++-to-C transpiler written in C — turns C++ source into portable C that
 any standard C compiler can build. Used in two complementary ways:

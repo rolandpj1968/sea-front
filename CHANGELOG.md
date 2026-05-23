@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.2.7 — stmt-expr removal: all but throw-in-ternary (2026-05-23)
+
+Closes out the stmt-expr removal sweep started in v0.2.6. Every
+sea-front-emitted stmt-expr is now hoisted to ISO statements
+EXCEPT throw-in-expression-context, which is fundamentally hard
+under sea-front's goto-based EH model.
+
+### Slices
+
+- **Pass-by-value copy ctor** — `take(arg)` where `arg` is a
+  class lvalue passed by value to a class param that has a user
+  copy ctor used to emit
+      `take(({ T tmp; T_cpy(&tmp, &arg); tmp; }))`
+  inside the call's arg list. New `hoist_pass_by_value_copy`
+  emits the temp + copy as ISO statements before the call; the
+  arg position emits the bare temp name.
+- **Memberwise op= for class with array members** — `a = b`
+  for a class with array members whose element type has a user
+  op= used to emit
+      `({ T *d=&a; T *s=&b; *d=*s; for(...) elem_op=(...);
+          *d; })`
+  in expression position. New `hoist_memberwise_assign` emits
+  the captured ptrs + bitwise copy + per-element op= loops as
+  ISO statements; the assign's `codegen_temp_name` is set to
+  `(*__sf_d_<id>)` so the assignment site emits the matching
+  lvalue.
+- **`throw T()` at statement context** — previously emitted
+      `__SF_THROW_CLASS(({ T tmp = {0}; ctor(&tmp);
+                          __SF_CHAIN_THROW(lbl); &tmp; }), 0, lbl);`
+  now lifted to four separate statements: decl, ctor call,
+  chain check, throw macro.
+
+### Out of scope (genuinely)
+
+- **Throw in expression context** (`c ? a : throw e`, etc.) —
+  sea-front's EH model uses `goto LBL` inside the throw macro,
+  and ISO C doesn't permit `goto` inside an expression. The
+  ISO-compatible workaround would set the EH state without
+  `goto`, then have sea-front inject `__SF_CHAIN_THROW(LBL)`
+  after every statement that could contain a thrown expression.
+  That's a real restructuring of the EH model (deferred-throw +
+  per-statement state check), tracked separately.
+- **Fallback paths in `new`-expr emit** that fire for the
+  function-pointer-pointee parser bug and short-circuit
+  context — both keep the stmt-expr emit; documented in the
+  source.
+
+emit-c outputs containing `({`:
+   4 (start of slice) → 1 (only `throw_in_ternary.c`, unaviodable
+                          + `template_with_stmt_expr.c` which is
+                          user source pass-through, not sea-front
+                          generated).
+
+### Result
+
+dg: 405 / 3 / 14 (unchanged — stmt-expr removal preserves
+semantics).
+
 ## 0.2.6 — implicit-virtual transitive + new-expr stmt-expr removal (2026-05-23)
 
 Two threads landed:
