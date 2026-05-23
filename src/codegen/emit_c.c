@@ -1475,19 +1475,21 @@ static void hoist_new_expr(Node *cast, bool in_shortcircuit) {
     bool need_ctor = is_class &&
         ((na > 0) || p_resolved->has_default_ctor);
 
-    /* Skip paths the stmt-expr emit still handles inline. */
-    if (is_class && need_ctor && g_cf.func_has_cleanups) return;    /* throw chain */
+    /* (Previously skipped paths that the stmt-expr emit handled
+     * inline: per-element ctor loop, throw chain, braced-init
+     * array, implicit-copy ctor — all now lifted out below.) */
 
-    /* Implicit-copy-ctor case (na==1, no matching ctor) — handled
-     * by the stmt-expr emit's `*tmp = arg` path. Detect via the
-     * same shape gate. */
+    /* Implicit-copy-ctor case (na==1, no matching ctor): emit
+     * `*tmp = arg;` after the allocation. The arg may be a ref-
+     * lowered pointer that needs deref. Detect and hoist below. */
+    bool implicit_copy_assign = false;
     if (need_ctor && na == 1) {
         Type **at = NULL;
         int nat = collect_call_arg_types(cast->cast.new_ctor_args, na, &at);
         Type **pty = NULL;
         int np = resolve_overload(p_resolved, NULL, true, at, nat,
                                    false, &pty, NULL);
-        if (np < 0 || np != na) return;
+        if (np < 0 || np != na) implicit_copy_assign = true;
     }
 
     int id = g_cf.next_label_id++;
@@ -1549,9 +1551,33 @@ static void hoist_new_expr(Node *cast, bool in_shortcircuit) {
         fputs(");\n", stdout);
     }
 
+    /* Implicit-copy-ctor: `*tmp = arg;` (or `*tmp = *arg;` when
+     * arg is a ref-lowered pointer). */
+    if (implicit_copy_assign) {
+        Node *arg0 = cast->cast.new_ctor_args[0];
+        Type *art = arg0 ? arg0->resolved_type : NULL;
+        bool arg_is_ref = art &&
+            (art->kind == TY_REF || art->kind == TY_RVALREF);
+        bool arg_is_ref_param = arg0 && arg0->kind == ND_IDENT &&
+            arg0->ident.name && is_ref_param(arg0->ident.name);
+        bool need_deref = arg_is_ref || arg_is_ref_param;
+        emit_indent();
+        fprintf(stdout, "*%s = ", name);
+        if (need_deref) {
+            bool saved_supp = g_suppress_ref_deref;
+            g_suppress_ref_deref = true;
+            fputs("*(", stdout);
+            emit_arg_for_param(arg0, NULL);
+            fputc(')', stdout);
+            g_suppress_ref_deref = saved_supp;
+        } else {
+            emit_arg_for_param(arg0, NULL);
+        }
+        fputs(";\n", stdout);
+    }
     /* Braced-init array — per-element direct-init with the
      * matching single-arg ctor. */
-    if (is_class && cast->cast.new_array_count && na > 0) {
+    else if (is_class && cast->cast.new_array_count && na > 0) {
         for (int i = 0; i < na; i++) {
             Node *brace_arg = cast->cast.new_ctor_args[i];
             Type *bat[1] = { brace_arg ? brace_arg->resolved_type : NULL };
@@ -1596,6 +1622,46 @@ static void hoist_new_expr(Node *cast, bool in_shortcircuit) {
                 fputs(");\n", stdout);
             }
         }
+    }
+
+    /* Throw chain — if the new's ctor (or its element ctors)
+     * threw, propagate to the enclosing try-handler / cleanup
+     * label. Without this, post-`new` code would run as if
+     * construction succeeded. N4659 §15.2/2 [except.ctor].
+     * Pattern: g++.dg/init/array16.C. */
+    if (is_class && need_ctor && g_cf.func_has_cleanups) {
+        bool in_try = false;
+        int tt = find_throw_target_from(g_cf.nlive, &in_try);
+        char tbuf[32];
+        if (tt >= 0) {
+            snprintf(tbuf, sizeof(tbuf),
+                     in_try ? "__SF_try_%d_handler"
+                            : "__SF_cleanup_%d",
+                     tt);
+        } else {
+            snprintf(tbuf, sizeof(tbuf), "__SF_epilogue");
+        }
+        const char *opdel = NULL;
+        if (cast->cast.new_placement_nargs == 0 &&
+            cast->cast.operand &&
+            cast->cast.operand->kind == ND_CALL &&
+            cast->cast.operand->call.callee &&
+            cast->cast.operand->call.callee->kind == ND_IDENT &&
+            cast->cast.operand->call.callee->ident.name) {
+            Token *an = cast->cast.operand->call.callee->ident.name;
+            if (an->len == 5 && memcmp(an->loc, "_Znam", 5) == 0)
+                opdel = "_ZdaPv";
+            else if (an->len == 5 && memcmp(an->loc, "_Znwm", 5) == 0)
+                opdel = "_ZdlPv";
+        }
+        emit_indent();
+        if (opdel)
+            fprintf(stdout,
+                "if (__sf_exc_state.state == __SF_UNWIND_THROW) "
+                "{ %s(%s); __SF_unwind = __SF_UNWIND_THROW; "
+                "goto %s; }\n", opdel, name, tbuf);
+        else
+            fprintf(stdout, "__SF_CHAIN_THROW(%s);\n", tbuf);
     }
 
     if (array_loop)
