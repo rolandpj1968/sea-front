@@ -6,8 +6,8 @@
 #ifndef SEA_FRONT_H
 #define SEA_FRONT_H
 
-#define SF_VERSION "0.2.4"
-#define SF_VERSION_NAME "closing out gcc 4.8 dg"
+#define SF_VERSION "0.2.5"
+#define SF_VERSION_NAME "covariant + virtual-inheritance slice 1"
 
 #include <stdbool.h>
 #include <stdint.h>

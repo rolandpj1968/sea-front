@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.2.5 — covariant returns + virtual inheritance, slice 1 (2026-05-23)
+
+First slice into the XFAIL categories: pure covariant-return
+edge cases and the foundational virtual-inheritance work needed
+for ctor/dtor order and MI delete-via-base.
+
+### Slices
+
+- **Covariant-return thunks: null pointer + reference returns** —
+  pre-fix the thunk adjusted unconditionally, turning a `return
+  0;` from the override into `(B*)offset` (non-null garbage),
+  AND reference returns (T&) weren't getting the adjustment at
+  all because the check only handled TY_PTR. Plus
+  `&<call-returning-reference>` was emitted literally —
+  invalid C. Picks up g++.dg/abi/covariant5.C.
+
+- **Virtual base ctor/dtor ordering** — N4659 §15.6.2/13 mandates
+  virtual bases construct FIRST (regardless of declaration or
+  mem-init-list order); §15.4/9 mirrors it in reverse for
+  destruction. Sea-front previously iterated bases once in
+  declaration order, ignoring the bases_virtual flag (which has
+  been tracked at parse time but unused). Two passes now —
+  virtual-first then non-virtual for ctor, reversed for dtor.
+  Picks up g++.dg/init/dtor1.C.
+
+- **Deleting destructor (D0) for MI delete-via-base** — `delete
+  b2_ptr;` where b2_ptr is a B2 subobject view of a D allocation
+  used to call `__builtin_free(b2_ptr)` — freeing a
+  mid-allocation pointer. Itanium ABI handles this with the
+  "deleting destructor" (D0) variant; sea-front now
+  approximates it:
+   - Vtable `__dtor` slot returns `void *` (the most-derived
+     `this` after MI adjustment).
+   - New `sf__C__del_dtor` wrapper (`sf__C__dtor` chain + `return
+     this`) sits in the primary vtable slot.
+   - MI secondary-vtable thunks subtract the subobject offset,
+     run the chain, and return the most-derived address.
+   - Delete codegen now `_ZdlPv(vptr->__dtor(p))` so the user's
+     `::operator delete(void*)` overrides via Itanium aliasing
+     (N4659 §8.3.5/9 [expr.delete]).
+   - Vtable install in the ctor now fires for any class with a
+     virtual dtor — even classes whose only "virtual" is the
+     implicit-virtual dtor inherited from a base. Pre-fix this
+     gated on an explicit `virtual` keyword and missed the
+     implicit case.
+  Picks up g++.dg/init/delete2.C.
+
+### Result
+
+dg: 404 PASS / 3 FAIL / 14 XFAIL (from 401/3/14 at v0.2.4). Same
+3 out-of-scope FAILs. The XFAIL'd virtual-base layout tests
+(`abi/vbase11`, `abi/vbase13`) and `abi/covariant3/4` (full VI +
+covariant) remain — they need vbase storage sharing, the next
+slice on the VI road.
+
 ## 0.2.4 — closing out gcc 4.8 dg (2026-05-23)
 
 C++11 slices to mop up the remaining in-scope FAILs and an
