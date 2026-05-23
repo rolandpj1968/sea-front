@@ -3787,6 +3787,25 @@ static void emit_expr(Node *n) {
      * down (historical, before this universal check), which is a
      * redundant but harmless shortcut. */
     if (n->codegen_temp_name) {
+        /* Deferred-assign hoist: the temp's declaration was emitted as
+         * `T name;` without an initializer (because the call sits
+         * inside a short-circuit / conditional branch that may not
+         * evaluate). Materialize the call here as a comma operator:
+         *   (name = <real call>, name)
+         * — so the call runs at the use site (gated by the surrounding
+         * short-circuit) and the expression's value is the temp.
+         * Without this the temp reads uninitialized memory. Pattern:
+         * g++.dg/opt/expect1.C — `bar().i == 0` inside __builtin_expect. */
+        if (n->codegen_temp_pending_assign) {
+            const char *name = n->codegen_temp_name;
+            n->codegen_temp_pending_assign = false;
+            n->codegen_temp_name = NULL;
+            fprintf(stdout, "(%s = ", name);
+            emit_expr(n);
+            fprintf(stdout, ", %s)", name);
+            n->codegen_temp_name = name;
+            return;
+        }
         fputs(n->codegen_temp_name, stdout);
         return;
     }
