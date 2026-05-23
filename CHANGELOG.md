@@ -1,5 +1,67 @@
 # Changelog
 
+## 0.2.6 — implicit-virtual transitive + new-expr stmt-expr removal (2026-05-23)
+
+Two threads landed:
+
+### Transitive implicit-virtual override
+
+N4659 §13.3/2 [class.virtual]: a derived-class method with the
+same name + signature as a base virtual IS itself virtual, even
+without the `virtual` keyword. The match can be across multiple
+levels of inheritance — an intermediate class that doesn't
+redeclare the method doesn't break the virtual chain.
+
+Pre-fix sea-front's implicit-virtual scan only walked DIRECT
+bases — so for `EQU : RA : R : virtual Model`, `EQU::name()`
+(no `virtual` keyword) was missed as overriding `Model::name`
+three levels up. EQU's vtable then missed the `name` slot and
+dispatch through `Model *` reached garbage. Replaced the
+single-level scan with depth-first over the full inheritance
+graph.
+
+Picks up `g++.dg/abi/covariant4.C`.
+
+### `new`-expression hoist (ISO C, no GNU stmt-expr)
+
+First slice of the cproc/QBE compat project
+([[project_cproc_side_goal]]). Sea-front's `new T(args)`
+previously emitted GNU statement-expressions
+    `({ T* tmp = malloc; ctor(tmp); ...; tmp; })`
+which strict-C99 backends (cproc, QBE, TCC, sdcc) reject.
+
+New `hoist_new_expr` lifts the allocation + value-init memset
++ ctor call + array for-loop + throw chain out as ISO C
+statements at the enclosing block; the use site substitutes
+the bare temp name via the existing codegen_temp_name
+machinery.
+
+Covers:
+- scalar `new T` / `new T()` (POD or class with default ctor)
+- array `new T[N]` (POD value-init OR per-element ctor loop)
+- braced-init array `new T[N]{a, b}` (per-element direct-init)
+- implicit-copy-ctor case `new T(arg)` (`*tmp = arg`)
+- throw chain on ctor failure (`if (...) { opdel(tmp); goto LBL; }`)
+
+Skipped (still uses stmt-expr in emit_expr):
+- function-pointer pointee (`new int(arg)` parsed as `int(*)(arg)`
+  — separate parser bug, tracked).
+- short-circuit context (`cond && new T()` — would need a
+  comma-expression form to gate the malloc on the cond).
+
+Other stmt-expr emit sites remain (rare paths):
+- `emit_memberwise_assign_stmt_expr` (struct = struct with
+  array members needing per-element op=)
+- pass-by-value copy ctor in arg-list
+- 0-arg polymorphic functional cast `T()` (dead path in
+  practice — hoist usually catches first)
+- throw expression in non-statement position
+
+### Result
+
+dg: 405 PASS / 3 FAIL / 14 XFAIL (from 404/3/14 at v0.2.5). No
+regressions. emit-c: 470 (from 467).
+
 ## 0.2.5 — covariant returns + virtual inheritance, slice 1 (2026-05-23)
 
 First slice into the XFAIL categories: pure covariant-return

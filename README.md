@@ -1,6 +1,6 @@
 # sea-front
 
-**v0.2.5 — covariant + virtual-inheritance slice 1** ([CHANGELOG](CHANGELOG.md))
+**v0.2.6 — transitive-virtual + new-expr ISO C** ([CHANGELOG](CHANGELOG.md))
 
 A C++-to-C transpiler written in C — turns C++ source into portable C that
 any standard C compiler can build. Used in two complementary ways:
