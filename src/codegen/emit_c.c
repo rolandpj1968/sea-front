@@ -4731,25 +4731,42 @@ static void emit_expr(Node *n) {
             }
             if (has_virt_dtor) {
                 /* Vptr dispatch: read the vptr from the polymorphic
-                 * root, then invoke its __dtor slot with the original
-                 * pointer (slot signature takes the static pointer
-                 * type, so the cast for vtable-type access is sound). */
+                 * root, then invoke its __dtor slot with the
+                 * original pointer. The slot returns void* (the
+                 * MOST-DERIVED `this` after any MI adjustment), so
+                 * the operator delete call receives the original
+                 * allocation address even when the user wrote
+                 * `delete b2_ptr` for a B2 subobject view of a D
+                 * allocation. Pattern: g++.dg/init/delete2.C.
+                 *
+                 * Route through `_ZdlPv` (the Itanium-aliased
+                 * scalar operator delete shim) rather than
+                 * __builtin_free, so a user-defined `::operator
+                 * delete(void*)` overrides via the same mangled
+                 * symbol — N4659 §8.3.5/9 [expr.delete]. */
                 Type *root = vptr_owner_class(pointee);
                 if (!root) root = pointee;
-                fputs("((struct ", stdout);
+                fputs("_ZdlPv(((struct ", stdout);
                 mangle_class_tag(root);
                 fputs(" *)(", stdout);
                 emit_expr(opnd);
                 fputs("))->__sf_vptr->__dtor(", stdout);
                 emit_expr(opnd);
-                fputs("), ", stdout);
-            } else if (has_dtor) {
+                fputs("))", stdout);
+                if (null_guard) {
+                    fputs(", 0) : 0)", stdout);
+                } else {
+                    fputc(')', stdout);
+                }
+                return;
+            }
+            if (has_dtor) {
                 mangle_class_dtor(pointee);
                 fputc('(', stdout);
                 emit_expr(opnd);
                 fputs("), ", stdout);
             }
-            fputs("__builtin_free(", stdout);
+            fputs("_ZdlPv(", stdout);
             emit_expr(opnd);
             if (null_guard) {
                 /* Close: `, free(p), 0) : 0)` — the comma yields 0
@@ -11611,6 +11628,27 @@ static void emit_ctor_member_inits(Node *func) {
          * g++.dg/ipa/pr46287 pattern; without this the vtable is
          * never installed and dispatch lands on uninitialised
          * memory. */
+        /* A class whose only "virtual" is its (implicitly or
+         * explicitly) virtual dtor still needs the vtable
+         * installed so delete-via-base-pointer dispatches to the
+         * derived's deleting-dtor wrapper (`sf__C__del_dtor`).
+         * Without this, `delete b_ptr` where b_ptr is `B*` (and
+         * the runtime type is D) reaches B's vtable's __dtor
+         * (B's del_dtor) which returns a B* — `_ZdlPv(B*)` then
+         * frees the wrong address (offset into the D allocation).
+         * Pattern: g++.dg/init/delete2.C — D has only an
+         * implicit-virtual dtor (no `virtual` keyword on the
+         * source dtor since base's `virtual ~B1` already makes
+         * it virtual). */
+        if (!any_body && cdef->class_def.ty &&
+            class_has_virtual_dtor(cdef->class_def.ty)) {
+            for (int i = 0; i < cdef->class_def.nmembers; i++) {
+                Node *m = cdef->class_def.members[i];
+                if (m && m->kind == ND_FUNC_DEF && m->func.is_destructor) {
+                    any_body = true; break;
+                }
+            }
+        }
         if (!any_body && g_tu) {
             Type *cty = cdef->class_def.ty;
             for (int i = 0; i < cdef->class_def.nmembers && !any_body; i++) {
@@ -13609,6 +13647,17 @@ static void emit_class_def(Node *n) {
         mangle_class_tag(class_type);
         fputs(" *this);\n", stdout);
     }
+    /* Forward-declare the deleting-dtor wrapper so the vtable
+     * instance (emitted next) can reference it. The wrapper itself
+     * is defined later as part of the dtor synthesis block. */
+    if (class_type && class_has_virtual_dtor(class_type)) {
+        fputs("__SF_INLINE void *", stdout);
+        mangle_class_tag(class_type);
+        fputs("__del_dtor(", stdout);
+        fputs(class_type->kind == TY_UNION ? "union " : "struct ", stdout);
+        mangle_class_tag(class_type);
+        fputs(" *this);\n", stdout);
+    }
 
     if (g_emit_phase == PHASE_STRUCTS) return;
 methods_phase:;
@@ -13736,8 +13785,15 @@ methods_phase:;
         fputs(" {\n", stdout);
         g_indent++;
         if (need_dtor_slot) {
+            /* __dtor slot returns void* so the delete-via-vtable
+             * path can free the adjusted pointer. For MI, the
+             * slot in a secondary vtable holds a thunk that
+             * adjusts the base-subobject pointer to the most-
+             * derived address and returns IT — `free(vptr->__dtor(p))`
+             * then frees the right allocation. Approximates
+             * Itanium's D0. Pattern: g++.dg/init/delete2.C. */
             emit_indent();
-            fputs("void (*__dtor)(struct ", stdout);
+            fputs("void *(*__dtor)(struct ", stdout);
             mangle_class_tag(class_type);
             fputs(" *);\n", stdout);
         }
@@ -13799,12 +13855,11 @@ methods_phase:;
         g_indent++;
         if (need_dtor_slot) {
             emit_indent();
-            /* The wrapper symbol chains user body + member dtors +
-             * base dtors. It always exists when class_has_virtual_dtor
-             * is true (any class with a virtual dtor — user-declared
-             * or transitive — gets a wrapper emitted). */
-            mangle_class_dtor(class_type);
-            fputs(",\n", stdout);
+            /* `__del_dtor` runs the chain + returns `this` so the
+             * caller can free the right allocation. Approximates
+             * Itanium's D0 — see the wrapper emit further down. */
+            mangle_class_tag(class_type);
+            fputs("__del_dtor,\n", stdout);
         }
         for (int i = 0; i < n->class_def.nmembers; i++) {
             Node *m = n->class_def.members[i];
@@ -13889,19 +13944,28 @@ methods_phase:;
              * so `delete bp;` (bp: B*) reaches Derived's dtor chain. */
             bool base_virt_dtor = class_has_virtual_dtor(base);
             if (base_virt_dtor && class_type->has_dtor) {
-                fputs("static void ", stdout);
+                /* Returns void* (the adjusted most-derived
+                 * pointer) so the delete-via-vptr caller can
+                 * `__builtin_free` the correct allocation
+                 * address instead of the base-subobject pointer.
+                 * Pattern: g++.dg/init/delete2.C — `delete b2_ptr`
+                 * where b2_ptr is a `B2*` view of a `D` allocation
+                 * needs to free the D* address. */
+                fputs("static void *", stdout);
                 mangle_class_tag(class_type);
                 fputs("__thunk_for_", stdout);
                 mangle_class_tag(base);
                 fputs("__dtor(struct ", stdout);
                 mangle_class_tag(base);
-                fputs(" *__bp) {\n    ", stdout);
-                mangle_class_dtor(class_type);
-                fputs("((struct ", stdout);
+                fputs(" *__bp) {\n    struct ", stdout);
+                mangle_class_tag(class_type);
+                fputs(" *__dp = (struct ", stdout);
                 mangle_class_tag(class_type);
                 fputs(" *)((char *)__bp - offsetof(struct ", stdout);
                 mangle_class_tag(class_type);
-                fprintf(stdout, ", __sf_base%d)));\n}\n", bi);
+                fprintf(stdout, ", __sf_base%d));\n    ", bi);
+                mangle_class_dtor(class_type);
+                fputs("(__dp);\n    return __dp;\n}\n", stdout);
             }
             /* Pass 1: for every virtual slot in B that THIS class
              * overrides (same name + same param count), emit a thunk
@@ -14150,8 +14214,11 @@ methods_phase:;
                     fputs("__dtor", stdout);
                 } else {
                     /* No Derived dtor to thunk to — fall back to B's
-                     * own wrapper (which still runs B's chain). */
-                    mangle_class_dtor(base);
+                     * own deleting-dtor wrapper (chain + return
+                     * this), so the slot still returns void* per
+                     * the new __dtor slot signature. */
+                    mangle_class_tag(base);
+                    fputs("__del_dtor", stdout);
                 }
                 fputs(",\n", stdout);
             }
@@ -14360,6 +14427,28 @@ methods_phase:;
         }
         g_indent--;
         fputs("}\n", stdout);
+
+        /* "Deleting dtor" wrapper for polymorphic classes: runs the
+         * destruction chain (sf__C__dtor above) AND returns the
+         * `this` pointer for the caller to free. Vtable's __dtor
+         * slot stores this wrapper (or a thunk that adjusts the
+         * base-subobject pointer and returns the most-derived
+         * pointer for MI). The delete-via-vptr codegen calls
+         * `__builtin_free(vptr->__dtor(p))` so MI delete frees the
+         * correct allocation address (the most-derived's start),
+         * not the base subobject pointer. Approximates Itanium's
+         * D0 — N4659 §15.4 + Itanium C++ ABI §2.5. Pattern:
+         * g++.dg/init/delete2.C. */
+        if (class_has_virtual_dtor(class_type)) {
+            fputs("__SF_INLINE void *", stdout);
+            mangle_class_tag(class_type);
+            fputs("__del_dtor(", stdout);
+            fputs(class_type->kind == TY_UNION ? "union " : "struct ", stdout);
+            mangle_class_tag(class_type);
+            fputs(" *this) {\n    ", stdout);
+            mangle_class_dtor(class_type);
+            fputs("(this); return this;\n}\n", stdout);
+        }
     }
 
     /* Synthesize a default ctor when the class has has_default_ctor
