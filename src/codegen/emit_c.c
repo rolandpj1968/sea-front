@@ -3732,6 +3732,11 @@ static const char *unop_str(TokenKind k) {
     case TK_TILDE: return "~";
     case TK_INC:   return "++";
     case TK_DEC:   return "--";
+    /* GCC __real__ / __imag__ — gcc & clang accept these in C, so
+     * pass through unchanged. Trailing space so the operand isn't
+     * abutted (the C-level result is a scalar, no parens forced). */
+    case TK_KW_IMAG: return "__imag__ ";
+    case TK_KW_REAL: return "__real__ ";
     default: return "?";
     }
 }

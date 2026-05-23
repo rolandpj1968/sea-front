@@ -186,12 +186,12 @@ static const Keyword kw_table[] = {
     {"__complex__",      TK_KW_COMPLEX}, /* GCC alias for _Complex */
     {"__const",          TK_KW_CONST},   /* GCC alias for const */
     {"__const__",        TK_KW_CONST},   /* GCC alias for const */
-    {"__imag__",         TK_PLUS},       /* GCC complex imag-part — alias to unary plus (no-op) */
+    {"__imag__",         TK_KW_IMAG},    /* GCC complex imag-part — narrows complex to its imaginary scalar */
     {"__inline",         TK_KW_INLINE},  /* GCC alias for inline */
     {"__inline__",       TK_KW_INLINE},  /* GCC alias for inline */
     {"__int128",         TK_KW_LONG},    /* GCC 128-bit int — map to long (close enough for struct layout) */
     {"__null",           TK_KW_NULLPTR}, /* GCC builtin null — g++ expands NULL to __null */
-    {"__real__",         TK_PLUS},       /* GCC complex real-part — alias to unary plus (no-op) */
+    {"__real__",         TK_KW_REAL},    /* GCC complex real-part — narrows complex to its real scalar */
     {"__restrict",       TK_KW_VOLATILE}, /* GCC restrict — treat as volatile (noise spec we discard) */
     {"__restrict__",     TK_KW_VOLATILE}, /* GCC restrict alias */
     {"__signed",         TK_KW_SIGNED},  /* GCC alias for signed */
@@ -1138,6 +1138,7 @@ const char *token_kind_name(TokenKind kind) {
     case TK_KW_FRIEND:      return "KW_friend";
     case TK_KW_GOTO:        return "KW_goto";
     case TK_KW_IF:          return "KW_if";
+    case TK_KW_IMAG:        return "KW___imag__";
     case TK_KW_INLINE:      return "KW_inline";
     case TK_KW_INT:         return "KW_int";
     case TK_KW_LONG:        return "KW_long";
@@ -1150,6 +1151,7 @@ const char *token_kind_name(TokenKind kind) {
     case TK_KW_PRIVATE:     return "KW_private";
     case TK_KW_PROTECTED:   return "KW_protected";
     case TK_KW_PUBLIC:      return "KW_public";
+    case TK_KW_REAL:        return "KW___real__";
     case TK_KW_REGISTER:    return "KW_register";
     case TK_KW_REINTERPRET_CAST: return "KW_reinterpret_cast";
     case TK_KW_RETURN:      return "KW_return";

@@ -133,6 +133,9 @@ typedef enum {
     TK_KW_FRIEND,
     TK_KW_GOTO,
     TK_KW_IF,
+    TK_KW_IMAG,         /* GCC __imag__ — yields the imaginary part of
+                         * a complex value as a scalar. Pass-through
+                         * to C as `__imag__`. */
     TK_KW_INLINE,
     TK_KW_INT,
     TK_KW_LONG,
@@ -145,6 +148,9 @@ typedef enum {
     TK_KW_PRIVATE,
     TK_KW_PROTECTED,
     TK_KW_PUBLIC,
+    TK_KW_REAL,         /* GCC __real__ — yields the real part of a
+                         * complex value as a scalar. Pass-through to
+                         * C as `__real__`. */
     TK_KW_REGISTER,
     TK_KW_REINTERPRET_CAST,
     TK_KW_RETURN,

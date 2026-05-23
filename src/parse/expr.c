@@ -2731,6 +2731,16 @@ static Node *unary_expr(Parser *p) {
         return new_unary_node(p, TK_PLUS, operand, tok);
     }
 
+    /* GCC __real__ / __imag__ — N1570 doesn't define these; gcc
+     * extension that extracts the real / imaginary part of a
+     * complex value as a scalar. Pass-through to C: gcc and clang
+     * both accept the same syntax in C, so emit unchanged. */
+    if (tok->kind == TK_KW_IMAG || tok->kind == TK_KW_REAL) {
+        parser_advance(p);
+        Node *operand = unary_expr(p);
+        return new_unary_node(p, tok->kind, operand, tok);
+    }
+
     /* sizeof and alignof are handled in primary_expr (they need parens logic) */
 
     return postfix_expr(p);
