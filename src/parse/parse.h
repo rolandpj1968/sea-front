@@ -479,6 +479,12 @@ struct Node {
              * storage before the (synth) ctor runs — N4659
              * §11.6/8 [dcl.init] / §8.3.4 [expr.new]. */
             bool   new_value_init;
+            /* For `new T[N]` / `new (p) T[N]()`: the per-call
+             * element count N. NULL for scalar new. Codegen wraps
+             * the ctor call in a `for (i=0; i<N; i++) ctor(&tmp[i]);`
+             * loop so every element runs its ctor — without this
+             * only element 0 is constructed. */
+            Node  *new_array_count;
             /* Placement-new args: `new (p1, p2, ...) T(...)` carries
              * the placement expression list here. Empty / NULL for
              * non-placement new and for plain casts. Codegen routes

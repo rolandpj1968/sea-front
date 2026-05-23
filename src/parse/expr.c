@@ -2570,6 +2570,7 @@ static Node *unary_expr(Parser *p) {
          * TODO(seafront#new-ctor): run the ctor on the allocated
          * storage when T has a non-trivial one. */
         Node *malloc_call;
+        Node *array_count = NULL;     /* set when ty is TY_ARRAY */
         {
             Node *callee = new_node(p, ND_IDENT, tok);
             callee->ident.name = arena_alloc(p->arena, sizeof(Token));
@@ -2621,6 +2622,7 @@ static Node *unary_expr(Parser *p) {
             if (ty && ty->kind == TY_ARRAY && ty->array_size_expr) {
                 elem_for_sizeof = ty->base;
                 size_mul = ty->array_size_expr;
+                array_count = size_mul;
             }
             Node *sizeof_arg = new_node(p, ND_SIZEOF, tok);
             sizeof_arg->sizeof_.ty = elem_for_sizeof;
@@ -2643,6 +2645,15 @@ static Node *unary_expr(Parser *p) {
                 mul->binary.op = TK_STAR;
                 mul->binary.lhs = size_mul;
                 mul->binary.rhs = sizeof_arg;
+                /* Stamp the multiplication's result type as size_t.
+                 * The placement-new Itanium-aliasing path keys on
+                 * the first arg's resolved_type being unsigned long
+                 * (size_t) to emit `_ZnwmPv` / `_ZnamPv`. Sea-front's
+                 * sema doesn't fill resolved_type on this synthesized
+                 * binary, so without the stamp the alias path is
+                 * skipped and the tag-suffix fallback produces an
+                 * unresolved symbol. */
+                mul->resolved_type = sizeof_arg->resolved_type;
                 malloc_arg = mul;
             }
             malloc_call = new_node(p, ND_CALL, tok);
@@ -2670,6 +2681,7 @@ static Node *unary_expr(Parser *p) {
         cast->cast.new_ctor_args = ctor_args;
         cast->cast.new_ctor_nargs = ctor_nargs;
         cast->cast.new_value_init = value_init;
+        cast->cast.new_array_count = array_count; /* NULL for scalar new */
         cast->cast.new_placement_args = placement_args;
         cast->cast.new_placement_nargs = placement_nargs;
         return cast;

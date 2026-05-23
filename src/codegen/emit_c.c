@@ -6284,6 +6284,26 @@ static void emit_expr(Node *n) {
                 (!rd_callee && n->call.callee &&
                  n->call.callee->resolved_type &&
                  n->call.callee->resolved_type->kind == TY_FUNC);
+            /* Treat synthesized "operator new" / "operator delete"
+             * idents from parse_new as functions even when sema
+             * didn't resolve a user-defined overload — the Itanium
+             * aliasing path in emit_free_func_mangled_name knows
+             * how to map (size_t, void*) → `_ZnwmPv` and friends,
+             * which is what the no-user-def placement-new case
+             * needs. Without this the synthesized "operator" ident
+             * falls through to the bare `operator(...)` path,
+             * producing an unresolved symbol. */
+            if (!callee_is_fn && n->call.callee &&
+                n->call.callee->kind == ND_IDENT &&
+                n->call.callee->ident.name &&
+                n->call.callee->ident.name->len == 8 &&
+                memcmp(n->call.callee->ident.name->loc, "operator", 8) == 0) {
+                OperatorKind ck = operator_kind_from_method_name(
+                                       n->call.callee->ident.name);
+                if (ck == OP_NEW || ck == OP_NEW_ARRAY ||
+                    ck == OP_DELETE || ck == OP_DELETE_ARRAY)
+                    callee_is_fn = true;
+            }
             if (n->call.callee && n->call.callee->kind == ND_IDENT &&
                 !n->call.callee->ident.implicit_this &&
                 callee_is_fn &&
@@ -6603,7 +6623,32 @@ static void emit_expr(Node *n) {
                     return;
                 }
                 if (np >= 0) {
+                    /* Array new with a ctor per element: capture N
+                     * into __sf_new_n so the count expression's side
+                     * effects run exactly once, then loop the ctor
+                     * over [0, N). Without the loop only element 0
+                     * would be constructed. Restricted to na==0
+                     * (default-init) for now — passing user ctor
+                     * args to N elements would need a fresh
+                     * evaluation per element which the spec rejects
+                     * (the args are written once). Pattern:
+                     * g++.dg/expr/anew4.C `new (p) D[n]()`. */
+                    bool array_loop = n->cast.new_array_count && na == 0;
                     fputs("({ ", stdout);
+                    /* For array new with a ctor loop, evaluate the
+                     * element count ONCE up front (its side effects
+                     * must not double-fire). Subsequent references —
+                     * including inside the malloc-call's
+                     * `count * sizeof(T)` arg — substitute the local
+                     * via the codegen_temp_name machinery, then we
+                     * clear the tag at the end. */
+                    if (array_loop) {
+                        fputs("unsigned long __sf_new_n = ", stdout);
+                        emit_expr(n->cast.new_array_count);
+                        fputs("; ", stdout);
+                        n->cast.new_array_count->codegen_temp_name =
+                            "__sf_new_n";
+                    }
                     emit_type(n->cast.ty);
                     fputs(" __sf_new_tmp = (", stdout);
                     emit_type(n->cast.ty);
@@ -6622,7 +6667,10 @@ static void emit_expr(Node *n) {
                     if (n->cast.new_value_init && na == 0 &&
                         !class_has_user_default_ctor(p_resolved)) {
                         fputs("memset(__sf_new_tmp, 0, ", stdout);
-                        if (n->cast.operand &&
+                        if (array_loop) {
+                            fputs("__sf_new_n * sizeof(*__sf_new_tmp)",
+                                  stdout);
+                        } else if (n->cast.operand &&
                             n->cast.operand->kind == ND_CALL &&
                             n->cast.operand->call.nargs >= 1 &&
                             n->cast.operand->call.args[0]) {
@@ -6632,8 +6680,16 @@ static void emit_expr(Node *n) {
                         }
                         fputs("); ", stdout);
                     }
-                    mangle_class_ctor(p_resolved, pty, np);
-                    fputs("(__sf_new_tmp", stdout);
+                    if (array_loop) {
+                        fputs("for (unsigned long __sf_new_i = 0; "
+                              "__sf_new_i < __sf_new_n; __sf_new_i++) ",
+                              stdout);
+                        mangle_class_ctor(p_resolved, pty, np);
+                        fputs("(&__sf_new_tmp[__sf_new_i]", stdout);
+                    } else {
+                        mangle_class_ctor(p_resolved, pty, np);
+                        fputs("(__sf_new_tmp", stdout);
+                    }
                     for (int i = 0; i < na; i++) {
                         fputs(", ", stdout);
                         emit_arg_for_param(n->cast.new_ctor_args[i],
@@ -6697,6 +6753,8 @@ static void emit_expr(Node *n) {
                             fprintf(stdout, "__SF_CHAIN_THROW(%s); ", tbuf);
                     }
                     fputs("__sf_new_tmp; })", stdout);
+                    if (array_loop)
+                        n->cast.new_array_count->codegen_temp_name = NULL;
                     return;
                 }
             }

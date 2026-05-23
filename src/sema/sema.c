@@ -156,8 +156,16 @@ static Type *common_arith_type(Sema *s, const Type *a, const Type *b) {
      * N4659 §7.6 [conv.prom]. */
     if (arith_rank(winner) < RANK_INT)
         return ty_int(s);
-    /* Return a fresh copy so callers can mutate freely. */
-    return sema_new_type(s, winner->kind);
+    /* Return a fresh copy so callers can mutate freely. Preserve
+     * the winner's signedness — without this, `int * unsigned long`
+     * loses its unsigned flag and downstream consumers (e.g. the
+     * Itanium placement-new aliasing path that keys on `size_t`)
+     * see a signed long instead. N4659 §7.6 [conv.prom] requires
+     * preserving signedness of the operand that won the rank
+     * comparison. */
+    Type *out = sema_new_type(s, winner->kind);
+    out->is_unsigned = winner->is_unsigned;
+    return out;
 }
 
 /* ------------------------------------------------------------------ */
