@@ -595,6 +595,15 @@ parse_operator_id:
 parse_suffixes:
     ;  /* empty statement — C11 requires a statement after a label,
         * a declaration alone doesn't satisfy (gcc 4.7 -pedantic). */
+    /* N4659 §11.3/1: noptr-declarator: declarator-id attribute-specifier-seq(opt).
+     * The attribute-specifier-seq is permitted between the declarator-id and
+     * the parameters-and-qualifiers / array-suffix that follow. Example
+     * (libcody internal.hh):
+     *   void HCF [[noreturn]] (char const *msg) noexcept;
+     * Only the C++11 form here — GNU __attribute__((cleanup(...))) in the
+     * same slot for variable declarators is captured later (see the latch
+     * in parse_declaration), so don't swallow it here. */
+    parser_skip_cxx_attributes(p);
     /* Function declarator suffix — N4659 §11.3.5 [dcl.fct]
      *   parameters-and-qualifiers:
      *       ( parameter-declaration-clause ) cv-qualifier-seq(opt)
@@ -1141,6 +1150,12 @@ static bool consume_trailing_qualifiers(Parser *p) {
     parser_skip_gnu_attributes_full(p, NULL, NULL,
                                     &p->pending_attr_constructor,
                                     &p->pending_attr_destructor);
+    /* C++11 trailing attribute-specifier-seq — N4659 §11.3.5/3:
+     * parameters-and-qualifiers ends with attribute-specifier-seq(opt).
+     *   void f() noexcept [[noreturn]];
+     *   void g() [[gnu::pure]];
+     * Drop them on the floor (no semantic propagation yet). */
+    parser_skip_cxx_attributes(p);
     /* override / final — N4659 §13.3 [class.virtual]. Contextual
      * keywords (not reserved); we recognise by name. */
     while (parser_at(p, TK_IDENT) &&

@@ -5307,6 +5307,32 @@ static void emit_expr(Node *n) {
                 return;
             }
         }
+        /* Functional cast to a non-class type — N4659 §8.2.3 [expr.type.conv]
+         *   simple-type-specifier ( expression-list )
+         * where the simple-type-specifier names a typedef of a built-in
+         * (or enum) and there's exactly one argument. Common in libstdc++:
+         *   const difference_type __d = difference_type(__n1 - __n2);
+         *   return int(__d);
+         * Without this branch the call falls into the implicit-this
+         * method-call path (because the typedef's resolved Declaration
+         * has a class home), where overload resolution fails and
+         * die_no_overload aborts. */
+        if (n->call.nargs == 1 && n->call.callee &&
+            n->call.callee->kind == ND_IDENT) {
+            Declaration *rd = n->call.callee->ident.resolved_decl;
+            if (rd && rd->entity == ENTITY_TYPE && rd->type &&
+                rd->type->kind != TY_STRUCT && rd->type->kind != TY_UNION) {
+                fputc('(', stdout);
+                fputc('(', stdout);
+                emit_type(rd->type);
+                fputc(')', stdout);
+                fputc('(', stdout);
+                emit_expr(n->call.args[0]);
+                fputc(')', stdout);
+                fputc(')', stdout);
+                return;
+            }
+        }
         /* Capturing-lambda call — N4659 §8.1.5/3 [expr.prim.lambda].
          * Invoking the closure invokes its function call operator;
          * sea-front lowers that to a free fn taking the closure ptr

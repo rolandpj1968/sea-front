@@ -609,6 +609,14 @@ typedef struct {
      * va_heap::reserve<T> stays on va_heap, not 'va_heap<T>'). For
      * non-template classes this is NULL — we just use cur_class. */
     Node              *cur_class_tid;
+    /* Stack of ND_CLASS_DEF nodes currently being walked. Used by the
+     * ND_TYPEDEF branch to skip descents that would re-enter a class
+     * body already in flight ('class X { typedef X Self; ... };' — STL
+     * containers like std::vector use this idiom). Tag comparison via
+     * Type* fails when an instantiation produces fresh Type pointers
+     * for the same logical type; comparing class_def Node* is robust. */
+    Node              *walking_class_defs[32];
+    int                walking_class_def_depth;
 } InstCollector;
 
 /* Build a MemberTmplRequest from a call site and push it onto the
@@ -774,9 +782,22 @@ static void collect_from_node(InstCollector *col, Node *n) {
             Type *tyw = n->var_decl.ty;
             while (tyw && (tyw->kind == TY_PTR || tyw->kind == TY_ARRAY) && tyw->base)
                 tyw = tyw->base;
+            /* Skip the descent when the typedef target's class_def is
+             * already on the walk stack ('class X { typedef X Self; };',
+             * common in STL containers like std::vector). Otherwise the
+             * walk bounces infinitely between ND_TYPEDEF and ND_CLASS_DEF. */
             if (tyw && (tyw->kind == TY_STRUCT || tyw->kind == TY_UNION) &&
-                tyw->class_def)
-                collect_from_node(col, tyw->class_def);
+                tyw->class_def) {
+                bool already_walking = false;
+                for (int i = 0; i < col->walking_class_def_depth; i++) {
+                    if (col->walking_class_defs[i] == tyw->class_def) {
+                        already_walking = true;
+                        break;
+                    }
+                }
+                if (!already_walking)
+                    collect_from_node(col, tyw->class_def);
+            }
         }
         break;
 
@@ -827,12 +848,20 @@ static void collect_from_node(InstCollector *col, Node *n) {
             col->cur_class = n->class_def.ty;
             col->cur_class_tid = NULL;
         }
+        bool pushed_walking = false;
+        if (col->walking_class_def_depth <
+            (int)(sizeof(col->walking_class_defs) / sizeof(col->walking_class_defs[0]))) {
+            col->walking_class_defs[col->walking_class_def_depth++] = n;
+            pushed_walking = true;
+        }
         for (int i = 0; i < n->class_def.nmembers; i++)
             collect_from_node(col, n->class_def.members[i]);
         /* Collect from base types — a template base like Base<T>
          * (substituted to Base<int>) needs to be instantiated too. */
         for (int i = 0; i < n->class_def.nbase_types; i++)
             collect_from_type(col, n->class_def.base_types[i]);
+        if (pushed_walking)
+            col->walking_class_def_depth--;
         col->cur_class = saved_class;
         col->cur_class_tid = saved_class_tid;
         break;
