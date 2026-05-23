@@ -1669,6 +1669,97 @@ static void hoist_new_expr(Node *cast, bool in_shortcircuit) {
     cast->codegen_temp_name = name;
 }
 
+/* Hoist a memberwise class-assignment into ISO statements. Used
+ * for `a = b` where the class has array members whose element
+ * type has a user op= — bitwise copy first (covers scalar
+ * members), then per-element op= per array member, all as ISO
+ * statements at the enclosing block. The assign node's
+ * codegen_temp_name is set to `*__sf_d_<id>` so the assignment
+ * site emits the lvalue (matching the source semantics of
+ * yielding the assigned-to subobject). */
+static bool class_has_user_op_assign(Type *class_type);
+static bool class_needs_array_memberwise_assign(Type *class_type);
+static int emit_class_op_mangled_name(Type *class_type, OperatorKind op,
+                                       Type **args, int nargs,
+                                       bool receiver_const,
+                                       Type ***out_pty, Node **out_best);
+
+static void hoist_memberwise_assign(Node *assign, Type *cls,
+                                     bool in_shortcircuit) {
+    if (in_shortcircuit) return;
+    if (!assign || assign->codegen_temp_name) return;
+
+    int id = g_cf.next_label_id++;
+    char dname[40], sname[40], use_name[64];
+    snprintf(dname, sizeof(dname), "__sf_d_%d", id);
+    snprintf(sname, sizeof(sname), "__sf_s_%d", id);
+    snprintf(use_name, sizeof(use_name), "(*%s)", dname);
+
+    emit_indent();
+    emit_type(cls);
+    fprintf(stdout, " *%s = &(", dname);
+    emit_expr(assign->binary.lhs);
+    fputs(");\n", stdout);
+
+    emit_indent();
+    emit_type(cls);
+    fprintf(stdout, " *%s = &(", sname);
+    emit_expr(assign->binary.rhs);
+    fputs(");\n", stdout);
+
+    emit_indent();
+    fprintf(stdout, "*%s = *%s;\n", dname, sname);
+
+    Node *cd = cls->class_def;
+    if (cd) {
+        for (int i = 0; i < cd->class_def.nmembers; i++) {
+            Node *m = cd->class_def.members[i];
+            if (!m || m->kind != ND_VAR_DECL || !m->var_decl.ty) continue;
+            Type *t = m->var_decl.ty;
+            if (t->kind != TY_ARRAY) continue;
+            int dims[8]; int ndims = 0;
+            Type *elem = t;
+            while (elem && elem->kind == TY_ARRAY && ndims < 8) {
+                dims[ndims++] = elem->array_len;
+                elem = elem->base;
+            }
+            if (!elem || (elem->kind != TY_STRUCT && elem->kind != TY_UNION))
+                continue;
+            if (!class_has_user_op_assign(elem)) continue;
+            emit_indent();
+            for (int d = 0; d < ndims; d++)
+                fprintf(stdout,
+                    "for (int __sf_i%d = 0; __sf_i%d < %d; __sf_i%d++) ",
+                    d, d, dims[d], d);
+            Type *args[1] = { elem };
+            Type **pty = NULL;
+            int np = emit_class_op_mangled_name(elem, OP_ASSIGN, args, 1,
+                                                 false, &pty, NULL);
+            (void)np;
+            fprintf(stdout, "(&%s->", dname);
+            fprintf(stdout, "%.*s",
+                    m->var_decl.name->len, m->var_decl.name->loc);
+            for (int d = 0; d < ndims; d++)
+                fprintf(stdout, "[__sf_i%d]", d);
+            fprintf(stdout, ", &%s->", sname);
+            fprintf(stdout, "%.*s",
+                    m->var_decl.name->len, m->var_decl.name->loc);
+            for (int d = 0; d < ndims; d++)
+                fprintf(stdout, "[__sf_i%d]", d);
+            fputs(");\n", stdout);
+        }
+    }
+
+    /* malloc + memcpy to match make_codegen_temp_name's
+     * lifetime model (the borrow lasts the emit pass; sea-front
+     * doesn't free codegen_temp_name strings explicitly). */
+    int len = (int)strlen(use_name);
+    char *stored = malloc(len + 1);
+    if (!stored) abort();
+    memcpy(stored, use_name, len + 1);
+    assign->codegen_temp_name = stored;
+}
+
 /* Pass-by-value of a class-typed arg with a user copy ctor:
  * hoist a temp + invoke the copy ctor as statements so the use
  * site can emit just the temp name (no GNU stmt-expr). The
@@ -1816,6 +1907,19 @@ static void hoist_temps_in_expr(Node *n, bool in_shortcircuit) {
              (n->binary.op == TK_LAND || n->binary.op == TK_LOR));
         hoist_temps_in_expr(n->binary.lhs, in_shortcircuit);
         hoist_temps_in_expr(n->binary.rhs, rhs_short);
+        /* Memberwise class assign with array members: hoist the
+         * captured ptrs + bitwise copy + per-element op= loops as
+         * ISO statements (instead of an in-emit stmt-expr). */
+        if (n->kind == ND_ASSIGN && n->binary.op == TK_ASSIGN &&
+            !n->codegen_temp_name && n->binary.lhs && n->binary.rhs) {
+            Type *cls = n->binary.lhs->resolved_type;
+            if (ty_is_ref(cls)) cls = cls->base;
+            if (cls && (cls->kind == TY_STRUCT || cls->kind == TY_UNION) &&
+                cls->tag && !class_has_user_op_assign(cls) &&
+                class_needs_array_memberwise_assign(cls)) {
+                hoist_memberwise_assign(n, cls, in_shortcircuit);
+            }
+        }
         /* Struct-typed lhs of a binary/compound-assign op dispatches
          * through an overloaded operator: 'a == b' → 'sf__T__eq(&a, b)'.
          * If lhs is an rvalue call 'f() == b', the emitted '&f()' is
@@ -4759,7 +4863,8 @@ static void emit_expr(Node *n) {
          *   - class LHS without its OWN user op= (a user op= would
          *     have been dispatched above the regular path).
          *   - the array-memberwise pattern actually applies. */
-        if (n->binary.op == TK_ASSIGN && n->binary.lhs && n->binary.rhs) {
+        if (n->binary.op == TK_ASSIGN && n->binary.lhs && n->binary.rhs &&
+            !n->codegen_temp_name) {
             Type *cls = n->binary.lhs->resolved_type;
             if (ty_is_ref(cls)) cls = cls->base;
             if (cls && (cls->kind == TY_STRUCT || cls->kind == TY_UNION) &&
@@ -10280,18 +10385,27 @@ static void emit_stmt(Node *n) {
                         (op_ty->has_virtual_methods ||
                          op_ty->has_default_ctor);
                     if (is_func_cast_zero && needs_ctor_call) {
-                        fputs("__SF_THROW_CLASS(({ ", stdout);
+                        /* Hoist the ctor temp as ISO statements
+                         * before the throw macro; no stmt-expr. */
+                        int tid = g_cf.next_label_id++;
+                        char tname[32];
+                        snprintf(tname, sizeof(tname),
+                                 "__sf_thr_%d", tid);
+                        emit_indent();
                         emit_type(op_ty);
-                        fputs(" __sf_thr = {0}; ", stdout);
+                        fprintf(stdout, " %s = {0};\n", tname);
+                        emit_indent();
                         mangle_class_ctor(op_ty, NULL, 0);
-                        fputs("(&__sf_thr); ", stdout);
+                        fprintf(stdout, "(&%s);\n", tname);
                         /* The ctor body may itself throw; if so the
                          * outer __SF_THROW_CLASS must NOT clobber the
                          * just-set exc_state. The CHAIN check skips
                          * out via the same label the ctor used. */
-                        fprintf(stdout, "__SF_CHAIN_THROW(%s); ", lbl);
-                        fputs("&__sf_thr; })", stdout);
-                        fprintf(stdout, ", 0, %s);\n", lbl);
+                        emit_indent();
+                        fprintf(stdout, "__SF_CHAIN_THROW(%s);\n", lbl);
+                        emit_indent();
+                        fprintf(stdout, "__SF_THROW_CLASS(&%s, 0, %s);\n",
+                                tname, lbl);
                     } else {
                         fputs("__SF_THROW_CLASS(&(", stdout);
                         emit_expr(thr->throw_.operand);
