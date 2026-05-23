@@ -2905,6 +2905,8 @@ static void emit_memberwise_assign_stmt_expr(Type *cls, Node *lhs, Node *rhs);
  * Iterates members rather than using lookup_in_scope so a plain
  * `operator=` (any signature) qualifies. Used by the implicit
  * memberwise op= synthesis path. */
+static bool class_has_user_default_ctor(Type *cls);
+
 static bool class_has_user_op_assign(Type *class_type) {
     if (!class_type || !class_type->class_def) return false;
     Node *cd = class_type->class_def;
@@ -6559,6 +6561,28 @@ static void emit_expr(Node *n) {
                     fputc(')', stdout);
                     emit_expr(n->cast.operand);
                     fputs("; ", stdout);
+                    /* Value-init for `new T()` when T has no user-
+                     * provided default ctor: zero-initialize the
+                     * storage before the synth ctor runs (N4659
+                     * §11.6/8 [dcl.init]). The synth ctor only
+                     * touches class-typed subobjects and the vptr;
+                     * scalar members keep undefined bytes from
+                     * malloc unless we memset first. Pattern:
+                     * g++.dg/init/value3.C — `struct B { A a; int i; };
+                     * new B()` must zero `i`. */
+                    if (n->cast.new_value_init && na == 0 &&
+                        !class_has_user_default_ctor(p_resolved)) {
+                        fputs("memset(__sf_new_tmp, 0, ", stdout);
+                        if (n->cast.operand &&
+                            n->cast.operand->kind == ND_CALL &&
+                            n->cast.operand->call.nargs >= 1 &&
+                            n->cast.operand->call.args[0]) {
+                            emit_expr(n->cast.operand->call.args[0]);
+                        } else {
+                            fputs("sizeof(*__sf_new_tmp)", stdout);
+                        }
+                        fputs("); ", stdout);
+                    }
                     mangle_class_ctor(p_resolved, pty, np);
                     fputs("(__sf_new_tmp", stdout);
                     for (int i = 0; i < na; i++) {
@@ -8887,6 +8911,30 @@ static void decl_cond_cleanup_close(int saved_nlive) {
  * any side-effects in the body (e.g. p = new int(...)) actually
  * run. Pattern: g++.dg/opt/alias4.C — VB(const VB&) does work
  * inside; sea-front previously emitted `u = v` and skipped it. */
+/* True iff the class has a user-PROVIDED default ctor (0-arg). Used
+ * by `new T()` value-init: per N4659 §11.6/8 [dcl.init], value-
+ * initialization of a class with no user-provided default ctor
+ * first zero-initializes the object, then default-initializes. The
+ * synthesised default ctor only constructs class-typed subobjects
+ * and the vptr; scalar members and bytes outside subobjects stay
+ * undefined unless we zero first. With a user-provided default
+ * ctor, the user's body owns initialization — no zero needed. */
+static bool class_has_user_default_ctor(Type *cls) {
+    if (!cls || !cls->class_def) return false;
+    Node *cdef = cls->class_def;
+    for (int i = 0; i < cdef->class_def.nmembers; i++) {
+        Node *m = cdef->class_def.members[i];
+        if (!m) continue;
+        bool is_ctor_def = (m->kind == ND_FUNC_DEF && m->func.is_constructor);
+        bool is_ctor_decl = (m->kind == ND_VAR_DECL && m->var_decl.is_constructor);
+        if (!is_ctor_def && !is_ctor_decl) continue;
+        int np = is_ctor_def ? m->func.nparams
+                             : (m->var_decl.ty ? m->var_decl.ty->nparams : 0);
+        if (np == 0) return true;
+    }
+    return false;
+}
+
 static bool class_has_user_copy_ctor(Type *cls) {
     if (!cls || !cls->class_def) return false;
     Node *cdef = cls->class_def;

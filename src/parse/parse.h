@@ -471,6 +471,14 @@ struct Node {
             Node *operand;
             Node **new_ctor_args;
             int    new_ctor_nargs;
+            /* True when the source wrote parentheses after the
+             * type — i.e. `new T()` (value-init) as opposed to
+             * `new T` (default-init). Empty parens disambiguate
+             * the two cases that both have new_ctor_nargs == 0.
+             * Used by codegen to memset the freshly-allocated
+             * storage before the (synth) ctor runs — N4659
+             * §11.6/8 [dcl.init] / §8.3.4 [expr.new]. */
+            bool   new_value_init;
             /* Placement-new args: `new (p1, p2, ...) T(...)` carries
              * the placement expression list here. Empty / NULL for
              * non-placement new and for plain casts. Codegen routes

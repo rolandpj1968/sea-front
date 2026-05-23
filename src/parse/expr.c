@@ -2528,8 +2528,15 @@ static Node *unary_expr(Parser *p) {
         Node **ctor_args = NULL;
         int    ctor_nargs = 0;
         bool   has_ctor_init = false;   /* true once we've seen '(' or '{' */
+        /* `new T()` is value-init (empty parens) vs `new T` which
+         * is default-init — N4659 §8.3.4 [expr.new]/17.1 +
+         * §11.6/8 [dcl.init]. Codegen needs to memset the
+         * freshly-allocated storage when value-init applies
+         * and the class has no user-declared default ctor. */
+        bool   value_init = false;
         if (parser_consume(p, TK_LPAREN)) {
             has_ctor_init = true;
+            value_init = true;          /* empty parens → value-init */
             Vec args = vec_new(p->arena);
             if (!parser_at(p, TK_RPAREN)) {
                 Node *a0 = parse_assign_expr(p);
@@ -2662,6 +2669,7 @@ static Node *unary_expr(Parser *p) {
         cast->cast.is_new_expr = true;
         cast->cast.new_ctor_args = ctor_args;
         cast->cast.new_ctor_nargs = ctor_nargs;
+        cast->cast.new_value_init = value_init;
         cast->cast.new_placement_args = placement_args;
         cast->cast.new_placement_nargs = placement_nargs;
         return cast;
