@@ -2602,9 +2602,25 @@ static Node *unary_expr(Parser *p) {
             ctor_nargs = args.len;
         } else if (parser_consume(p, TK_LBRACE)) {
             has_ctor_init = true;
-            /* Braced new-initializer. Skip-and-discard — sema doesn't
-             * model the initializer structure, just walk past it. */
-            parser_skip_to_matching_rbrace(p);
+            value_init = true;        /* `new T{}` is list-init / value-init */
+            /* Braced new-initializer: `new T{a, b}` or `new T[N]{a, b}`.
+             * For array-new, each brace item initialises one element
+             * via direct-init against its matching ctor (C++11 §8.5.4
+             * [dcl.init.list]/3). Stored as ctor_args; codegen
+             * dispatches per-element when array_count is set. */
+            Vec args = vec_new(p->arena);
+            if (!parser_at(p, TK_RBRACE)) {
+                Node *a0 = parse_assign_expr(p);
+                if (a0) vec_push(&args, a0);
+                while (parser_consume(p, TK_COMMA)) {
+                    if (parser_at(p, TK_RBRACE)) break;  /* trailing , */
+                    Node *an = parse_assign_expr(p);
+                    if (an) vec_push(&args, an);
+                }
+            }
+            parser_expect(p, TK_RBRACE);
+            ctor_args = (Node **)args.data;
+            ctor_nargs = args.len;
         }
         (void)has_ctor_init;
 

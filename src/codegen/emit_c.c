@@ -6628,6 +6628,41 @@ static void emit_expr(Node *n) {
                     fputs("; __sf_new_tmp; })", stdout);
                     return;
                 }
+                /* Braced-init array new — `new T[N]{a0, a1, ...}`.
+                 * Each brace item initialises one element via
+                 * direct-init against its matching single-arg
+                 * ctor (C++11 §8.5.4 [dcl.init.list]/3 + §5.3.4
+                 * [expr.new]). Per-element overload resolution
+                 * because the items may bind different ctors.
+                 * Pattern: g++.dg/cpp0x/initlist49.C
+                 * `new A[2]{1, ""}` — A(int) for [0], A(const char*)
+                 * for [1]. */
+                if (n->cast.new_array_count && na > 0) {
+                    fputs("({ ", stdout);
+                    emit_type(n->cast.ty);
+                    fputs(" __sf_new_tmp = (", stdout);
+                    emit_type(n->cast.ty);
+                    fputc(')', stdout);
+                    emit_expr(n->cast.operand);
+                    fputs("; ", stdout);
+                    for (int i = 0; i < na; i++) {
+                        Node *brace_arg = n->cast.new_ctor_args[i];
+                        Type *bat[1] = { brace_arg ? brace_arg->resolved_type : NULL };
+                        Type **bpty = NULL;
+                        int bnp = resolve_overload(p_resolved, /*name=*/NULL,
+                                                    /*is_ctor=*/true,
+                                                    bat, 1,
+                                                    /*receiver_is_const=*/false,
+                                                    &bpty, /*out_best=*/NULL);
+                        mangle_class_ctor(p_resolved, bpty, bnp >= 0 ? bnp : 1);
+                        fprintf(stdout, "(&__sf_new_tmp[%d], ", i);
+                        emit_arg_for_param(brace_arg,
+                                            (bnp >= 0 && bpty) ? bpty[0] : NULL);
+                        fputs("); ", stdout);
+                    }
+                    fputs("__sf_new_tmp; })", stdout);
+                    return;
+                }
                 if (np >= 0) {
                     /* Array new with a ctor per element: capture N
                      * into __sf_new_n so the count expression's side

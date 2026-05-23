@@ -2136,6 +2136,17 @@ static void visit(Sema *s, Node *n) {
         if (n->cast.ty) n->resolved_type = n->cast.ty;
         if (n->cast.operand && n->cast.operand->is_type_dependent)
             n->is_type_dependent = true;
+        /* New-expr ctor args + placement args sit on the cast as
+         * extra slots, not visited via the operand walk. Codegen
+         * needs each arg's resolved_type for overload resolution
+         * (especially per-element ctor pick in
+         * `new T[N]{a0, a1, ...}`). */
+        if (n->cast.is_new_expr) {
+            for (int i = 0; i < n->cast.new_ctor_nargs; i++)
+                visit(s, n->cast.new_ctor_args[i]);
+            for (int i = 0; i < n->cast.new_placement_nargs; i++)
+                visit(s, n->cast.new_placement_args[i]);
+        }
         break;
     case ND_SIZEOF:
         visit(s, n->sizeof_.expr);
