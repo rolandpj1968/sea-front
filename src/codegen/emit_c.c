@@ -5181,13 +5181,22 @@ static void emit_expr(Node *n) {
                  * symbol — N4659 §8.3.5/9 [expr.delete]. */
                 Type *root = vptr_owner_class(pointee);
                 if (!root) root = pointee;
+                /* Cast both the vptr-load receiver AND the __dtor
+                 * call arg to 'struct root *'. The latter cast was
+                 * missing — strict-C back-ends like cproc enforce
+                 * pointer base-type compatibility on the arg and
+                 * reject 'struct Derived *' passed to a param typed
+                 * 'struct Root *'. gcc accepted it via the silent
+                 * derived-to-base conversion. */
                 fputs("_ZdlPv(((struct ", stdout);
                 mangle_class_tag(root);
                 fputs(" *)(", stdout);
                 emit_expr(opnd);
-                fputs("))->__sf_vptr->__dtor(", stdout);
+                fputs("))->__sf_vptr->__dtor((struct ", stdout);
+                mangle_class_tag(root);
+                fputs(" *)(", stdout);
                 emit_expr(opnd);
-                fputs("))", stdout);
+                fputs(")))", stdout);
                 if (null_guard) {
                     fputs(", 0) : 0)", stdout);
                 } else {
@@ -6457,6 +6466,16 @@ static void emit_expr(Node *n) {
                  * qualifier segment on member.qualifier_class. */
                 if (virt && callee->member.qualifier_class)
                     virt = false;
+                /* Vptr owner is the polymorphic-root ancestor of ot.
+                 * Hoisted out of the virt branch below so the receiver-
+                 * as-this arg emit can also cast to vowner — otherwise
+                 * '((struct Vowner *)obj)->__sf_vptr->m(obj)' would
+                 * pass 'struct Derived *' into 'struct Vowner *' param
+                 * and strict-C back-ends (cproc) reject. gcc accepted
+                 * via silent derived-to-base conversion. */
+                Type *vowner_for_args = virt ? vptr_owner_class(ot) : NULL;
+                bool need_vowner_cast = (vowner_for_args &&
+                                          vowner_for_args != ot);
                 /* Param types of the resolved method; used for arg
                  * lowering at line below. NULL on the virtual path
                  * (no overload resolution there yet — virtual call
@@ -6732,25 +6751,32 @@ static void emit_expr(Node *n) {
                     Type *raw_ot = obj ? obj->resolved_type : NULL;
                     bool ref_to_ptr = ty_is_ref(raw_ot) && raw_ot->base &&
                                       raw_ot->base->kind == TY_PTR;
-                    /* Cast-strip the const when the receiver is
-                     * 'const T*' / 'const T&' but the method's C
-                     * signature takes 'struct T *' (non-const). gcc
-                     * warns and accepts; cproc enforces C's strict
-                     * qualifier rule. Source is technically ill-formed
-                     * C++ when calling a non-const method on a const
-                     * receiver — sema doesn't reject today (separate
-                     * gap) but emit must produce portable C. */
+                    /* Receiver-as-this cast. Two reasons to wrap:
+                     *  (a) Virtual call where the vptr lives on an
+                     *      ancestor — the slot's first param is
+                     *      'struct vowner *', but obj's type is the
+                     *      derived. Mirrors the LHS cast emitted
+                     *      above.
+                     *  (b) Receiver is 'const T*' / 'const T&' but
+                     *      the method's this is non-const (also
+                     *      technically ill-formed C++; sema doesn't
+                     *      reject today — separate gap).
+                     * gcc accepts both via silent conversions; strict-
+                     * C back-ends like cproc reject. Cast target is
+                     * vowner when need_vowner_cast, else ot. */
                     bool need_const_strip = receiver_type_is_const(raw_ot);
-                    if (need_const_strip) {
+                    bool need_arg_cast = need_vowner_cast || need_const_strip;
+                    Type *arg_cast_class = need_vowner_cast ? vowner_for_args : ot;
+                    if (need_arg_cast) {
                         fputs("(struct ", stdout);
-                        mangle_class_tag(ot);
+                        mangle_class_tag(arg_cast_class);
                         fputs(" *)(", stdout);
                     }
                     bool saved_suppress = g_suppress_ref_deref;
                     g_suppress_ref_deref = !ref_to_ptr;
                     emit_expr(obj);
                     g_suppress_ref_deref = saved_suppress;
-                    if (need_const_strip)
+                    if (need_arg_cast)
                         fputc(')', stdout);
                 } else {
                     emit_addrof_for_this(obj);
