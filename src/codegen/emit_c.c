@@ -9634,11 +9634,25 @@ static void emit_stmt(Node *n) {
                    && dep->base) dep = dep->base;
             if (dep && (dep->kind == TY_STRUCT || dep->kind == TY_UNION) &&
                 dep->class_def && !dep->codegen_emitted) {
-                int saved_phase = g_emit_phase;
-                g_emit_phase = 0;
-                emit_class_def(dep->class_def);
-                g_emit_phase = saved_phase;
-                emit_indent();
+                /* Resolve to the canonical class type via class_def's
+                 * back-pointer — `dep` may be a Type copy whose
+                 * codegen_emitted flag wasn't updated when the
+                 * canonical version was emitted at file scope. If
+                 * the canonical is already emitted, this whole
+                 * branch is a no-op and the trailing emit_indent
+                 * would double-indent the var-decl. Pattern: any
+                 * `A a;` in a function body for a top-level-defined
+                 * struct A. */
+                Type *canon = (dep->class_def->kind == ND_CLASS_DEF)
+                                ? dep->class_def->class_def.ty : NULL;
+                bool already = canon ? canon->codegen_emitted : false;
+                if (!already) {
+                    int saved_phase = g_emit_phase;
+                    g_emit_phase = 0;
+                    emit_class_def(dep->class_def);
+                    g_emit_phase = saved_phase;
+                    emit_indent();
+                }
             }
         }
         /* Block-scope storage-class qualifiers (static, register, etc.)

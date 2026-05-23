@@ -152,9 +152,9 @@ int describe_p_Animal_ptr_pe_(struct sf__Animal* a) {
 int main(void) {
     __SF_PROLOGUE(int);
     {
-                struct sf__Animal a;
+        struct sf__Animal a;
         sf__Animal__ctor_p_int_pe_(&a, 3);
-                struct sf__Cat c;
+        struct sf__Cat c;
         sf__Cat__ctor_p_int_pe_(&c, 4);
         __SF_RETURN((describe_p_Animal_ptr_pe_((&a)) + describe_p_Animal_ptr_pe_(&((&c))->__sf_base)), __SF_cleanup_1);
         __SF_cleanup_1: ;

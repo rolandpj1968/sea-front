@@ -2,17 +2,37 @@
 
 **v0.2.0 — C++98 dg compliance** ([CHANGELOG](CHANGELOG.md))
 
-A C++-to-C transpiler written in C, for trusted bootstrapping of GCC and Clang.
+A C++-to-C transpiler written in C — turns C++ source into portable C that
+any standard C compiler can build. Used in two complementary ways:
 
-## The Problem
+  - **As a C++ frontend for a C-only backend.** Pair sea-front with a C
+    compiler that lacks a C++ frontend (e.g. tcc, [cproc + QBE](https://c9x.me/compile/),
+    a fresh-built gcc 4.7) and you have a working C++ toolchain end-to-end.
+    No language-runtime fork: the C output is plain ISO C with sea-front's
+    own small support shim (exception-state TLS struct, vtable-thunk
+    helpers — see [Generated Output Examples](demo/)).
+  - **As a trusted-bootstrap bridge.** Sea-front is the first link that
+    lets [Bootstrappable Builds](https://bootstrappable.org) reach a real
+    C++ compiler — see "Bootstrap context" below.
+
+Sample C output is in [`demo/`](demo/) — five small C++ inputs paired with
+the C sea-front produces.
+
+## Why a C++ → C transpiler?
+
+The portability story: C is the universal lowest-common-denominator IR.
+Every interesting target (cproc/QBE, tcc, gcc, clang, mrustc-style trusted
+chains, hex0-derived stacks) has a C path; few have a C++ path. A C++
+program transpiled to C can be retargeted to any of them with no further
+work in sea-front.
+
+The trusted-bootstrap story:
 
 Every major C++ compiler (GCC, Clang, MSVC) is self-hosting — it requires an
-existing C++ compiler to build. The [Bootstrappable Builds](https://bootstrappable.org)
-project has built a trusted chain from auditable hex all the way to a C compiler
-(hex0 → mescc → tcc → gcc 4.7.4), but **C++ is the unsolved gap**. gcc 4.8 was
+existing C++ compiler to build. The Bootstrappable Builds project has built
+a trusted chain from auditable hex all the way to a C compiler (hex0 →
+mescc → tcc → gcc 4.7.4), but **C++ is the unsolved gap**. gcc 4.8 was
 the first to require C++ to build itself.
-
-## The Solution
 
 sea-front bridges the C → C++ chasm:
 
@@ -37,7 +57,7 @@ hex0 → ... → mescc → tcc → gcc 4.7.4
 **Stage A bootstrap complete.** A cc1plus binary built end-to-end through
 sea-front from gcc 4.8 source compiles and runs real C++ programs, and is a
 self-consistent fixed point under the gcc bootstrap protocol
-(stage2 == stage3 byte-equal). See [the milestone section below](#bootstrap-milestone-stage-a-gcc-48).
+(stage2 == stage3 byte-equal). See [the bootstrap context below](#bootstrap-context-stage-a-gcc-48).
 
 Lexer, parser, sema, template instantiation, and C codegen all work
 end-to-end. Plumbed into the gcc 4.8 build via two wrapper scripts:
@@ -77,7 +97,7 @@ See [Trusted Bootstrap Design](docs/trusted-bootstrap-design.md).
 - 4 multi-TU deduplication tests
 - 28/28 gated + 52/52 stretch libstdc++ header smoke tests
 - 2 gcc-standalone tests
-- **g++.dg `dg-do run` corpus: 381 PASS / 6 FAIL.** All 6 FAILs are
+- **g++.dg `dg-do run` corpus: 382 PASS / 6 FAIL.** All 6 FAILs are
   out-of-scope for C++98: 2 are deliberately so (`eh/sighandle.C` signal
   handlers, `eh/simd-4.C` SIMD intrinsics), 3 are C++11 features
   (`cpp0x/implicit2.C` implicit-move via inherited ctor, `cpp0x/initlist49.C`
@@ -88,7 +108,13 @@ See [Trusted Bootstrap Design](docs/trusted-bootstrap-design.md).
 - gcc 14 libcpp/ source: 5 of 16 .cc files transpile + compile cleanly
   (informational; gcc 14 isn't a Stage A target)
 
-## Bootstrap milestone (Stage A, gcc 4.8)
+## Bootstrap context (Stage A, gcc 4.8)
+
+The C → C++ chasm via the trusted-bootstrap chain — `hex0 → … → tcc →
+gcc 4.7.4`, then sea-front (built by that tcc / gcc 4.7.4) transpiles
+gcc 4.8 source to C, which the trusted C compiler then builds into a
+working gcc 4.8 binary. Beyond gcc 4.8, modern gcc / clang build
+themselves. The milestone:
 
 ```
 cc1plus-stage0  53.3 MB  (built by sea-front-cc — initial host bootstrap)
@@ -178,9 +204,11 @@ make CXX=./scripts/sea-front-cc CXX_FOR_BUILD=g++ ...
 
 ### Generated Output Examples
 
-The `gen/` directory contains source + generated C pairs for eyeballing
-the transpiler's output quality. Each emitted C definition includes a
-`/* C++: ... */` comment showing the original C++ declaration.
+The [`demo/`](demo/) directory contains five small C++ inputs paired with the C
+sea-front produces: name mangling, ctors/dtors with scope cleanup, vtables,
+templates, and exception handling. Each emitted C definition carries a
+`/* C++: ... */` comment showing the original C++ declaration the C
+implements.
 
 ## Approach
 

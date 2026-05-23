@@ -118,10 +118,10 @@ __SF_INLINE struct sf__geom__Vec sf__geom__Vec__plus_p_const_Vec_ref_pe__const(c
 
 /* C++: int main() */
 int main(void) {
-        struct sf__geom__Vec a;
+    struct sf__geom__Vec a;
     sf__geom__Vec__ctor_p_int_int_pe_(&a, 3, 4);
-        struct sf__geom__Vec b;
+    struct sf__geom__Vec b;
     sf__geom__Vec__ctor_p_int_int_pe_(&b, 1, 2);
-        struct sf__geom__Vec c = sf__geom__Vec__plus_p_const_Vec_ref_pe__const(&a, &(b));
+    struct sf__geom__Vec c = sf__geom__Vec__plus_p_const_Vec_ref_pe__const(&a, &(b));
     return (sf__geom__Vec__scale_p_int_int_pe__const(&c, 2, 3) - sf__geom__Vec__dot_p_const_Vec_ref_pe__const(&a, &(b)));
 }

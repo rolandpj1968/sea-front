@@ -112,12 +112,12 @@ int main(void) {
         int log[16] = {0};
         int idx = 0;
         {
-                        struct sf__Tracer a;
+            struct sf__Tracer a;
             sf__Tracer__ctor_p_int_int_ptr_int_ptr_pe_(&a, 1, log, (&idx));
-                        struct sf__Tracer b;
+            struct sf__Tracer b;
             sf__Tracer__ctor_p_int_int_ptr_int_ptr_pe_(&b, 2, log, (&idx));
             {
-                                struct sf__Tracer c;
+                struct sf__Tracer c;
                 sf__Tracer__ctor_p_int_int_ptr_int_ptr_pe_(&c, 3, log, (&idx));
                 __SF_cleanup_2: ;
                 sf__Tracer__dtor(&c);
