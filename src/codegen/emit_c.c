@@ -6292,8 +6292,14 @@ static void emit_expr(Node *n) {
              * which is what the no-user-def placement-new case
              * needs. Without this the synthesized "operator" ident
              * falls through to the bare `operator(...)` path,
-             * producing an unresolved symbol. */
-            if (!callee_is_fn && n->call.callee &&
+             * producing an unresolved symbol.
+             *
+             * Skip when the fast path above already emitted a
+             * direct Itanium symbol (`_Znwm` / `_ZdlPv` / etc.) —
+             * otherwise the slow path would emit a second symbol
+             * back-to-back and the C parser would see e.g.
+             * `_Znwm_Znwm(sz)`. */
+            if (!emitted_mangled && !callee_is_fn && n->call.callee &&
                 n->call.callee->kind == ND_IDENT &&
                 n->call.callee->ident.name &&
                 n->call.callee->ident.name->len == 8 &&
@@ -6635,19 +6641,38 @@ static void emit_expr(Node *n) {
                      * g++.dg/expr/anew4.C `new (p) D[n]()`. */
                     bool array_loop = n->cast.new_array_count && na == 0;
                     fputs("({ ", stdout);
-                    /* For array new with a ctor loop, evaluate the
-                     * element count ONCE up front (its side effects
-                     * must not double-fire). Subsequent references —
-                     * including inside the malloc-call's
-                     * `count * sizeof(T)` arg — substitute the local
-                     * via the codegen_temp_name machinery, then we
-                     * clear the tag at the end. */
                     if (array_loop) {
+                        /* Capture N up front; reference it in both
+                         * the malloc-call's size arg AND the ctor
+                         * loop bound so the count expression's side
+                         * effects fire exactly once. Substitute the
+                         * count node's emit via codegen_temp_name —
+                         * works whenever the malloc-call's size arg
+                         * is the same Node as n->cast.new_array_count
+                         * (the common case; for clone-divergent
+                         * trees the size arg still re-evaluates,
+                         * which is a sema bug, not a codegen one). */
                         fputs("unsigned long __sf_new_n = ", stdout);
                         emit_expr(n->cast.new_array_count);
                         fputs("; ", stdout);
                         n->cast.new_array_count->codegen_temp_name =
                             "__sf_new_n";
+                        /* Also tag the malloc-call's size-arg-lhs
+                         * directly in case template instantiation
+                         * cloned the array-size expression into a
+                         * distinct Node before the cast was woven.
+                         * Pattern: g++.dg/template/new1.C — the
+                         * cloned A<Aint>::f body's `new T[Blksize()]`
+                         * has two separate Blksize() nodes after
+                         * clone. */
+                        if (n->cast.operand &&
+                            n->cast.operand->kind == ND_CALL &&
+                            n->cast.operand->call.nargs >= 1 &&
+                            n->cast.operand->call.args[0] &&
+                            n->cast.operand->call.args[0]->kind == ND_BINARY &&
+                            n->cast.operand->call.args[0]->binary.lhs)
+                            n->cast.operand->call.args[0]->binary.lhs
+                                ->codegen_temp_name = "__sf_new_n";
                     }
                     emit_type(n->cast.ty);
                     fputs(" __sf_new_tmp = (", stdout);
@@ -6753,8 +6778,17 @@ static void emit_expr(Node *n) {
                             fprintf(stdout, "__SF_CHAIN_THROW(%s); ", tbuf);
                     }
                     fputs("__sf_new_tmp; })", stdout);
-                    if (array_loop)
+                    if (array_loop) {
                         n->cast.new_array_count->codegen_temp_name = NULL;
+                        if (n->cast.operand &&
+                            n->cast.operand->kind == ND_CALL &&
+                            n->cast.operand->call.nargs >= 1 &&
+                            n->cast.operand->call.args[0] &&
+                            n->cast.operand->call.args[0]->kind == ND_BINARY &&
+                            n->cast.operand->call.args[0]->binary.lhs)
+                            n->cast.operand->call.args[0]->binary.lhs
+                                ->codegen_temp_name = NULL;
+                    }
                     return;
                 }
             }
