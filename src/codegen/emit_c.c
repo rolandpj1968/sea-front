@@ -4799,11 +4799,56 @@ static void emit_expr(Node *n) {
                 return;
             }
         }
-        fputc('(', stdout);
-        emit_expr(n->binary.lhs);
-        fprintf(stdout, " %s ", binop_str(n->binary.op));
-        emit_expr(n->binary.rhs);
-        fputc(')', stdout);
+        /* Pointer-comparison void* wrap — strict-C back-ends (cproc)
+         * reject '==' / '!=' / relational on two pointers to
+         * incompatible struct/union types. Common cause: covariant-
+         * return virtual call whose C-level slot returns 'struct
+         * Base *' compared against 'struct Derived *' from the
+         * caller. C++ allows the implicit derived-to-base conversion;
+         * C doesn't. Cast both sides to '(void *)' — pointer
+         * comparison is well-defined through void* and the layout
+         * invariants make the byte address comparison meaningful. */
+        {
+            bool _cmp_op_ptr =
+                (n->binary.op == TK_EQ || n->binary.op == TK_NE ||
+                 n->binary.op == TK_LT || n->binary.op == TK_LE ||
+                 n->binary.op == TK_GT || n->binary.op == TK_GE);
+            Type *_lty = n->binary.lhs ? n->binary.lhs->resolved_type : NULL;
+            Type *_rty = n->binary.rhs ? n->binary.rhs->resolved_type : NULL;
+            /* Wrap when sema-level pointee classes differ, OR when one
+             * side is a virtual call (where sema's covariant return
+             * type — e.g. AB* — disagrees with the emitted C slot
+             * return type — A*). The call case can't be detected from
+             * sema types alone (both sides report AB* in source); use
+             * an ND_CALL probe as a proxy. */
+            bool _types_differ = _lty && _rty &&
+                _lty->kind == TY_PTR && _rty->kind == TY_PTR &&
+                _lty->base && _rty->base &&
+                (_lty->base->kind == TY_STRUCT || _lty->base->kind == TY_UNION) &&
+                (_rty->base->kind == TY_STRUCT || _rty->base->kind == TY_UNION) &&
+                !same_class_type(_lty->base, _rty->base);
+            bool _lhs_is_call = n->binary.lhs &&
+                                n->binary.lhs->kind == ND_CALL;
+            bool _rhs_is_call = n->binary.rhs &&
+                                n->binary.rhs->kind == ND_CALL;
+            bool _ptr_compare = _cmp_op_ptr && _lty && _rty &&
+                _lty->kind == TY_PTR && _rty->kind == TY_PTR &&
+                _lty->base && _rty->base &&
+                (_lty->base->kind == TY_STRUCT || _lty->base->kind == TY_UNION) &&
+                (_rty->base->kind == TY_STRUCT || _rty->base->kind == TY_UNION);
+            bool _wrap = _cmp_op_ptr &&
+                (_types_differ ||
+                 (_ptr_compare && (_lhs_is_call || _rhs_is_call)));
+            fputc('(', stdout);
+            if (_wrap) fputs("(void *)(", stdout);
+            emit_expr(n->binary.lhs);
+            if (_wrap) fputc(')', stdout);
+            fprintf(stdout, " %s ", binop_str(n->binary.op));
+            if (_wrap) fputs("(void *)(", stdout);
+            emit_expr(n->binary.rhs);
+            if (_wrap) fputc(')', stdout);
+            fputc(')', stdout);
+        }
         return;
     }
     case ND_ASSIGN: {
