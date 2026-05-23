@@ -6732,10 +6732,26 @@ static void emit_expr(Node *n) {
                     Type *raw_ot = obj ? obj->resolved_type : NULL;
                     bool ref_to_ptr = ty_is_ref(raw_ot) && raw_ot->base &&
                                       raw_ot->base->kind == TY_PTR;
+                    /* Cast-strip the const when the receiver is
+                     * 'const T*' / 'const T&' but the method's C
+                     * signature takes 'struct T *' (non-const). gcc
+                     * warns and accepts; cproc enforces C's strict
+                     * qualifier rule. Source is technically ill-formed
+                     * C++ when calling a non-const method on a const
+                     * receiver — sema doesn't reject today (separate
+                     * gap) but emit must produce portable C. */
+                    bool need_const_strip = receiver_type_is_const(raw_ot);
+                    if (need_const_strip) {
+                        fputs("(struct ", stdout);
+                        mangle_class_tag(ot);
+                        fputs(" *)(", stdout);
+                    }
                     bool saved_suppress = g_suppress_ref_deref;
                     g_suppress_ref_deref = !ref_to_ptr;
                     emit_expr(obj);
                     g_suppress_ref_deref = saved_suppress;
+                    if (need_const_strip)
+                        fputc(')', stdout);
                 } else {
                     emit_addrof_for_this(obj);
                 }
