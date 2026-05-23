@@ -14467,6 +14467,15 @@ static void emit_top_level(Node *n) {
                 else
                     fputs("__attribute__((destructor)) ", stdout);
             }
+            /* `extern void f(...) __attribute__((weak))` — proto
+             * carries the weak attribute (linker honours it; an
+             * unresolved weak symbol is null at run time, which
+             * the user code typically tests via `&f`). Without
+             * the pass-through the linker errors with an
+             * undefined-reference on an unsatisfied weak symbol.
+             * Pattern: g++.dg/warn/weak1.C. */
+            if (n->var_decl.attr_weak)
+                fputs("__attribute__((weak)) ", stdout);
             Type *fty = n->var_decl.ty;
             /* Function returning a function pointer requires
              * declarator-interleaving (N4659 §11.3):
