@@ -8304,6 +8304,25 @@ static void emit_var_decl_inner(Node *n) {
                     n->var_decl.name->len, n->var_decl.name->loc);
         }
     }
+    /* `std::nothrow` is exported by libstdc++ as `_ZSt7nothrow`,
+     * but sea-front's namespace-var emit drops the namespace
+     * qualifier and produces a bare `nothrow` symbol — link
+     * fails on `new (std::nothrow) T()` and friends. Inject an
+     * asm-rename for the canonical declaration so the resulting
+     * C symbol matches what the library exports. Conservatively
+     * gated: only when the var's name is exactly `nothrow` AND
+     * the type tag is `nothrow_t` AND the storage is extern (so
+     * we're naming the canonical libstdc++ declaration, not a
+     * stray local). N4659 §18.6.4 [new.nothrow] /
+     * Itanium ABI §5.1.5. Pattern: g++.dg/init/new5.C. */
+    if (n->var_decl.name && n->var_decl.name->len == 7 &&
+        memcmp(n->var_decl.name->loc, "nothrow", 7) == 0 &&
+        ty && (ty->kind == TY_STRUCT) && ty->tag &&
+        ty->tag->len == 9 &&
+        memcmp(ty->tag->loc, "nothrow_t", 9) == 0 &&
+        (n->var_decl.storage_flags & DECL_EXTERN)) {
+        fputs(" __asm__(\"_ZSt7nothrow\")", stdout);
+    }
     /* Bit-field width — N4659 §12.2.4 [class.bit] */
     if (n->var_decl.bitfield_width) {
         fputs(" : ", stdout);
