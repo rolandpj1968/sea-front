@@ -42,7 +42,13 @@ struct vec<T, A, vl_ptr> {
 vec<int, va_heap, vl_embed> g;
 
 int main() {
-    vec<int, va_heap, vl_ptr> p;
-    vec<int, va_heap, vl_embed> e;
+    // Explicit zero-init — C++ default-init of a POD-only class
+    // leaves members indeterminate (reading one is UB). The dedup
+    // intent doesn't depend on the uninit read; gcc -O0 happens to
+    // zero locals as a side-effect of frame setup, hiding the UB.
+    // Strict back-ends (cproc/qbe) faithfully leave the storage
+    // indeterminate, so an explicit '= {}' is needed for portability.
+    vec<int, va_heap, vl_ptr> p = {};
+    vec<int, va_heap, vl_embed> e = {};
     return p.length() + e.length() + g.length();
 }
