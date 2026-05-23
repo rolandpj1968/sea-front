@@ -7881,6 +7881,49 @@ static void emit_aggregate_init_per_member(Node *var) {
         bool member_is_class = mt && mt->kind == TY_STRUCT;
         bool member_needs_ctor = member_is_class &&
             class_has_user_copy_ctor(mt);
+        /* Copy elision (N4659 §15.8.3 [class.copy.elision]): if the
+         * source element is a PRVALUE (functional cast `T()`,
+         * call returning T by value, init-list rvalue), elide the
+         * copy ctor and bitwise-init the member from the rvalue.
+         * Beyond the standard's permission, this is necessary for
+         * sea-front: a user copy ctor that's DECLARED but never
+         * DEFINED would otherwise produce a link error here
+         * (sea-front's bitwise emit was the implicit fallback
+         * pre-aggregate-per-member). Pattern: g++.dg/init/aggr2.C
+         * — `B b = { A() };` where A's copy ctor is declared but
+         * the test relies on elision. */
+        bool elem_is_rvalue = elem && (elem->kind == ND_CALL ||
+                                         elem->kind == ND_CAST ||
+                                         elem->kind == ND_INIT_LIST);
+        /* Functional-cast `T()` source for a T-typed member —
+         * construct-in-place: call T's default ctor directly on
+         * &member, skipping the copy ctor entirely. The functional
+         * cast IS the constructor invocation in C++ semantics, so
+         * eliding the intermediate temp is required for the user's
+         * ctor body to run on the FINAL storage (where it can
+         * record this-pointer, etc.). Pattern: g++.dg/init/aggr2.C
+         * — `B b = { A() };` where A() must set p=this with this
+         * being &b.a. */
+        bool elem_is_default_ctor_call = false;
+        if (member_is_class && mt && mt->tag &&
+            elem && elem->kind == ND_CALL && elem->call.nargs == 0 &&
+            elem->call.callee && elem->call.callee->kind == ND_IDENT &&
+            elem->call.callee->ident.name) {
+            Token *cn = elem->call.callee->ident.name;
+            if (cn->len == mt->tag->len &&
+                memcmp(cn->loc, mt->tag->loc, mt->tag->len) == 0)
+                elem_is_default_ctor_call = true;
+        }
+        if (elem_is_default_ctor_call && mt->has_default_ctor) {
+            emit_indent();
+            mangle_class_ctor(mt, NULL, 0);
+            fprintf(stdout, "(&%.*s.%.*s);\n",
+                    var->var_decl.name->len, var->var_decl.name->loc,
+                    m->var_decl.name->len, m->var_decl.name->loc);
+            continue;
+        }
+        if (member_needs_ctor && elem_is_rvalue)
+            member_needs_ctor = false;
         if (member_needs_ctor) {
             /* Build a one-element pty for the ctor mangling. Same
              * trick as emit_inline_copy_chain. */
@@ -8273,6 +8316,14 @@ static void emit_var_decl_inner(Node *n) {
         fputs(" __attribute__((cleanup(", stdout);
         emit_token_text(n->var_decl.cleanup_attr_name);
         fputs(")))", stdout);
+    }
+    /* Aggregate init `T x = {...}` with class members that have
+     * user copy ctors is lowered separately via
+     * emit_aggregate_init_per_member at the var_decl statement
+     * level (after the `;`). Don't double-emit the bitwise `= {...}`
+     * suffix here. Pattern: g++.dg/init/aggr2.C. */
+    if (n->var_decl.init && var_decl_needs_aggregate_per_member(n)) {
+        return;
     }
     if (n->var_decl.init) {
         fputs(" = ", stdout);
