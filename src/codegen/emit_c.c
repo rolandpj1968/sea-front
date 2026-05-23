@@ -13780,6 +13780,15 @@ static void emit_class_def(Node *n) {
                 n->class_def.tag->len, n->class_def.tag->loc);
     fputc(' ', stdout);
     emit_open_brace();
+    /* C requires struct bodies to have at least one named member
+     * (C11 §6.7.2.1/1). An empty C++ class ('struct Shout {};' with
+     * only members functions) lowers to a struct with no bases, no
+     * vptr, and no data members. gcc and clang accept the empty body
+     * as an extension; cproc enforces the standard rule. Track whether
+     * the body emits anything, and on close emit a 'char __sf_empty;'
+     * placeholder when it didn't. sizeof becomes 1 — same as C++'s
+     * own empty-class rule (§6.7.2/2) so behaviour matches. */
+    bool any_member_emitted = false;
     /* Base subobjects — N4659 §11 [class.derived] / §6.7 [class.layout].
      * For non-virtual single (or multiple) inheritance we embed each
      * direct base as a struct field at the head of the layout, in
@@ -13802,6 +13811,7 @@ static void emit_class_def(Node *n) {
         mangle_class_tag(base);
         if (b == 0) fputs(" __sf_base;\n", stdout);
         else        fprintf(stdout, " __sf_base%d;\n", b);
+        any_member_emitted = true;
     }
     /* Vptr at offset 0 — N4659 §13.3 [class.virtual]. The standard
      * doesn't mandate offset 0 but every Itanium-style ABI puts it
@@ -13831,6 +13841,7 @@ static void emit_class_def(Node *n) {
         fputs("const struct ", stdout);
         mangle_class_vtable_type(class_type);
         fputs(" *__sf_vptr;\n", stdout);
+        any_member_emitted = true;
     }
     for (int i = 0; i < n->class_def.nmembers; i++) {
         Node *m = n->class_def.members[i];
@@ -13860,6 +13871,7 @@ static void emit_class_def(Node *n) {
                 emit_var_decl_inner(s);
                 s->var_decl.init = saved_init;
                 fputs(";\n", stdout);
+                any_member_emitted = true;
             }
             continue;
         }
@@ -13892,6 +13904,7 @@ static void emit_class_def(Node *n) {
             g_indent--;
             emit_indent();
             fputs("};\n", stdout);
+            any_member_emitted = true;
             continue;
         }
         if (m->kind != ND_VAR_DECL) continue;
@@ -13931,6 +13944,7 @@ static void emit_class_def(Node *n) {
             }
             if (fty->nparams == 0) fputs("void", stdout);
             fputs(");\n", stdout);
+            any_member_emitted = true;
             continue;
         }
         emit_indent();
@@ -13939,6 +13953,11 @@ static void emit_class_def(Node *n) {
         emit_var_decl_inner(m);
         m->var_decl.init = saved_init;
         fputs(";\n", stdout);
+        any_member_emitted = true;
+    }
+    if (!any_member_emitted) {
+        emit_indent();
+        fputs("char __sf_empty;\n", stdout);
     }
     g_indent--;
     /* GNU __attribute__((packed)) — pass-through to the C compiler
@@ -16362,13 +16381,13 @@ void emit_c(Node *tu) {
             Type *ty = n->var_decl.ty;
             if (ty->kind != TY_STRUCT && ty->kind != TY_UNION) continue;
             if (!ty->has_default_ctor) continue;
+            /* Attribute on the definition only — see __sf_global_init
+             * for the rationale (cproc accepts ctor attr on defs only;
+             * gcc/clang are happy either way). */
             fprintf(stdout,
-                "\nstatic void __sf_init_pri_%d_%.*s(void) "
-                "__attribute__((constructor(%d)));\n",
-                i, n->var_decl.name->len, n->var_decl.name->loc,
-                n->var_decl.init_priority);
-            fprintf(stdout,
+                "\n__attribute__((constructor(%d))) "
                 "static void __sf_init_pri_%d_%.*s(void) {\n    ",
+                n->var_decl.init_priority,
                 i, n->var_decl.name->len, n->var_decl.name->loc);
             mangle_class_ctor(ty, NULL, 0);
             fprintf(stdout, "(&%.*s);\n}\n",
@@ -16396,9 +16415,13 @@ void emit_c(Node *tu) {
             fputs("extern void *__dso_handle "
                   "__attribute__((weak));\n", stdout);
         }
-        fputs("\nstatic void __sf_global_init(void) __attribute__((constructor));\n",
+        /* The constructor attribute appears on the definition only —
+         * not on a forward declaration. Some back-ends (cproc) only
+         * accept it on definitions, and gcc/clang are equally happy
+         * either way; nothing other than the runtime .init_array
+         * mechanism calls this function, so no prototype is needed. */
+        fputs("\n__attribute__((constructor)) static void __sf_global_init(void) {\n",
               stdout);
-        fputs("static void __sf_global_init(void) {\n", stdout);
         for (int i = 0; i < tu->tu.ndecls; i++) {
             Node *n = tu->tu.decls[i];
             if (!n || n->kind != ND_VAR_DECL) continue;
