@@ -60,12 +60,20 @@ fi
 # which already defines __GNUC__ natively and would warn on redef.
 GNUC_DEFINES="-D__GNUC__=4 -D__GNUC_MINOR__=2 -D__GNUC_PATCHLEVEL__=1"
 
+# Auto-include the GCC-builtin compat shim so cproc has impls for the
+# __builtin_ctz/popcount/bswap/memset/expect/unreachable/__cxa_thread_atexit
+# family that sea-front (and glibc inlines reached via the preprocess
+# expansion) reference but cproc doesn't natively implement. Path is
+# resolved relative to the script's directory so the wrapper is
+# location-independent. See compat/sf_builtins.h for the rationale.
+SF_COMPAT_INCLUDE="-include $SCRIPT_DIR/../compat/sf_builtins.h"
+
 # cproc rejects gcc's -no-pie linker flag. Override sea-front-cc's
 # default of '-no-pie' to empty for the link step. cproc's own ld
 # invocation already produces a working dynamic exe by default.
 exec env \
     SEA_CC="$SEA_CPROC" \
-    SEA_CC_FLAGS="$GNUC_DEFINES ${SEA_CC_FLAGS:-}" \
+    SEA_CC_FLAGS="$GNUC_DEFINES $SF_COMPAT_INCLUDE ${SEA_CC_FLAGS:-}" \
     SEA_LINK_FLAGS="" \
     SEA_BACKEND=cproc \
     "$SCRIPT_DIR/sea-front-cc" "$@"
