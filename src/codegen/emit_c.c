@@ -2574,15 +2574,23 @@ static void emit_vptr_lhs(Type *class_type) {
  * is returned. Zero means 'not found' (or current == target — no
  * walk needed). Bounded by max_depth to avoid runaway in malformed
  * graphs. */
+static bool same_class_type(Type *a, Type *b) {
+    if (a == b) return true;
+    if (!a || !b || !a->tag || !b->tag) return false;
+    return a->tag->len == b->tag->len &&
+           memcmp(a->tag->loc, b->tag->loc, a->tag->len) == 0;
+}
+
 static int find_base_path(Type *current, Type *target,
                           int *path, int max_depth) {
-    if (!current || !target || current == target || max_depth <= 0)
+    if (!current || !target || same_class_type(current, target) ||
+        max_depth <= 0)
         return 0;
     int nb = class_nbases(current);
     for (int b = 0; b < nb; b++) {
         Type *base = class_base(current, b);
         if (!base) continue;
-        if (base == target) {
+        if (same_class_type(base, target)) {
             path[0] = b;
             return 1;
         }
@@ -6476,6 +6484,22 @@ static void emit_expr(Node *n) {
                 Type *vowner_for_args = virt ? vptr_owner_class(ot) : NULL;
                 bool need_vowner_cast = (vowner_for_args &&
                                           vowner_for_args != ot);
+                /* Explicit qualifier 'obj->Class::method()' bypasses
+                 * the virtual dispatch and binds to Class::method
+                 * directly. The receiver-as-this arg also needs a cast
+                 * to 'struct Class *' (or base-subobject access) since
+                 * obj's type is the derived. Hoist that class up so
+                 * the arg-emit can use it. N4659 §13.3/15. */
+                Type *qualified_recv_class = NULL;
+                if (!virt && callee->member.qualifier_class) {
+                    Type qstub = {0};
+                    qstub.kind = TY_STRUCT;
+                    qstub.tag  = callee->member.qualifier_class;
+                    Node *qcdef = find_class_def_by_tag_only(&qstub);
+                    if (qcdef && qcdef->class_def.ty &&
+                        qcdef->class_def.ty != ot)
+                        qualified_recv_class = qcdef->class_def.ty;
+                }
                 /* Param types of the resolved method; used for arg
                  * lowering at line below. NULL on the virtual path
                  * (no overload resolution there yet — virtual call
@@ -6765,8 +6789,11 @@ static void emit_expr(Node *n) {
                      * C back-ends like cproc reject. Cast target is
                      * vowner when need_vowner_cast, else ot. */
                     bool need_const_strip = receiver_type_is_const(raw_ot);
-                    bool need_arg_cast = need_vowner_cast || need_const_strip;
-                    Type *arg_cast_class = need_vowner_cast ? vowner_for_args : ot;
+                    bool need_arg_cast = need_vowner_cast || need_const_strip ||
+                                          qualified_recv_class != NULL;
+                    Type *arg_cast_class = need_vowner_cast ? vowner_for_args
+                                          : qualified_recv_class ? qualified_recv_class
+                                          : ot;
                     if (need_arg_cast) {
                         fputs("(struct ", stdout);
                         mangle_class_tag(arg_cast_class);
