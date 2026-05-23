@@ -6,8 +6,8 @@
 #ifndef SEA_FRONT_H
 #define SEA_FRONT_H
 
-#define SF_VERSION "0.2.3"
-#define SF_VERSION_NAME "type traits + weak proto"
+#define SF_VERSION "0.2.4"
+#define SF_VERSION_NAME "closing out gcc 4.8 dg"
 
 #include <stdbool.h>
 #include <stdint.h>

@@ -2375,10 +2375,25 @@ static void visit(Sema *s, Node *n) {
         visit(s, n->template_decl.decl);
         break;
 
-    case ND_TRANSLATION_UNIT:
+    case ND_TRANSLATION_UNIT: {
+        /* Push the global region as cur_scope so visit_ident /
+         * lookup_unqualified_from can find file-scope names from
+         * file-scope var-decl inits (e.g. `T *p = &g;` references
+         * the prior `g`). Without this, cur_scope is NULL and the
+         * lookup short-circuits — leaving resolved_decl NULL and
+         * downstream is-this-TLS checks blind. Pattern:
+         * g++.dg/tls/thread_local-order{1,2}.C — `A* ap = &a1;`
+         * needs to see that a1 is `thread_local` so the init is
+         * deferred to __sf_global_init instead of being emitted
+         * as a static C init (which the C front rejects because
+         * `&<TLS>` isn't a constant). */
+        DeclarativeRegion *saved = s->cur_scope;
+        if (n->tu.global_scope) s->cur_scope = n->tu.global_scope;
         for (int i = 0; i < n->tu.ndecls; i++)
             visit(s, n->tu.decls[i]);
+        s->cur_scope = saved;
         break;
+    }
 
     default:
         /* Everything else: walk children we know about, leave

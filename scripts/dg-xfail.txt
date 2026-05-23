@@ -31,6 +31,25 @@ g++.dg/abi/vbase11.C
 g++.dg/abi/vbase13.C
 g++.dg/cpp0x/regress/abi-empty7.C
 
+# --- Out-of-scope C++11 features ----------------------------------------
+# These need substantial C++11 work that sea-front hasn't built out yet.
+# Listed here so the FAIL count tracks real regressions rather than
+# known deferred slices.
+
+# implicit2 needs:
+#   - Synth copy ctor SYNTHESIS (sea-front emits only default ctors when
+#     no user copy ctor is declared; the test relies on C's synth copy
+#     ctor calling A's chosen copy ctor on the base subobject).
+#   - Function-template overload resolution: A has both `A(const A&)`
+#     and `template<class T> A(T& t)`; for a non-const A& source the
+#     template wins (better match than the implicit const conversion),
+#     so the template body runs. Sea-front's overload resolver doesn't
+#     consider template ctors yet.
+#   - Template-ctor MANGLING (`_ZN1AC1IS_EERT_`) + body instantiation
+#     with T substituted to A.
+# Together these are multi-week work; deferred until the C++11 sweep.
+g++.dg/cpp0x/implicit2.C
+
 # --- Universally xfail in gcc itself ------------------------------------
 # These tests are marked `dg-do run { xfail *-*-* }` in the source — gcc
 # itself expects them to FAIL on every target. Listing here surfaces

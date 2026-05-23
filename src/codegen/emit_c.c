@@ -1030,10 +1030,21 @@ static bool is_const_initializer_for_static(Node *n) {
         /* Address-of-global is a constant address. Treat '&ident'
          * conservatively as constant — most callers reference a
          * file-scope global, the cast-through-pointer case is what
-         * we're trying to support. */
+         * we're trying to support.
+         *
+         * Exception: the address of a `_Thread_local` variable is
+         * NOT a C constant expression — TLS storage is resolved at
+         * thread init, so the linker can't bake the address into
+         * a static initialiser. Falling back to false routes this
+         * init through `__sf_global_init`. Pattern:
+         * g++.dg/tls/thread_local-order{1,2}.C — `A *ap = &a1;`
+         * where a1 is `thread_local`. */
         if (n->unary.op == TK_AMP && n->unary.operand &&
-            n->unary.operand->kind == ND_IDENT)
+            n->unary.operand->kind == ND_IDENT) {
+            Declaration *d = n->unary.operand->ident.resolved_decl;
+            if (d && d->is_thread_local) return false;
             return true;
+        }
         /* Unary plus / minus on a literal is also constant. */
         if ((n->unary.op == TK_PLUS || n->unary.op == TK_MINUS) &&
             n->unary.operand)
@@ -1312,6 +1323,36 @@ static void hoist_emit_decl(Node *call, bool in_shortcircuit) {
                 emit_indent();
                 mangle_class_ctor(ctor_class_type, NULL, 0);
                 fprintf(stdout, "(&%s);\n", name);
+            } else if (call->call.nargs == 1 && ctor_class_type) {
+                /* `T(x)` where x is also a T (or T&) — the implicit
+                 * copy ctor (N4659 §15.8.1 [class.copy.ctor]) does
+                 * memberwise copy. In C that's just a struct
+                 * assignment. Preserve the arg instead of dropping
+                 * it via `{0}` (silent corruption: the arg's value
+                 * vanished entirely). Doesn't invoke user template
+                 * ctors — pattern g++.dg/cpp0x/implicit2.C needs a
+                 * full overload-res slice and is xfailed. */
+                Node *arg0 = call->call.args[0];
+                Type *art = arg0 ? arg0->resolved_type : NULL;
+                Type *u = art;
+                if (u && (u->kind == TY_REF || u->kind == TY_RVALREF))
+                    u = u->base;
+                bool same_class = u &&
+                    (u->kind == TY_STRUCT || u->kind == TY_UNION) &&
+                    u->tag && ctor_class_type->tag &&
+                    u->tag->len == ctor_class_type->tag->len &&
+                    memcmp(u->tag->loc, ctor_class_type->tag->loc,
+                           u->tag->len) == 0;
+                if (same_class) {
+                    fprintf(stdout, " %s = ", name);
+                    bool arg_is_ref = art &&
+                        (art->kind == TY_REF || art->kind == TY_RVALREF);
+                    if (arg_is_ref) fputc('*', stdout);
+                    emit_expr(arg0);
+                    fputs(";\n", stdout);
+                } else {
+                    fprintf(stdout, " %s = {0};\n", name);
+                }
             } else {
                 fprintf(stdout, " %s = {0};\n", name);
             }
@@ -2396,8 +2437,21 @@ static void emit_storage_flags_impl(int flags, bool for_definition) {
      * `_Thread_local`; all map to the same flag. For class
      * variables with non-trivial ctor/dtor, the per-thread
      * lazy-init wrapper supplements the storage class (handled
-     * at the var-decl emit site, not here). */
-    if (flags & DECL_THREAD_LOCAL) fputs("_Thread_local ", stdout);
+     * at the var-decl emit site, not here).
+     *
+     * C99 §6.7.1/7: at block scope, `_Thread_local` requires
+     * `static` (or `extern`) as a companion storage-class
+     * specifier. C++ permits the bare keyword at any scope; the
+     * implicit-static is what makes it valid C. Pattern:
+     * g++.dg/tls/thread_local6.C — `thread_local A a;` inside
+     * `void f()` needs `static _Thread_local` in the C output.
+     * g_current_func_ret_ty is set when we're emitting inside a
+     * function body. */
+    if (flags & DECL_THREAD_LOCAL) {
+        if (g_current_func_ret_ty && !is_static && !is_extern)
+            fputs("static ", stdout);
+        fputs("_Thread_local ", stdout);
+    }
 }
 
 static void emit_storage_flags(int flags) {
@@ -8619,6 +8673,51 @@ static void emit_var_decl_inner(Node *n) {
                 }
             }
         }
+        /* 1-arg functional-cast init `T b = T(x);` where x is
+         * also a T (or T&). Without a special handler this would
+         * emit `T b = T(x);` — C parser sees unknown function `T`.
+         * Lower to bitwise (memberwise) copy `T b = x;`, matching
+         * the implicit-copy-ctor semantics for classes without a
+         * user-declared one. N4659 §15.8.1 [class.copy.ctor]. */
+        if (n->var_decl.init &&
+            n->var_decl.init->kind == ND_CALL &&
+            n->var_decl.init->call.nargs == 1 &&
+            n->var_decl.init->call.callee &&
+            n->var_decl.init->call.callee->kind == ND_IDENT &&
+            ty && (ty->kind == TY_STRUCT || ty->kind == TY_UNION)) {
+            Node *cid = n->var_decl.init->call.callee;
+            bool callee_is_type =
+                cid->ident.resolved_decl &&
+                (cid->ident.resolved_decl->entity == ENTITY_TYPE ||
+                 cid->ident.resolved_decl->entity == ENTITY_TAG);
+            /* Unresolved ident matching the lhs class tag — same
+             * fallback the 0-arg branch above uses. */
+            if (!callee_is_type && !cid->ident.resolved_decl &&
+                cid->ident.name && ty->tag &&
+                cid->ident.name->len == ty->tag->len &&
+                memcmp(cid->ident.name->loc, ty->tag->loc,
+                       ty->tag->len) == 0)
+                callee_is_type = true;
+            if (callee_is_type) {
+                Node *arg0 = n->var_decl.init->call.args[0];
+                Type *art = arg0 ? arg0->resolved_type : NULL;
+                Type *u = art;
+                if (u && (u->kind == TY_REF || u->kind == TY_RVALREF))
+                    u = u->base;
+                bool same_class = u &&
+                    (u->kind == TY_STRUCT || u->kind == TY_UNION) &&
+                    u->tag && ty->tag &&
+                    u->tag->len == ty->tag->len &&
+                    memcmp(u->tag->loc, ty->tag->loc, u->tag->len) == 0;
+                if (same_class) {
+                    bool arg_is_ref = art &&
+                        (art->kind == TY_REF || art->kind == TY_RVALREF);
+                    if (arg_is_ref) fputc('*', stdout);
+                    emit_expr(arg0);
+                    return;
+                }
+            }
+        }
         /* If the variable is a struct value but the init expression
          * returns a reference (TY_REF lowered to T*), dereference.
          * Patterns:
@@ -8727,8 +8826,16 @@ static void emit_var_decl_inner(Node *n) {
         Type *init_rt = init_e ? init_e->resolved_type : NULL;
         bool var_is_ref = ty_is_ref(n->var_decl.ty);
         bool init_is_ref = ty_is_ref(init_rt);
-        bool init_is_ptr = init_rt && init_rt->kind == TY_PTR;
-        if (var_is_ref && !init_is_ref && !init_is_ptr) {
+        /* Only suppress the address-of when the init is already a
+         * C-level pointer because it's a SOURCE-level reference
+         * (TY_REF/RVALREF in the resolved type — sea-front lowers
+         * those to pointer storage). A plain TY_PTR init is a
+         * pointer at BOTH levels and the ref-binding still needs
+         * `&init` so the lowered T** captures the address of the
+         * source object. Pattern: g++.dg/inherit/null1.C
+         * `A*& apr (ap);` — apr is A*& (T=A*), ap is A*, the
+         * binding must be `apr = &ap` (apr is A** in C). */
+        if (var_is_ref && !init_is_ref) {
             /* Same as the var_decl.init ref-binding path — wrap the
              * lvalue in `&`, with comma-expr push-inside so
              * `int &r((Foo(), m));` emits `(Foo(), &m)` rather than
@@ -13272,6 +13379,14 @@ static void emit_class_def(Node *n) {
         if (!m->var_decl.name) continue;
         emit_source_comment(m->tok);
         fputs("__attribute__((weak)) ", stdout);
+        /* `static __thread int i;` in-class member — propagate
+         * the TLS storage class to the TU-scope shadow so the
+         * later OOL definition's `_Thread_local int sf__A__i = N;`
+         * matches. Without this the cc errors with "thread-local
+         * declaration follows non-thread-local declaration".
+         * Pattern: g++.dg/tls/static-1.C. */
+        if (m->var_decl.storage_flags & DECL_THREAD_LOCAL)
+            fputs("_Thread_local ", stdout);
         /* emit_type handles 'const' based on ty->is_const — do not
          * add an inverted 'const' here. The previous logic
          * (`if (!is_const) fputs("const ")`) made every non-const

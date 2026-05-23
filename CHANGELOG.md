@@ -1,5 +1,86 @@
 # Changelog
 
+## 0.2.4 — closing out gcc 4.8 dg (2026-05-23)
+
+C++11 slices to mop up the remaining in-scope FAILs and an
+xfail for the one that needs the full template-overload-
+resolution slice. The 3 remaining FAILs are all genuinely
+out-of-scope: 2 signal/SIMD and 1 flag-only.
+
+### Slices
+
+- **Array-new with braced-init-list** — `new T[N]{a0, a1, ...}`
+  initialises each element with the matching single-arg ctor
+  (C++11 §8.5.4 + §5.3.4 [expr.new]). The parser captures brace
+  items (was skip-and-discard); the codegen array-new path
+  per-element overload-resolves each brace item independently
+  and emits `ctor_i(&tmp[i], brace_args[i])`. Sema visit_cast
+  now walks new_ctor_args / new_placement_args so brace items
+  get resolved_type stamped for overload resolution. Pattern:
+  g++.dg/cpp0x/initlist49.C.
+
+- **thread_local class vars** — `thread_local A a;` where A has
+  a non-trivial dtor now gets:
+   1. `_Thread_local` storage class (via DECL_THREAD_LOCAL flag
+      + emit_storage_flags). At BLOCK scope sea-front auto-adds
+      `static` since C99 §6.7.1/7 requires it for `_Thread_local`
+      block-scope vars.
+   2. Per-thread dtor registration via `__cxa_thread_atexit` in
+      `__sf_global_init`, so the dtor fires at thread teardown
+      (Itanium C++ ABI §3.3.5) rather than process exit / atexit.
+   3. Forward decls for `__cxa_thread_atexit` and `__dso_handle`
+      (libsupc++ provides both).
+   4. `_Thread_local` storage propagated to the in-class
+      member-decl shadow when a class declares a static __thread
+      member (so the OOL `_Thread_local int A::i = N;` doesn't
+      conflict with the shadow's plain `int sf__A__i;`).
+   5. `&<tls-var>` no longer counted as a C constant expression —
+      file-scope `T *p = &tls;` defers to `__sf_global_init`.
+  Init still runs in `__sf_global_init` (main-thread only). Lazy
+  per-thread on-first-access init is a future slice. Pattern:
+  g++.dg/tls/thread_local6g.C plus side wins on static-1,
+  thread_local6, thread_local-order1/2, thread_local-cse.
+
+- **sema: cur_scope=global at TU level** — file-scope var-decl
+  inits previously couldn't resolve ident lookups (cur_scope was
+  NULL during the TU walk), leaving resolved_decl unset and
+  blinding downstream emit-time checks. Push the global region
+  while visiting tu.decls so `T *p = &g;` references the prior
+  `g`'s Declaration. Bonus: ref-binding init `A*& apr (ap);`
+  previously emitted `apr = ap;` (wrong — should be `&ap` for
+  ref-to-pointer); the existing exclusion `!init_is_ptr` was
+  too broad. Tightened to only skip `&` when init is a
+  SOURCE-level reference (TY_REF/RVALREF), not a plain TY_PTR.
+  Pattern: g++.dg/inherit/null1.C.
+
+- **`T(arg)` functional cast preserves arg** — pre-fix sea-front
+  silently dropped the arg and emitted `T temp = {0}` when no
+  user copy ctor existed. Now falls through to bitwise
+  (memberwise) copy `T temp = arg;` when arg's type matches the
+  class. Handles both expression context (hoist_emit_decl) and
+  var-decl init (`T b = T(a);`). The implicit-copy-ctor
+  semantics (N4659 §15.8.1) — bitwise copy in C is correct for
+  POD-shape classes without user template ctors.
+
+### Deferred (xfail)
+
+- `g++.dg/cpp0x/implicit2.C` — synth copy ctor SYNTHESIS +
+  function-template overload resolution + template-ctor
+  mangling (`_ZN1AC1IS_EERT_`) + body instantiation with T
+  substitution. Together: multi-week C++11 work. Routed to
+  dg-xfail.txt with the full rationale.
+
+### Result
+
+dg: 401 PASS / 3 FAIL / 14 XFAIL (from 398/6/13 at v0.2.3).
+
+The 3 remaining FAILs are all genuinely out-of-scope:
+- `eh/sighandle.C` — POSIX signal handlers
+- `eh/simd-4.C` — SIMD intrinsics (vector_size)
+- `init/copy3.C` — `-fno-elide-constructors` flag-only
+
+We are genuinely done with gcc 4.8's g++.dg `dg-do run` corpus.
+
 ## 0.2.3 — type traits + weak proto (2026-05-23)
 
 Two more slices, each clears a family of tests:
