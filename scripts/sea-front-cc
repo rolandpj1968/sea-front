@@ -118,6 +118,15 @@ for arg in "$@"; do
             STD_FLAG="$arg"
             CPP_FLAGS="$CPP_FLAGS $qarg"
             ;;
+        # C++-only flags: route to CPP_FLAGS (g++ -E recognizes and
+        # uses them to set predefined macros like __EXCEPTIONS /
+        # __GXX_RTTI) but NOT to CC_FLAGS. The C back-end (cc / cproc)
+        # is compiling sea-front's emitted C; it has no exceptions or
+        # RTTI to enable or disable. Strict back-ends (cproc) reject
+        # unknown flags.
+        -fno-exceptions|-fexceptions|-fno-rtti|-frtti)
+            CPP_FLAGS="$CPP_FLAGS $qarg"
+            ;;
         -W*|-f*|-g*|-O*|-m*|-pipe|-pthread)
             CC_FLAGS="$CC_FLAGS $qarg"
             ;;

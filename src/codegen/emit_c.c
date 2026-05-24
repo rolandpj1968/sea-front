@@ -2760,6 +2760,40 @@ static void sf_require_backend_supports(bool supported, const char *feature) {
     exit(2);
 }
 
+/* Emit the C keyword for long double, OR emit 'double' as a lossy
+ * fallback when the env requests it. Returns true if the long-double
+ * emission was substituted (caller should NOT also emit the keyword).
+ *
+ * SEA_LONG_DOUBLE_AS_DOUBLE=1 is an opt-in escape hatch for back-ends
+ * (cproc/QBE) that don't support long double. The lie is unprincipled
+ * — sizeof, precision, and exact constant folds all change — but for
+ * code where long double is only "incidentally present" (e.g. glibc's
+ * max_align_t carries a long-double field that everyone transitively
+ * includes via <stddef.h> but few actually use for arithmetic), it
+ * unblocks compilation at acceptable cost. Defaults to off; opt-in
+ * needs an explicit env var so the lie is conscious. See discussion
+ * of long-double cross-platform fragmentation (x86 80-bit vs
+ * AArch64 binary128 vs Apple Silicon = double) — many real platforms
+ * already silently downgrade in their ABI. */
+static bool sf_long_double_as_double(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char *v = getenv("SEA_LONG_DOUBLE_AS_DOUBLE");
+        cached = (v && v[0] && v[0] != '0') ? 1 : 0;
+    }
+    return cached != 0;
+}
+
+static void sf_emit_long_double(void) {
+    if (sf_long_double_as_double()) {
+        fputs("double", stdout);
+        return;
+    }
+    sf_require_backend_supports(
+        sf_backend_traits()->supports_long_double, "long double");
+    fputs("long double", stdout);
+}
+
 static void emit_type(Type *ty) {
     if (!ty) { fputs("/*?*/ int", stdout); return; }
 
@@ -2822,10 +2856,7 @@ static void emit_type(Type *ty) {
     case TY_LLONG:   fputs(ty->is_unsigned ? "unsigned long long" : "long long", stdout); return;
     case TY_FLOAT:   fputs("float", stdout); return;
     case TY_DOUBLE:  fputs("double", stdout); return;
-    case TY_LDOUBLE: sf_require_backend_supports(
-                         sf_backend_traits()->supports_long_double,
-                         "long double");
-                     fputs("long double", stdout); return;
+    case TY_LDOUBLE: sf_emit_long_double(); return;
     case TY_PTR:
         /* Function-pointer type in type-expression position.
          * Handles arbitrary pointer depth: T(*)(args) for single
@@ -8548,10 +8579,7 @@ static void emit_cxx_type(Type *t) {
         fputs(t->is_unsigned ? "long long unsigned int" : "long long int", stdout); break;
     case TY_FLOAT:  fputs("float", stdout); break;
     case TY_DOUBLE: fputs("double", stdout); break;
-    case TY_LDOUBLE: sf_require_backend_supports(
-                         sf_backend_traits()->supports_long_double,
-                         "long double");
-                     fputs("long double", stdout); break;
+    case TY_LDOUBLE: sf_emit_long_double(); break;
     case TY_PTR:
         emit_cxx_type(t->base);
         if (t->is_const) fputs("* const", stdout);

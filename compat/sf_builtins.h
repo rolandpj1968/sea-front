@@ -96,15 +96,44 @@ static inline int __builtin_popcountll(unsigned long long x) {
     return n;
 }
 
+/* Find-first-set: 1-based index of the LSB, 0 if x is zero. POSIX
+ * ffs/ffsl/ffsll, also GCC built-ins. gcc 4.8's hwint.h uses ffsl. */
+static inline int __builtin_ffs(int x) {
+    if (x == 0) return 0;
+    unsigned int u = (unsigned int)x;
+    int n = 1;
+    while ((u & 1u) == 0) { u >>= 1; ++n; }
+    return n;
+}
+static inline int __builtin_ffsl(long x) {
+    if (x == 0) return 0;
+    unsigned long u = (unsigned long)x;
+    int n = 1;
+    while ((u & 1ul) == 0) { u >>= 1; ++n; }
+    return n;
+}
+static inline int __builtin_ffsll(long long x) {
+    if (x == 0) return 0;
+    unsigned long long u = (unsigned long long)x;
+    int n = 1;
+    while ((u & 1ull) == 0) { u >>= 1; ++n; }
+    return n;
+}
+
 /* Integer abs — libstdc++'s <bits/std_abs.h> uses these. */
 static inline int __builtin_abs(int x) { return x < 0 ? -x : x; }
 static inline long __builtin_labs(long x) { return x < 0 ? -x : x; }
 static inline long long __builtin_llabs(long long x) { return x < 0 ? -x : x; }
 
 /* Float abs — libstdc++'s <bits/std_abs.h> uses these for std::abs
- * overloads on float/double/long double. */
+ * overloads on float/double/long double. The 'l' variant uses
+ * 'double' as the parameter type when SEA_LONG_DOUBLE_AS_DOUBLE
+ * downgrade is in effect (sea-front emits long double as double in
+ * that mode) — otherwise the back-end would have errored before
+ * this header was ever consulted. */
 static inline float __builtin_fabsf(float x) { return x < 0 ? -x : x; }
 static inline double __builtin_fabs(double x) { return x < 0 ? -x : x; }
+static inline double __builtin_fabsl(double x) { return x < 0 ? -x : x; }
 
 /* Byte-swap. glibc's <bits/byteswap.h> uses these for ntoh/htons. */
 static inline unsigned short __builtin_bswap16(unsigned short x) {
