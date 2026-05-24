@@ -278,6 +278,35 @@ Type *subst_type(Type *ty, SubstMap *map, Arena *arena) {
         if (concrete) return concrete;
     }
 
+    /* TY_STRUCT/UNION with template_args but no template_id_node:
+     * the substituted version of an instantiated template-id (e.g.
+     * the return type of a method built up by sema rather than
+     * carrying a synthesised template-id node). The tag-emit path
+     * walks template_args directly, so dependent args here surface
+     * as 'sf__vec_t_T_A_vl_embed_te_' in the emitted C. Substitute
+     * each arg so the tag prints with concrete types. Pattern: gcc
+     * 4.8 vec.h, where 'vec<T, A, vl_ptr>::copy()' returns a
+     * 'vec<T, A, vl_ptr>' value whose template_args carry T/A. */
+    if ((ty->kind == TY_STRUCT || ty->kind == TY_UNION) &&
+        !ty->template_id_node && ty->n_template_args > 0) {
+        bool needs_subst = false;
+        for (int i = 0; i < ty->n_template_args; i++) {
+            if (type_has_dependent(ty->template_args[i])) {
+                needs_subst = true; break;
+            }
+        }
+        if (needs_subst) {
+            Type *copy = arena_alloc(arena, sizeof(Type));
+            *copy = *ty;
+            copy->template_args = arena_alloc(arena,
+                ty->n_template_args * sizeof(Type *));
+            for (int i = 0; i < ty->n_template_args; i++)
+                copy->template_args[i] = subst_type(ty->template_args[i],
+                                                     map, arena);
+            return copy;
+        }
+    }
+
     /* Recurse into compound types */
     switch (ty->kind) {
     case TY_PTR: case TY_REF: case TY_RVALREF: {
