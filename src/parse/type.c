@@ -2001,6 +2001,25 @@ bool parser_at_type_specifier(Parser *p) {
                                                       ENTITY_VARIABLE);
             if (vd && !(vd->type && vd->type->kind == TY_FUNC))
                 return false;
+            /* Function-shaped ENTITY_VARIABLE: usually a ctor (which
+             * shares its class's name via the injected-class-name
+             * rule §11.1) and must NOT hide its own class. But if the
+             * existing type-name names an ENUM (which has no ctors),
+             * a same-named function can't possibly be a ctor — apply
+             * §6.3.10/2 hiding so 'gimple_code(x)' in expression
+             * position parses as the function call, not as a
+             * declaration with parenthesised declarator 'enum
+             * gimple_code (x)'. Pattern: gcc 4.8 tree-flow-inline.h
+             * 'switch (gimple_code(stmt))' where gimple_code is both
+             * an enum tag and a static inline function returning that
+             * enum. */
+            if (vd && vd->type && vd->type->kind == TY_FUNC) {
+                Declaration *td = lookup_unqualified_kind(p, tok->loc,
+                                                           tok->len,
+                                                           ENTITY_TYPE);
+                if (td && td->type && td->type->kind == TY_ENUM)
+                    return false;
+            }
             return true;
         }
         if (lookup_is_template_name(p, parser_peek(p))) {

@@ -118,13 +118,25 @@ for arg in "$@"; do
             STD_FLAG="$arg"
             CPP_FLAGS="$CPP_FLAGS $qarg"
             ;;
-        # C++-only flags: route to CPP_FLAGS (g++ -E recognizes and
-        # uses them to set predefined macros like __EXCEPTIONS /
-        # __GXX_RTTI) but NOT to CC_FLAGS. The C back-end (cc / cproc)
-        # is compiling sea-front's emitted C; it has no exceptions or
-        # RTTI to enable or disable. Strict back-ends (cproc) reject
-        # unknown flags.
+        # C++-only flags + gcc-specific flags that strict back-ends
+        # (cproc) reject: route to CPP_FLAGS (g++ -E recognizes them
+        # for predefines / preprocessing effect) but NOT to CC_FLAGS.
+        #   -fno-exceptions / -fno-rtti  — C++-only; cproc has no EH/RTTI
+        #   -fasync*-unwind-tables       — gcc codegen-side, n/a to cproc
+        #   -fno-strict-aliasing         — gcc-only optimisation control
+        #   -fno-common / -fcommon       — gcc-side linkage default
+        #   -fdiagnostics-*              — gcc diagnostic-format flags
         -fno-exceptions|-fexceptions|-fno-rtti|-frtti)
+            CPP_FLAGS="$CPP_FLAGS $qarg"
+            ;;
+        -fasynchronous-unwind-tables|-fno-asynchronous-unwind-tables)
+            # gcc-only codegen flag — cproc has nothing equivalent
+            CPP_FLAGS="$CPP_FLAGS $qarg"
+            ;;
+        -fno-strict-aliasing|-fstrict-aliasing|-fno-common|-fcommon)
+            CPP_FLAGS="$CPP_FLAGS $qarg"
+            ;;
+        -fdiagnostics-*)
             CPP_FLAGS="$CPP_FLAGS $qarg"
             ;;
         -W*|-f*|-g*|-O*|-m*|-pipe|-pthread)
