@@ -151,6 +151,15 @@ static bool is_ref_param(Token *name) {
  * and by ND_UNARY TK_AMP (address-of a ref is the pointer itself). */
 static bool g_suppress_ref_deref = false;
 
+/* Suppresses the '(*...)' wrap that the method-call emit normally
+ * adds around a reference-returning call. Set by the ND_UNARY TK_AMP
+ * elision branch so '&obj.last()' (last() returns T&) collapses both
+ * the source '&' AND the C-level deref into a bare 'last(&obj)' that
+ * returns T* — the address-of of a reference IS the underlying
+ * pointer in our lowering. Pattern: gcc 4.8 tree-ssa-reassoc.c
+ *   oecount *c = &cvec.last ();   */
+static bool g_suppress_ref_call_deref = false;
+
 static void emit_indent(void) {
     for (int i = 0; i < g_indent; i++) fputs("    ", stdout);
 }
@@ -5397,7 +5406,14 @@ static void emit_expr(Node *n) {
             n->unary.operand->kind == ND_CALL &&
             n->unary.operand->resolved_type &&
             ty_is_ref(n->unary.operand->resolved_type)) {
+            /* Suppress the call's auto-(*...) ref-deref too — source
+             * '&call()' returns the underlying pointer; the C-level
+             * call already returns T* (since refs lower to ptrs), so
+             * we want a bare 'call(args)' — neither '&' nor '*'. */
+            bool saved = g_suppress_ref_call_deref;
+            g_suppress_ref_call_deref = true;
             emit_expr(n->unary.operand);
+            g_suppress_ref_call_deref = saved;
             return;
         }
         /* For *(ref_param): deref the pointer, then deref again —
@@ -6646,7 +6662,12 @@ static void emit_expr(Node *n) {
                 bool cur_returns_ref = g_current_func_ret_ty &&
                     (g_current_func_ret_ty->kind == TY_REF ||
                      g_current_func_ret_ty->kind == TY_RVALREF);
-                if (ref_ret && !cur_returns_ref) fputs("(*", stdout);
+                /* Suppress the auto-(*...) wrap when an outer '&'
+                 * has already opted into the bare-pointer form
+                 * (see g_suppress_ref_call_deref). */
+                bool wrap_deref = ref_ret && !cur_returns_ref &&
+                                   !g_suppress_ref_call_deref;
+                if (wrap_deref) fputs("(*", stdout);
                 bool virt = method_is_virtual(ot, callee->member.member);
                 /* N4659 §13.3/15 [class.virtual]: a qualified call
                  * 'obj->Class::method()' binds to Class::method
@@ -7006,7 +7027,7 @@ static void emit_expr(Node *n) {
                 emit_default_args_tail(winner_method, n->call.nargs,
                                         call_np, call_pty);
                 fputc(')', stdout);
-                if (ref_ret && !cur_returns_ref) fputc(')', stdout);
+                if (wrap_deref) fputc(')', stdout);
                 return;
             }
         }
