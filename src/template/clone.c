@@ -439,6 +439,29 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
 
     case ND_IDENT:
         c->ident = n->ident;
+        /* Substitute the sema-recorded resolved_type so the cloned
+         * ident carries the instantiation-specific type instead of
+         * the source template's TY_DEPENDENT shape. Sema's visit_
+         * ident treats a non-NULL resolved_type as "already typed"
+         * and preserves it instead of re-binding from the source
+         * Declaration — without the substitution, the cloned ident
+         * would inherit the source param's un-substituted type and
+         * downstream member-access type resolution on it (vec_ of
+         * 'vec<T,va_stack,vl_ptr>' rather than
+         * 'vec<loop*,va_stack,vl_ptr>') would leak TY_DEPENDENT
+         * into the receiver-class mangle. Real-world shape: gcc
+         * 4.8 vec.h's 'va_stack::alloc<T>' body referencing
+         * 'v.vec_->embedded_init(...)'. N4659 §17.7.1 [temp.inst].
+         *
+         * Restricted to types that ACTUALLY contained a template
+         * param. Non-dependent source types (e.g. a lambda's
+         * concrete closure tag) get re-resolved by sema against the
+         * fresh per-instantiation Declaration registered for the
+         * cloned local — pinning the source resolved_type would
+         * mask the cloned lambda's suffixed name and emit the
+         * wrong call symbol. */
+        if (n->resolved_type && type_has_dependent(n->resolved_type))
+            c->resolved_type = subst_type(n->resolved_type, map, arena);
         /* Non-type template parameter substitution: when this ident
          * names an NTTP whose binding was recorded via the TT-param
          * slot (the slot is reused for any "name → Token" binding;

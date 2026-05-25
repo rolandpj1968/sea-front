@@ -883,34 +883,64 @@ static Type *subst_member_type_with_class_args(Sema *s,
                                                 Type *class_ty) {
     if (!member_ty || !class_ty) return member_ty;
     if (!type_has_dependent(member_ty)) return member_ty;
-    Node *tid = class_ty->template_id_node;
-    if (!tid || tid->kind != ND_TEMPLATE_ID) return member_ty;
-    /* Find the primary template's parameter list. Prefer the
-     * resolved_tmpl set by sema; fall back to a name lookup so
-     * pass-1 visits (before any other sema pass annotated the
-     * template-id) can still substitute. */
-    Node *tmpl = tid->template_id.resolved_tmpl;
-    if ((!tmpl || tmpl->kind != ND_TEMPLATE_DECL) &&
-        tid->template_id.name && s->cur_scope) {
+    /* Find the source primary template — needed for the parameter
+     * list. Prefer class_ty->template_args (direct Type* slots),
+     * which are populated per-clone and don't share state with other
+     * instantiations. Fall back to template_id_node's arg-node walk
+     * when no template_args slot is set (mostly source-template
+     * sema, pre-instantiation). The reversed precedence matters
+     * because the substituted template-id Node can be aliased across
+     * instantiations via arena reuse — its args may carry stale
+     * TY_DEPENDENT slots that don't match the per-instance Type.
+     * Pattern: gcc 4.8 va_stack::alloc<T>'s
+     * 'v.vec_->embedded_init(...)' where v's cloned class type has
+     * concrete template_args but its template_id_node still aliases
+     * an earlier-pass dependent shape. N4659 §17.7.1 [temp.inst]. */
+    Node *tmpl = NULL;
+    Type **arg_types = NULL;
+    int nargs = 0;
+    if (class_ty->tag && class_ty->n_template_args > 0 && s->cur_scope) {
         tmpl = find_primary_template_in_scope(s->cur_scope,
-            tid->template_id.name->loc,
-            tid->template_id.name->len);
+            class_ty->tag->loc, class_ty->tag->len);
+        arg_types = class_ty->template_args;
+        nargs = class_ty->n_template_args;
+    } else if (class_ty->template_id_node &&
+               class_ty->template_id_node->kind == ND_TEMPLATE_ID) {
+        Node *tid = class_ty->template_id_node;
+        tmpl = tid->template_id.resolved_tmpl;
+        if ((!tmpl || tmpl->kind != ND_TEMPLATE_DECL) &&
+            tid->template_id.name && s->cur_scope) {
+            tmpl = find_primary_template_in_scope(s->cur_scope,
+                tid->template_id.name->loc,
+                tid->template_id.name->len);
+        }
+        nargs = tid->template_id.nargs;
+        /* Convert tid arg nodes to Type* */
+        arg_types = arena_alloc(s->arena, nargs * sizeof(Type *));
+        for (int i = 0; i < nargs; i++) {
+            Node *a = tid->template_id.args[i];
+            arg_types[i] = (a && a->kind == ND_VAR_DECL) ? a->var_decl.ty : NULL;
+        }
     }
     if (!tmpl || tmpl->kind != ND_TEMPLATE_DECL) return member_ty;
     int nparams = tmpl->template_decl.nparams;
-    int nargs   = tid->template_id.nargs;
-    if (nparams == 0 || nargs == 0) return member_ty;
-    /* The picked template must accommodate every tid arg — otherwise
+    if (nparams == 0 || nargs == 0 || !arg_types) return member_ty;
+    /* The picked template must accommodate every arg — otherwise
      * we're keying a SubstMap from a partial spec's narrower head
-     * against a wider tid, leaving the trailing args unbound and
-     * leaking TY_DEPENDENT through subst_type. find_primary_template_
-     * in_scope should already prevent this; the check makes the
-     * invariant load-bearing instead of best-effort. */
+     * against a wider arg list, leaving the trailing args unbound
+     * and leaking TY_DEPENDENT through subst_type.
+     * find_primary_template_in_scope should already prevent this;
+     * the check makes the invariant load-bearing rather than
+     * best-effort. */
     if (nparams < nargs) return member_ty;
     SubstMap map = subst_map_new(s->arena, nparams);
-    subst_map_bind_args(&map,
-        tmpl->template_decl.params, nparams,
-        tid->template_id.args, nargs);
+    /* Direct Type**-arg binding. Mirrors subst_map_bind_args's
+     * per-param loop but takes Type* directly. */
+    for (int i = 0; i < nparams && i < nargs; i++) {
+        Node *param = tmpl->template_decl.params[i];
+        if (!param || !param->param.name || !arg_types[i]) continue;
+        subst_map_add(&map, param->param.name, arg_types[i]);
+    }
     if (map.nentries == 0) return member_ty;
     return subst_type(member_ty, &map, s->arena);
 }
