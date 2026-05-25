@@ -3747,6 +3747,7 @@ static bool find_enum_tag_in_tu(Node *tu, Token *name) {
 static Node *find_class_def_by_tag_only(Type *class_type) {
     if (!g_tu || !class_type || !class_type->tag) return NULL;
     Node *found = NULL;
+    bool found_via_class_def = false;
     for (int i = 0; i < g_tu->tu.ndecls; i++) {
         Node *d = g_tu->tu.decls[i];
         if (!d) continue;
@@ -3775,8 +3776,27 @@ static Node *find_class_def_by_tag_only(Type *class_type) {
          * match. Callers with templates should use
          * find_class_def_by_tag_args instead. */
         if (t->n_template_args > 0) continue;
-        if (found) return NULL;  /* ambiguous */
+        bool this_is_class_def = (d->kind == ND_CLASS_DEF);
+        if (found) {
+            /* 'typedef struct X : Base { ... } *Y;' produces BOTH an
+             * ND_CLASS_DEF for the struct and an ND_TYPEDEF for the
+             * pointer alias whose peeled type points at the same
+             * struct. Both decls share the tag, so the legacy
+             * ambiguity guard returned NULL — leaving qualified-call
+             * resolution unable to reach the class_region's bases.
+             * Prefer the ND_CLASS_DEF (richer node — has nbase_types
+             * + class_def back-pointer), demote ND_TYPEDEF, and only
+             * bail out when two distinct ND_CLASS_DEFs share the tag
+             * (the real ambiguity case). Pattern: gcc 4.8 tree-ssa-
+             * pre.c 'typedef struct expr_pred_trans_d :
+             * typed_free_remove<expr_pred_trans_d> { ... }
+             * *expr_pred_trans_t;'. */
+            if (found_via_class_def && this_is_class_def) return NULL;
+            if (found_via_class_def && !this_is_class_def) continue;
+            /* found via typedef, now seeing class_def: prefer it. */
+        }
         found = (d->kind == ND_TYPEDEF) ? t->class_def : d;
+        found_via_class_def = this_is_class_def;
     }
     return found;
 }
