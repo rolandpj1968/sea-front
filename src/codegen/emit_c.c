@@ -13475,6 +13475,20 @@ static void emit_free_func_mangled_name(Token *name, Type **param_types,
         mangle_param_suffix(param_types, nparams);
         return;
     }
+    /* Itanium-ABI free-function mangling: prefix '_Z<n>' so the name
+     * doesn't collide with C-linkage functions of the same character
+     * sequence. Without the prefix, the C++ overload 'acos(float)'
+     * mangles to 'acos' + 'f' = 'acosf', which is also the libc C
+     * function 'acosf'. Linker / declarator collision results.
+     * N4659 + Itanium ABI §5.1.6: free function mangling is
+     *   _Z N source-name params
+     * (no nested-name-specifier wrap for global-namespace functions).
+     */
+    if (g_mangle_kind == MANGLE_ITANIUM) {
+        fprintf(stdout, "_Z%d%.*s", name->len, name->len, name->loc);
+        mangle_param_suffix(param_types, nparams);
+        return;
+    }
     fprintf(stdout, "%.*s", name->len, name->loc);
     mangle_param_suffix(param_types, nparams);
 }
