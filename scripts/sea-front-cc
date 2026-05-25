@@ -303,8 +303,18 @@ for src in "$@"; do
     fi
     qobj=$(shell_quote "$obj_file")
 
-    log "  Preprocess: $SEA_CPP -E $SF_DEFINES $STD_FLAG $STDCXX_FLAGS $CPP_FLAGS $src"
-    eval "$SEA_CPP -E $SF_DEFINES $STD_FLAG $STDCXX_FLAGS $CPP_FLAGS $qsrc -o $qpp" 2>/dev/null
+    # -x c++ forces C++ semantics regardless of source extension.
+    # sea-front is a C++ transpiler — there is no C-only mode — so a
+    # .c file passed in is parsed as C++ anyway. Forcing the
+    # preprocessor to match means __cplusplus is defined, name
+    # mangling is uniform across the TU, and 'extern "C" { ... }'
+    # blocks in shared headers (e.g. incpath.h, input.h) flip on so
+    # call sites from .c TUs resolve against the same symbol the .cc
+    # TUs reference. Without this, mixed .c/.cc builds (gcc 4.8's
+    # source) hit pervasive link failures from the C-unmangled-vs.-
+    # C++-Itanium-mangled mismatch on shared free-function decls.
+    log "  Preprocess: $SEA_CPP -E -x c++ $SF_DEFINES $STD_FLAG $STDCXX_FLAGS $CPP_FLAGS $src"
+    eval "$SEA_CPP -E -x c++ $SF_DEFINES $STD_FLAG $STDCXX_FLAGS $CPP_FLAGS $qsrc -o $qpp" 2>/dev/null
 
     # Step 2: Transpile C++ → C
     # SEA_FRONT_FLAGS lets callers pass through extra flags (e.g.

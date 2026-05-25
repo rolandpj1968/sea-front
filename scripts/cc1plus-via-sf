@@ -123,9 +123,11 @@ for src in "$@"; do
     qasm=$(shell_quote "$asm")
     qout=$(shell_quote "$OUTPUT")
 
-    # Step 1 — preprocess.
-    log "  pp: $SEA_CPP -E $SF_DEFINES $STD_FLAG $STDCXX_FLAGS $CPP_FLAGS $src"
-    eval "$SEA_CPP -E $SF_DEFINES $STD_FLAG $STDCXX_FLAGS $CPP_FLAGS $qsrc -o $qpp"
+    # Step 1 — preprocess. -x c++ forces C++ semantics regardless of
+    # source extension, matching sea-front-cc's pipeline so .c TUs
+    # mangle the same way .cc TUs do.
+    log "  pp: $SEA_CPP -E -x c++ $SF_DEFINES $STD_FLAG $STDCXX_FLAGS $CPP_FLAGS $src"
+    eval "$SEA_CPP -E -x c++ $SF_DEFINES $STD_FLAG $STDCXX_FLAGS $CPP_FLAGS $qsrc -o $qpp"
 
     # Step 2 — cc1plus → asm.
     log "  cc1plus: $CC1PLUS -quiet -O0 $pp -o $asm"
