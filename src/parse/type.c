@@ -2003,22 +2003,41 @@ bool parser_at_type_specifier(Parser *p) {
                 return false;
             /* Function-shaped ENTITY_VARIABLE: usually a ctor (which
              * shares its class's name via the injected-class-name
-             * rule §11.1) and must NOT hide its own class. But if the
-             * existing type-name names an ENUM (which has no ctors),
-             * a same-named function can't possibly be a ctor — apply
-             * §6.3.10/2 hiding so 'gimple_code(x)' in expression
-             * position parses as the function call, not as a
-             * declaration with parenthesised declarator 'enum
-             * gimple_code (x)'. Pattern: gcc 4.8 tree-flow-inline.h
-             * 'switch (gimple_code(stmt))' where gimple_code is both
-             * an enum tag and a static inline function returning that
-             * enum. */
+             * rule §11.1) and must NOT hide its own class. The
+             * carve-out applies only when the function COULD be a
+             * ctor of the type:
+             *  - enum X: no ctors possible — function hides the enum
+             *  - struct/union X: ctors possible BUT only if the
+             *    function is a member of X. A free function with
+             *    the same name as the struct is NOT a ctor and
+             *    should hide the type-name (§6.3.10/2).
+             * Distinguish ctor-ness via the function's home region:
+             * a ctor lives inside its class's region; a free function
+             * shares only the name. Pattern: gcc 4.8
+             *   struct token { ... };
+             *   static int token(void) { ... };   // free function, NOT a ctor
+             *   int u = token();                  // must be call, not decl
+             * Same shape applies to enum tags (gimple_code). */
             if (vd && vd->type && vd->type->kind == TY_FUNC) {
                 Declaration *td = lookup_unqualified_kind(p, tok->loc,
                                                            tok->len,
                                                            ENTITY_TYPE);
-                if (td && td->type && td->type->kind == TY_ENUM)
-                    return false;
+                if (td && td->type) {
+                    bool td_is_enum = td->type->kind == TY_ENUM;
+                    bool td_is_class = td->type->kind == TY_STRUCT ||
+                                       td->type->kind == TY_UNION;
+                    /* For class types, only treat the function as a
+                     * ctor if its home is the class itself. The
+                     * Declaration's home points at the declarative
+                     * region where it was declared; a ctor's home is
+                     * the class's class_region. */
+                    bool func_could_be_ctor = false;
+                    if (td_is_class && vd->home &&
+                        vd->home == td->type->class_region)
+                        func_could_be_ctor = true;
+                    if (td_is_enum || (td_is_class && !func_could_be_ctor))
+                        return false;
+                }
             }
             return true;
         }

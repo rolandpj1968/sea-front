@@ -5453,7 +5453,35 @@ static void emit_expr(Node *n) {
          * resolved_decl is ENTITY_TYPE/ENTITY_TAG and there are no
          * args; lower to a value-init compound literal '(struct T){0}'.
          * Without this, 'Derived()' in expression position emitted as
-         * a literal call to a function named 'Derived' — cc rejected. */
+         * a literal call to a function named 'Derived' — cc rejected.
+         *
+         * Skip when the callee's ident ALSO has an in-scope function
+         * declaration with the same name — per §6.3.10/2, the function
+         * hides the type-name in ordinary lookup, so 'T()' is a call,
+         * not a functional cast. Pattern: gcc 4.8 gengtype-parse.c
+         *   struct token { ... };
+         *   static int token(void);
+         *   int u = token();   // must be call, not (struct token){0} */
+        if (n->call.nargs == 0 && n->call.callee &&
+            n->call.callee->kind == ND_IDENT &&
+            n->call.callee->ident.name) {
+            Token *_ck = n->call.callee->ident.name;
+            for (int _i = 0; g_tu && _i < g_tu->tu.ndecls; _i++) {
+                Node *_d = g_tu->tu.decls[_i];
+                if (!_d) continue;
+                Token *_dn = NULL;
+                bool _is_func = false;
+                if (_d->kind == ND_FUNC_DEF || _d->kind == ND_FUNC_DECL) {
+                    _dn = _d->func.name; _is_func = true;
+                } else if (_d->kind == ND_VAR_DECL && _d->var_decl.ty &&
+                           _d->var_decl.ty->kind == TY_FUNC) {
+                    _dn = _d->var_decl.name; _is_func = true;
+                }
+                if (_is_func && _dn && _dn->len == _ck->len &&
+                    memcmp(_dn->loc, _ck->loc, _ck->len) == 0)
+                    goto skip_functional_cast;
+            }
+        }
         if (n->call.nargs == 0 && n->call.callee &&
             n->call.callee->kind == ND_IDENT) {
             Declaration *rd = n->call.callee->ident.resolved_decl;
@@ -5508,6 +5536,7 @@ static void emit_expr(Node *n) {
                 return;
             }
         }
+        skip_functional_cast:;
         /* Functional cast to a non-class type — N4659 §8.2.3 [expr.type.conv]
          *   simple-type-specifier ( expression-list )
          * where the simple-type-specifier names a typedef of a built-in
