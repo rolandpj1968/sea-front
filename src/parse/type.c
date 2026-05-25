@@ -518,6 +518,26 @@ DeclSpec parse_type_specifiers(Parser *p) {
                 if (existing && existing->type &&
                     (existing->type->class_region || existing->type->class_def)) {
                     Type *eT = existing->type;
+                    /* If we just parsed template args ('struct vec<X,Y>'),
+                     * the existing definition is the primary template's
+                     * Type or a stub from an earlier elaborated use;
+                     * reusing it bare would lose our parsed template_args
+                     * (or worse, replace them with eT's TY_DEPENDENT
+                     * placeholders inherited from the primary's params).
+                     * Stamp the parsed args (and tid) onto a copy of the
+                     * existing Type so downstream sema/clone has both
+                     * class_region access AND the instantiation-specific
+                     * args. N4659 §17.2/2 + §17.4 [temp.type]. */
+                    if (ty->n_template_args > 0) {
+                        Type *copy = new_type(p, eT->kind);
+                        *copy = *eT;
+                        copy->template_id_node = ty->template_id_node;
+                        copy->template_args    = ty->template_args;
+                        copy->n_template_args  = ty->n_template_args;
+                        copy->is_const         = is_const;
+                        copy->is_volatile      = is_volatile;
+                        result.type = copy; return result;
+                    }
                     /* Preserve cv qualifiers from the elaborated form. */
                     if (eT->is_const == is_const &&
                         eT->is_volatile == is_volatile) {
