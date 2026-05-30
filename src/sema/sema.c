@@ -1380,14 +1380,31 @@ static int ics_rank(Type *param, Type *arg) {
         param->base && arg->base &&
         param->base->kind == arg->base->kind &&
         param->base->is_unsigned == arg->base->is_unsigned) {
-        bool p_const = param->base->is_const;
-        bool a_const = arg->base->is_const;
-        if (p_const && !a_const) return ICS_QUAL_CONV;
-        if (!p_const && a_const) return ICS_INCOMPATIBLE;
-        if (p_const == a_const) {
-            /* Same cv but types_equivalent failed → kind diff at base
-             * (e.g. int* vs long*). Falls through to integer-conv at
-             * the bottom; let it. */
+        /* §7.5 [conv.qual]: only T* → const T* qualifies — the pointee
+         * type (sans cv) must match. For aggregates that means same
+         * tag; without this check, `bitmap_head_def *` and
+         * `simple_bitmap_def *` both score QUAL_CONV against each
+         * other (kind=TY_STRUCT matches on both) and ties drop into
+         * "pick first viable", so overloaded `bitmap_empty_p` on
+         * both struct pointers always picked the first-declared
+         * overload regardless of the argument's actual struct. */
+        bool tag_ok = true;
+        Type *pb = param->base;
+        Type *ab = arg->base;
+        if (pb->kind == TY_STRUCT || pb->kind == TY_UNION ||
+            pb->kind == TY_ENUM) {
+            tag_ok = pb->tag && ab->tag && tokens_equal(pb->tag, ab->tag);
+        }
+        if (tag_ok) {
+            bool p_const = pb->is_const;
+            bool a_const = ab->is_const;
+            if (p_const && !a_const) return ICS_QUAL_CONV;
+            if (!p_const && a_const) return ICS_INCOMPATIBLE;
+            if (p_const == a_const) {
+                /* Same cv but types_equivalent failed → kind diff
+                 * at base (e.g. int* vs long*). Falls through to
+                 * integer-conv at the bottom; let it. */
+            }
         }
     }
     if (types_equivalent(param, arg)) {
