@@ -94,7 +94,14 @@ test-smoke: $(TARGET) $(MCPP)
 	@echo "=== Parser smoke ==="
 	-@./tests/test_clang_parse.sh $(TARGET) $(MCPP) || true
 
+# Run emit-c tests through cproc/QBE instead of host cc. Non-gated:
+# tracks progress on the cproc/QBE pipeline (sea-front-emitted C
+# compiled by Michael Forney's cproc + QBE rather than host gcc).
+# Reports pass/fail counts; never fails the build.
+test-cproc: $(TARGET)
+	-@./tests/test_emit_c_cproc.sh $(TARGET) || true
+
 clean:
 	rm -rf $(BUILDDIR)
 
-.PHONY: all test test-smoke clean
+.PHONY: all test test-smoke test-cproc clean
