@@ -9213,6 +9213,78 @@ static bool var_decl_needs_aggregate_per_member(Node *n) {
     return class_aggregate_needs_per_member_ctor(n->var_decl.ty);
 }
 
+/* True if `t` is std::initializer_list<E> for some E. Sea-front
+ * recognises this by tag-name match plus a non-empty template arg
+ * list; no namespace check (the tag is unique enough in practice
+ * and the same shape appears in any reasonable reimplementation). */
+static bool ty_is_std_initializer_list(Type *t) {
+    if (!t || t->kind != TY_STRUCT || !t->tag) return false;
+    if (t->tag->len != 16) return false;  /* strlen("initializer_list") */
+    if (memcmp(t->tag->loc, "initializer_list", 16) != 0) return false;
+    return t->n_template_args >= 1 && t->template_args[0] != NULL;
+}
+
+/* True if this is a block-scope var-decl 'std::initializer_list<E> x = {...};'
+ * (or 'x{...}') whose initialiser is a brace-init-list. N4659 §11.6.4/5
+ * [dcl.init.list] mandates that the braced-init-list construct an
+ * initializer_list<E> object whose backing array is `{e0, e1, ...}`. */
+static bool var_decl_is_initializer_list_brace_init(Node *n) {
+    if (!n || n->kind != ND_VAR_DECL) return false;
+    if (!n->var_decl.name) return false;
+    if (!ty_is_std_initializer_list(n->var_decl.ty)) return false;
+    /* Two surface forms route the elements into different slots: */
+    if (n->var_decl.init && n->var_decl.init->kind == ND_INIT_LIST) return true;
+    if (n->var_decl.has_ctor_init && n->var_decl.ctor_nargs > 0) return true;
+    return false;
+}
+
+/* Emit the two-statement lowering for a std::initializer_list<E>
+ * brace-init var-decl:
+ *
+ *   static const E __sf_il_arr_<id>[N] = { e0, e1, ..., e<N-1> };
+ *   struct sf__std__initializer_list_t_<E>_te_ <name>
+ *       = { __sf_il_arr_<id>, N };
+ *
+ * The backing array is `static const` so its lifetime extends beyond
+ * the enclosing full-expression — N4659 §11.6.4/6 grants this even
+ * for the temporary case. Local non-static would also satisfy the
+ * sub-full-expression lifetime for the common case of a local
+ * variable; `static const` is the safer over-approximation that
+ * also handles being copied out or returned. The struct fields are
+ * filled in declaration order: sea-front emits std::initializer_list
+ * as `{ E* _M_array; size_t _M_len; }` so positional `{ptr, len}`
+ * matches. */
+static void emit_initializer_list_var_decl(Node *n) {
+    Node **elems = NULL;
+    int nelems = 0;
+    if (n->var_decl.init && n->var_decl.init->kind == ND_INIT_LIST) {
+        elems  = n->var_decl.init->init_list.elems;
+        nelems = n->var_decl.init->init_list.nelems;
+    } else {
+        elems  = n->var_decl.ctor_args;
+        nelems = n->var_decl.ctor_nargs;
+    }
+    Type *elem_ty = n->var_decl.ty->template_args[0];
+    static int g_il_id = 0;
+    int aid = g_il_id++;
+
+    /* Caller (emit_block / emit_stmt) has already issued the leading
+     * emit_indent for this statement; the first line consumes it. */
+    fputs("static const ", stdout);
+    emit_type(elem_ty);
+    fprintf(stdout, " __sf_il_arr_%d[%d] = {", aid, nelems);
+    for (int i = 0; i < nelems; i++) {
+        if (i > 0) fputs(", ", stdout);
+        emit_expr(elems[i]);
+    }
+    fputs("};\n", stdout);
+
+    emit_indent();
+    emit_type(n->var_decl.ty);
+    fprintf(stdout, " %.*s = {__sf_il_arr_%d, %d};\n",
+            n->var_decl.name->len, n->var_decl.name->loc, aid, nelems);
+}
+
 static void emit_var_decl_init_suffix(Node *n) {
     if (!n->var_decl.init) return;
     /* Aggregate init with at least one user-copy-ctor member is
@@ -11037,6 +11109,15 @@ static void emit_stmt(Node *n) {
         return;
     }
     case ND_VAR_DECL:
+        /* std::initializer_list<E> x = {e0, ...};  /  x{e0, ...}
+         * — N4659 §11.6.4/5 [dcl.init.list] mandates a synthesised
+         * const array backing the initializer_list. Sea-front lowers
+         * to a `static const E[N]` + the two-field struct literal;
+         * see emit_initializer_list_var_decl for the shape. */
+        if (var_decl_is_initializer_list_brace_init(n)) {
+            emit_initializer_list_var_decl(n);
+            return;
+        }
         rewrite_copy_init_ctor_call(n);
         rewrite_copy_init_user_copy_ctor(n);
         /* Block-scope inline-struct dependency, same shape as the
