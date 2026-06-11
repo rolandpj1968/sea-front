@@ -1,14 +1,15 @@
 // EXPECT: 60
-// std::initializer_list<E> as a var-decl target with brace-init
-// initializer. N4659 §11.6.4/5 [dcl.init.list]: a braced-init-list
-// is matched to an initializer_list<E> parameter by constructing
-// a temporary initializer_list whose backing array holds the
-// supplied elements. Sea-front recognises this in var-decl form
-// — both `= {...}` and `{...}` — and lowers to a `static const
-// E[N]` array plus the `{ptr, len}` struct literal.
+// std::initializer_list<E> brace-init lowerings — N4659 §11.6.4
+// [dcl.init.list]. Sea-front recognises two surface forms:
+//
+//   - Var-decl init: `std::initializer_list<E> x = {...};` or
+//     `x{...}` — lowered to `static const E[N]` + `{ptr, len}`.
+//   - Function-call arg: `f({...})` where f takes initializer_list
+//     <E> — lowered to C99 compound literals
+//     `(struct il){(const E[N]){...}, N}`.
 //
 // This test uses a hand-rolled std::initializer_list to exercise
-// the lowering in isolation from libstdc++ header surface; the
+// both lowerings in isolation from libstdc++ header surface; the
 // libstdc++ form has the same shape (see g++.dg/cpp0x/initlist1.C
 // and friends for the upstream pattern).
 

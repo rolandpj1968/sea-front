@@ -445,6 +445,7 @@ static inline bool ty_is_indirect(Type *t) {
     return t && (t->kind == TY_PTR || t->kind == TY_REF || t->kind == TY_RVALREF);
 }
 static void emit_arg_for_param(Node *arg, Type *param_ty);  /* fwd */
+static bool ty_is_std_initializer_list(Type *t);             /* fwd */
 
 /* Conservative side-effect detector. Returns true if evaluating `n`
  * could produce an observable effect (write to memory, output,
@@ -631,6 +632,31 @@ static Type *class_base(Type *class_type, int i);
 
 static void emit_arg_for_param(Node *arg, Type *param_ty) {
     if (!arg) return;
+    /* std::initializer_list<E> param taking a braced-init-list arg
+     * — N4659 §11.6.4/5 [dcl.init.list]. Lower to a C99 compound
+     * literal pair: the outer struct holds {backing_array, length},
+     * the inner `(const E[N]){...}` is the backing array. The
+     * compound-literal lifetime is the enclosing block (C99
+     * §6.5.2.5/5), which matches the C++ semantic that the
+     * backing array lives at least as long as the initializer_list
+     * temp. Pattern: g++.dg/cpp0x/initlist1.C — calls into ctors
+     * taking `initializer_list<int>` parameters. */
+    if (arg->kind == ND_INIT_LIST && param_ty &&
+        ty_is_std_initializer_list(param_ty)) {
+        Type *elem_ty = param_ty->template_args[0];
+        int n = arg->init_list.nelems;
+        fputc('(', stdout);
+        emit_type(param_ty);
+        fputs("){(const ", stdout);
+        emit_type(elem_ty);
+        fprintf(stdout, "[%d]){", n);
+        for (int i = 0; i < n; i++) {
+            if (i > 0) fputs(", ", stdout);
+            emit_expr(arg->init_list.elems[i]);
+        }
+        fprintf(stdout, "}, %d}", n);
+        return;
+    }
     /* 'vNULL' passed as a function argument to a struct-typed param:
      * same issue as the ND_ASSIGN / return paths — ND_IDENT vNULL
      * lowers to '{0}' which C only accepts in init-declarators.
