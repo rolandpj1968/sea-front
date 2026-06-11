@@ -12091,9 +12091,57 @@ static void emit_stmt(Node *n) {
             range_ty = range_ty->base;
         Token *decl_name = decl ? decl->var_decl.name : NULL;
         Type *decl_ty = decl ? decl->var_decl.ty : NULL;
-        if (!decl_name || !decl_ty || !range_ty) {
+        /* The braced-init-list range path tolerates a null range_ty
+         * (ND_INIT_LIST itself has no resolved type), so check it
+         * before the catch-all guard below. */
+        if (decl_name && decl_ty &&
+            range && range->kind == ND_INIT_LIST) {
+            /* fall through to the ND_INIT_LIST branch */
+        } else if (!decl_name || !decl_ty || !range_ty) {
             fputs("/* sf: unsupported range-for (missing decl/range type) */ {}\n",
                   stdout);
+            return;
+        }
+        /* Range-init is itself a braced-init-list: N4659 §9.5.4/1
+         * [stmt.ranged] / §11.6.4 [dcl.init.list] — the range
+         * expression is treated as a std::initializer_list<E> temp.
+         * Sea-front sidesteps the initializer_list synth and iterates
+         * the backing array directly: emit a `static const E[N]`
+         * holding the elements, then a plain index loop. Matches the
+         * semantics of iterating over begin()/end() on an
+         * initializer_list whose backing array is this very array.
+         * Pattern: g++.dg/cpp0x/initlist105.C  `for (auto k : {e,f,g,h})`. */
+        if (range && range->kind == ND_INIT_LIST) {
+            int N = range->init_list.nelems;
+            static int g_il_for_id = 0;
+            int aid = g_il_for_id++;
+            fputs("{\n", stdout); g_indent++;
+            emit_indent();
+            /* Block-local (not static): brace-init elements may be
+             * arbitrary expressions, not just literals. C requires
+             * static initialisers to be constant expressions, so the
+             * backing array's storage matches the source-language
+             * lifetime — the enclosing block, same as the C++
+             * initializer_list temp it stands in for. */
+            fputs("const ", stdout);
+            emit_type(decl_ty);
+            fprintf(stdout, " __sf_il_for_%d[%d] = {", aid, N);
+            for (int i = 0; i < N; i++) {
+                if (i > 0) fputs(", ", stdout);
+                emit_expr(range->init_list.elems[i]);
+            }
+            fputs("};\n", stdout);
+            emit_indent();
+            fprintf(stdout,
+                    "for (int __sf_i_%d = 0; __sf_i_%d < %d; __sf_i_%d++) {\n",
+                    aid, aid, N, aid);
+            g_indent++;
+            emit_indent(); emit_type(decl_ty);
+            fprintf(stdout, " %.*s = __sf_il_for_%d[__sf_i_%d];\n",
+                    decl_name->len, decl_name->loc, aid, aid);
+            emit_indent(); emit_stmt(body);
+            g_indent--; emit_indent(); fputs("}\n", stdout);
+            g_indent--; emit_indent(); fputs("}\n", stdout);
             return;
         }
         if (range_ty->kind == TY_ARRAY) {
