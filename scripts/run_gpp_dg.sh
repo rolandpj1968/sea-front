@@ -178,13 +178,39 @@ for src in $files; do
 
     [ "$SEA_DG_VERBOSE" = "1" ] && echo "RUN  $rel" >&2
 
-    # Parse the test's dg-options for a -std= flag and feed it through
-    # to sea-front-cc (which forwards it to the preprocessor). Without
-    # this every cpp0x/* test fails at the g++ preprocess step because
-    # sea-front-cc defaults to -std=c++03. The regex grabs the FIRST
-    # -std=... token in any dg-options "..." directive in the file.
+    # Parse the test's dg directives for a -std= flag. Two surface
+    # forms are common:
+    #   { dg-options "-std=c++NN" }
+    #   { dg-do run { target c++NN } }   (or c++NN_only, c++Nx)
+    # The first IS a compiler flag; the second is a feature
+    # requirement that dejagnu would translate into -std=c++NN
+    # when picking which std to compile under. Both need the same
+    # forwarding here. dg-options wins if both appear.
+    #
+    # The dg-do target form must be scoped to dg-do directives —
+    # 'target c++Nx' also appears inside dg-warning / dg-error
+    # tags as per-line conditionals (NOT a compile target), so a
+    # bare 'target c++Nx' regex over-matches.
     test_std=$(grep -oE 'dg-options[[:space:]]*"[^"]*-std=[^[:space:]"]+' "$src" \
                2>/dev/null | head -1 | grep -oE -- '-std=[^[:space:]"]+')
+    if [ -z "$test_std" ]; then
+        # 'dg-do <action> { target c++NN[a-z]?(_only)? }' →
+        # extract the c++NN[a-z]? token, then translate gcc's
+        # shorthands (c++0x→11, c++1y→14, c++1z→17, c++2a→20,
+        # c++2b→23, c++2c→26) to canonical std names.
+        target_std=$(grep -oE 'dg-do[[:space:]]+[a-z]+[[:space:]]*\{[[:space:]]*target[[:space:]]+c\+\+[0-9]+[a-z]?(_only)?' "$src" \
+                     2>/dev/null | head -1 | \
+                     grep -oE 'c\+\+[0-9]+[a-z]?' | head -1)
+        case "$target_std" in
+            c++0x) target_std=c++11 ;;
+            c++1y) target_std=c++14 ;;
+            c++1z) target_std=c++17 ;;
+            c++2a) target_std=c++20 ;;
+            c++2b) target_std=c++23 ;;
+            c++2c) target_std=c++26 ;;
+        esac
+        [ -n "$target_std" ] && test_std="-std=$target_std"
+    fi
     extra_flags=""
     if [ -n "$test_std" ]; then
         extra_flags="$test_std"
