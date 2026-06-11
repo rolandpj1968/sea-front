@@ -444,6 +444,120 @@ static inline bool ty_is_ref(Type *t) {
 static inline bool ty_is_indirect(Type *t) {
     return t && (t->kind == TY_PTR || t->kind == TY_REF || t->kind == TY_RVALREF);
 }
+static void emit_arg_for_param(Node *arg, Type *param_ty);  /* fwd */
+
+/* Conservative side-effect detector. Returns true if evaluating `n`
+ * could produce an observable effect (write to memory, output,
+ * function call, throw, allocation). Used to gate the L2R sequencing
+ * hoist: pure args (literals, idents, simple arithmetic) emit inline
+ * at the ctor-call site without a temp; side-effecting args (the only
+ * kind whose evaluation order is observable) get the temp. Recursive
+ * walk over the AST; bails-as-side-effect on shapes we don't
+ * recognise (safer to over-hoist than under-hoist).
+ *
+ * Direct side-effect node kinds:
+ *   - ND_CALL: any call may write memory, throw, or have IO.
+ *   - ND_CAST with is_new_expr: new-expression allocates + ctor-calls.
+ *   - ND_ASSIGN: = += -= ... write to LHS.
+ *   - ND_UNARY with op TK_INC / TK_DEC: pre-increment/decrement.
+ *   - ND_POSTFIX: post-increment/decrement (always ++/--).
+ *   - ND_THROW: control transfer + state mutation.
+ *   - ND_STMT_EXPR: arbitrary statements inside.
+ *
+ * Pure node kinds: literals (ND_NUM/FNUM/STR/CHAR/BOOL_LIT/NULLPTR),
+ * ND_IDENT, ND_QUALIFIED, ND_SIZEOF, ND_ALIGNOF, ND_OFFSETOF, and
+ * compound shapes that just combine sub-exprs (ND_BINARY, ND_UNARY
+ * non-++/--, ND_TERNARY, ND_COMMA, ND_MEMBER, ND_SUBSCRIPT, ND_CAST
+ * non-new, ND_INIT_LIST) — recurse into kids. */
+static bool node_has_side_effects(Node *n) {
+    if (!n) return false;
+    switch (n->kind) {
+        case ND_NUM: case ND_FNUM: case ND_STR: case ND_CHAR:
+        case ND_BOOL_LIT: case ND_NULLPTR:
+        case ND_IDENT: case ND_QUALIFIED:
+        case ND_SIZEOF: case ND_ALIGNOF: case ND_OFFSETOF:
+        case ND_LAMBDA:  /* lambda-expr is a value; capture eval is in body */
+            return false;
+        case ND_CALL: case ND_ASSIGN: case ND_THROW: case ND_STMT_EXPR:
+        case ND_VA_ARG:
+            return true;
+        case ND_POSTFIX:
+            return true;  /* always ++ or -- */
+        case ND_UNARY:
+            if (n->unary.op == TK_INC || n->unary.op == TK_DEC) return true;
+            return node_has_side_effects(n->unary.operand);
+        case ND_CAST:
+            if (n->cast.is_new_expr) return true;
+            return node_has_side_effects(n->cast.operand);
+        case ND_BINARY:
+            return node_has_side_effects(n->binary.lhs) ||
+                   node_has_side_effects(n->binary.rhs);
+        case ND_COMMA:
+            return node_has_side_effects(n->comma.lhs) ||
+                   node_has_side_effects(n->comma.rhs);
+        case ND_TERNARY:
+            return node_has_side_effects(n->ternary.cond) ||
+                   node_has_side_effects(n->ternary.then_) ||
+                   node_has_side_effects(n->ternary.else_);
+        case ND_MEMBER:
+            return node_has_side_effects(n->member.obj);
+        case ND_SUBSCRIPT:
+            return node_has_side_effects(n->binary.lhs) ||
+                   node_has_side_effects(n->binary.rhs);
+        case ND_INIT_LIST:
+            for (int i = 0; i < n->init_list.nelems; i++)
+                if (node_has_side_effects(n->init_list.elems[i])) return true;
+            return false;
+        default:
+            return true;  /* unknown shape — be conservative */
+    }
+}
+
+/* Emit `<temp-type> <name> = (<arg-expr>);` for a ctor-call arg of
+ * any reachable param-type shape; caller has indented the line.
+ * Sea-front's C-side type for each param-shape:
+ *
+ *   - Scalar / enum / data-ptr / struct / union by value:
+ *       `<param-type> <name> = (<arg>);`
+ *   - L/R-value reference: `<base> *<name> = &(<arg>);` — refs
+ *     lower to pointers in C; emit_arg_for_param already produces
+ *     `&(arg)` for the RHS.
+ *   - Pointer-to-function: `<ret> (*<name>)(<params>) = (<arg>);` —
+ *     C requires the name to interleave with the type.
+ *   - Array param: arrays decay to pointer-to-element at call
+ *     boundaries (N4659 §11.3.4); emit as `<elem> *<name> = (<arg>);`.
+ *
+ * Exhaustively covers the ctor-arg-reachable type kinds — TY_VOID
+ * and TY_FUNC-by-value are not legal arg types in any C++ program,
+ * and TY_DEPENDENT is already resolved by emit time. So callers can
+ * always hoist when the arg has observable side effects; no
+ * predicate-gated fallback to inline pass is needed. */
+static void emit_hoist_arg_temp(const char *name, Type *pty, Node *arg) {
+    if (pty->kind == TY_REF || pty->kind == TY_RVALREF) {
+        emit_type(pty->base);
+        fprintf(stdout, " *%s = ", name);
+        emit_arg_for_param(arg, pty);  /* emits '&(arg)' for ref params */
+        fputs(";\n", stdout);
+    } else if (pty->kind == TY_PTR && pty->base && pty->base->kind == TY_FUNC) {
+        Type *fty = pty->base;
+        emit_type(fty->ret);
+        fprintf(stdout, " (*%s)(", name);
+        emit_func_param_types(fty);
+        fputs(") = (", stdout);
+        emit_arg_for_param(arg, pty);
+        fputs(");\n", stdout);
+    } else if (pty->kind == TY_ARRAY) {
+        emit_type(pty->base);
+        fprintf(stdout, " *%s = (", name);
+        emit_arg_for_param(arg, pty);
+        fputs(");\n", stdout);
+    } else {
+        emit_type(pty);
+        fprintf(stdout, " %s = (", name);
+        emit_arg_for_param(arg, pty);
+        fputs(");\n", stdout);
+    }
+}
 
 /* Does any type in `params[0..n)` mention TY_DEPENDENT — directly,
  * via TY_REF/TY_RVALREF/TY_PTR/TY_ARRAY chains, OR nested inside
@@ -11112,13 +11226,66 @@ static void emit_stmt(Node *n) {
                                              "direct-init ctor call");
                         }
                     }
+                    /* Per-arg evaluation order:
+                     *   - Brace-init 'T x{a, b}' mandates left-to-right
+                     *     initializer evaluation (N4659 §11.6.4
+                     *     [dcl.init.list]/4).
+                     *   - Paren-init 'T x(a, b)' is indeterminately
+                     *     sequenced wrt the args (N4659 §8.2.2
+                     *     [expr.call]/5), but each arg is fully
+                     *     evaluated before another starts.
+                     * Plain C function-call args are unsequenced
+                     * (C11 §6.5.2.2/10). Args without observable
+                     * side effects (literals, idents, pure
+                     * arithmetic) emit inline — same code as before.
+                     * Args WITH side effects (function call, ++/--,
+                     * assignment, new, throw) get hoisted into a
+                     * sequenced temp before the call — one statement
+                     * per such arg, source order — which satisfies
+                     * the brace-init mandate AND matches gcc/clang's
+                     * de-facto left-to-right paren-init behaviour.
+                     * Pure args left inline reorder freely with no
+                     * observable difference. Hoist applies only when
+                     * the param type is value-hoistable; fn-pointer
+                     * and array params pass inline regardless.
+                     * Pattern: g++.dg/cpp0x/initlist86.C. */
+                    static int g_ctor_l2r_id = 0;
+                    int lid = -1;
+                    bool hoisted_buf[16] = {0};
+                    bool *hoisted = NULL;
+                    if (n->var_decl.ctor_nargs > 1 &&
+                        n->var_decl.ctor_nargs <= 16 &&
+                        np == n->var_decl.ctor_nargs) {
+                        bool any_hoist = false;
+                        for (int i = 0; i < n->var_decl.ctor_nargs; i++) {
+                            hoisted_buf[i] = node_has_side_effects(
+                                n->var_decl.ctor_args[i]);
+                            if (hoisted_buf[i]) any_hoist = true;
+                        }
+                        if (any_hoist) {
+                            hoisted = hoisted_buf;
+                            lid = g_ctor_l2r_id++;
+                            for (int i = 0; i < n->var_decl.ctor_nargs; i++) {
+                                if (!hoisted[i]) continue;
+                                char nm[32];
+                                snprintf(nm, sizeof(nm), "__sf_li_%d_%d",
+                                          lid, i);
+                                emit_hoist_arg_temp(nm, pty[i],
+                                                    n->var_decl.ctor_args[i]);
+                                emit_indent();
+                            }
+                        }
+                    }
                     mangle_class_ctor(n->var_decl.ty, pty, np);
                     fprintf(stdout, "(&%.*s",
                             n->var_decl.name->len, n->var_decl.name->loc);
                     for (int i = 0; i < n->var_decl.ctor_nargs; i++) {
                         fputs(", ", stdout);
-                        emit_arg_for_param(n->var_decl.ctor_args[i],
-                                            i < np ? pty[i] : NULL);
+                        if (hoisted && hoisted[i])
+                            fprintf(stdout, "__sf_li_%d_%d", lid, i);
+                        else
+                            emit_arg_for_param(n->var_decl.ctor_args[i],
+                                                i < np ? pty[i] : NULL);
                     }
                     /* Default-arg expansion — N4659 §11.3.6
                      * [dcl.fct.default]. Trailing params unsupplied
