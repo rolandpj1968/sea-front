@@ -446,6 +446,8 @@ static inline bool ty_is_indirect(Type *t) {
 }
 static void emit_arg_for_param(Node *arg, Type *param_ty);  /* fwd */
 static bool ty_is_std_initializer_list(Type *t);             /* fwd */
+static void push_user_var_cleanup(Node *s);                  /* fwd */
+static bool var_decl_is_initializer_list_brace_init(Node *n);/* fwd */
 
 /* Conservative side-effect detector. Returns true if evaluating `n`
  * could produce an observable effect (write to memory, output,
@@ -2351,6 +2353,15 @@ static bool subtree_has_cleanups(Node *n) {
             n->var_decl.ty->base &&
             n->var_decl.ty->base->kind == TY_STRUCT &&
             n->var_decl.ty->base->has_dtor) return true;
+        /* std::initializer_list<E> with E having a dtor: the
+         * synth backing array emit_initializer_list_var_decl
+         * creates is a TY_ARRAY of E and is registered for
+         * cleanup at emit time. The function still needs the
+         * cleanup scaffolding flag set, which is computed here. */
+        if (var_decl_is_initializer_list_brace_init(n) &&
+            n->var_decl.ty->template_args[0] &&
+            n->var_decl.ty->template_args[0]->kind == TY_STRUCT &&
+            n->var_decl.ty->template_args[0]->has_dtor) return true;
         return subtree_has_cleanups(n->var_decl.init);
     case ND_BLOCK:
         for (int i = 0; i < n->block.nstmts; i++)
@@ -9309,12 +9320,35 @@ static void emit_initializer_list_var_decl(Node *n) {
          * `const`. Pattern: g++.dg/cpp0x/initlist6.C
          * `initializer_list<A> l { {1,2}, {3,4} };` with A(int,int).
          *
-         * KNOWN GAP: dtor cleanup at scope exit isn't registered yet
-         * — initlist6's `c != 0` check after the inner-block exit
-         * still fails. The fix lives in the broader array-of-class
-         * cleanup machinery; this slice scopes to ctor calls. */
+         * If E has a dtor, synth a stand-in ND_VAR_DECL for the
+         * backing array and push it onto the cleanup chain so dtors
+         * fire at scope exit — same machinery push_user_var_cleanup
+         * uses for ordinary `T arr[N];` locals. */
         emit_type(elem_ty);
         fprintf(stdout, " __sf_il_arr_%d[%d];\n", aid, nelems);
+        if (elem_ty->has_dtor) {
+            /* Synth a Token / Type / ND_VAR_DECL trio referring to
+             * the backing array so push_user_var_cleanup recognises
+             * it as an array-of-class-with-dtor and the cleanup
+             * chain emits per-element dtor calls in reverse at
+             * scope exit. Allocations are one-shot — the process
+             * never frees them. */
+            char *nm_buf = malloc(32);
+            int nm_len = snprintf(nm_buf, 32, "__sf_il_arr_%d", aid);
+            Token *nm = calloc(1, sizeof(Token));
+            nm->kind = TK_IDENT;
+            nm->loc  = nm_buf;
+            nm->len  = nm_len;
+            Type *arr_ty = calloc(1, sizeof(Type));
+            arr_ty->kind      = TY_ARRAY;
+            arr_ty->base      = elem_ty;
+            arr_ty->array_len = nelems;
+            Node *arr_decl = calloc(1, sizeof(Node));
+            arr_decl->kind            = ND_VAR_DECL;
+            arr_decl->var_decl.name   = nm;
+            arr_decl->var_decl.ty     = arr_ty;
+            push_user_var_cleanup(arr_decl);
+        }
         for (int i = 0; i < nelems; i++) {
             Node *elem = elems[i];
             Node **carg = NULL;
