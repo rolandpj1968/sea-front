@@ -9294,16 +9294,74 @@ static void emit_initializer_list_var_decl(Node *n) {
     static int g_il_id = 0;
     int aid = g_il_id++;
 
+    bool elem_is_class = elem_ty && (elem_ty->kind == TY_STRUCT ||
+                                      elem_ty->kind == TY_UNION);
     /* Caller (emit_block / emit_stmt) has already issued the leading
      * emit_indent for this statement; the first line consumes it. */
-    fputs("static const ", stdout);
-    emit_type(elem_ty);
-    fprintf(stdout, " __sf_il_arr_%d[%d] = {", aid, nelems);
-    for (int i = 0; i < nelems; i++) {
-        if (i > 0) fputs(", ", stdout);
-        emit_expr(elems[i]);
+    if (elem_is_class) {
+        /* Class element type: aggregate init would skip the user-
+         * declared ctor (C struct init is memberwise / bitwise), so
+         * we emit auto-storage and per-element ctor calls instead.
+         * Each elem is a nested ND_INIT_LIST whose inner elements are
+         * the ctor args; resolve_overload picks the matching ctor.
+         * Storage class is auto (not static const) — ctor calls write
+         * to the array and the C compiler rejects writes through
+         * `const`. Pattern: g++.dg/cpp0x/initlist6.C
+         * `initializer_list<A> l { {1,2}, {3,4} };` with A(int,int).
+         *
+         * KNOWN GAP: dtor cleanup at scope exit isn't registered yet
+         * — initlist6's `c != 0` check after the inner-block exit
+         * still fails. The fix lives in the broader array-of-class
+         * cleanup machinery; this slice scopes to ctor calls. */
+        emit_type(elem_ty);
+        fprintf(stdout, " __sf_il_arr_%d[%d];\n", aid, nelems);
+        for (int i = 0; i < nelems; i++) {
+            Node *elem = elems[i];
+            Node **carg = NULL;
+            int    cnarg = 0;
+            if (elem && elem->kind == ND_INIT_LIST) {
+                carg  = elem->init_list.elems;
+                cnarg = elem->init_list.nelems;
+            } else if (elem) {
+                carg  = &elems[i];
+                cnarg = 1;
+            }
+            Type **at = NULL;
+            int na = collect_call_arg_types(carg, cnarg, &at);
+            Type **pty = NULL;
+            Node *resolved_ctor = NULL;
+            int np = resolve_overload(elem_ty, /*name=*/NULL,
+                                       /*is_ctor=*/true, at, na,
+                                       /*receiver_is_const=*/false,
+                                       &pty, &resolved_ctor);
+            if (np < 0) {
+                if (na == 0 && elem_ty->has_default_ctor) {
+                    pty = NULL; np = 0;
+                } else {
+                    die_no_overload(elem_ty, NULL, na,
+                                     "initializer_list element ctor");
+                }
+            }
+            emit_indent();
+            mangle_class_ctor(elem_ty, pty, np);
+            fprintf(stdout, "(&__sf_il_arr_%d[%d]", aid, i);
+            for (int j = 0; j < cnarg; j++) {
+                fputs(", ", stdout);
+                emit_arg_for_param(carg[j], j < np ? pty[j] : NULL);
+            }
+            emit_default_args_tail(resolved_ctor, cnarg, np, pty);
+            fputs(");\n", stdout);
+        }
+    } else {
+        fputs("static const ", stdout);
+        emit_type(elem_ty);
+        fprintf(stdout, " __sf_il_arr_%d[%d] = {", aid, nelems);
+        for (int i = 0; i < nelems; i++) {
+            if (i > 0) fputs(", ", stdout);
+            emit_expr(elems[i]);
+        }
+        fputs("};\n", stdout);
     }
-    fputs("};\n", stdout);
 
     emit_indent();
     emit_type(n->var_decl.ty);
