@@ -11420,6 +11420,16 @@ static void emit_stmt(Node *n) {
                          * g++.dg/init/value1.C. */
                         if (na == 0 && n->var_decl.ty->has_default_ctor) {
                             pty = NULL; np = 0;
+                        } else if (na == 0) {
+                            /* Empty-brace value-init `A a{};` on a
+                             * class with no ctor — N4659 §11.6.1/8
+                             * [dcl.init]: value-initialization
+                             * zero-initialises the storage. The bare
+                             * var-decl emit above already appended
+                             * ` = {0}` for this shape; just skip the
+                             * ctor-call emission. Pattern:
+                             * g++.dg/cpp0x/initlist-value.C `A a{};`. */
+                            return;
                         } else {
                             die_no_overload(n->var_decl.ty, NULL, na,
                                              "direct-init ctor call");
