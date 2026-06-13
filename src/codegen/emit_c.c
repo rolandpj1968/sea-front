@@ -11603,6 +11603,44 @@ static void emit_stmt(Node *n) {
                 }
             }
         }
+        /* Default-init `A arr[N];` for an array of class with a
+         * default ctor — each element must have its ctor called
+         * (N4659 §11.6/8 [dcl.init]: default-initialisation runs
+         * the default constructor; for an array each element is
+         * default-initialised). Without this, NSDMI-applying
+         * synth ctors don't run and members stay garbage. Pattern:
+         * g++.dg/cpp0x/nsdmi1.C `A a3[1];` where A has 'int i =
+         * 42;'. Register for cleanup so dtors run too.
+         *
+         * For a literal-sized array we emit individual ctor calls
+         * (the C compiler folds the indices and there's no loop
+         * setup cost); for unknown-sized arrays (rare at block
+         * scope) emit a for-loop using sizeof. */
+        else if (!n->var_decl.init && !n->var_decl.has_ctor_init &&
+                 n->var_decl.ty && n->var_decl.ty->kind == TY_ARRAY &&
+                 n->var_decl.ty->base &&
+                 n->var_decl.ty->base->kind == TY_STRUCT &&
+                 n->var_decl.ty->base->has_default_ctor &&
+                 n->var_decl.name) {
+            Type *elem = n->var_decl.ty->base;
+            int N = n->var_decl.ty->array_len;
+            if (N > 0 && N <= 16) {
+                for (int i = 0; i < N; i++) {
+                    emit_indent();
+                    mangle_class_ctor(elem, NULL, 0);
+                    fprintf(stdout, "(&%.*s[%d]);\n",
+                            n->var_decl.name->len, n->var_decl.name->loc, i);
+                }
+            } else if (N > 0) {
+                emit_indent();
+                fprintf(stdout, "for (int __sf_i = 0; __sf_i < %d; ++__sf_i) ",
+                        N);
+                mangle_class_ctor(elem, NULL, 0);
+                fprintf(stdout, "(&%.*s[__sf_i]);\n",
+                        n->var_decl.name->len, n->var_decl.name->loc);
+            }
+            push_user_var_cleanup(n);
+        }
         /* Default-init 'Foo a;' (no init, no parens) calls the
          * class's user-declared default ctor when one exists.
          * Without a default ctor we leave the storage uninitialized

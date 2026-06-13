@@ -2261,6 +2261,20 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
                 }
                 if (m->var_decl.is_virtual)
                     inst_ty->has_virtual_methods = true;
+                /* NSDMI — N4659 §12.6.2/9 [class.base.init]/9: a
+                 * default-member-initializer on a non-static, non-
+                 * function member triggers default-ctor synthesis.
+                 * Mirrors the same condition in parse/type.c so a
+                 * template instantiation of 'struct C { T m = t; };'
+                 * gets its synth default ctor (which assigns m=t).
+                 * Pattern: g++.dg/cpp0x/nsdmi1.C `C<int,3>`. */
+                if (!any_user_ctor &&
+                    m->var_decl.ty &&
+                    m->var_decl.ty->kind != TY_FUNC &&
+                    !(m->var_decl.storage_flags & DECL_STATIC) &&
+                    m->var_decl.init) {
+                    inst_ty->has_default_ctor = true;
+                }
             }
         }
         /* Polymorphic-no-user-ctor: synthesise a default ctor so the
