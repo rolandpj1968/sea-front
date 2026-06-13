@@ -1032,6 +1032,25 @@ static void emit_return_expr(Node *e) {
         fputs("){0}", stdout);
         return;
     }
+    /* `return {}` / `return {a, b, ...}` for a struct-typed return —
+     * N4659 §11.6.4/3.6 [dcl.init.list] copy-list-initializes the
+     * return value. C accepts `{...}` only in init-declarators; for
+     * a return expression wrap in a compound literal so the value
+     * is rvalue-shaped. Pattern: g++.dg/cpp0x/initlist122.C
+     *   `B bar() { ... return {}; }`. */
+    if (e && e->kind == ND_INIT_LIST && rt &&
+        (rt->kind == TY_STRUCT || rt->kind == TY_UNION) && rt->tag) {
+        fputc('(', stdout);
+        emit_type(rt);
+        fputs("){", stdout);
+        for (int i = 0; i < e->init_list.nelems; i++) {
+            if (i > 0) fputs(", ", stdout);
+            emit_expr(e->init_list.elems[i]);
+        }
+        if (e->init_list.nelems == 0) fputc('0', stdout);
+        fputc('}', stdout);
+        return;
+    }
     if (!ty_is_ref(rt)) { emit_expr(e); return; }
     Type *et = e ? e->resolved_type : NULL;
     if (ty_is_ref(et)) {
