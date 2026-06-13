@@ -7564,15 +7564,28 @@ static void emit_expr(Node *n) {
         return;
     }
     case ND_CAST:
-        /* `new T` parses as ND_CAST with cast.ty=T and operand=NULL
-         * (parser reuses the CAST node — see expr.c new-expression
-         * handling). Emit as `((T*)0)` — typed null. Stub: doesn't
-         * actually allocate; suitable when the call site never runs
-         * (most real-world vec_alloc<T> single-template-param invocations
-         * are unreachable in cc1plus). A proper fix would emit
-         * `((T*)__builtin_malloc(sizeof(T)))` plus a ctor call.
-         * TODO(seafront#new-expr): real allocation. */
+        /* Two AST shapes can land here with operand=NULL:
+         *
+         *   - `A{}` / `A()` — functional-cast value-init.
+         *     N4659 §8.2.3 [expr.type.conv]: zero-initialised T.
+         *     Detected by !is_new_expr and ty is a non-pointer
+         *     value type. Emit a C99 compound literal `(T){0}`.
+         *
+         *   - `new T` — operator-new with NO ctor args (parser
+         *     reuses ND_CAST). Emit a typed null `((T*)0)` as a
+         *     stub — TODO(seafront#new-expr) for real allocation.
+         *
+         * Without the value-init branch, `A{}.v` would lower as
+         * `((struct A*)0).v` — a null-deref. */
         if (!n->cast.operand) {
+            if (!n->cast.is_new_expr && n->cast.ty &&
+                (n->cast.ty->kind == TY_STRUCT ||
+                 n->cast.ty->kind == TY_UNION)) {
+                fputc('(', stdout);
+                emit_type(n->cast.ty);
+                fputs("){0}", stdout);
+                return;
+            }
             fputs("((", stdout);
             emit_type(n->cast.ty);
             fputs("*)0)", stdout);
