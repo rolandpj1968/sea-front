@@ -57,3 +57,25 @@ g++.dg/cpp0x/implicit2.C
 # also fail; tests where we PASS something gcc-xfails are surprising
 # good news and stay in the PASS bucket.
 
+# --- Signal-driven / forced unwinding EH --------------------------------
+# Tests in this bucket install a signal handler that throws a C++
+# exception, or call _Unwind_RaiseException directly, or rely on
+# -fnon-call-exceptions to turn synchronous CPU traps into throws.
+# Sea-front's TLS-polling EH design (see docs/exceptions.md) is
+# fundamentally synchronous — exceptions can only originate from a
+# `throw` statement in code sea-front emitted. There is no mechanism
+# to convert a signal or a CPU trap into a polled exception state.
+# These tests cannot pass under the current EH design.
+
+g++.dg/eh/sighandle.C
+g++.dg/eh/simd-4.C
+g++.dg/eh/forced1.C
+g++.dg/eh/forced2.C
+g++.dg/eh/forced3.C
+g++.dg/eh/forced4.C
+g++.dg/eh/unexpected1.C
+g++.dg/ext/sync-4.C
+g++.dg/torture/except-1.C
+g++.dg/torture/pr85334.C
+g++.dg/pr97627.C
+
