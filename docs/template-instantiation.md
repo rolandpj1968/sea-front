@@ -266,3 +266,69 @@ before codegen sees it; the mangler reads from there.
 - Multi-TU dedup (the link-time side of the deduplication story):
   [`inline_and_dedup.md`](inline_and_dedup.md)
 - Codegen consumption of instantiated AST: [`emit.md`](emit.md)
+
+## Variadic templates — status and design
+
+N4659 §17.5.3 [temp.variadic]. Sea-front has phase-1 coverage
+(parser tags packs in the AST); the substitution / clone / emit
+machinery still treats packs as single-element entries. Phases:
+
+**Phase 1 — Parse + AST tagging (shipped).**
+- `ND_PARAM.param.is_pack` set for `template<typename... Ts>` and
+  for function-param `Ts... args` (threaded from
+  `parse_declarator` via `Parser::pending_param_is_pack`).
+- `ND_SIZEOF.sizeof_.is_pack` + `.pack_name` capture
+  `sizeof...(pack)`.
+- No behavioural change yet: instantiation, mangling, and emit
+  treat packs as if `is_pack` were false (1-element). `--dump-ast`
+  shows the tags for verification.
+
+**Phase 2 — Pack-list SubstMap + cloner expansion (not shipped).**
+- Extend `SubstEntry` (clone.h) to optionally carry a list of
+  concrete types when `param->is_pack`:
+  ```c
+  typedef struct {
+      Token *param_name;
+      Type  *concrete_type;     /* non-pack entry */
+      Token *tt_bound_name;
+      Type **pack_types;        /* pack entry: list of N concrete types */
+      int    pack_ntypes;
+      bool   is_pack;
+  } SubstEntry;
+  ```
+- `deduce_template_args`: when the LAST template param is a pack
+  and the call has > nparams-1 args, deduce the pack against the
+  trailing args; bind the pack as a type list of (nargs -
+  nparams + 1) entries.
+- `subst_type`: when a `TY_DEPENDENT` matches a pack entry,
+  callers in pack-expansion contexts must enumerate over the
+  pack types (NOT return a single type). Add a sibling
+  `subst_pack_types` returning `Type**` + count.
+- `clone_node`: detect pack-expansion sites in the body — a
+  function param with `param->is_pack` expands to N synthesized
+  params (`args_0, args_1, ...`); a call-arg `args...` expands
+  to N inline call-args; `sizeof...(args)` collapses to an
+  ND_NUM with value N.
+- Synth-param naming: use the original pack name + `_<i>` index
+  so re-references inside the body resolve to the right C-level
+  identifier per expansion.
+
+**Phase 3 — Mangling.**
+- Include each pack-bound type in the mangled instantiation
+  name. For `f<int,double,char>(...)`, the suffix lists three
+  types.
+
+**Phase 4 — Codegen.**
+- Most fallout from phases 2-3 should ship for free once the
+  AST is expanded; specific check: function definition emit
+  enumerates per-param emit, which already works with N
+  synth params. Call-site emit walks the ND_CALL args, same
+  story — no special pack-expansion handling needed at
+  emit-time if the cloner did its job.
+
+**Tests targeted by full coverage**: `variadic73, variadic-init,
+variadic-new, variadic-new2, variadic-tuple,
+lambda-generic-variadic21` (~6 cpp0x/cpp1y tests). Downstream
+unlocks: `std::tuple` / `std::pair` parse / emit, which is the
+gateway to a chunk of `<vector>`-using tests once SFINAE +
+noexcept-inference also land.
