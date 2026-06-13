@@ -17473,9 +17473,51 @@ void emit_c(Node *tu) {
                                            /*is_ctor=*/true, at, na,
                                            /*receiver_is_const=*/false,
                                            &pty, &resolved_ctor);
-                if (np < 0) {
-                    /* No matching ctor — emit a comment placeholder and
-                     * skip rather than producing broken C. */
+                if (np < 0 && class_has_no_user_ctor(ty)) {
+                    /* No ctor at all: aggregate-init via compound-
+                     * literal assignment at module-load time. Same
+                     * pattern as the block-scope aggregate path
+                     * (see ND_VAR_DECL emit), with the const-cast on
+                     * the receiver borrowed from the ctor branch
+                     * below. N4659 §11.6.1/1 [dcl.init.aggr].
+                     * Pattern: g++.dg/cpp1z/aggr-base4.C
+                     *   `derived d2{f(), 1};` at file scope. */
+                    Node *cdef = ty->class_def;
+                    Type *mtys[16] = {0};
+                    int nmtys = 0;
+                    if (cdef) {
+                        for (int mi = 0;
+                             mi < cdef->class_def.nmembers &&
+                             nmtys < 16; mi++) {
+                            Node *m = cdef->class_def.members[mi];
+                            if (!m || m->kind != ND_VAR_DECL) continue;
+                            if (m->var_decl.storage_flags & DECL_STATIC)
+                                continue;
+                            if (!m->var_decl.ty ||
+                                m->var_decl.ty->kind == TY_FUNC)
+                                continue;
+                            if (!m->var_decl.name) continue;
+                            mtys[nmtys++] = m->var_decl.ty;
+                        }
+                    }
+                    fputs("*(", stdout);
+                    if (ty->kind == TY_UNION) fputs("union ", stdout);
+                    else fputs("struct ", stdout);
+                    mangle_class_tag(ty);
+                    fputs(" *)&", stdout);
+                    fprintf(stdout, "%.*s = (",
+                            n->var_decl.name->len, n->var_decl.name->loc);
+                    emit_type(ty);
+                    fputs("){", stdout);
+                    for (int j = 0; j < n->var_decl.ctor_nargs; j++) {
+                        if (j > 0) fputs(", ", stdout);
+                        emit_arg_for_param(n->var_decl.ctor_args[j],
+                                            j < nmtys ? mtys[j] : NULL);
+                    }
+                    fputs("};\n", stdout);
+                } else if (np < 0) {
+                    /* Has ctor(s) but none matches the args — emit a
+                     * comment placeholder and skip. */
                     fprintf(stdout, "/* sf: no ctor match for %.*s direct-init */;\n",
                             n->var_decl.name->len, n->var_decl.name->loc);
                 } else {
