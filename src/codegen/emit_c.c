@@ -9273,6 +9273,25 @@ static void emit_aggregate_init_per_member(Node *var) {
     (void)aid;
 }
 
+/* True if `n` is a file-scope `T arr[N] = { ... }` where T is a class
+ * with a user copy ctor. Aggregate init via `= {...}` in C only does
+ * memberwise copy, skipping the user copy ctor. Sea-front lowers this
+ * by suppressing the file-scope `= {...}` suffix and emitting per-
+ * element copy-ctor calls in __sf_global_init instead. Pattern:
+ * g++.dg/init/copy3.C  `S s[1] = { S() };`. */
+static bool var_decl_array_class_copy_init(Node *n) {
+    if (!n || n->kind != ND_VAR_DECL) return false;
+    if (!n->var_decl.ty || n->var_decl.ty->kind != TY_ARRAY) return false;
+    if (!n->var_decl.ty->base) return false;
+    Type *elem = n->var_decl.ty->base;
+    if (elem->kind != TY_STRUCT && elem->kind != TY_UNION) return false;
+    if (!class_has_user_copy_ctor(elem)) return false;
+    if (!n->var_decl.init || n->var_decl.init->kind != ND_INIT_LIST)
+        return false;
+    if (!n->var_decl.name) return false;
+    return true;
+}
+
 static bool var_decl_needs_aggregate_per_member(Node *n) {
     if (!n || n->kind != ND_VAR_DECL) return false;
     if (!n->var_decl.ty || n->var_decl.ty->kind != TY_STRUCT) return false;
@@ -9442,6 +9461,11 @@ static void emit_var_decl_init_suffix(Node *n) {
      * skip the `= {...}` suffix and let the per-member emit
      * follow the bare declaration. */
     if (var_decl_needs_aggregate_per_member(n)) return;
+    /* Array of class with user copy ctor + init list — the copy
+     * ctor calls go to __sf_global_init (per-element). Skip the
+     * file-scope `= {...}` suffix; the bare declaration above is
+     * what the global-init code copies into. */
+    if (var_decl_array_class_copy_init(n)) return;
     fputs(" = ", stdout);
     emit_init_with_target(n->var_decl.init, n->var_decl.ty);
 }
@@ -17442,7 +17466,9 @@ void emit_c(Node *tu) {
                 elem_ty = ty->base;
             }
             bool deferred = n->var_decl.init && n->var_decl.deferred_to_global_init;
-            if (!is_class && !is_class_direct_init && !is_array_of_class && !deferred)
+            bool is_array_copy_init = var_decl_array_class_copy_init(n);
+            if (!is_class && !is_class_direct_init && !is_array_of_class &&
+                !is_array_copy_init && !deferred)
                 continue;
             if (is_class) {
                 fputs("    ", stdout);
@@ -17554,7 +17580,50 @@ void emit_c(Node *tu) {
                     fputs(");\n", stdout);
                 }
             }
-            if (is_array_of_class && arr_size > 0) {
+            /* Array of class with user copy ctor + init list:
+             * per-element copy-ctor calls (the file-scope `= {...}`
+             * suffix was suppressed by var_decl_array_class_copy_init).
+             * Pattern: g++.dg/init/copy3.C `S s[1] = { S() };` —
+             * S has a user copy ctor that counts copies, and the
+             * test expects one copy per init element. */
+            if (var_decl_array_class_copy_init(n)) {
+                Node *il = n->var_decl.init;
+                int N = ty->array_len;
+                Type *elem = ty->base;
+                for (int i = 0; i < N; i++) {
+                    Node *src = (i < il->init_list.nelems)
+                                  ? il->init_list.elems[i] : NULL;
+                    bool emitted_copy = false;
+                    if (src) {
+                        Type *at_e[1] = {
+                            src->resolved_type ? src->resolved_type : elem
+                        };
+                        Type **pty_e = NULL;
+                        Node *res_e = NULL;
+                        int np_e = resolve_overload(elem, /*name=*/NULL,
+                                                     /*is_ctor=*/true,
+                                                     at_e, 1, false,
+                                                     &pty_e, &res_e);
+                        if (np_e == 1) {
+                            fputs("    ", stdout);
+                            mangle_class_ctor(elem, pty_e, np_e);
+                            fprintf(stdout, "(&%.*s[%d], ",
+                                    n->var_decl.name->len,
+                                    n->var_decl.name->loc, i);
+                            emit_arg_for_param(src, pty_e[0]);
+                            fputs(");\n", stdout);
+                            emitted_copy = true;
+                        }
+                    }
+                    if (!emitted_copy && elem->has_default_ctor) {
+                        fputs("    ", stdout);
+                        mangle_class_ctor(elem, NULL, 0);
+                        fprintf(stdout, "(&%.*s[%d]);\n",
+                                n->var_decl.name->len,
+                                n->var_decl.name->loc, i);
+                    }
+                }
+            } else if (is_array_of_class && arr_size > 0) {
                 fprintf(stdout,
                         "    for (int __sf_i = 0; __sf_i < %d; ++__sf_i) ",
                         arr_size);
