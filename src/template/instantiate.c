@@ -1419,44 +1419,15 @@ bool deduce_template_args(Node *tmpl_func, Type **arg_types, int nargs,
     else
         return false;
 
-    /* Detect trailing function-parameter pack (N4659 §17.5.3
-     * [temp.variadic]). The pack consumes the trailing run of
-     * call args; the non-pack leading params are paired 1:1 with
-     * the leading args as before. Only the FUNC_DEF/FUNC_DECL
-     * shape carries `param->is_pack` reliably (parser sets it
-     * via the side channel); VAR_DECL function types don't. */
-    bool has_func_def = (tmpl_func->kind == ND_FUNC_DEF ||
-                          tmpl_func->kind == ND_FUNC_DECL);
-    Node *pack_param = NULL;
-    if (has_func_def && nparams > 0 &&
-        tmpl_func->func.params[nparams - 1] &&
-        tmpl_func->func.params[nparams - 1]->param.is_pack)
-        pack_param = tmpl_func->func.params[nparams - 1];
-
-    int n_non_pack = pack_param ? (nparams - 1) : nparams;
-    int pairs = n_non_pack < nargs ? n_non_pack : nargs;
+    int pairs = nparams < nargs ? nparams : nargs;
     for (int i = 0; i < pairs; i++) {
         Type *P = NULL;
-        if (has_func_def)
+        if (tmpl_func->kind == ND_FUNC_DEF || tmpl_func->kind == ND_FUNC_DECL)
             P = tmpl_func->func.params[i]->param.ty;
         else
             P = tmpl_func->var_decl.ty->params[i];
         if (!deduce_from_pair(P, arg_types[i], out))
             return false;
-    }
-    if (pack_param && nargs > n_non_pack) {
-        /* Bind the pack template param (whose name lives on the
-         * function pack param's TY_DEPENDENT tag) to the trailing
-         * arg types. Storage borrowed from the SubstMap's arena. */
-        Type *pack_ty = pack_param->param.ty;
-        if (pack_ty && pack_ty->kind == TY_DEPENDENT && pack_ty->tag) {
-            int npack = nargs - n_non_pack;
-            Type **pack_list = arena_alloc(out->arena,
-                                            sizeof(Type *) * npack);
-            for (int i = 0; i < npack; i++)
-                pack_list[i] = arg_types[n_non_pack + i];
-            subst_map_add_pack(out, pack_ty->tag, pack_list, npack);
-        }
     }
     return out->nentries > 0;
 }
@@ -2094,24 +2065,6 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
                     bound_name = param->param.default_type->tag;
                 }
                 if (bound_name) subst_map_add_tt(&map, pname, bound_name);
-                continue;
-            }
-
-            /* Variadic-template parameter pack — N4659 §17.5.3
-             * [temp.variadic]. The pack consumes the trailing run of
-             * template args; bind it as a type list so the cloner
-             * can expand pack-expansion sites in the body. */
-            if (param->param.is_pack) {
-                int npack = (nargs > i) ? (nargs - i) : 0;
-                Type **pack_list = npack > 0
-                    ? arena_alloc(arena, sizeof(Type *) * npack) : NULL;
-                int pi = 0;
-                for (int j = i; j < nargs; j++) {
-                    Type *t = type_arg_from_node(template_id->template_id.args[j]);
-                    if (t) pack_list[pi++] = t;
-                }
-                if (pi > 0)
-                    subst_map_add_pack(&map, pname, pack_list, pi);
                 continue;
             }
 

@@ -265,15 +265,6 @@ struct Node {
      * re-emitting the expression. NULL when no hoisting happened. */
     const char *codegen_temp_name;
 
-    /* Variadic-template pack expansion: set on an expression node
-     * when followed by `...` in a context that calls for pack
-     * expansion (most commonly a CALL arg list: `f(args...)`).
-     * The cloner sees this and, when the contained pack template
-     * parameter has been bound to N concrete types, replicates
-     * the node N times in the surrounding array. N4659 §17.5.3
-     * [temp.variadic.expand]. */
-    bool is_pack_expand;
-
     /* Codegen-only: when set, the temp's RHS-expression has not yet
      * been assigned. emit_expr emits '(name = orig_expr, name)' on
      * first use and clears the flag, so the assignment happens AT the
