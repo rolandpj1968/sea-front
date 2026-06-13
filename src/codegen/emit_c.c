@@ -11472,7 +11472,31 @@ static void emit_stmt(Node *n) {
                              * scope rvalues. Caller already issued
                              * emit_indent before this branch.
                              * Pattern: g++.dg/cpp0x/initlist-nrv1.C
-                             *   `B ret{ A{}, "" };`. */
+                             *   `B ret{ A{}, "" };`. Pass each arg
+                             * through emit_arg_for_param with the
+                             * corresponding member's type so ref
+                             * members (lowered to pointers in C)
+                             * get the `&(arg)` adjustment. */
+                            Node *cdef = n->var_decl.ty->class_def;
+                            Type *mtys[16] = {0};
+                            int nmtys = 0;
+                            if (cdef) {
+                                for (int mi = 0;
+                                     mi < cdef->class_def.nmembers &&
+                                     nmtys < 16;
+                                     mi++) {
+                                    Node *m = cdef->class_def.members[mi];
+                                    if (!m || m->kind != ND_VAR_DECL)
+                                        continue;
+                                    if (m->var_decl.storage_flags &
+                                        DECL_STATIC) continue;
+                                    if (!m->var_decl.ty ||
+                                        m->var_decl.ty->kind == TY_FUNC)
+                                        continue;
+                                    if (!m->var_decl.name) continue;
+                                    mtys[nmtys++] = m->var_decl.ty;
+                                }
+                            }
                             fprintf(stdout, "%.*s = (",
                                     n->var_decl.name->len,
                                     n->var_decl.name->loc);
@@ -11481,7 +11505,7 @@ static void emit_stmt(Node *n) {
                             for (int i = 0; i < n->var_decl.ctor_nargs; i++) {
                                 if (i > 0) fputs(", ", stdout);
                                 emit_arg_for_param(n->var_decl.ctor_args[i],
-                                                    NULL);
+                                                    i < nmtys ? mtys[i] : NULL);
                             }
                             fputs("};\n", stdout);
                             return;
