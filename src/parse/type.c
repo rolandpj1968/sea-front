@@ -634,6 +634,38 @@ DeclSpec parse_type_specifiers(Parser *p) {
                 parser_expect(p, TK_RBRACE);
                 region_pop(p);
 
+                /* Flatten members: comma-separated declarators
+                 * `T a, b;` parse into a single ND_BLOCK (is_flat=true)
+                 * wrapping per-name ND_VAR_DECLs. Many class-body
+                 * consumers (synth-ctor body emit, has_default_ctor
+                 * propagation, aggregate-init enumeration) iterate
+                 * members and look at one node at a time — they need
+                 * to see each named var-decl directly, not the wrapper.
+                 * Flatten here so the rest of the pipeline doesn't
+                 * need to unwrap. */
+                int n_flat = 0;
+                for (int mi = 0; mi < members.len; mi++) {
+                    Node *mm = ((Node **)members.data)[mi];
+                    if (!mm) continue;
+                    if (mm->kind == ND_BLOCK && mm->block.is_flat)
+                        n_flat += mm->block.nstmts;
+                    else
+                        n_flat += 1;
+                }
+                Node **flat_members = n_flat > 0
+                    ? arena_alloc(p->arena, n_flat * sizeof(Node *))
+                    : NULL;
+                int n_flat_w = 0;
+                for (int mi = 0; mi < members.len; mi++) {
+                    Node *mm = ((Node **)members.data)[mi];
+                    if (!mm) continue;
+                    if (mm->kind == ND_BLOCK && mm->block.is_flat) {
+                        for (int ii = 0; ii < mm->block.nstmts; ii++)
+                            flat_members[n_flat_w++] = mm->block.stmts[ii];
+                    } else {
+                        flat_members[n_flat_w++] = mm;
+                    }
+                }
                 /* Record class definition on the result. Build it
                  * BEFORE replaying deferred bodies so the class's Type
                  * has its class_def back-pointer wired — overload
@@ -643,7 +675,7 @@ DeclSpec parse_type_specifiers(Parser *p) {
                  * candidate ctors. N4659 §6.4.7/1 [class.mem]/6 says
                  * complete-class context applies to deferred bodies. */
                 result.class_def = new_class_def_node(p, ty->tag,
-                    (Node **)members.data, members.len,
+                    flat_members, n_flat_w,
                     ty->tag ? ty->tag : parser_peek(p));
                 result.class_def->class_def.ty = ty;
                 ty->class_def = result.class_def;
@@ -694,8 +726,11 @@ DeclSpec parse_type_specifiers(Parser *p) {
                  * has already been fully parsed and has_dtor set. */
                 bool any_user_ctor = false;
                 bool any_member_needs_default = false;
-                for (int mi = 0; mi < members.len; mi++) {
-                    Node *m = ((Node **)members.data)[mi];
+                /* Iterate the flattened members built above, so
+                 * comma-separated declarators count as individual
+                 * per-name var-decls (not the wrapping ND_BLOCK). */
+                for (int mi = 0; mi < n_flat_w; mi++) {
+                    Node *m = flat_members[mi];
                     if (!m) continue;
                     /* N4659 §13.3 [class.virtual]: any virtual method
                      * makes the class polymorphic and forces a vptr. */
