@@ -16828,6 +16828,18 @@ static bool tu_defines_op_with_kind(Node *tu, OperatorKind want_kind,
  * useful for the multi-arg placement variants where param-1
  * type discrimination (void* vs const nothrow_t&) doesn't
  * affect whether we should emit the prelude fallback. */
+/* True if the token came from a system header (a path containing
+ * '/usr/include' or '/include/c++/'). Used to filter operator
+ * definitions found in libstdc++ headers from genuine user-source
+ * overrides — both have bodies, but only the latter should suppress
+ * sea-front's fallback stub. */
+static bool token_is_system_header(Token *t) {
+    if (!t || !t->file || !t->file->name) return false;
+    const char *p = t->file->name;
+    return strstr(p, "/usr/include") != NULL ||
+           strstr(p, "/include/c++/") != NULL;
+}
+
 static bool node_defines_op_any_p0(Node *n, OperatorKind want_kind,
                                     int want_nparams) {
     if (!n) return false;
@@ -16847,11 +16859,47 @@ static bool node_defines_op_any_p0(Node *n, OperatorKind want_kind,
     return false;
 }
 
+/* Same as node_defines_op_any_p0 but only matches definitions that
+ * came from user source (not from a libstdc++ system header). */
+static bool node_defines_op_user_p0(Node *n, OperatorKind want_kind,
+                                     int want_nparams) {
+    if (!n) return false;
+    if (n->kind == ND_FUNC_DEF) {
+        Token *nm = n->func.name;
+        if (nm && nm->len == 8 && memcmp(nm->loc, "operator", 8) == 0 &&
+            operator_kind_from_method_name(nm) == want_kind &&
+            n->func.nparams == want_nparams &&
+            n->func.body &&
+            !token_is_system_header(nm))
+            return true;
+    }
+    if (n->kind == ND_BLOCK) {
+        for (int i = 0; i < n->block.nstmts; i++)
+            if (node_defines_op_user_p0(n->block.stmts[i], want_kind, want_nparams))
+                return true;
+    }
+    return false;
+}
+
 static bool scan_op_def_any_arity(Node *tu, OperatorKind want_kind,
                                    int want_nparams) {
     if (!tu || tu->kind != ND_TRANSLATION_UNIT) return false;
     for (int i = 0; i < tu->tu.ndecls; i++)
         if (node_defines_op_any_p0(tu->tu.decls[i], want_kind, want_nparams))
+            return true;
+    return false;
+}
+
+/* User-source-only variant of scan_op_def_any_arity: matches
+ * operator definitions whose name token comes from a non-system
+ * header. Skips libstdc++ inline definitions of the same operator,
+ * which Sea-front emits as decl-only (no body) so a fallback stub
+ * is still needed to satisfy the link. */
+static bool scan_op_def_user(Node *tu, OperatorKind want_kind,
+                              int want_nparams) {
+    if (!tu || tu->kind != ND_TRANSLATION_UNIT) return false;
+    for (int i = 0; i < tu->tu.ndecls; i++)
+        if (node_defines_op_user_p0(tu->tu.decls[i], want_kind, want_nparams))
             return true;
     return false;
 }
@@ -16924,19 +16972,27 @@ static void emit_prelude(void) {
      * means a user `operator delete(void*, const std::nothrow_t&)`
      * emits as `(void*, void*)` and would collide with our
      * placement-delete fallback otherwise. */
-    /* Always emit fallback for the placement-new[] / -delete[]
-     * variants from <new>: sea-front's emit drops the inline
-     * body for these (probably the overload-dedup pass collapsing
-     * `operator new[](size_t, void*)` and
-     * `operator new(size_t, void*)` to one entry). User-defined
-     * overrides for the 2-arg array form are rare; if they exist
-     * the duplicate-static-inline conflict is preferable to
-     * silently undefined symbols. The 1-arg and scalar 2-arg
-     * variants are still detection-gated. */
+    /* Placement-operator fallback stubs — asymmetric detection per
+     * variant because overload-dedup in emit treats scalar vs array
+     * differently:
+     *
+     *   - Scalar variants (_ZnwmPv, _ZdlPvS_): when <new> is
+     *     included, sea-front emits libstdc++'s inline WITH body.
+     *     Skip the stub for ANY known definition (user or system)
+     *     to avoid redefinition. Pattern: g++.dg/expr/anew3.C.
+     *
+     *   - Array variants (_ZnamPv, _ZdaPvS_): overload-dedup
+     *     collapses array to scalar entry, so the array inline
+     *     emits as decl-only. Skip the stub only for USER
+     *     definitions; libstdc++'s decl-only doesn't satisfy
+     *     the link so the stub must remain when only the system
+     *     header provides it. Pattern: g++.dg/init/strlen.C,
+     *     g++.dg/cpp0x/initlist53.C define array placement-new
+     *     in user source and need the stub suppressed. */
     bool u_pnw = scan_op_def_any_arity(g_tu, OP_NEW, 2);
-    bool u_pna = false;
+    bool u_pna = scan_op_def_user(g_tu, OP_NEW_ARRAY, 2);
     bool u_pdl = scan_op_def_any_arity(g_tu, OP_DELETE, 2);
-    bool u_pda = false;
+    bool u_pda = scan_op_def_user(g_tu, OP_DELETE_ARRAY, 2);
     if (!u_pnw)
         fputs("static inline void *_ZnwmPv(unsigned long __sf_unused_0, "
               "void *__p) { (void)__sf_unused_0; return __p; }\n", stdout);
