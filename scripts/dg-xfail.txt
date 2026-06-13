@@ -30,6 +30,25 @@ g++.dg/abi/layout4.C
 g++.dg/abi/vbase11.C
 g++.dg/abi/vbase13.C
 g++.dg/cpp0x/regress/abi-empty7.C
+# Newer empty-base-class / no_unique_address Itanium ABI tests — same
+# "specific gcc-on-x86_64-LP64 layout" basis as the entries above.
+g++.dg/abi/bitfield6.C
+g++.dg/abi/empty12.C
+g++.dg/abi/empty13.C
+g++.dg/abi/empty14.C
+g++.dg/abi/empty15.C
+g++.dg/abi/empty16.C
+g++.dg/abi/empty17.C
+g++.dg/abi/empty18.C
+g++.dg/abi/empty19.C
+g++.dg/abi/empty22.C
+g++.dg/abi/empty25.C
+g++.dg/abi/empty26.C
+g++.dg/abi/no_unique_address1.C
+g++.dg/abi/pr39188-1a.C
+g++.dg/abi/pr39188-2a.C
+g++.dg/abi/pr60336-4.C
+g++.dg/abi/structret1.C
 
 # --- Out-of-scope C++11 features ----------------------------------------
 # These need substantial C++11 work that sea-front hasn't built out yet.
