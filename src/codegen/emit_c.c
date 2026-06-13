@@ -16800,19 +16800,17 @@ static void emit_prelude(void) {
      * means a user `operator delete(void*, const std::nothrow_t&)`
      * emits as `(void*, void*)` and would collide with our
      * placement-delete fallback otherwise. */
-    /* Always emit fallback for the placement-new[] / -delete[]
-     * variants from <new>: sea-front's emit drops the inline
-     * body for these (probably the overload-dedup pass collapsing
-     * `operator new[](size_t, void*)` and
-     * `operator new(size_t, void*)` to one entry). User-defined
-     * overrides for the 2-arg array form are rare; if they exist
-     * the duplicate-static-inline conflict is preferable to
-     * silently undefined symbols. The 1-arg and scalar 2-arg
-     * variants are still detection-gated. */
+    /* Detect user-defined placement-new / -delete and skip the
+     * fallback stub to avoid `redefinition of _ZnamPv` etc.
+     * tu_defines_op_with_kind distinguishes OP_NEW from
+     * OP_NEW_ARRAY (and OP_DELETE from OP_DELETE_ARRAY), so the
+     * 2-arg array forms are individually detectable. Pattern:
+     * g++.dg/cpp0x/initlist53.C
+     *   `void *operator new[](__SIZE_TYPE__, void *p)`. */
     bool u_pnw = scan_op_def_any_arity(g_tu, OP_NEW, 2);
-    bool u_pna = false;
+    bool u_pna = scan_op_def_any_arity(g_tu, OP_NEW_ARRAY, 2);
     bool u_pdl = scan_op_def_any_arity(g_tu, OP_DELETE, 2);
-    bool u_pda = false;
+    bool u_pda = scan_op_def_any_arity(g_tu, OP_DELETE_ARRAY, 2);
     if (!u_pnw)
         fputs("static inline void *_ZnwmPv(unsigned long __sf_unused_0, "
               "void *__p) { (void)__sf_unused_0; return __p; }\n", stdout);
