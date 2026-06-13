@@ -224,9 +224,12 @@ Node *parse_declarator(Parser *p, Type *base_ty) {
     }
 
     /* Pack expansion '...' between ptr-operators and declarator-id —
-     * 'T&&... args'. Consume so the rest of parse_declarator sees the
-     * name as the next token. */
-    parser_consume(p, TK_ELLIPSIS);
+     * 'T&&... args' / 'Ts... args'. N4659 §17.5.3 [temp.variadic].
+     * Consume so the rest of parse_declarator sees the name as the
+     * next token; signal via p->pending_param_is_pack so the
+     * function-param-parse callers can stamp the resulting ND_PARAM. */
+    if (parser_consume(p, TK_ELLIPSIS))
+        p->pending_param_is_pack = true;
 
     /* Tracks whether the declarator-id passed through '::' (qualified
      * name like Foo::bar or Foo<T>::operator=). Used by the
@@ -780,12 +783,17 @@ parse_suffixes:
                         DeclarativeRegion *saved_qds = p->qualified_decl_scope;
                         bool saved_pic = p->pending_is_constructor;
                         bool saved_pid = p->pending_is_destructor;
+                        p->pending_param_is_pack = false;
                         Node *param_decl = parse_declarator(p, param_base);
+                        bool was_pack = p->pending_param_is_pack;
+                        p->pending_param_is_pack = false;
                         p->qualified_decl_scope = saved_qds;
                         p->pending_is_constructor = saved_pic;
                         p->pending_is_destructor = saved_pid;
-                        if (param_decl)
+                        if (param_decl) {
                             param_decl->kind = ND_PARAM;
+                            param_decl->param.is_pack = was_pack;
+                        }
                         /* C++11 attribute-specifier-seq AFTER the
                          * declarator — libstdc++ uses
                          * 'void f(int x [[gnu::unused]])'. */
@@ -955,11 +963,17 @@ parse_suffixes:
                     DeclarativeRegion *saved_qds = p->qualified_decl_scope;
                     bool saved_pic = p->pending_is_constructor;
                     bool saved_pid = p->pending_is_destructor;
+                    p->pending_param_is_pack = false;
                     Node *param_decl = parse_declarator(p, param_base);
+                    bool was_pack = p->pending_param_is_pack;
+                    p->pending_param_is_pack = false;
                     p->qualified_decl_scope = saved_qds;
                     p->pending_is_constructor = saved_pic;
                     p->pending_is_destructor = saved_pid;
-                    if (param_decl) param_decl->kind = ND_PARAM;
+                    if (param_decl) {
+                        param_decl->kind = ND_PARAM;
+                        param_decl->param.is_pack = was_pack;
+                    }
                     /* Trailing attribute-specifier-seq after the
                      * declarator (libstdc++ uses [[gnu::unused]]). */
                     parser_skip_cxx_attributes(p);
@@ -2790,9 +2804,12 @@ static Node *parse_template_parameter(Parser *p) {
 
             parser_advance(p);  /* consume class/typename */
 
-            /* Optional pack expansion ... */
+            /* Optional pack expansion ... — N4659 §17.5.3 [temp.variadic].
+             * `template<typename... Ts>` declares Ts as a type-parameter
+             * pack that binds to an arbitrary-length type list at
+             * instantiation. The flag is set on the resulting ND_PARAM
+             * and consumed by later phases (sema / instantiate / emit). */
             bool is_pack = parser_consume(p, TK_ELLIPSIS);
-            (void)is_pack;  /* used in later stages */
 
             /* Optional identifier */
             Token *name = NULL;
@@ -2819,6 +2836,7 @@ static Node *parse_template_parameter(Parser *p) {
 
             Node *pnode = new_param_node(p, /*ty=*/NULL, name, tok);
             pnode->param.default_type = default_ty;
+            pnode->param.is_pack      = is_pack;
             return pnode;
         }
         /* else: fall through to non-type parameter parsing */

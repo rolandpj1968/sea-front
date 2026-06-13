@@ -503,6 +503,13 @@ struct Node {
             Node *expr;     /* non-NULL when sizeof(expr) */
             Type *ty;       /* non-NULL when sizeof(type) */
             bool is_type;
+            /* C++11 `sizeof...(pack)` — N4659 §8.3.3/5. pack_name is
+             * the identifier token between `(` and `)`. is_pack
+             * marks this shape; the instantiation pass replaces the
+             * sizeof-pack with the integer literal `N` (number of
+             * types the pack binds to). */
+            bool   is_pack;
+            Token *pack_name;
         } sizeof_;
 
         /* ND_ALIGNOF — N4659 §8.3.6 [expr.alignof]
@@ -969,6 +976,18 @@ struct Node {
              * pass fewer args than the function has params.
              * N4659 §11.3.6 [dcl.fct.default]. */
             Node *default_value;
+            /* True for a variadic-template parameter pack.
+             * Template form: `template<typename... Ts>` — Ts is a
+             * pack of types; the instantiation pass binds the pack
+             * to a list of concrete types from a call site's
+             * trailing args.
+             * Function-param form: `void f(Ts... args)` — args is a
+             * function-parameter pack that expands to one C param
+             * per type the template pack was bound to.
+             * N4659 §17.5.3 [temp.variadic]. Phase 1 of variadic-
+             * template support sets this; later phases drive the
+             * expansion in instantiate / mangle / emit. */
+            bool  is_pack;
         } param;
 
         /* ND_TEMPLATE_DECL — N4659 §17.1 [temp] (Annex A.12)
@@ -1669,6 +1688,13 @@ struct Parser {
      * definition. Controls cross-TU global ctor execution order
      * (lower = earlier). Pattern: g++.dg/special/conpr-{2,3,4}.C. */
     int  pending_init_priority;
+    /* Side channel from parse_declarator: set true when the declarator
+     * consumed a `...` between ptr-operators and the declarator-id
+     * (function-parameter pack `Ts... args`). Param-parse callers
+     * read this immediately after parse_declarator returns and stamp
+     * is_pack on the resulting ND_PARAM. Reset before each call.
+     * N4659 §17.5.3 [temp.variadic]. */
+    bool pending_param_is_pack;
     /* Side channel from consume_trailing_qualifiers → parse_declaration:
      * set true when the declarator carried a no-throw spec — either
      * `noexcept` / `noexcept(...)` or `throw()` (empty list). Codegen

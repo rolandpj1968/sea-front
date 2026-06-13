@@ -245,12 +245,18 @@ static void dump(Node *node, int depth) {
         break;
 
     case ND_SIZEOF:
-        printf("(sizeof ");
-        if (node->sizeof_.is_type)
-            dump_type(node->sizeof_.ty);
-        else
-            dump(node->sizeof_.expr, depth + 1);
-        printf(")");
+        if (node->sizeof_.is_pack) {
+            printf("(sizeof-pack \"%.*s\")",
+                   node->sizeof_.pack_name ? node->sizeof_.pack_name->len : 1,
+                   node->sizeof_.pack_name ? node->sizeof_.pack_name->loc : "?");
+        } else {
+            printf("(sizeof ");
+            if (node->sizeof_.is_type)
+                dump_type(node->sizeof_.ty);
+            else
+                dump(node->sizeof_.expr, depth + 1);
+            printf(")");
+        }
         break;
 
     case ND_ALIGNOF:
@@ -480,6 +486,8 @@ static void dump(Node *node, int depth) {
     case ND_PARAM:
         printf("(param ");
         dump_type(node->param.ty);
+        if (node->param.is_pack)
+            printf(" pack");
         if (node->param.name)
             printf(" \"%.*s\"", node->param.name->len, node->param.name->loc);
         printf(")");

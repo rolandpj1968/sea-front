@@ -2134,12 +2134,18 @@ static Node *primary_expr(Parser *p) {
         Node *node = new_node(p, ND_SIZEOF, tok);
 
         /* C++11 sizeof... pack — N4659 §8.3.3 [expr.sizeof]/5
-         *   sizeof ... ( identifier ) */
+         *   sizeof ... ( identifier )
+         * Captures the pack identifier so the instantiation pass
+         * can replace this whole expression with the integer
+         * literal N (number of types the pack binds to). */
         if (parser_consume(p, TK_ELLIPSIS)) {
             parser_expect(p, TK_LPAREN);
-            if (parser_at(p, TK_IDENT)) parser_advance(p);
+            Token *pack_name = NULL;
+            if (parser_at(p, TK_IDENT)) pack_name = parser_advance(p);
             parser_expect(p, TK_RPAREN);
             node->sizeof_.is_type = false;
+            node->sizeof_.is_pack = true;
+            node->sizeof_.pack_name = pack_name;
             return node;
         }
 
