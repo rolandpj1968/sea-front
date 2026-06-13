@@ -11616,7 +11616,14 @@ static void emit_stmt(Node *n) {
          * (the C compiler folds the indices and there's no loop
          * setup cost); for unknown-sized arrays (rare at block
          * scope) emit a for-loop using sizeof. */
-        else if (!n->var_decl.init && !n->var_decl.has_ctor_init &&
+        else if (!n->var_decl.init &&
+                 /* Bare 'A a[N];' OR empty-brace 'A a[N]{};' both
+                  * need default-construct of each element. Direct-
+                  * init with elements `A a[N]{x, y}` is a different
+                  * shape (per-element init) and falls through to
+                  * other paths. */
+                 (!n->var_decl.has_ctor_init ||
+                  n->var_decl.ctor_nargs == 0) &&
                  n->var_decl.ty && n->var_decl.ty->kind == TY_ARRAY &&
                  n->var_decl.ty->base &&
                  n->var_decl.ty->base->kind == TY_STRUCT &&
