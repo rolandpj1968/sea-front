@@ -16207,6 +16207,60 @@ methods_phase:;
         fputs("}\n", stdout);
         g_current_class_def = saved_cdef_synth;
     }
+
+    /* Defaulted copy ctor: `T(const T&) = default;`. The body is
+     * bitwise memberwise copy per N4659 §15.8.1 [class.copy.ctor]
+     * for trivially-copyable members. Emit `*this = *src;` which
+     * the C compiler lowers to struct assignment (a memberwise
+     * bitwise copy). Non-trivial members would need per-member
+     * copy ctor calls; if a class needs that the path lives in
+     * emit_inline_copy_chain (used by the var-decl copy path) —
+     * the synth here covers the common defaulted shape.
+     *
+     * Pattern: g++.dg/cpp2a/aggr2.C `A { A(const A&) = default; ...
+     * };` — file-scope `A a {B{}};` triggers the copy ctor call
+     * via conversion-operator B → A, and the linker needs the
+     * symbol body. */
+    if (class_type && class_type->tag) {
+        for (int i = 0; i < n->class_def.nmembers; i++) {
+            Node *m = n->class_def.members[i];
+            if (!m || m->kind != ND_VAR_DECL || !m->var_decl.ty) continue;
+            if (m->var_decl.ty->kind != TY_FUNC) continue;
+            if (!m->var_decl.is_constructor) continue;
+            if (m->var_decl.ty->nparams != 1) continue;
+            Node *init = m->var_decl.init;
+            bool is_defaulted = init && init->kind == ND_NULLPTR &&
+                                 init->tok && init->tok->kind == TK_KW_DEFAULT;
+            if (!is_defaulted) continue;
+            /* Param must be `const T&` (TY_REF to same class). */
+            Type *p0 = m->var_decl.ty->params[0];
+            if (!p0 || p0->kind != TY_REF || !p0->base) continue;
+            Type *base = p0->base;
+            if (base->kind != TY_STRUCT) continue;
+            if (!base->tag || !class_type->tag) continue;
+            if (base->tag->len != class_type->tag->len ||
+                memcmp(base->tag->loc, class_type->tag->loc,
+                       class_type->tag->len) != 0) continue;
+            /* Emit forward decl + body for the defaulted copy ctor. */
+            Type *pty1[1] = { p0 };
+            const char *kw_open =
+                class_type->kind == TY_UNION ? "(union " : "(struct ";
+            /* Emit non-static so the existing forward decl from
+             * the user's source matches. Defaulted copy ctors
+             * cross TU boundaries like any user member function. */
+            fputs("void ", stdout);
+            mangle_class_ctor(class_type, pty1, 1);
+            fputs(kw_open, stdout);
+            mangle_class_tag(class_type);
+            fputs(" *this, const ", stdout);
+            fputs(kw_open + 1, stdout);  /* skip the '(' */
+            mangle_class_tag(class_type);
+            fputs(" *__sf_src) {\n", stdout);
+            fputs("    *this = *__sf_src;\n", stdout);
+            fputs("}\n", stdout);
+            break;  /* one defaulted copy ctor per class */
+        }
+    }
 }
 
 static void emit_top_level(Node *n) {
