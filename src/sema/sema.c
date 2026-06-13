@@ -1903,13 +1903,56 @@ static Node *build_template_id_from_deduced(Sema *s, Token *tname,
     if (!tmpl || tmpl->kind != ND_TEMPLATE_DECL) return NULL;
     int ntp = tmpl->template_decl.nparams;
     if (ntp <= 0) return NULL;
-    Node **tid_args = arena_alloc(s->arena, ntp * sizeof(Node *));
+    /* Pre-compute total args after pack expansion: each non-pack
+     * param contributes 1 slot; the (single) pack param contributes
+     * N slots from its deduced binding. N4659 §17.5.3 [temp.variadic]. */
+    int total = 0;
     for (int k = 0; k < ntp; k++) {
         Node *tp = tmpl->template_decl.params[k];
         Token *pname = tp ? tp->param.name : NULL;
+        bool counted = false;
+        if (tp && tp->param.is_pack && pname) {
+            for (int e = 0; e < deduced->nentries; e++) {
+                if (!deduced->entries[e].is_pack) continue;
+                Token *en = deduced->entries[e].param_name;
+                if (en && tokens_equal(en, pname)) {
+                    total += deduced->entries[e].pack_ntypes;
+                    counted = true;
+                    break;
+                }
+            }
+        }
+        if (!counted) total++;
+    }
+    Node **tid_args = arena_alloc(s->arena, total * sizeof(Node *));
+    int ai = 0;
+    for (int k = 0; k < ntp; k++) {
+        Node *tp = tmpl->template_decl.params[k];
+        Token *pname = tp ? tp->param.name : NULL;
+        if (tp && tp->param.is_pack && pname) {
+            bool expanded = false;
+            for (int e = 0; e < deduced->nentries; e++) {
+                if (!deduced->entries[e].is_pack) continue;
+                Token *en = deduced->entries[e].param_name;
+                if (en && tokens_equal(en, pname)) {
+                    for (int j = 0; j < deduced->entries[e].pack_ntypes; j++) {
+                        Node *arg = arena_alloc(s->arena, sizeof(Node));
+                        memset(arg, 0, sizeof(Node));
+                        arg->kind = ND_VAR_DECL;
+                        arg->var_decl.ty = deduced->entries[e].pack_types[j];
+                        tid_args[ai++] = arg;
+                    }
+                    expanded = true;
+                    break;
+                }
+            }
+            if (!expanded) return NULL;
+            continue;
+        }
         Type *ct = NULL;
         if (pname) {
             for (int e = 0; e < deduced->nentries; e++) {
+                if (deduced->entries[e].is_pack) continue;
                 Token *en = deduced->entries[e].param_name;
                 if (en && tokens_equal(en, pname)) {
                     ct = deduced->entries[e].concrete_type;
@@ -1922,7 +1965,7 @@ static Node *build_template_id_from_deduced(Sema *s, Token *tname,
         memset(arg, 0, sizeof(Node));
         arg->kind = ND_VAR_DECL;
         arg->var_decl.ty = ct;
-        tid_args[k] = arg;
+        tid_args[ai++] = arg;
     }
     Node *tid = arena_alloc(s->arena, sizeof(Node));
     memset(tid, 0, sizeof(Node));
@@ -1930,7 +1973,7 @@ static Node *build_template_id_from_deduced(Sema *s, Token *tname,
     tid->tok = call_tok;
     tid->template_id.name = tname;
     tid->template_id.args = tid_args;
-    tid->template_id.nargs = ntp;
+    tid->template_id.nargs = total;
     /* Carry the specific template the overload resolver picked, so
      * the instantiation pass uses it instead of doing a name-only
      * registry lookup that may return a different overload (real-

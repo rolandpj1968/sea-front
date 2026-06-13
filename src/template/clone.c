@@ -30,6 +30,7 @@ SubstMap subst_map_new_with_registry(Arena *arena, int capacity,
     m.entries = arena_alloc(arena, capacity * sizeof(SubstEntry));
     m.nentries = 0;
     m.capacity = capacity;
+    m.arena = arena;
     m.registry = reg;
     return m;
 }
@@ -39,7 +40,33 @@ void subst_map_add(SubstMap *m, Token *param_name, Type *concrete_type) {
     m->entries[m->nentries].param_name = param_name;
     m->entries[m->nentries].concrete_type = concrete_type;
     m->entries[m->nentries].tt_bound_name = NULL;
+    m->entries[m->nentries].pack_types = NULL;
+    m->entries[m->nentries].pack_ntypes = 0;
+    m->entries[m->nentries].is_pack = false;
     m->nentries++;
+}
+
+void subst_map_add_pack(SubstMap *m, Token *param_name,
+                        Type **pack_types, int pack_ntypes) {
+    if (m->nentries >= m->capacity) return;
+    m->entries[m->nentries].param_name = param_name;
+    m->entries[m->nentries].concrete_type = NULL;
+    m->entries[m->nentries].tt_bound_name = NULL;
+    m->entries[m->nentries].pack_types = pack_types;
+    m->entries[m->nentries].pack_ntypes = pack_ntypes;
+    m->entries[m->nentries].is_pack = true;
+    m->nentries++;
+}
+
+SubstEntry *subst_map_lookup_pack(SubstMap *m, Token *name) {
+    if (!name) return NULL;
+    for (int i = 0; i < m->nentries; i++) {
+        if (!m->entries[i].is_pack) continue;
+        Token *pn = m->entries[i].param_name;
+        if (pn && tokens_equal(pn, name))
+            return &m->entries[i];
+    }
+    return NULL;
 }
 
 void subst_map_bind_args(SubstMap *m, Node **params, int nparams,
@@ -59,6 +86,9 @@ void subst_map_add_tt(SubstMap *m, Token *param_name, Token *bound_name) {
     m->entries[m->nentries].param_name = param_name;
     m->entries[m->nentries].concrete_type = NULL;
     m->entries[m->nentries].tt_bound_name = bound_name;
+    m->entries[m->nentries].pack_types = NULL;
+    m->entries[m->nentries].pack_ntypes = 0;
+    m->entries[m->nentries].is_pack = false;
     m->nentries++;
 }
 
@@ -375,6 +405,123 @@ static Node **clone_node_array(Node **arr, int n, SubstMap *map, Arena *arena) {
     return out;
 }
 
+/* Single-pack lookup: if the SubstMap has exactly one pack
+ * binding, return it; else NULL. Used by the cloner's pack
+ * expansion when an expression marked `is_pack_expand` doesn't
+ * directly carry its pack name (e.g. bare `args...` in a call
+ * arg list — sea-front doesn't track the pack name on the
+ * marker). Works for the common single-pack template (`template
+ * <class... Ts>`); multi-pack templates need a more precise
+ * lookup but they're vanishingly rare. */
+static SubstEntry *subst_map_single_pack(SubstMap *map) {
+    SubstEntry *only = NULL;
+    for (int i = 0; i < map->nentries; i++) {
+        if (!map->entries[i].is_pack) continue;
+        if (only) return NULL;  /* multiple packs — caller must disambiguate */
+        only = &map->entries[i];
+    }
+    return only;
+}
+
+/* Synth a Token for `<base>_<idx>` (e.g. `args_0`, `args_1`).
+ * The buffer is one-shot malloc'd so the token outlives the
+ * clone phase. */
+static Token *synth_pack_name(Token *base, int idx, Arena *arena) {
+    char *buf = arena_alloc(arena, base->len + 16);
+    int len = snprintf(buf, base->len + 16, "%.*s_%d",
+                       base->len, base->loc, idx);
+    Token *t = arena_alloc(arena, sizeof(Token));
+    memset(t, 0, sizeof(*t));
+    t->kind = TK_IDENT;
+    t->loc  = buf;
+    t->len  = len;
+    t->line = base->line;
+    t->col  = base->col;
+    t->file = base->file;
+    return t;
+}
+
+/* Pack-aware array clone: handles pack-expansion sites by
+ * replicating an input node N times.
+ *
+ *   - ND_PARAM with `param.is_pack` AND `param.ty` is TY_DEPENDENT
+ *     bound to a pack: emit N params, each with the i-th
+ *     concrete type and name `<orig>_<i>`.
+ *   - Any expression node with `is_pack_expand`: emit N clones,
+ *     replacing the pack-named ident with `<orig>_<i>`.
+ *   - Other nodes: clone once.
+ *
+ * Out-count is written through `*out_n`. */
+static Node **clone_node_array_pack(Node **arr, int n, SubstMap *map,
+                                     Arena *arena, int *out_n) {
+    assert(n >= 0);
+    if (n == 0) { *out_n = 0; return NULL; }
+    assert(arr != NULL);
+    /* First pass: compute output count. */
+    int total = 0;
+    for (int i = 0; i < n; i++) {
+        Node *src = arr[i];
+        if (!src) { total++; continue; }
+        bool is_pack_param = (src->kind == ND_PARAM && src->param.is_pack);
+        bool is_pack_expr  = src->is_pack_expand;
+        if (is_pack_param || is_pack_expr) {
+            SubstEntry *pe = NULL;
+            if (is_pack_param && src->param.ty &&
+                src->param.ty->kind == TY_DEPENDENT)
+                pe = subst_map_lookup_pack(map, src->param.ty->tag);
+            if (!pe) pe = subst_map_single_pack(map);
+            if (pe) { total += pe->pack_ntypes; continue; }
+        }
+        total++;
+    }
+    Node **out = arena_alloc(arena, total * sizeof(Node *));
+    int oi = 0;
+    for (int i = 0; i < n; i++) {
+        Node *src = arr[i];
+        if (!src) { out[oi++] = NULL; continue; }
+        bool is_pack_param = (src->kind == ND_PARAM && src->param.is_pack);
+        bool is_pack_expr  = src->is_pack_expand;
+        if (is_pack_param || is_pack_expr) {
+            SubstEntry *pe = NULL;
+            if (is_pack_param && src->param.ty &&
+                src->param.ty->kind == TY_DEPENDENT)
+                pe = subst_map_lookup_pack(map, src->param.ty->tag);
+            if (!pe) pe = subst_map_single_pack(map);
+            if (pe) {
+                for (int j = 0; j < pe->pack_ntypes; j++) {
+                    Node *c = arena_alloc(arena, sizeof(Node));
+                    memcpy(c, src, sizeof(Node));
+                    c->is_pack_expand = false;
+                    if (is_pack_param) {
+                        c->kind = ND_PARAM;
+                        c->param.is_pack = false;
+                        c->param.ty = pe->pack_types[j];
+                        if (src->param.name)
+                            c->param.name = synth_pack_name(src->param.name,
+                                                             j, arena);
+                    } else {
+                        /* Clone the expression first, then if it's an
+                         * ND_IDENT naming the pack, rewrite the name
+                         * to <orig>_<i>. Other shapes (e.g. expr that
+                         * contains the pack ident) are not yet handled
+                         * — they'd need pack-aware deep rewrite. */
+                        c = clone_node(src, map, arena);
+                        if (c && c->kind == ND_IDENT && c->ident.name)
+                            c->ident.name = synth_pack_name(c->ident.name,
+                                                             j, arena);
+                        c->is_pack_expand = false;
+                    }
+                    out[oi++] = c;
+                }
+                continue;
+            }
+        }
+        out[oi++] = clone_node(src, map, arena);
+    }
+    *out_n = total;
+    return out;
+}
+
 static MemInit *clone_mem_inits(MemInit *inits, int n,
                                  SubstMap *map, Arena *arena) {
     assert(n >= 0);
@@ -630,12 +777,15 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
         c->ternary.else_ = clone_node(n->ternary.else_, map, arena);
         break;
 
-    case ND_CALL:
+    case ND_CALL: {
         c->call = n->call;
         c->call.callee = clone_node(n->call.callee, map, arena);
-        c->call.args   = clone_node_array(n->call.args, n->call.nargs,
-                                           map, arena);
+        int new_nargs = 0;
+        c->call.args = clone_node_array_pack(n->call.args, n->call.nargs,
+                                              map, arena, &new_nargs);
+        c->call.nargs = new_nargs;
         break;
+    }
 
     case ND_MEMBER:
         c->member = n->member;
@@ -665,6 +815,23 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
         c->sizeof_ = n->sizeof_;
         c->sizeof_.expr = clone_node(n->sizeof_.expr, map, arena);
         c->sizeof_.ty   = subst_type(n->sizeof_.ty, map, arena);
+        /* `sizeof...(pack)` collapses to the integer literal N
+         * (count of types the pack binds to). N4659 §8.3.3/5
+         * [expr.sizeof]. */
+        if (n->sizeof_.is_pack && n->sizeof_.pack_name) {
+            SubstEntry *pe = subst_map_lookup_pack(map, n->sizeof_.pack_name);
+            if (!pe) pe = subst_map_single_pack(map);
+            if (pe) {
+                c->kind = ND_NUM;
+                c->num.lo = (uint64_t)pe->pack_ntypes;
+                c->num.hi = 0;
+                c->num.is_signed = true;
+                /* Drop the source `sizeof` token so ND_NUM's emit
+                 * uses the synth integer format (otherwise it
+                 * writes the verbatim source text). */
+                c->tok = NULL;
+            }
+        }
         break;
 
     case ND_ALIGNOF:
@@ -775,11 +942,13 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
         break;
 
     case ND_FUNC_DEF:
-    case ND_FUNC_DECL:
+    case ND_FUNC_DECL: {
         c->func = n->func;
         c->func.ret_ty = subst_type(n->func.ret_ty, map, arena);
-        c->func.params = clone_node_array(n->func.params, n->func.nparams,
-                                           map, arena);
+        int new_nparams = 0;
+        c->func.params = clone_node_array_pack(n->func.params, n->func.nparams,
+                                                map, arena, &new_nparams);
+        c->func.nparams = new_nparams;
         c->func.body   = clone_node(n->func.body, map, arena);
         c->func.mem_inits = clone_mem_inits(n->func.mem_inits,
                                              n->func.n_mem_inits,
@@ -799,6 +968,7 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
          * every gen-tool TU that #includes vec.h). */
         c->func.storage_flags |= DECL_INLINE;
         break;
+    }
 
     case ND_PARAM:
         c->param = n->param;

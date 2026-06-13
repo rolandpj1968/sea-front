@@ -25,6 +25,16 @@ typedef struct {
     Token *param_name;
     Type  *concrete_type;
     Token *tt_bound_name;   /* non-NULL iff this is a TT-param binding */
+    /* Pack binding (N4659 §17.5.3 [temp.variadic]): when the source
+     * template parameter is a pack (`template<typename... Ts>`),
+     * `is_pack` is true and `pack_types` lists the N concrete types
+     * the pack was bound to at deduction time. concrete_type is NULL
+     * in pack entries. clone_node consults this when it sees a
+     * pack-expansion site (function-param pack, call-arg `pack...`,
+     * `sizeof...(pack)`). */
+    Type **pack_types;
+    int    pack_ntypes;
+    bool   is_pack;
 } SubstEntry;
 
 /* Opaque type — defined in instantiate.c. Carried on SubstMap so
@@ -48,6 +58,16 @@ SubstMap subst_map_new(Arena *arena, int capacity);
 SubstMap subst_map_new_with_registry(Arena *arena, int capacity,
                                      TmplRegistry *reg);
 void subst_map_add(SubstMap *m, Token *param_name, Type *concrete_type);
+/* Bind a template-parameter pack to a list of N concrete types.
+ * The list is borrowed (caller owns the storage in the same arena
+ * the SubstMap uses). N4659 §17.8.2.5 [temp.deduct.type]/9 — pack
+ * deduction from a non-type-only call-arg trailing run. */
+void subst_map_add_pack(SubstMap *m, Token *param_name,
+                        Type **pack_types, int pack_ntypes);
+/* Look up the pack binding for a TY_DEPENDENT token; returns
+ * NULL if the token isn't a pack-bound name. Out-params are set
+ * to the type list and count when non-NULL. */
+SubstEntry *subst_map_lookup_pack(SubstMap *m, Token *name);
 /* Bulk-bind: pair the leading positions of `params[]` (a template's
  * parameter Nodes) with `args[]` (a template-id's argument Nodes) and
  * add each (param.name, args[i].var_decl.ty) entry to the map. Loops

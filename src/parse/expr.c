@@ -2214,11 +2214,18 @@ static Node *postfix_expr(Parser *p) {
             parser_advance(p);
             Vec args = vec_new(p->arena);
             if (!parser_at(p, TK_RPAREN)) {
-                vec_push(&args, parse_assign_expr(p));
-                parser_consume(p, TK_ELLIPSIS);  /* pack expansion */
+                Node *arg = parse_assign_expr(p);
+                /* Pack expansion `expr...` — N4659 §17.5.3.4
+                 * [temp.variadic.expand]. Mark the arg so cloner
+                 * replicates per pack-bound type at instantiation. */
+                if (arg && parser_consume(p, TK_ELLIPSIS))
+                    arg->is_pack_expand = true;
+                vec_push(&args, arg);
                 while (parser_consume(p, TK_COMMA)) {
-                    vec_push(&args, parse_assign_expr(p));
-                    parser_consume(p, TK_ELLIPSIS);
+                    arg = parse_assign_expr(p);
+                    if (arg && parser_consume(p, TK_ELLIPSIS))
+                        arg->is_pack_expand = true;
+                    vec_push(&args, arg);
                 }
             }
             parser_expect(p, TK_RPAREN);
