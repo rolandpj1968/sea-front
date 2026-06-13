@@ -17594,7 +17594,43 @@ void emit_c(Node *tu) {
                     Node *src = (i < il->init_list.nelems)
                                   ? il->init_list.elems[i] : NULL;
                     bool emitted_copy = false;
-                    if (src) {
+                    if (src && src->kind == ND_INIT_LIST) {
+                        /* Brace-init element `{a, b, ...}` → resolve
+                         * an N-arg ctor of elem against the inner
+                         * brace-init elements. Per N4659 §11.6.4/3
+                         * list-init: list elements pass directly as
+                         * ctor args. Avoids matching the implicit
+                         * copy ctor (which may not be emitted). */
+                        int nin = src->init_list.nelems;
+                        Type **at_in = NULL;
+                        int nat_in = collect_call_arg_types(
+                            src->init_list.elems, nin, &at_in);
+                        Type **pty_i = NULL;
+                        Node *res_i = NULL;
+                        int np_i = resolve_overload(elem, /*name=*/NULL,
+                                                     /*is_ctor=*/true,
+                                                     at_in, nat_in, false,
+                                                     &pty_i, &res_i);
+                        if (np_i >= 0) {
+                            fputs("    ", stdout);
+                            mangle_class_ctor(elem, pty_i, np_i);
+                            fprintf(stdout, "(&%.*s[%d]",
+                                    n->var_decl.name->len,
+                                    n->var_decl.name->loc, i);
+                            for (int j = 0; j < nin; j++) {
+                                fputs(", ", stdout);
+                                emit_arg_for_param(src->init_list.elems[j],
+                                                    j < np_i ? pty_i[j]
+                                                             : NULL);
+                            }
+                            fputs(");\n", stdout);
+                            emitted_copy = true;
+                        }
+                    } else if (src) {
+                        /* Expression element (e.g. `S()`): copy-init
+                         * into the slot. Resolve a 1-arg ctor of elem
+                         * against src's type — typically the implicit
+                         * or user copy ctor `T(const T&)`. */
                         Type *at_e[1] = {
                             src->resolved_type ? src->resolved_type : elem
                         };
