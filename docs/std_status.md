@@ -201,6 +201,7 @@ intentionally not reported.
 | gcc 4.8 g++.dg dg-do run | 2026-06-11 | 404 / 809 (50%) |
 | gcc 14.2 g++.dg dg-do run | 2026-06-11 | 599 / 1671 (36%) |
 | gcc 14.2 g++.dg dg-do run | 2026-06-13 | 612 / 1671 (37%) |
+| gcc 14.2 g++.dg dg-do run | 2026-06-13 (late) | 616 / 1671 (37%, 3 actionable FAILs) |
 
 The gcc-14 number is the primary target going forward. The gcc-4.8
 number is retained as a regression marker — it should not move
