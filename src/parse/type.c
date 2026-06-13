@@ -780,7 +780,10 @@ DeclSpec parse_type_specifiers(Parser *p) {
                     if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
                         m->var_decl.ty->kind != TY_FUNC &&
                         !(m->var_decl.storage_flags & DECL_STATIC) &&
-                        m->var_decl.init) {
+                        (m->var_decl.init || m->var_decl.has_ctor_init)) {
+                        /* Both NSDMI forms count: `T m = expr;` sets
+                         * init, `T m{args};` / `T m(args);` populate
+                         * ctor_args via has_ctor_init. */
                         any_member_needs_default = true;
                     }
                 }

@@ -2267,12 +2267,15 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
                  * Mirrors the same condition in parse/type.c so a
                  * template instantiation of 'struct C { T m = t; };'
                  * gets its synth default ctor (which assigns m=t).
-                 * Pattern: g++.dg/cpp0x/nsdmi1.C `C<int,3>`. */
+                 * Both NSDMI forms count: `T m = expr;` sets init,
+                 * `T m{args};` / `T m(args);` populate ctor_args via
+                 * has_ctor_init. Pattern: g++.dg/cpp0x/nsdmi1.C
+                 * `C<int,3>`. */
                 if (!any_user_ctor &&
                     m->var_decl.ty &&
                     m->var_decl.ty->kind != TY_FUNC &&
                     !(m->var_decl.storage_flags & DECL_STATIC) &&
-                    m->var_decl.init) {
+                    (m->var_decl.init || m->var_decl.has_ctor_init)) {
                     inst_ty->has_default_ctor = true;
                 }
             }

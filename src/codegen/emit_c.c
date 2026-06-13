@@ -16069,6 +16069,48 @@ methods_phase:;
                     fputs(";\n", stdout);
                     continue;
                 }
+                /* Brace-init NSDMI: `T m{a, b, ...};` inside the
+                 * class body. Resolve the matching ctor and emit
+                 * the call. N4659 §12.6.2/9. Pattern:
+                 * g++.dg/cpp0x/initlist-throw1.C `struct P { X x{20}; };`
+                 * — the synth ctor for P must invoke X::X(20),
+                 * which throws and propagates through the
+                 * outer try/catch. */
+                if (m->var_decl.has_ctor_init &&
+                    m->var_decl.ctor_nargs > 0) {
+                    Type **at_m = NULL;
+                    int nat_m = collect_call_arg_types(
+                        m->var_decl.ctor_args,
+                        m->var_decl.ctor_nargs, &at_m);
+                    Type **pty_m = NULL;
+                    Node *res_m = NULL;
+                    int np_m = resolve_overload(m->var_decl.ty, NULL,
+                                                 /*is_ctor=*/true,
+                                                 at_m, nat_m, false,
+                                                 &pty_m, &res_m);
+                    if (np_m >= 0) {
+                        emit_indent();
+                        mangle_class_ctor(m->var_decl.ty, pty_m, np_m);
+                        fprintf(stdout, "(&this->%.*s",
+                                m->var_decl.name->len,
+                                m->var_decl.name->loc);
+                        for (int j = 0; j < m->var_decl.ctor_nargs; j++) {
+                            fputs(", ", stdout);
+                            emit_arg_for_param(m->var_decl.ctor_args[j],
+                                                j < np_m ? pty_m[j] : NULL);
+                        }
+                        fputs(");\n", stdout);
+                        /* TODO(seafront#synth-ctor-throw-propagate):
+                         * mark the synth ctor as potentially-throwing
+                         * (or emit __SF_CHAIN_THROW at the call site)
+                         * so a throwing NSDMI ctor reaches the outer
+                         * try/catch. g_cf here reflects the enclosing
+                         * function being emitted, not this synth body,
+                         * so the chain-throw can't be planted from
+                         * inside the synth at this point. */
+                        continue;
+                    }
+                }
                 if (!m->var_decl.ty->has_default_ctor) continue;
                 emit_indent();
                 mangle_class_ctor(m->var_decl.ty, NULL, 0);
