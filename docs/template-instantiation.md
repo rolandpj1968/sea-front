@@ -283,8 +283,8 @@ machinery still treats packs as single-element entries. Phases:
   treat packs as if `is_pack` were false (1-element). `--dump-ast`
   shows the tags for verification.
 
-**Phase 2 — Pack-list SubstMap + cloner expansion (not shipped).**
-- Extend `SubstEntry` (clone.h) to optionally carry a list of
+**Phase 2 — Pack-list SubstMap + cloner expansion (attempted; reverted).**
+- Extended `SubstEntry` (clone.h) to optionally carry a list of
   concrete types when `param->is_pack`:
   ```c
   typedef struct {
@@ -300,10 +300,6 @@ machinery still treats packs as single-element entries. Phases:
   and the call has > nparams-1 args, deduce the pack against the
   trailing args; bind the pack as a type list of (nargs -
   nparams + 1) entries.
-- `subst_type`: when a `TY_DEPENDENT` matches a pack entry,
-  callers in pack-expansion contexts must enumerate over the
-  pack types (NOT return a single type). Add a sibling
-  `subst_pack_types` returning `Type**` + count.
 - `clone_node`: detect pack-expansion sites in the body — a
   function param with `param->is_pack` expands to N synthesized
   params (`args_0, args_1, ...`); a call-arg `args...` expands
@@ -312,6 +308,24 @@ machinery still treats packs as single-element entries. Phases:
 - Synth-param naming: use the original pack name + `_<i>` index
   so re-references inside the body resolve to the right C-level
   identifier per expansion.
+
+**Why reverted (lesson):** the attempt worked for simple
+synthesised tests but broke `g++.dg/cpp0x/lambda/lambda-nested8.C`
+because nested lambda captures name the pack identifier
+DIRECTLY (`[&]() { foo(args...); }();`). Renaming the function
+param `args` to `args_0` left those captures pointing at a
+non-existent name. A complete fix needs lambda-capture
+pack-expansion too: a `[&]` capture of a pack-bound name must
+expand to N captures (one per synth name), and the lambda body's
+references must follow. That's a more invasive change than the
+current cloner shape supports cleanly. The single-arg fallback
+(bind as non-pack, no rename) avoids the regression for
+1-element packs but doesn't unlock the multi-arg cases that
+needed the expansion in the first place. A clean phase 2 needs
+the lambda-capture-expansion path before the function-param
+expansion can ship safely. Net win on dg tests was 0 either
+way — phase 1 (AST tags) stays in; the rest stays as a design
+debt entry until lambda capture-pack-expansion is in scope.
 
 **Phase 3 — Mangling.**
 - Include each pack-bound type in the mangled instantiation
