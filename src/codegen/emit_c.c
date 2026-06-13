@@ -12697,6 +12697,19 @@ static void emit_stmt(Node *n) {
         if (g_cf.nlive > 0 && g_cf.live[g_cf.nlive - 1].kind == CL_TRY)
             g_cf.nlive--;
 
+        /* If a throw fired inside the body but didn't directly
+         * goto the handler (e.g. it set the TLS state from a
+         * nested call whose synth ctor returns normally without
+         * planting a chain check), route the still-set state to
+         * the handler now. Without this, an unbubbled THROW
+         * survives the body and the `goto _after` skips over
+         * every handler. Pattern: g++.dg/cpp0x/initlist-throw1.C
+         * — P's synth ctor calls X's ctor which throws; control
+         * returns to main with TLS state set but no per-call
+         * chain check planted (synth ctors don't have epilogues
+         * yet). */
+        emit_indent();
+        fprintf(stdout, "__SF_CHAIN_THROW(__SF_try_%d_handler);\n", id);
         /* Body completed without throw — skip handlers. */
         emit_indent();
         fprintf(stdout, "goto __SF_try_%d_after;\n", id);
