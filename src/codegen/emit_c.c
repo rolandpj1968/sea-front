@@ -10360,6 +10360,23 @@ static bool class_has_user_default_ctor(Type *cls) {
     return false;
 }
 
+/* True iff `cls` has no user-declared ctor of any signature —
+ * aggregate-shaped classes per N4659 §11.6.1/1 [dcl.init.aggr],
+ * loosely. Allows `T x{a, b, ...}` to fall through to aggregate
+ * init when no overload resolves. */
+static bool class_has_no_user_ctor(Type *cls) {
+    if (!cls || !cls->class_def) return true;
+    Node *cdef = cls->class_def;
+    for (int i = 0; i < cdef->class_def.nmembers; i++) {
+        Node *m = cdef->class_def.members[i];
+        if (!m) continue;
+        if ((m->kind == ND_FUNC_DEF && m->func.is_constructor) ||
+            (m->kind == ND_VAR_DECL && m->var_decl.is_constructor))
+            return false;
+    }
+    return true;
+}
+
 static bool class_has_user_copy_ctor(Type *cls) {
     if (!cls || !cls->class_def) return false;
     Node *cdef = cls->class_def;
@@ -11429,6 +11446,31 @@ static void emit_stmt(Node *n) {
                              * ` = {0}` for this shape; just skip the
                              * ctor-call emission. Pattern:
                              * g++.dg/cpp0x/initlist-value.C `A a{};`. */
+                            return;
+                        } else if (class_has_no_user_ctor(n->var_decl.ty)) {
+                            /* Aggregate-init `T x{a, b, ...}` on a
+                             * class with no user-declared ctor — N4659
+                             * §11.6.1/1 [dcl.init.aggr]. The bare
+                             * var-decl was emitted uninitialised
+                             * (no `= {0}` since ctor_nargs>0); follow
+                             * with an assignment from a compound
+                             * literal `name = (struct T){args};`
+                             * which C99 accepts for arbitrary block-
+                             * scope rvalues. Caller already issued
+                             * emit_indent before this branch.
+                             * Pattern: g++.dg/cpp0x/initlist-nrv1.C
+                             *   `B ret{ A{}, "" };`. */
+                            fprintf(stdout, "%.*s = (",
+                                    n->var_decl.name->len,
+                                    n->var_decl.name->loc);
+                            emit_type(n->var_decl.ty);
+                            fputs("){", stdout);
+                            for (int i = 0; i < n->var_decl.ctor_nargs; i++) {
+                                if (i > 0) fputs(", ", stdout);
+                                emit_arg_for_param(n->var_decl.ctor_args[i],
+                                                    NULL);
+                            }
+                            fputs("};\n", stdout);
                             return;
                         } else {
                             die_no_overload(n->var_decl.ty, NULL, na,
