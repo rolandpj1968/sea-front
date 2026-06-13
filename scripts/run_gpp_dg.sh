@@ -56,21 +56,44 @@ SEA_DG_TIMEOUT="${SEA_DG_TIMEOUT:-10}"
 SEA_DG_VERBOSE="${SEA_DG_VERBOSE:-0}"
 SEA_DG_XFAIL_FILE="${SEA_DG_XFAIL_FILE:-$SCRIPT_DIR/dg-xfail.txt}"
 
-# Load xfail list (one rel-path per line, '#' comments). Joined into
-# a newline-delimited string; matches are exact rel-path equality.
-XFAIL_LIST=""
+# Load xfail list (one rel-path per line, '#' comments). Two match
+# shapes:
+#   - exact rel-path: 'g++.dg/cpp0x/implicit2.C'
+#   - directory prefix ending in '/': 'g++.dg/coroutines/' matches
+#     any test under that directory.
+XFAIL_EXACT=""
+XFAIL_PREFIXES=""
 if [ -f "$SEA_DG_XFAIL_FILE" ]; then
-    XFAIL_LIST=$(grep -vE '^\s*(#|$)' "$SEA_DG_XFAIL_FILE" \
+    raw=$(grep -vE '^\s*(#|$)' "$SEA_DG_XFAIL_FILE" \
                   | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        case "$line" in
+            */)  XFAIL_PREFIXES="$XFAIL_PREFIXES
+$line" ;;
+            *)   XFAIL_EXACT="$XFAIL_EXACT
+$line" ;;
+        esac
+    done <<EOF
+$raw
+EOF
 fi
 is_xfail() {
     case "
-$XFAIL_LIST
+$XFAIL_EXACT
 " in
         *"
 $1
 "*) return 0 ;;
     esac
+    while IFS= read -r pfx; do
+        [ -z "$pfx" ] && continue
+        case "$1" in
+            "$pfx"*) return 0 ;;
+        esac
+    done <<EOF
+$XFAIL_PREFIXES
+EOF
     return 1
 }
 

@@ -64,6 +64,51 @@ g++.dg/cpp0x/implicit2.C
 # FAIL even though sea-front does what it can (it doesn't have ASan).
 g++.dg/asan/function-argument-2.C
 
+# --- Wholesale out-of-scope directories ---------------------------------
+# Directory-prefix xfails (entries ending in '/' match every test under
+# that path). Avoids enumerating dozens of individual files when EVERY
+# test in the directory fails for the same out-of-scope reason. Don't
+# add a prefix entry unless at least the bulk pass-rate is zero — a
+# prefix that catches passing tests turns them into XPASS noise.
+#
+# coroutines/: C++20 coroutines. Sea-front parser doesn't know
+#   `co_await`, `co_yield`, `co_return`. 0 PASS, 127 fail in the
+#   gcc-14 sweep — clean bulk-xfail candidate.
+g++.dg/coroutines/
+
+# --- Sanitizer / coverage tests requiring runtime instrumentation -------
+# AddressSanitizer / UBSan / gcov tests that fail specifically because
+# sea-front doesn't generate the instrumentation those runtimes expect.
+# Listed individually (not directory-prefix) because the majority of
+# tests in these directories happen to compile and run fine without
+# the instrumentation — only the ones that actually rely on it fail.
+g++.dg/asan/asan_test.C
+g++.dg/asan/interception-malloc-test-1.C
+g++.dg/asan/interception-test-1.C
+g++.dg/asan/pr69276.C
+g++.dg/asan/pr81021.C
+g++.dg/asan/pr85774.C
+g++.dg/asan/pr90570.C
+g++.dg/asan/use-after-scope-types-1.C
+g++.dg/asan/use-after-scope-types-2.C
+g++.dg/asan/use-after-scope-types-3.C
+g++.dg/asan/use-after-scope-types-4.C
+g++.dg/asan/use-after-scope-types-5.C
+g++.dg/gcov/gcov-14.C
+g++.dg/gcov/gcov-17.C
+g++.dg/gcov/gcov-dump-1.C
+g++.dg/gcov/gcov-dump-2.C
+g++.dg/gcov/pr16855.C
+g++.dg/gcov/pr16855-priority.C
+g++.dg/gcov/pr88045.C
+g++.dg/gcov/pr88263-2.C
+g++.dg/gcov/pr88263.C
+g++.dg/ubsan/pr70147-1.C
+g++.dg/ubsan/vptr-1.C
+g++.dg/ubsan/vptr-2.C
+g++.dg/ubsan/vptr-3.C
+g++.dg/ubsan/vptr-11.C
+
 # --- Signal-driven / forced unwinding EH --------------------------------
 # Tests in this bucket install a signal handler that throws a C++
 # exception, or call _Unwind_RaiseException directly, or rely on
