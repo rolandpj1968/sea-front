@@ -57,6 +57,13 @@ g++.dg/cpp0x/implicit2.C
 # also fail; tests where we PASS something gcc-xfails are surprising
 # good news and stay in the PASS bucket.
 
+# --- AddressSanitizer test using dg-shouldfail --------------------------
+# The test deliberately triggers a memory error and expects ASan to
+# catch it; gcc honours `dg-shouldfail "asan"` and treats the non-zero
+# exit as PASS. Our runner only checks exit==0, so the test reports
+# FAIL even though sea-front does what it can (it doesn't have ASan).
+g++.dg/asan/function-argument-2.C
+
 # --- Signal-driven / forced unwinding EH --------------------------------
 # Tests in this bucket install a signal handler that throws a C++
 # exception, or call _Unwind_RaiseException directly, or rely on
