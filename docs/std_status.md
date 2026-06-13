@@ -82,7 +82,7 @@ introduced in C++11 onward.
 | Brace-init / list-init | partial | Aggregate init (`T x{a, b}` for class with no user ctor) lowers via C99 compound-literal assignment with per-member-type ref adjustment; left-to-right sequencing enforced for side-effecting ctor args; empty-brace value-init for non-aggregate classes works |
 | `std::initializer_list<T>` | partial | Var-decl init (`auto`-storage + `static const` backing array); function-call arg (C99 compound-literal pair); range-for over braced-init-list; class-typed elements with per-slot ctor calls and dtor cleanup-chain integration. Remaining: file-scope nested aggregate init, temp-with-dtor cleanup at full-expression end, ternary common-type interactions with STL containers |
 | Delegating constructors | yes | |
-| Non-static data member initialisers (NSDMI) | partial | Literal initialisers work; calls and braces inside NSDMI drop in some shapes |
+| Non-static data member initialisers (NSDMI) | partial | `T m = expr;` and `T m{args};` / `T m(args);` forms all trigger synth default ctor; brace-init NSDMI emits a mangled ctor call in the synth body. Template instantiations honour the same NSDMI-trigger rule. Remaining gap: throw propagation from a throwing NSDMI ctor through the synth ctor to a surrounding try/catch needs call-site __SF_CHAIN_THROW (or synth-ctor prologue/epilogue scaffolding) |
 | Attributes `[[noreturn]]`, `[[carries_dependency]]` | yes | gcc-style `__attribute__((...))` is also accepted |
 | User-defined literals (`operator""`) | no | |
 | Raw / Unicode string literals | partial | UTF-8 string literals tokenise; raw-string literals not yet |
