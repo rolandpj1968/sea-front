@@ -947,8 +947,21 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
         c->var_decl = n->var_decl;
         c->var_decl.ty   = subst_type(n->var_decl.ty, map, arena);
         c->var_decl.init = clone_node(n->var_decl.init, map, arena);
-        c->var_decl.ctor_args = clone_node_array(
-            n->var_decl.ctor_args, n->var_decl.ctor_nargs, map, arena);
+        /* Direct-init declarator `T name(args...)` can contain a
+         * pack-expansion site that must expand to the bound pack at
+         * instantiation. Pattern: g++.dg/cpp0x/variadic-new2.C
+         * `int y(args...);` with empty pack instantiates to
+         * `int y();` (value-init → 0). N4659 §17.5.3.4
+         * [temp.variadic.expand]. */
+        if (n->var_decl.ctor_args && n->var_decl.ctor_nargs > 0) {
+            int new_n = 0;
+            c->var_decl.ctor_args = clone_node_array_pack(
+                n->var_decl.ctor_args, n->var_decl.ctor_nargs,
+                map, arena, &new_n);
+            c->var_decl.ctor_nargs = new_n;
+        } else {
+            c->var_decl.ctor_args = NULL;
+        }
         /* If the init was an ND_LAMBDA (capturing), the var's type
          * was set at parse time to the original (template-context)
          * closure TY_STRUCT. Cloning the lambda produced a fresh

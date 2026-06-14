@@ -11468,6 +11468,22 @@ static void emit_stmt(Node *n) {
             n->var_decl.name) {
             fputs(" = {0}", stdout);
         }
+        /* Scalar value-init `T x()` / `T x{}` for non-class T —
+         * N4659 §11.6/8 [dcl.init] zero-initializes scalar types.
+         * Reaches via empty pack expansion of `T x(args...)` where
+         * `args` binds to a 0-element pack. Pattern:
+         * g++.dg/cpp0x/variadic-new2.C `int y(args...);`. Skip
+         * TY_ARRAY / TY_FUNC / TY_REF — none accept `= 0` as an
+         * initializer in C. */
+        if (n->var_decl.has_ctor_init && n->var_decl.ctor_nargs == 0 &&
+            n->var_decl.ty && n->var_decl.name &&
+            n->var_decl.ty->kind != TY_STRUCT &&
+            n->var_decl.ty->kind != TY_UNION &&
+            n->var_decl.ty->kind != TY_ARRAY &&
+            n->var_decl.ty->kind != TY_FUNC &&
+            n->var_decl.ty->kind != TY_REF) {
+            fputs(" = 0", stdout);
+        }
         fputs(";\n", stdout);
         /* Aggregate init `T x = {e1, e2, ...};` where T has class
          * members with user copy ctors. The bare declaration above

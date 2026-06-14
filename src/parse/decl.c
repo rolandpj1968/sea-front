@@ -2038,11 +2038,19 @@ Node *parse_declaration(Parser *p) {
         decl->var_decl.has_ctor_init = true;
         Vec args = vec_new(p->arena);
         if (!parser_at(p, TK_RPAREN)) {
-            vec_push(&args, parse_assign_expr(p));
-            parser_consume(p, TK_ELLIPSIS);
+            Node *a0 = parse_assign_expr(p);
+            /* Pack-expansion arg `e...` — mark for the cloner so
+             * `args...` expands per the bound pack at instantiation.
+             * N4659 §17.5.3.4 [temp.variadic.expand]. Pattern:
+             * variadic-new2.C `int y(args...);`. */
+            if (a0 && parser_consume(p, TK_ELLIPSIS))
+                a0->is_pack_expand = true;
+            if (a0) vec_push(&args, a0);
             while (parser_consume(p, TK_COMMA)) {
-                vec_push(&args, parse_assign_expr(p));
-                parser_consume(p, TK_ELLIPSIS);
+                Node *an = parse_assign_expr(p);
+                if (an && parser_consume(p, TK_ELLIPSIS))
+                    an->is_pack_expand = true;
+                if (an) vec_push(&args, an);
             }
         }
         decl->var_decl.ctor_args  = (Node **)args.data;
@@ -2055,12 +2063,16 @@ Node *parse_declaration(Parser *p) {
         decl->var_decl.has_ctor_init = true;
         Vec args = vec_new(p->arena);
         if (!parser_at(p, TK_RBRACE)) {
-            vec_push(&args, parse_assign_expr(p));
-            parser_consume(p, TK_ELLIPSIS);
+            Node *a0 = parse_assign_expr(p);
+            if (a0 && parser_consume(p, TK_ELLIPSIS))
+                a0->is_pack_expand = true;
+            if (a0) vec_push(&args, a0);
             while (parser_consume(p, TK_COMMA)) {
                 if (parser_at(p, TK_RBRACE)) break;  /* trailing comma */
-                vec_push(&args, parse_assign_expr(p));
-                parser_consume(p, TK_ELLIPSIS);
+                Node *an = parse_assign_expr(p);
+                if (an && parser_consume(p, TK_ELLIPSIS))
+                    an->is_pack_expand = true;
+                if (an) vec_push(&args, an);
             }
         }
         decl->var_decl.ctor_args  = (Node **)args.data;
