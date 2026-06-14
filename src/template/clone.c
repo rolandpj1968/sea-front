@@ -530,9 +530,14 @@ static MemInit *clone_mem_inits(MemInit *inits, int n,
     MemInit *copy = arena_alloc(arena, n * sizeof(MemInit));
     for (int i = 0; i < n; i++) {
         copy[i].name = inits[i].name;
-        copy[i].args = clone_node_array(inits[i].args, inits[i].nargs,
-                                         map, arena);
-        copy[i].nargs = inits[i].nargs;
+        /* A mem-initializer can carry a pack-expansion site —
+         * `Class() : member(args...)` — N4659 §15.6.2/2
+         * [class.base.init]. Route through the pack-aware clone
+         * so `args...` expands per the bound pack. */
+        int new_n = 0;
+        copy[i].args = clone_node_array_pack(inits[i].args, inits[i].nargs,
+                                               map, arena, &new_n);
+        copy[i].nargs = new_n;
     }
     return copy;
 }
@@ -867,9 +872,19 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
 
     case ND_INIT_LIST:
         c->init_list = n->init_list;
-        c->init_list.elems = clone_node_array(n->init_list.elems,
-                                              n->init_list.nelems,
-                                              map, arena);
+        /* Brace-init-list can carry a pack-expansion site —
+         * `{args...}` — N4659 §17.5.3.4 [temp.variadic.expand].
+         * Route through the pack-aware clone so `args...`
+         * expands per the bound pack at instantiation. */
+        if (n->init_list.elems && n->init_list.nelems > 0) {
+            int new_n = 0;
+            c->init_list.elems = clone_node_array_pack(
+                n->init_list.elems, n->init_list.nelems,
+                map, arena, &new_n);
+            c->init_list.nelems = new_n;
+        } else {
+            c->init_list.elems = NULL;
+        }
         break;
 
     /* -- Statements -- */

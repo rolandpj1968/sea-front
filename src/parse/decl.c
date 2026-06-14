@@ -1264,11 +1264,19 @@ static void parse_func_body(Parser *p, Node *func) {
                 TokenKind close = braced ? TK_RBRACE : TK_RPAREN;
                 Vec args = vec_new(p->arena);
                 if (!parser_at(p, close)) {
-                    vec_push(&args, parse_assign_expr(p));
-                    parser_consume(p, TK_ELLIPSIS);
+                    Node *a0 = parse_assign_expr(p);
+                    /* Pack-expansion arg `e...` in a mem-initializer —
+                     * N4659 §17.5.3.4 [temp.variadic.expand] applied to
+                     * §15.6.2/2 [class.base.init]. Mark so the cloner
+                     * expands per the bound pack at instantiation. */
+                    if (a0 && parser_consume(p, TK_ELLIPSIS))
+                        a0->is_pack_expand = true;
+                    if (a0) vec_push(&args, a0);
                     while (parser_consume(p, TK_COMMA)) {
-                        vec_push(&args, parse_assign_expr(p));
-                        parser_consume(p, TK_ELLIPSIS);
+                        Node *an = parse_assign_expr(p);
+                        if (an && parser_consume(p, TK_ELLIPSIS))
+                            an->is_pack_expand = true;
+                        if (an) vec_push(&args, an);
                     }
                 }
                 parser_expect(p, close);

@@ -828,15 +828,21 @@ static Node *primary_expr(Parser *p) {
         Node *node = new_node(p, ND_INIT_LIST, tok);
         Vec elems = vec_new(p->arena);
         if (!parser_at(p, TK_RBRACE)) {
-            vec_push(&elems, parse_assign_expr(p));
-            /* Pack expansion: 'expr...' — consume the ellipsis if
-             * present (rare in aggregate init, legal after unpacking
-             * an argument pack inside a braced-init-list). */
-            parser_consume(p, TK_ELLIPSIS);
+            Node *e0 = parse_assign_expr(p);
+            /* Pack-expansion site `expr...` inside a brace-init-list —
+             * N4659 §17.5.3.4 [temp.variadic.expand]. Mark the element
+             * so the cloner expands per the bound pack at
+             * instantiation. Pattern: g++.dg/cpp0x/variadic-init.C
+             * `static int x[] = { (M+N)..., -1 };`. */
+            if (e0 && parser_consume(p, TK_ELLIPSIS))
+                e0->is_pack_expand = true;
+            if (e0) vec_push(&elems, e0);
             while (parser_consume(p, TK_COMMA)) {
                 if (parser_at(p, TK_RBRACE)) break;  /* trailing comma */
-                vec_push(&elems, parse_assign_expr(p));
-                parser_consume(p, TK_ELLIPSIS);
+                Node *en = parse_assign_expr(p);
+                if (en && parser_consume(p, TK_ELLIPSIS))
+                    en->is_pack_expand = true;
+                if (en) vec_push(&elems, en);
             }
         }
         parser_expect(p, TK_RBRACE);
