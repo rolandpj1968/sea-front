@@ -1605,6 +1605,7 @@ hoist_done:
  * Forward decls referenced in the body. */
 static bool class_has_user_default_ctor(Type *cls);
 static bool class_has_mutable_field_transitive(Type *cls);
+static bool class_is_observably_empty(Type *cls);
 static Node *find_class_def_by_tag_args(Type *probe);
 static Node *find_class_def_by_tag_only(Type *probe);
 static int collect_call_arg_types(Node **args, int nargs, Type ***out_types);
@@ -9555,6 +9556,13 @@ static void emit_var_decl_init_suffix(Node *n) {
      * file-scope `= {...}` suffix; the bare declaration above is
      * what the global-init code copies into. */
     if (var_decl_array_class_copy_init(n)) return;
+    /* Empty-class copy init `T y = expr;` — the C++ object has no
+     * observable storage so the copy is a no-op. Emitting the
+     * init in C would actually evaluate `expr`, which segfaults
+     * for the canonical pathological case `empty_t y = *x;` with
+     * x null. Skip the init entirely. Pattern:
+     * g++.dg/opt/empty1.C. */
+    if (class_is_observably_empty(n->var_decl.ty)) return;
     fputs(" = ", stdout);
     emit_init_with_target(n->var_decl.init, n->var_decl.ty);
 }
@@ -9896,6 +9904,14 @@ static void emit_var_decl_inner(Node *n) {
      * level (after the `;`). Don't double-emit the bitwise `= {...}`
      * suffix here. Pattern: g++.dg/init/aggr2.C. */
     if (n->var_decl.init && var_decl_needs_aggregate_per_member(n)) {
+        return;
+    }
+    /* Empty-class copy/value init `T y = expr;` — the C++ object has
+     * no observable storage so the copy is a no-op. The C-level emit
+     * `T y = (*x);` would actually deref `expr` (segfaults on the
+     * null-ptr pathological case). Pattern: g++.dg/opt/empty1.C
+     * `empty_t y = *(empty_t *)0;`. */
+    if (n->var_decl.init && class_is_observably_empty(ty)) {
         return;
     }
     if (n->var_decl.init) {
@@ -10551,6 +10567,57 @@ static bool class_has_mutable_field_transitive(Type *cls) {
             return true;
     }
     return false;
+}
+
+/* True iff `cls` is a class type with no observable storage AND
+ * no user-declared ctor / copy-ctor / dtor — a copy from an
+ * arbitrary lvalue (`T y = *x;`) is therefore a no-op even when
+ * *x is a null-pointer deref. gcc lazily elides the deref;
+ * sea-front would emit a real `(*x)` in C which segfaults.
+ * Pattern: g++.dg/opt/empty1.C `empty_t y = *(empty_t *)0;`.
+ *
+ * The "no user-declared special members" check matters because a
+ * class with no data members can STILL be observable — e.g.
+ * g++.dg/opt/nrv1.C's `struct A { A(){++c;} A(const A&){++c;}
+ * ~A(){++d;} };` has zero bytes of storage but every copy/dtor
+ * changes program state. */
+static bool class_is_observably_empty(Type *cls) {
+    if (!cls || cls->kind != TY_STRUCT) return false;
+    Node *cd = cls->class_def;
+    if (!cd) {
+        cd = find_class_def_by_tag_args(cls);
+        if (!cd) cd = find_class_def_by_tag_only(cls);
+    }
+    if (!cd) return false;
+    /* Any non-empty / observable base → not empty. */
+    for (int i = 0; i < cd->class_def.nbase_types; i++) {
+        if (!class_is_observably_empty(cd->class_def.base_types[i]))
+            return false;
+    }
+    for (int i = 0; i < cd->class_def.nmembers; i++) {
+        Node *m = cd->class_def.members[i];
+        if (!m) continue;
+        /* Any non-static data member: observable storage. */
+        if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
+            m->var_decl.ty->kind != TY_FUNC &&
+            !(m->var_decl.storage_flags & DECL_STATIC))
+            return false;
+        /* Any virtual function: implicit vtable pointer is storage. */
+        if (m->kind == ND_FUNC_DEF && m->func.is_virtual)
+            return false;
+        if (m->kind == ND_VAR_DECL && m->var_decl.is_virtual)
+            return false;
+        /* User-declared ctor / dtor / copy-assign: even with no
+         * data members, the function body can carry side effects
+         * that the copy must execute. */
+        if (m->kind == ND_FUNC_DEF &&
+            (m->func.is_constructor || m->func.is_destructor))
+            return false;
+        if (m->kind == ND_VAR_DECL &&
+            (m->var_decl.is_constructor || m->var_decl.is_destructor))
+            return false;
+    }
+    return true;
 }
 
 /* True iff `cls` has no user-declared ctor of any signature —
