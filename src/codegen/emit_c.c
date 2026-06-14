@@ -3260,11 +3260,18 @@ static void emit_storage_flags_for_def(int flags) {
  * spelled. The block-scope cases (locals) get 'static' as well —
  * harmless for true constants (init-once, same value) and the
  * common idiom for inline-vars-as-locals doesn't actually exist. */
-static void emit_var_storage_flags(int flags) {
+static void emit_var_storage_flags_for_type(int flags, Type *ty) {
     bool implies_static = (flags & (DECL_CONSTEXPR | DECL_INLINE)) != 0;
     if (implies_static && !(flags & DECL_STATIC))
         fputs("static ", stdout);
-    if (flags & DECL_CONSTEXPR)
+    /* `constexpr` implies const at the language level, but a const
+     * object whose type carries a `mutable` member would land in
+     * .rodata; the mutable-write cast-trick (`*(int*)&obj.m = ...`)
+     * then segfaults. Drop the const when any transitive member is
+     * mutable. N4659 §10.1.5/9 [dcl.constexpr] + §10.1.1/8 [dcl.stc].
+     * Pattern: g++.dg/cpp1y/constexpr-mutable2.C. */
+    if ((flags & DECL_CONSTEXPR) &&
+        !(ty && class_has_mutable_field_transitive(ty)))
         fputs("const ", stdout);
     /* Strip the C++-only spellings — emit_storage_flags would
      * otherwise print 'inline'/etc. literally, which cc warns
@@ -10542,6 +10549,31 @@ static bool class_has_user_default_ctor(Type *cls) {
  * [dcl.stc]. Pattern: g++.dg/cpp0x/mutable1.C. */
 static bool class_has_mutable_field_transitive(Type *cls) {
     if (!cls || cls->kind != TY_STRUCT) return false;
+    /* Prefer class_region — for template instantiations the region
+     * carries Declarations with their substituted member types
+     * (e.g. Foo<Bar>'s `val` resolves to Bar, not T). The class_def
+     * still names members by the original template parameter and
+     * would miss the mutable bar Bar carries. */
+    if (cls->class_region) {
+        for (int i = 0; i < REGION_HASH_SIZE; i++) {
+            for (Declaration *d = cls->class_region->buckets[i]; d; d = d->next) {
+                if (d->entity != ENTITY_VARIABLE) continue;
+                if (d->type && d->type->kind == TY_FUNC) continue;
+                if (d->is_mutable) return true;
+                if (d->type &&
+                    class_has_mutable_field_transitive(d->type))
+                    return true;
+            }
+        }
+        if (cls->class_region->bases) {
+            for (int i = 0; i < cls->class_region->nbases; i++) {
+                Type *bt = cls->class_region->bases[i] ?
+                    cls->class_region->bases[i]->owner_type : NULL;
+                if (class_has_mutable_field_transitive(bt)) return true;
+            }
+        }
+        return false;
+    }
     Node *cd = cls->class_def;
     if (!cd) {
         cd = find_class_def_by_tag_args(cls);
@@ -11436,7 +11468,7 @@ static void emit_stmt(Node *n) {
             if (n->class_def.ty->anon_id == 0)
                 n->class_def.ty->anon_id = ++g_anon_counter;
             emit_indent();
-            emit_var_storage_flags(n->class_def.storage_flags);
+            emit_var_storage_flags_for_type(n->class_def.storage_flags, n->class_def.ty);
             fputs(n->class_def.ty->kind == TY_UNION ? "union " : "struct ",
                   stdout);
             emit_open_brace();
@@ -11572,7 +11604,7 @@ static void emit_stmt(Node *n) {
                  init->kind == ND_CALL  || init->kind == ND_SUBSCRIPT);
             if (is_static && is_const_ty && init_nonconst)
                 sf &= ~DECL_STATIC;
-            emit_var_storage_flags(sf);
+            emit_var_storage_flags_for_type(sf, n->var_decl.ty);
         }
         emit_var_decl_inner(n);
         /* Value-init 'T x{}' — empty brace-init — N4659 §11.6.1/8
@@ -16796,7 +16828,7 @@ static void emit_top_level(Node *n) {
             n->var_decl.deferred_to_global_init = true;
             Node *saved_init = n->var_decl.init;
             n->var_decl.init = NULL;
-            emit_var_storage_flags(n->var_decl.storage_flags);
+            emit_var_storage_flags_for_type(n->var_decl.storage_flags, n->var_decl.ty);
             emit_var_decl_inner(n);
             fputs(";\n", stdout);
             n->var_decl.init = saved_init;
@@ -16814,7 +16846,7 @@ static void emit_top_level(Node *n) {
             n->var_decl.has_ctor_init && n->var_decl.ctor_nargs > 0) {
             bool saved_const = n->var_decl.ty->is_const;
             n->var_decl.ty->is_const = false;
-            emit_var_storage_flags(n->var_decl.storage_flags);
+            emit_var_storage_flags_for_type(n->var_decl.storage_flags, n->var_decl.ty);
             emit_var_decl_inner(n);
             fputs(";\n", stdout);
             n->var_decl.ty->is_const = saved_const;
@@ -16827,7 +16859,7 @@ static void emit_top_level(Node *n) {
          * what supplies the initializer and gives one well-defined
          * storage location for foo_t::count etc. across TUs.
          * N4659 §11.4.9.2 [class.static.data]. */
-        emit_var_storage_flags(n->var_decl.storage_flags);
+        emit_var_storage_flags_for_type(n->var_decl.storage_flags, n->var_decl.ty);
         emit_var_decl_inner(n);
         fputs(";\n", stdout);
         /* init_priority(N) is handled separately in the per-var
