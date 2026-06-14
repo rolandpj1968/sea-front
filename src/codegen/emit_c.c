@@ -6762,6 +6762,46 @@ static void emit_expr(Node *n) {
             fputc(')', stdout);
             return;
         }
+        if (callee && callee->kind == ND_MEMBER &&
+            callee->member.is_destructor_call) {
+            /* Explicit destructor call `obj.~Class()` or
+             * `p->~Class()`. The `member` token names the CLASS,
+             * which shares its source spelling with the
+             * constructor — falling through to the regular method-
+             * call path would mangle it as the ctor (`_ZN1C1CEv`)
+             * and link-fail. Route directly to mangle_class_dtor.
+             * N4659 §8.2.5/4 [expr.ref] + §15.4 [class.dtor].
+             * Pattern: g++.dg/opt/pr96722.C. */
+            Node *obj = callee->member.obj;
+            Type *ot = obj ? obj->resolved_type : NULL;
+            if (ot && ot->kind == TY_PTR) ot = ot->base;
+            if (ot && (ot->kind == TY_REF || ot->kind == TY_RVALREF))
+                ot = ot->base;
+            if (ot && (ot->kind == TY_STRUCT || ot->kind == TY_UNION)) {
+                Node *cd = find_class_def_by_tag_args(ot);
+                if (!cd) cd = find_class_def_by_tag_only(ot);
+                if (cd && cd->class_def.ty) ot = cd->class_def.ty;
+            }
+            /* Trivially-destructible class — no dtor wrapper is
+             * emitted, so the explicit call must lower to a no-op
+             * (the operand still evaluates for side effects). N4659
+             * §15.4/15 [class.dtor]: "Calls to the destructor of a
+             * trivially destructible class are permitted but
+             * unnecessary." */
+            if (!ot || !ot->has_dtor) {
+                fputs("((void)(", stdout);
+                emit_expr(obj);
+                fputs("))", stdout);
+                return;
+            }
+            mangle_class_dtor(ot);
+            fputc('(', stdout);
+            if (callee->member.op == TK_DOT) fputc('&', stdout);
+            fputc('(', stdout);
+            emit_expr(obj);
+            fputs("))", stdout);
+            return;
+        }
         if (callee && callee->kind == ND_MEMBER) {
             Node *obj = callee->member.obj;
             Type *ot = obj ? obj->resolved_type : NULL;

@@ -460,6 +460,14 @@ struct Node {
              * directly. Stores the LAST qualifier segment (the class
              * name). NULL when the member access is unqualified. */
             Token *qualifier_class;
+            /* True for an explicit destructor call: `obj.~Class()` or
+             * `p->~Class()`. N4659 §8.2.5/4 [expr.ref] + §15.4/12
+             * [class.dtor]. The `member` token names the CLASS, not
+             * the destructor symbol — codegen must route to the
+             * class's dtor mangle (Itanium D1) rather than the
+             * class's constructor (Itanium C1) which shares the
+             * same source name. */
+            bool is_destructor_call;
         } member;
 
         /* ND_SUBSCRIPT — N4659 §8.2.1 [expr.sub]

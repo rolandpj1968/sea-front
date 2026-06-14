@@ -2292,6 +2292,7 @@ static Node *postfix_expr(Parser *p) {
              *   x.~T()           (pseudo-destructor) */
             Token *member;
             Node *member_tid = NULL;  /* explicit '<args>' on member */
+            bool is_destructor_call = false;
             if (parser_at(p, TK_KW_OPERATOR)) {
                 member = parser_advance(p);
                 /* Consume the operator-symbol (one or two tokens). */
@@ -2337,6 +2338,7 @@ static Node *postfix_expr(Parser *p) {
                  * us — we just need to skip the template args. */
                 if (parser_at(p, TK_LT))
                     parse_template_id(p, member);
+                is_destructor_call = true;
             } else {
                 member = parser_expect(p, TK_IDENT);
                 /* Member template-id: 'obj.method<T>(args)'.
@@ -2431,6 +2433,7 @@ static Node *postfix_expr(Parser *p) {
             node = new_member_node(p, node, member, op, tok);
             node->member.template_id = member_tid;
             node->member.qualifier_class = qualifier_class;
+            node->member.is_destructor_call = is_destructor_call;
             continue;
         }
 
