@@ -2546,6 +2546,25 @@ static int func_sig_key(Token *name, Type **params, int nparams,
         memcpy(buf + pos, name->loc, name->len);
         pos += name->len;
     }
+    /* The bare "operator" source token is reused for every operator
+     * variant — operator_kind_from_method_name peeks past the token
+     * to read the suffix (`new`, `new[]`, `delete[]`, `+=`, ...).
+     * Without the kind in the dedup key, `operator new(size_t)` and
+     * `operator new[](size_t)` (and every other operator pair with
+     * the same param suffix) collide and the second definition gets
+     * deduped away as a "duplicate". N4659 §16.5 [over.oper]. */
+    if (name && name->len == 8 && memcmp(name->loc, "operator", 8) == 0) {
+        OperatorKind ok = operator_kind_from_method_name(name);
+        if (ok != OP_UNKNOWN && pos + 4 < FUNC_SIG_KEY_MAX) {
+            buf[pos++] = '_';
+            buf[pos++] = 'o';
+            buf[pos++] = 'k';
+            int n = ok;
+            if (n >= 100) { buf[pos++] = '0' + (n / 100); n %= 100; }
+            if (n >= 10  || pos > 0) { buf[pos++] = '0' + (n / 10); n %= 10; }
+            buf[pos++] = '0' + n;
+        }
+    }
     pos = mangle_param_suffix_to_buf(params, nparams, buf, pos,
                                        FUNC_SIG_KEY_MAX);
     return pos;
@@ -7317,14 +7336,33 @@ static void emit_expr(Node *n) {
              * tells us the kind unambiguously; the call's arg
              * type tells us the signature. Pattern:
              * g++.dg/eh/new1.C. */
+            /* The same op-name discriminator works for two callee
+             * shapes: a bare 'operator' ND_IDENT (synthesized by
+             * parse_new) and a global-scope qualified-id
+             * '::operator new' / '::operator delete' (ND_QUALIFIED,
+             * nparts==1, parts[0]=='operator'). The latter arises in
+             * user-written code like `::operator new(t)` from inside
+             * a user-defined `operator new[]`. Pattern:
+             * g++.dg/cpp0x/defaulted19.C. */
+            Token *opname_tok = NULL;
             if (n->call.callee && n->call.callee->kind == ND_IDENT &&
                 !n->call.callee->ident.implicit_this &&
                 n->call.callee->ident.name &&
                 n->call.callee->ident.name->len == 8 &&
-                memcmp(n->call.callee->ident.name->loc, "operator", 8) == 0 &&
+                memcmp(n->call.callee->ident.name->loc, "operator", 8) == 0)
+                opname_tok = n->call.callee->ident.name;
+            else if (n->call.callee && n->call.callee->kind == ND_QUALIFIED &&
+                     n->call.callee->qualified.global_scope &&
+                     n->call.callee->qualified.nparts == 1 &&
+                     n->call.callee->qualified.parts &&
+                     n->call.callee->qualified.parts[0] &&
+                     n->call.callee->qualified.parts[0]->len == 8 &&
+                     memcmp(n->call.callee->qualified.parts[0]->loc,
+                            "operator", 8) == 0)
+                opname_tok = n->call.callee->qualified.parts[0];
+            if (opname_tok &&
                 n->call.nargs == 1 && n->call.args[0]) {
-                OperatorKind ck = operator_kind_from_method_name(
-                                       n->call.callee->ident.name);
+                OperatorKind ck = operator_kind_from_method_name(opname_tok);
                 Type *at0 = n->call.args[0]->resolved_type;
                 bool is_size_t = at0 &&
                     ((at0->kind == TY_LONG || at0->kind == TY_LLONG)
@@ -17076,27 +17114,17 @@ static void emit_prelude(void) {
      * means a user `operator delete(void*, const std::nothrow_t&)`
      * emits as `(void*, void*)` and would collide with our
      * placement-delete fallback otherwise. */
-    /* Placement-operator fallback stubs — asymmetric detection per
-     * variant because overload-dedup in emit treats scalar vs array
-     * differently:
-     *
-     *   - Scalar variants (_ZnwmPv, _ZdlPvS_): when <new> is
-     *     included, sea-front emits libstdc++'s inline WITH body.
-     *     Skip the stub for ANY known definition (user or system)
-     *     to avoid redefinition. Pattern: g++.dg/expr/anew3.C.
-     *
-     *   - Array variants (_ZnamPv, _ZdaPvS_): overload-dedup
-     *     collapses array to scalar entry, so the array inline
-     *     emits as decl-only. Skip the stub only for USER
-     *     definitions; libstdc++'s decl-only doesn't satisfy
-     *     the link so the stub must remain when only the system
-     *     header provides it. Pattern: g++.dg/init/strlen.C,
-     *     g++.dg/cpp0x/initlist53.C define array placement-new
-     *     in user source and need the stub suppressed. */
+    /* Placement-operator fallback stubs — skip the stub for ANY
+     * known definition (user or system header), since the dedup
+     * key includes the operator kind so libstdc++'s scalar AND
+     * array placement inlines both emit with body, and the prelude
+     * stub would collide. Pattern: g++.dg/expr/anew3.C (system def
+     * suppresses scalar stub) + g++.dg/cpp0x/variadic-new.C (system
+     * def now also suppresses array stub). */
     bool u_pnw = scan_op_def_any_arity(g_tu, OP_NEW, 2);
-    bool u_pna = scan_op_def_user(g_tu, OP_NEW_ARRAY, 2);
+    bool u_pna = scan_op_def_any_arity(g_tu, OP_NEW_ARRAY, 2);
     bool u_pdl = scan_op_def_any_arity(g_tu, OP_DELETE, 2);
-    bool u_pda = scan_op_def_user(g_tu, OP_DELETE_ARRAY, 2);
+    bool u_pda = scan_op_def_any_arity(g_tu, OP_DELETE_ARRAY, 2);
     if (!u_pnw)
         fputs("static inline void *_ZnwmPv(unsigned long __sf_unused_0, "
               "void *__p) { (void)__sf_unused_0; return __p; }\n", stdout);
