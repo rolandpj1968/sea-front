@@ -1604,6 +1604,7 @@ hoist_done:
  *
  * Forward decls referenced in the body. */
 static bool class_has_user_default_ctor(Type *cls);
+static bool class_has_mutable_field_transitive(Type *cls);
 static Node *find_class_def_by_tag_args(Type *probe);
 static Node *find_class_def_by_tag_only(Type *probe);
 static int collect_call_arg_types(Node **args, int nargs, Type ***out_types);
@@ -9825,6 +9826,19 @@ static void emit_var_decl_inner(Node *n) {
         emit_var_decl_init_suffix(n);
         return;
     }
+    /* Drop top-level `const` when the type has any mutable transitive
+     * member. C-level const on a TU-scope object lands the storage in
+     * .rodata; the mutable-write cast-trick emitted by ND_ASSIGN
+     * (`*(int*)&obj.m = ...`) then segfaults at the write. N4659
+     * §10.1.1/8 [dcl.stc] allows the write because the field is
+     * mutable; the const-on-the-aggregate is C++ const-correctness
+     * only, not a storage promise. Pattern: g++.dg/cpp0x/mutable1.C. */
+    Type uncons = {0};
+    if (ty && ty->is_const && class_has_mutable_field_transitive(ty)) {
+        uncons = *ty;
+        uncons.is_const = false;
+        ty = &uncons;
+    }
     emit_type(ty);
     fputc(' ', stdout);
     if (n->var_decl.name) {
@@ -10500,6 +10514,41 @@ static bool class_has_user_default_ctor(Type *cls) {
         int np = is_ctor_def ? m->func.nparams
                              : (m->var_decl.ty ? m->var_decl.ty->nparams : 0);
         if (np == 0) return true;
+    }
+    return false;
+}
+
+/* True iff `cls` carries a `mutable` data member anywhere in its
+ * member or base-class subtree. Used at TU-scope var-decl emit so a
+ * `const T foo{};` whose T has a mutable member doesn't end up in
+ * .rodata — the mutable-write cast-trick (`*(int*)&foo.m = ...`)
+ * would segfault on a read-only-mapped object. N4659 §10.1.1/8
+ * [dcl.stc]. Pattern: g++.dg/cpp0x/mutable1.C. */
+static bool class_has_mutable_field_transitive(Type *cls) {
+    if (!cls || cls->kind != TY_STRUCT) return false;
+    Node *cd = cls->class_def;
+    if (!cd) {
+        cd = find_class_def_by_tag_args(cls);
+        if (!cd) cd = find_class_def_by_tag_only(cls);
+    }
+    if (!cd) return false;
+    for (int i = 0; i < cd->class_def.nmembers; i++) {
+        Node *m = cd->class_def.members[i];
+        if (!m || m->kind != ND_VAR_DECL || !m->var_decl.name) continue;
+        Type *cty = cd->class_def.ty;
+        if (cty && cty->class_region) {
+            Declaration *fd = lookup_in_scope(cty->class_region,
+                                               m->var_decl.name->loc,
+                                               m->var_decl.name->len);
+            if (fd && fd->is_mutable) return true;
+        }
+        if (m->var_decl.ty &&
+            class_has_mutable_field_transitive(m->var_decl.ty))
+            return true;
+    }
+    for (int i = 0; i < cd->class_def.nbase_types; i++) {
+        if (class_has_mutable_field_transitive(cd->class_def.base_types[i]))
+            return true;
     }
     return false;
 }
