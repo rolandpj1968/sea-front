@@ -809,6 +809,27 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
         c->cast = n->cast;
         c->cast.ty      = subst_type(n->cast.ty, map, arena);
         c->cast.operand = clone_node(n->cast.operand, map, arena);
+        /* New-expression initializer / placement args may contain
+         * pack-expansion sites (`new T(args...)`); route through
+         * clone_node_array_pack so `args...` expands to the bound
+         * pack at instantiation. Without this the args list keeps
+         * the template-body pack-ident verbatim and the cloned cast
+         * still has new_ctor_nargs==1 after empty-pack binding.
+         * N4659 §17.5.3.4 [temp.variadic.expand]. */
+        if (n->cast.new_ctor_args && n->cast.new_ctor_nargs > 0) {
+            int new_n = 0;
+            c->cast.new_ctor_args = clone_node_array_pack(
+                n->cast.new_ctor_args, n->cast.new_ctor_nargs,
+                map, arena, &new_n);
+            c->cast.new_ctor_nargs = new_n;
+        }
+        if (n->cast.new_placement_args && n->cast.new_placement_nargs > 0) {
+            int new_n = 0;
+            c->cast.new_placement_args = clone_node_array_pack(
+                n->cast.new_placement_args, n->cast.new_placement_nargs,
+                map, arena, &new_n);
+            c->cast.new_placement_nargs = new_n;
+        }
         break;
 
     case ND_SIZEOF:

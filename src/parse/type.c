@@ -2300,8 +2300,13 @@ no_grouped_abstract:;
      * Distinct from 'R(*)(args)' (pointer-to-function) above and from
      * 'R(name)(args)' (named function declarator). In type-name
      * context the only valid interpretation of 'R(' is a function
-     * type. We just balance the parens and call it opaque-func. */
-    if (parser_at(p, TK_LPAREN)) {
+     * type. We just balance the parens and call it opaque-func.
+     *
+     * Skipped when in_new_type_id: the new-expression grammar
+     * (N4659 §8.3.4/2 [expr.new]) forbids function-declarator in
+     * the new-type-id — the trailing '(args)' is the new-initializer
+     * and must remain for parse_new to consume. */
+    if (parser_at(p, TK_LPAREN) && !p->in_new_type_id) {
         parser_advance(p);
         parser_skip_to_matching_rparen(p);
         /* Trailing cv / ref / noexcept on the function type. */

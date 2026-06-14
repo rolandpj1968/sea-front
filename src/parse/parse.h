@@ -1704,6 +1704,15 @@ struct Parser {
      * is_pack on the resulting ND_PARAM. Reset before each call.
      * N4659 §17.5.3 [temp.variadic]. */
     bool pending_param_is_pack;
+    /* Suppress the greedy `R(args)` abstract-function-type capture in
+     * parse_type_name when set. The new-expression's new-type-id
+     * (N4659 §8.3.4/2 [expr.new]) restricts the declarator to
+     * ptr-operator / array — function-declarator is NOT allowed. The
+     * trailing `(args)` is the new-initializer, not part of the type.
+     * parse_new sets this true around its parse_type_name call.
+     * Pattern: variadic-new.C `new(&k) int(args...)` previously
+     * parsed `int` as a function type returning int taking `args...`. */
+    bool in_new_type_id;
     /* Side channel from consume_trailing_qualifiers → parse_declaration:
      * set true when the declarator carried a no-throw spec — either
      * `noexcept` / `noexcept(...)` or `throw()` (empty list). Codegen

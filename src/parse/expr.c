@@ -2580,7 +2580,17 @@ static Node *unary_expr(Parser *p) {
                 ty = arr;
             }
         } else {
+            /* N4659 §8.3.4/2 [expr.new] restricts the new-type-id
+             * declarator to ptr-operator / array — function-declarator
+             * is not allowed. Without the flag, parse_type_name would
+             * eat the new-initializer's '(args...)' as a function-type
+             * suffix on the element type (e.g. `int(args...)` →
+             * `int(...)` function type, which then renders as
+             * `int(*)(void)` once the pack expansion empties). */
+            bool saved_int = p->in_new_type_id;
+            p->in_new_type_id = true;
             ty = parse_type_name(p);
+            p->in_new_type_id = saved_int;
         }
 
         /* Optional initializer: (args) or braced-init-list {args}
@@ -2602,12 +2612,20 @@ static Node *unary_expr(Parser *p) {
             Vec args = vec_new(p->arena);
             if (!parser_at(p, TK_RPAREN)) {
                 Node *a0 = parse_assign_expr(p);
+                /* Pack expansion `expr...` in new-expression
+                 * initializer — N4659 §17.5.3.4
+                 * [temp.variadic.expand]. Mark the arg so the
+                 * cloner replicates per pack-bound type at
+                 * instantiation. Pattern: variadic-new.C
+                 * `new(&k) int(args...)`. */
+                if (a0 && parser_consume(p, TK_ELLIPSIS))
+                    a0->is_pack_expand = true;
                 if (a0) vec_push(&args, a0);
-                parser_consume(p, TK_ELLIPSIS);
                 while (parser_consume(p, TK_COMMA)) {
                     Node *an = parse_assign_expr(p);
+                    if (an && parser_consume(p, TK_ELLIPSIS))
+                        an->is_pack_expand = true;
                     if (an) vec_push(&args, an);
-                    parser_consume(p, TK_ELLIPSIS);
                 }
             }
             parser_expect(p, TK_RPAREN);

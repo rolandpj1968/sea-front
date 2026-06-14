@@ -1703,6 +1703,24 @@ static void hoist_new_expr(Node *cast, bool in_shortcircuit) {
     emit_expr(cast->cast.operand);
     fputs(";\n", stdout);
 
+    /* Scalar new with explicit initializer — `new T()` (value-init
+     * → 0) or `new T(x)` (direct-init). N4659 §8.5/8 [dcl.init]
+     * for scalar value-init. Without this the storage is left
+     * uninitialised. Pattern: variadic-new.C `new(&k) int(args...)`
+     * with empty pack expands ctor_nargs to 0 and we still need
+     * the value-init store. Class-pointee value-init is handled
+     * by the memset branch below. Multi-arg (na >= 2) is
+     * ill-formed for scalar; fall through. */
+    if (!is_class && cast->cast.new_value_init && na <= 1 &&
+        pointee && pointee->kind != TY_ARRAY && pointee->kind != TY_FUNC) {
+        emit_indent();
+        fprintf(stdout, "*%s = ", name);
+        if (na == 1 && cast->cast.new_ctor_args[0])
+            emit_expr(cast->cast.new_ctor_args[0]);
+        else
+            fputc('0', stdout);
+        fputs(";\n", stdout);
+    }
     /* Value-init memset, when applicable. */
     if (is_class && cast->cast.new_value_init && na == 0 &&
         !class_has_user_default_ctor(p_resolved)) {
@@ -7929,6 +7947,38 @@ static void emit_expr(Node *n) {
                 fputs("); __sf_new_tmp; })", stdout);
                 return;
             }
+        }
+        /* Scalar new-expression with explicit initializer — `new T()`
+         * (value-init → 0) or `new T(x)` (direct-init). N4659 §8.5/8
+         * [dcl.init] for value-init of scalar; §8.5.1 for direct-init.
+         * Without this branch the cast falls through to a bare
+         * `(int*)_ZnwmPv(...)` that drops the initializer entirely
+         * and leaves the storage uninitialized. Pattern:
+         * variadic-new.C `new(&k) int(args...)` with empty pack.
+         * Multi-arg shapes (na >= 2) for scalar are ill-formed in
+         * C++; fall through to the default cast emit so we don't
+         * silently miscompile. */
+        if (n->cast.is_new_expr && n->cast.ty && n->cast.ty->kind == TY_PTR &&
+            n->cast.ty->base &&
+            n->cast.ty->base->kind != TY_STRUCT &&
+            n->cast.ty->base->kind != TY_UNION &&
+            n->cast.ty->base->kind != TY_ARRAY &&
+            n->cast.new_value_init && n->cast.new_ctor_nargs <= 1) {
+            int na = n->cast.new_ctor_nargs;
+            fputs("({ ", stdout);
+            emit_type(n->cast.ty);
+            fputs(" __sf_new_tmp = (", stdout);
+            emit_type(n->cast.ty);
+            fputc(')', stdout);
+            emit_expr(n->cast.operand);
+            fputs("; *__sf_new_tmp = ", stdout);
+            if (na == 1 && n->cast.new_ctor_args[0]) {
+                emit_expr(n->cast.new_ctor_args[0]);
+            } else {
+                fputc('0', stdout);
+            }
+            fputs("; __sf_new_tmp; })", stdout);
+            return;
         }
         /* Cast TO a reference type — target lowers to T*. The cast
          * binds an lvalue (or the result of a ref-yielding expr) to
