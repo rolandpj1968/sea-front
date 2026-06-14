@@ -5568,6 +5568,38 @@ static void emit_expr(Node *n) {
              * pre-free work to do. Pattern: g++.dg/opt/pr42508.C —
              * `~A() { delete prev; }` reached with prev == NULL. */
             bool null_guard = has_virt_dtor || has_dtor;
+            /* When the delete operand may have side effects and we
+             * need to read it multiple times (vptr load + dtor call
+             * + free, and the null-guard), bind to a stmt-expr local
+             * so the operand evaluates exactly once. A bare ident
+             * has no side effects, so keep the older form for it.
+             * Pattern: g++.dg/expr/delete2.C `delete f();`. */
+            bool need_temp = opnd && opnd->kind != ND_IDENT &&
+                             (null_guard || has_virt_dtor);
+            if (need_temp) {
+                fputs("({ ", stdout);
+                emit_type(pt);
+                fputs(" __sf_del = ", stdout);
+                emit_expr(opnd);
+                fputs("; ", stdout);
+                if (null_guard) fputs("if (__sf_del) ", stdout);
+                if (has_virt_dtor) {
+                    Type *root = vptr_owner_class(pointee);
+                    if (!root) root = pointee;
+                    fputs("_ZdlPv(((struct ", stdout);
+                    mangle_class_tag(root);
+                    fputs(" *)__sf_del)->__sf_vptr->__dtor((struct ", stdout);
+                    mangle_class_tag(root);
+                    fputs(" *)__sf_del));", stdout);
+                } else if (has_dtor) {
+                    mangle_class_dtor(pointee);
+                    fputs("(__sf_del); _ZdlPv(__sf_del);", stdout);
+                } else {
+                    fputs("_ZdlPv(__sf_del);", stdout);
+                }
+                fputs(" })", stdout);
+                return;
+            }
             fputc('(', stdout);
             if (null_guard) {
                 emit_expr(opnd);
