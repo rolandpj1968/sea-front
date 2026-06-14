@@ -1657,7 +1657,7 @@ static void hoist_new_expr(Node *cast, bool in_shortcircuit) {
         Type **at = NULL;
         int nat = collect_call_arg_types(cast->cast.new_ctor_args, na, &at);
         Type **pty = NULL;
-        int np = resolve_overload(p_resolved, NULL, true, at, nat,
+        int np = resolve_overload(p_resolved, NULL, /*is_ctor=*/true, at, nat,
                                    false, &pty, NULL);
         if (np < 0 || np != na) implicit_copy_assign = true;
     }
@@ -1770,7 +1770,7 @@ static void hoist_new_expr(Node *cast, bool in_shortcircuit) {
             Node *brace_arg = cast->cast.new_ctor_args[i];
             Type *bat[1] = { brace_arg ? brace_arg->resolved_type : NULL };
             Type **bpty = NULL;
-            int bnp = resolve_overload(p_resolved, NULL, true,
+            int bnp = resolve_overload(p_resolved, NULL, /*is_ctor=*/true,
                                         bat, 1, false, &bpty, NULL);
             emit_indent();
             mangle_class_ctor(p_resolved, bpty, bnp >= 0 ? bnp : 1);
@@ -1785,7 +1785,7 @@ static void hoist_new_expr(Node *cast, bool in_shortcircuit) {
         Type **at = NULL;
         int nat = collect_call_arg_types(cast->cast.new_ctor_args, na, &at);
         Type **pty = NULL;
-        int np = resolve_overload(p_resolved, NULL, true, at, nat,
+        int np = resolve_overload(p_resolved, NULL, /*is_ctor=*/true, at, nat,
                                    false, &pty, NULL);
         if (np < 0 && na == 0 && p_resolved->has_default_ctor) {
             np = 0; pty = NULL;
@@ -2068,7 +2068,7 @@ static void hoist_temps_in_expr(Node *n, bool in_shortcircuit) {
                             tokens_equal(src->tag, pt->tag)) {
                             Type *at[1] = { src };
                             Type **pty = NULL;
-                            int np = resolve_overload(pt, NULL, true,
+                            int np = resolve_overload(pt, NULL, /*is_ctor=*/true,
                                                        at, 1, false,
                                                        &pty, NULL);
                             if (np >= 0 && pty && pty[0] &&
@@ -11230,7 +11230,7 @@ static void emit_stmt(Node *n) {
                         int na = collect_call_arg_types(
                             op->call.args, op->call.nargs, &at);
                         Type **pty = NULL;
-                        int np = resolve_overload(op_ty, NULL, true,
+                        int np = resolve_overload(op_ty, NULL, /*is_ctor=*/true,
                                                    at, na, false,
                                                    &pty, NULL);
                         if (np < 0 && na == 0 && op_ty->has_default_ctor) {
@@ -17082,12 +17082,12 @@ static void emit_prelude(void) {
      * fallback. Skip the fallback when the user defines their own
      * (their static-inline would clash with this one). Pattern:
      * g++.dg/opt/alias4.C, g++.dg/init/new26.C. */
-    bool u_nw = tu_defines_op_with_kind(g_tu, OP_NEW, 1, TY_LONG, false) ||
-                tu_defines_op_with_kind(g_tu, OP_NEW, 1, TY_LLONG, false);
-    bool u_na = tu_defines_op_with_kind(g_tu, OP_NEW_ARRAY, 1, TY_LONG, false) ||
-                tu_defines_op_with_kind(g_tu, OP_NEW_ARRAY, 1, TY_LLONG, false);
-    bool u_dl = tu_defines_op_with_kind(g_tu, OP_DELETE, 1, TY_VOID, true);
-    bool u_da = tu_defines_op_with_kind(g_tu, OP_DELETE_ARRAY, 1, TY_VOID, true);
+    bool u_nw = tu_defines_op_with_kind(g_tu, OP_NEW, 1, TY_LONG, /*p0_is_ptr=*/false) ||
+                tu_defines_op_with_kind(g_tu, OP_NEW, 1, TY_LLONG, /*p0_is_ptr=*/false);
+    bool u_na = tu_defines_op_with_kind(g_tu, OP_NEW_ARRAY, 1, TY_LONG, /*p0_is_ptr=*/false) ||
+                tu_defines_op_with_kind(g_tu, OP_NEW_ARRAY, 1, TY_LLONG, /*p0_is_ptr=*/false);
+    bool u_dl = tu_defines_op_with_kind(g_tu, OP_DELETE, 1, TY_VOID, /*p0_is_ptr=*/true);
+    bool u_da = tu_defines_op_with_kind(g_tu, OP_DELETE_ARRAY, 1, TY_VOID, /*p0_is_ptr=*/true);
     fputs("extern void *malloc(unsigned long);\n", stdout);
     fputs("extern void  free(void *);\n", stdout);
     /* Static-inline forwards over libc malloc/free so cc resolves
