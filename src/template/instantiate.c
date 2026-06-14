@@ -1444,30 +1444,30 @@ bool deduce_template_args(Node *tmpl_func, Type **arg_types, int nargs,
         if (!deduce_from_pair(P, arg_types[i], out))
             return false;
     }
-    if (pack_param && nargs > n_non_pack) {
+    if (pack_param) {
         /* Walk through ref/ptr/array wrappers to find the dependent
          * leaf so forwarding-ref pack `Args&&... args` binds Args
-         * correctly. Storage borrowed from the SubstMap's arena. */
+         * correctly. Storage borrowed from the SubstMap's arena.
+         * Includes the EMPTY-PACK case (`f()` with no trailing args)
+         * — still bind as a 0-element pack so build_template_id
+         * recognises the deduction succeeded and instantiation
+         * picks up f<>(). */
         Type *leaf = pack_param->param.ty;
         while (leaf && (leaf->kind == TY_REF || leaf->kind == TY_RVALREF ||
                         leaf->kind == TY_PTR || leaf->kind == TY_ARRAY) &&
                leaf->base)
             leaf = leaf->base;
         if (leaf && leaf->kind == TY_DEPENDENT && leaf->tag) {
-            int npack = nargs - n_non_pack;
+            int npack = (nargs > n_non_pack) ? (nargs - n_non_pack) : 0;
             if (npack == 1) {
                 /* Single-arg case: bind as a regular non-pack entry
-                 * so the cloner doesn't rename `args`→`args_0`. A
-                 * 1-element expansion is observationally a rename,
-                 * and several lambda-capture-discovery paths (nested
-                 * lambdas with implicit captures via `[&]`) miss
-                 * args_0 because sea-front's capture walk runs at
-                 * parse time on the source template. Multi-arg
-                 * packs (npack > 1) genuinely need expansion. */
+                 * so the cloner doesn't rename `args`→`args_0`. */
                 subst_map_add(out, leaf->tag, arg_types[n_non_pack]);
             } else {
-                Type **pack_list = arena_alloc(out->arena,
-                                                sizeof(Type *) * npack);
+                /* 0 or 2+ args → genuine pack binding. */
+                Type **pack_list = npack > 0
+                    ? arena_alloc(out->arena, sizeof(Type *) * npack)
+                    : NULL;
                 for (int i = 0; i < npack; i++)
                     pack_list[i] = arg_types[n_non_pack + i];
                 subst_map_add_pack(out, leaf->tag, pack_list, npack);
@@ -2128,6 +2128,10 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
                     if (t) subst_map_add(&map, pname, t);
                     continue;
                 }
+                /* 0 or 2+ args → genuine pack binding. Bind even
+                 * the empty case so the cloner expands `args...`
+                 * sites to zero elements and the function param
+                 * disappears from the signature. */
                 Type **pack_list = npack > 0
                     ? arena_alloc(arena, sizeof(Type *) * npack) : NULL;
                 int pi = 0;
@@ -2135,8 +2139,7 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
                     Type *t = type_arg_from_node(template_id->template_id.args[j]);
                     if (t) pack_list[pi++] = t;
                 }
-                if (pi > 0)
-                    subst_map_add_pack(&map, pname, pack_list, pi);
+                subst_map_add_pack(&map, pname, pack_list, pi);
                 continue;
             }
 
