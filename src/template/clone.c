@@ -1054,19 +1054,75 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
         static int s_lambda_inst_counter = 0;
         int        idx = ++s_lambda_inst_counter;
 
-        /* 1. Clone captures[] with resolved_type substituted. */
+        /* 1. Clone captures[] with resolved_type substituted; expand
+         * pack-bound captures to N entries (one per pack-bound type).
+         * A capture is pack-bound when its resolved_type's leaf is a
+         * TY_DEPENDENT tag that the SubstMap has as a pack entry.
+         * Synth names follow the same `<base>_<i>` convention as the
+         * function-param-pack expansion in clone_node_array_pack so
+         * the lambda body's references resolve uniformly after sema
+         * re-runs on the clone. N4659 §8.1.5.2 [expr.prim.lambda.closure]
+         * + §17.5.3 [temp.variadic]. */
         Capture *src_caps = n->lambda.captures;
         int      ncap     = n->lambda.ncaptures;
         Capture *new_caps = NULL;
+        int new_ncap = 0;
         if (ncap > 0) {
-            new_caps = arena_alloc(arena, ncap * sizeof(Capture));
+            /* First pass: compute expanded count. */
+            int total = 0;
             for (int i = 0; i < ncap; i++) {
-                new_caps[i] = src_caps[i];
-                if (src_caps[i].resolved_type)
-                    new_caps[i].resolved_type =
-                        subst_type(src_caps[i].resolved_type, map, arena);
+                SubstEntry *pe = NULL;
+                Type *rt = src_caps[i].resolved_type;
+                Type *leaf = rt;
+                while (leaf && (leaf->kind == TY_REF ||
+                                leaf->kind == TY_RVALREF ||
+                                leaf->kind == TY_PTR ||
+                                leaf->kind == TY_ARRAY) && leaf->base)
+                    leaf = leaf->base;
+                if (leaf && leaf->kind == TY_DEPENDENT)
+                    pe = subst_map_lookup_pack(map, leaf->tag);
+                if (pe) total += pe->pack_ntypes;
+                else    total += 1;
             }
+            new_caps = arena_alloc(arena, total * sizeof(Capture));
+            int oi = 0;
+            for (int i = 0; i < ncap; i++) {
+                Type *rt = src_caps[i].resolved_type;
+                Type *leaf = rt;
+                while (leaf && (leaf->kind == TY_REF ||
+                                leaf->kind == TY_RVALREF ||
+                                leaf->kind == TY_PTR ||
+                                leaf->kind == TY_ARRAY) && leaf->base)
+                    leaf = leaf->base;
+                SubstEntry *pe = NULL;
+                if (leaf && leaf->kind == TY_DEPENDENT)
+                    pe = subst_map_lookup_pack(map, leaf->tag);
+                if (pe && src_caps[i].name) {
+                    for (int j = 0; j < pe->pack_ntypes; j++) {
+                        new_caps[oi] = src_caps[i];
+                        new_caps[oi].name = synth_pack_name(
+                            src_caps[i].name, j, arena);
+                        /* Wrap pack type with the original ref shape
+                         * (by_ref => TY_PTR/REF wrapper preserved via
+                         * subst_type on a freshly-bound non-pack entry
+                         * is awkward — emit the leaf type directly;
+                         * sea-front's lambda emit treats by_ref via
+                         * pointer storage regardless). */
+                        new_caps[oi].resolved_type = pe->pack_types[j];
+                        new_caps[oi].resolved_decl = NULL;
+                        oi++;
+                    }
+                } else {
+                    new_caps[oi] = src_caps[i];
+                    if (rt)
+                        new_caps[oi].resolved_type =
+                            subst_type(rt, map, arena);
+                    oi++;
+                }
+            }
+            new_ncap = total;
         }
+        ncap = new_ncap;  /* downstream uses ncap */
 
         /* 2. Build a fresh closure TY_STRUCT with a unique tag. */
         Token *src_tag = n->lambda.closure_tag;
@@ -1089,7 +1145,11 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
         new_closure->kind = TY_STRUCT;
         new_closure->tag  = new_tag;
 
-        /* 3. Clone the closure ND_CLASS_DEF (members get substituted). */
+        /* 3. Clone the closure ND_CLASS_DEF (members get substituted).
+         * If we expanded any pack captures (new_ncap != source ncap),
+         * the cloned source cdef would still have the source's single
+         * pack-member; rebuild the members from new_caps so the
+         * closure layout matches the expanded captures one-to-one. */
         Node *src_cdef = n->lambda.closure_type
                        ? n->lambda.closure_type->class_def : NULL;
         Node *new_cdef = NULL;
@@ -1098,6 +1158,46 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
             new_cdef->class_def.tag = new_tag;
             new_cdef->class_def.ty  = new_closure;
             new_closure->class_def  = new_cdef;
+            /* Detect whether ANY capture was pack-renamed (even when
+             * the pack bound to a single type, the name changed from
+             * `args` to `args_0`). Rebuild members from new_caps so
+             * the closure field names match the body's expanded
+             * references. */
+            bool any_renamed = false;
+            for (int i = 0; i < n->lambda.ncaptures && i < new_ncap; i++) {
+                if (n->lambda.captures[i].name != new_caps[i].name) {
+                    any_renamed = true;
+                    break;
+                }
+            }
+            if (new_ncap != n->lambda.ncaptures || any_renamed) {
+                /* Rebuild members from new_caps: one ND_VAR_DECL per
+                 * capture. For by-ref captures, the C-side field type
+                 * is a pointer (sea-front lowers refs to pointers in
+                 * closure storage); for by-value, it's the resolved
+                 * type as-is. Mirrors what parse_lambda's closure
+                 * synthesis would have produced for the expanded
+                 * capture list directly. */
+                Node **mems = arena_alloc(arena, new_ncap * sizeof(Node *));
+                for (int i = 0; i < new_ncap; i++) {
+                    Node *m = arena_alloc(arena, sizeof(Node));
+                    memset(m, 0, sizeof(*m));
+                    m->kind = ND_VAR_DECL;
+                    m->var_decl.name = new_caps[i].name;
+                    Type *ft = new_caps[i].resolved_type;
+                    if (new_caps[i].by_ref && ft) {
+                        Type *pt = arena_alloc(arena, sizeof(Type));
+                        memset(pt, 0, sizeof(*pt));
+                        pt->kind = TY_PTR;
+                        pt->base = ft;
+                        ft = pt;
+                    }
+                    m->var_decl.ty = ft;
+                    mems[i] = m;
+                }
+                new_cdef->class_def.members = mems;
+                new_cdef->class_def.nmembers = new_ncap;
+            }
         }
 
         /* 4. Clone the lambda func_def. Reusing clone_node for

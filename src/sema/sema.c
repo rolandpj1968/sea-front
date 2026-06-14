@@ -1913,10 +1913,11 @@ static Node *build_template_id_from_deduced(Sema *s, Token *tname,
         bool counted = false;
         if (tp && tp->param.is_pack && pname) {
             for (int e = 0; e < deduced->nentries; e++) {
-                if (!deduced->entries[e].is_pack) continue;
                 Token *en = deduced->entries[e].param_name;
                 if (en && tokens_equal(en, pname)) {
-                    total += deduced->entries[e].pack_ntypes;
+                    total += deduced->entries[e].is_pack
+                               ? deduced->entries[e].pack_ntypes
+                               : 1;  /* single-arg fallback */
                     counted = true;
                     break;
                 }
@@ -1942,6 +1943,23 @@ static Node *build_template_id_from_deduced(Sema *s, Token *tname,
                         arg->var_decl.ty = deduced->entries[e].pack_types[j];
                         tid_args[ai++] = arg;
                     }
+                    expanded = true;
+                    break;
+                }
+            }
+            if (expanded) continue;
+            /* Single-arg fallback: deduce bound this pack as a
+             * non-pack entry. Emit one type-arg from that entry. */
+            for (int e = 0; e < deduced->nentries; e++) {
+                if (deduced->entries[e].is_pack) continue;
+                Token *en = deduced->entries[e].param_name;
+                if (en && tokens_equal(en, pname) &&
+                    deduced->entries[e].concrete_type) {
+                    Node *arg = arena_alloc(s->arena, sizeof(Node));
+                    memset(arg, 0, sizeof(Node));
+                    arg->kind = ND_VAR_DECL;
+                    arg->var_decl.ty = deduced->entries[e].concrete_type;
+                    tid_args[ai++] = arg;
                     expanded = true;
                     break;
                 }
