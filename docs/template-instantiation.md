@@ -283,7 +283,7 @@ machinery still treats packs as single-element entries. Phases:
   treat packs as if `is_pack` were false (1-element). `--dump-ast`
   shows the tags for verification.
 
-**Phase 2 — Pack-list SubstMap + cloner expansion (attempted; reverted).**
+**Phase 2 — Pack-list SubstMap + cloner expansion (shipped, foundation only).**
 - Extended `SubstEntry` (clone.h) to optionally carry a list of
   concrete types when `param->is_pack`:
   ```c
@@ -309,23 +309,31 @@ machinery still treats packs as single-element entries. Phases:
   so re-references inside the body resolve to the right C-level
   identifier per expansion.
 
-**Why reverted (lesson):** the attempt worked for simple
-synthesised tests but broke `g++.dg/cpp0x/lambda/lambda-nested8.C`
-because nested lambda captures name the pack identifier
-DIRECTLY (`[&]() { foo(args...); }();`). Renaming the function
-param `args` to `args_0` left those captures pointing at a
-non-existent name. A complete fix needs lambda-capture
-pack-expansion too: a `[&]` capture of a pack-bound name must
-expand to N captures (one per synth name), and the lambda body's
-references must follow. That's a more invasive change than the
-current cloner shape supports cleanly. The single-arg fallback
-(bind as non-pack, no rename) avoids the regression for
-1-element packs but doesn't unlock the multi-arg cases that
-needed the expansion in the first place. A clean phase 2 needs
-the lambda-capture-expansion path before the function-param
-expansion can ship safely. Net win on dg tests was 0 either
-way — phase 1 (AST tags) stays in; the rest stays as a design
-debt entry until lambda capture-pack-expansion is in scope.
+**Ship details:**
+- Single-arg fallback in deduce + instantiation primary binding
+  + sema's template-id build: when a pack binds to one type,
+  bind as non-pack to avoid renaming the function param.
+- Lambda-capture pack expansion: when a capture's resolved-type
+  leaf is a pack-bound TY_DEPENDENT, expand the capture to one
+  entry per pack-bound type with synth `<base>_<i>` names; the
+  closure ND_CLASS_DEF members are rebuilt from the expanded
+  list (so closure field names match body references).
+
+**dg-test impact: zero.** The real dg variadic tests (variadic-
+init, variadic-new, variadic-tuple, etc.) need additional
+expansion sites this phase doesn't cover:
+- Pack-expansion in array initialisers: `{ (M + N)..., -1 }`
+- Pack-expansion in new-expression args: `new(p) int(args...)`
+- Pack-expansion in throw-spec: `throw(Exceptions...)`
+- Recursive variadic templates (tuple-style head + tail<Ts...>)
+- Nested-lambda capture discovery (lambda-nested8 — pre-existing
+  gap, NOT regressed by phase 2)
+
+Phase 2 is the foundation: SubstEntry carries pack lists,
+deduce binds packs, the cloner expands function-param and
+call-arg pack-expansion sites. Later phases extend the
+expansion to the remaining syntactic positions and to
+recursive instantiation patterns.
 
 **Phase 3 — Mangling.**
 - Include each pack-bound type in the mangled instantiation
