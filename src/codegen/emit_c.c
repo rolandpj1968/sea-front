@@ -6008,6 +6008,27 @@ static void emit_expr(Node *n) {
             if (!conc) conc = n->call.callee->ident.resolved_decl->type;
             if (conc && (conc->kind == TY_STRUCT || conc->kind == TY_UNION) &&
                 n->call.nargs == 0 && conc->tag) {
+                /* Class temporary `T()` / `T{}` whose ctor has a side
+                 * effect (touches a global, increments a counter,
+                 * ...). The compound-literal lowering `(struct T){0}`
+                 * skips the ctor entirely. When the class has a user-
+                 * declared default ctor, wrap in a stmt-expr so the
+                 * ctor runs and the resulting temp is the value.
+                 * N4659 §8.2.3/2 [expr.type.conv] + §15.6.2
+                 * [class.base.init]. Pattern:
+                 * g++.dg/init/pr64527.C `(void) accessor{};`.
+                 *
+                 * Dtor at end-of-full-expression is not emitted here
+                 * — stmt-expr lifetime doesn't match C++ semantics
+                 * once the temp is consumed downstream. */
+                if (conc->has_default_ctor) {
+                    fputs("({ ", stdout);
+                    emit_type(conc);
+                    fputs(" __sf_ce_tmp; ", stdout);
+                    mangle_class_ctor(conc, NULL, 0);
+                    fputs("(&__sf_ce_tmp); __sf_ce_tmp; })", stdout);
+                    return;
+                }
                 fputc('(', stdout);
                 emit_type(conc);
                 fputs("){0}", stdout);
@@ -7737,6 +7758,33 @@ static void emit_expr(Node *n) {
             if (!n->cast.is_new_expr && n->cast.ty &&
                 (n->cast.ty->kind == TY_STRUCT ||
                  n->cast.ty->kind == TY_UNION)) {
+                /* Functional-cast value-init of a class whose default
+                 * ctor has observable side effects (touches a global,
+                 * runs a user ctor on a non-trivially-default-
+                 * constructible member, ...): wrap in a stmt-expr so
+                 * the synth ctor runs. The compound-literal lowering
+                 * `(struct T){0}` alone bypasses every ctor.
+                 * N4659 §8.2.3/2 [expr.type.conv]. Pattern:
+                 * g++.dg/init/pr64527.C `(void) accessor{};`.
+                 *
+                 * Dtor at end-of-full-expression intentionally NOT
+                 * emitted here — running it inside the stmt-expr
+                 * would kill the temp before any downstream
+                 * consumer sees it. */
+                Type *ct = n->cast.ty;
+                if (!ct->class_def && ct->tag) {
+                    Node *d = find_class_def_by_tag_args(ct);
+                    if (!d) d = find_class_def_by_tag_only(ct);
+                    if (d && d->class_def.ty) ct = d->class_def.ty;
+                }
+                if (ct->has_default_ctor) {
+                    fputs("({ ", stdout);
+                    emit_type(n->cast.ty);
+                    fputs(" __sf_fc_tmp; ", stdout);
+                    mangle_class_ctor(ct, NULL, 0);
+                    fputs("(&__sf_fc_tmp); __sf_fc_tmp; })", stdout);
+                    return;
+                }
                 fputc('(', stdout);
                 emit_type(n->cast.ty);
                 fputs("){0}", stdout);
