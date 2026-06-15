@@ -70,6 +70,13 @@ static int g_indent = 0;
  * before each method body, restored after. NULL outside class
  * member emission. */
 static Node *g_current_class_def = NULL;
+/* When non-NULL, the implicit-this prefix in emit_ident emits this
+ * literal string instead of `this->`. Used by the brace-init-list
+ * functional-cast NSDMI emitter to retarget NSDMI member references
+ * from `this->name` to `__sf_il_tmp.name` (the synth temp inside the
+ * stmt-expr). Restored after each NSDMI emit. N4659 §12.6.2/9
+ * [class.base.init] applied to the §8.2.3 [expr.type.conv] form. */
+static const char *g_implicit_this_override = NULL;
 /* Return type of the function currently being emitted. Set by
  * emit_func_def / emit_method_as_free_fn so ND_RETURN can adapt to
  * reference returns (T& lowered to T*: 'return *x;' → 'return x;'). */
@@ -4923,6 +4930,8 @@ static void emit_expr(Node *n) {
                     }
             }
             if (lam_has_this) fputs("__self->__this->", stdout);
+            else if (g_implicit_this_override)
+                fputs(g_implicit_this_override, stdout);
             else              fputs("this->",            stdout);
             /* If the resolved declaration lives in a BASE class of
              * the current class, walk through the __sf_base chain
@@ -7754,7 +7763,86 @@ static void emit_expr(Node *n) {
          *
          * Without the value-init branch, `A{}.v` would lower as
          * `((struct A*)0).v` — a null-deref. */
-        if (!n->cast.operand) {
+        /* `T{}` previously parsed with operand=NULL; now the parser
+         * captures `{...}` as an ND_INIT_LIST. Treat an empty init-
+         * list as the same value-init shape — collapse to the
+         * NULL-operand branch below. */
+        bool empty_brace_init = n->cast.operand &&
+            n->cast.operand->kind == ND_INIT_LIST &&
+            n->cast.operand->init_list.nelems == 0;
+        /* `T{a, b, ...}` with non-empty init-list AND T has NSDMI for
+         * at least one member — emit as a stmt-expr that assigns
+         * each provided arg to its corresponding member, then runs
+         * any NSDMI for omitted members. NSDMI member references
+         * (e.g. `unsigned n = i;`) are retargeted from `this->name`
+         * to `__sf_il_tmp.name` via g_implicit_this_override.
+         * N4659 §12.6.2/9 [class.base.init] + §8.5.1 [dcl.init.aggr].
+         * Pattern: g++.dg/cpp1y/pr79937-3.C `X{1, X{2}.n}`. */
+        if (!n->cast.is_new_expr && n->cast.operand &&
+            n->cast.operand->kind == ND_INIT_LIST &&
+            n->cast.operand->init_list.nelems > 0 &&
+            n->cast.ty &&
+            (n->cast.ty->kind == TY_STRUCT || n->cast.ty->kind == TY_UNION)) {
+            Type *ct = n->cast.ty;
+            if (!ct->class_def && ct->tag) {
+                Node *d = find_class_def_by_tag_args(ct);
+                if (!d) d = find_class_def_by_tag_only(ct);
+                if (d && d->class_def.ty) ct = d->class_def.ty;
+            }
+            /* Only intercept when the class needs NSDMI fill-in for
+             * omitted members. The has_default_ctor flag tracks
+             * "needs synth ctor" which fires precisely when at least
+             * one member has an init that wouldn't otherwise run via
+             * aggregate-init. */
+            if (ct->has_default_ctor && ct->class_def) {
+                Node *cd = ct->class_def;
+                int ninit = n->cast.operand->init_list.nelems;
+                Node **inits = n->cast.operand->init_list.elems;
+                fputs("({ ", stdout);
+                emit_type(n->cast.ty);
+                fputs(" __sf_il_tmp = {0}; ", stdout);
+                Node *saved_cdef = g_current_class_def;
+                const char *saved_over = g_implicit_this_override;
+                int data_idx = 0;
+                for (int mi = 0; mi < cd->class_def.nmembers; mi++) {
+                    Node *m = cd->class_def.members[mi];
+                    if (!m || m->kind != ND_VAR_DECL) continue;
+                    if (!m->var_decl.ty ||
+                        m->var_decl.ty->kind == TY_FUNC) continue;
+                    if (m->var_decl.storage_flags & DECL_STATIC) continue;
+                    if (!m->var_decl.name) continue;
+                    fputs("__sf_il_tmp.", stdout);
+                    emit_token_text(m->var_decl.name);
+                    fputs(" = ", stdout);
+                    if (data_idx < ninit && inits[data_idx]) {
+                        /* Explicit arg from the caller: emit in the
+                         * surrounding context — do NOT retarget any
+                         * member refs to __sf_il_tmp, since the args
+                         * belong to the OUTER class scope (e.g.
+                         * `Y{2, i}` inside Y's NSDMI body uses outer
+                         * y's `i`, not the inner temp's i). */
+                        emit_expr(inits[data_idx]);
+                    } else if (m->var_decl.init) {
+                        /* NSDMI fallback for this member — retarget
+                         * `this->name` to `__sf_il_tmp.name` so the
+                         * default expression's member refs hit the
+                         * inner temp's fields. */
+                        g_current_class_def = cd;
+                        g_implicit_this_override = "__sf_il_tmp.";
+                        emit_expr(m->var_decl.init);
+                        g_current_class_def = saved_cdef;
+                        g_implicit_this_override = saved_over;
+                    } else {
+                        fputc('0', stdout);
+                    }
+                    fputs("; ", stdout);
+                    data_idx++;
+                }
+                fputs("__sf_il_tmp; })", stdout);
+                return;
+            }
+        }
+        if (!n->cast.operand || empty_brace_init) {
             if (!n->cast.is_new_expr && n->cast.ty &&
                 (n->cast.ty->kind == TY_STRUCT ||
                  n->cast.ty->kind == TY_UNION)) {
@@ -11911,6 +11999,68 @@ static void emit_stmt(Node *n) {
                                     if (!m->var_decl.name) continue;
                                     mtys[nmtys++] = m->var_decl.ty;
                                 }
+                            }
+                            /* Class has NSDMI for at least one member
+                             * (has_default_ctor set) and the brace-
+                             * init args don't cover every member:
+                             * emit each member assignment in source
+                             * order, falling back to the member's
+                             * NSDMI when no arg matches. NSDMI member
+                             * references retarget to `name.member`
+                             * via g_implicit_this_override. N4659
+                             * §12.6.2/9 + §11.6.4 [dcl.init.list].
+                             * Pattern: g++.dg/cpp1y/pr79937-4.C
+                             * `Y y { 1 };`. */
+                            if (cdef && n->var_decl.ty->has_default_ctor) {
+                                /* Build the per-member prefix once —
+                                 * `y.` — and stash it in the override
+                                 * so emit_ident's implicit-this
+                                 * branch retargets NSDMI refs. */
+                                char prefix[256];
+                                int pl = snprintf(prefix, sizeof(prefix),
+                                                  "%.*s.",
+                                                  n->var_decl.name->len,
+                                                  n->var_decl.name->loc);
+                                (void)pl;
+                                Node *saved_cdef = g_current_class_def;
+                                const char *saved_over = g_implicit_this_override;
+                                g_current_class_def = cdef;
+                                g_implicit_this_override = prefix;
+                                int data_idx = 0;
+                                for (int mi = 0;
+                                     mi < cdef->class_def.nmembers;
+                                     mi++) {
+                                    Node *m = cdef->class_def.members[mi];
+                                    if (!m || m->kind != ND_VAR_DECL) continue;
+                                    if (m->var_decl.storage_flags & DECL_STATIC)
+                                        continue;
+                                    if (!m->var_decl.ty ||
+                                        m->var_decl.ty->kind == TY_FUNC)
+                                        continue;
+                                    if (!m->var_decl.name) continue;
+                                    if (mi > 0) emit_indent();
+                                    fprintf(stdout, "%.*s.",
+                                            n->var_decl.name->len,
+                                            n->var_decl.name->loc);
+                                    emit_token_text(m->var_decl.name);
+                                    fputs(" = ", stdout);
+                                    if (data_idx < n->var_decl.ctor_nargs &&
+                                        n->var_decl.ctor_args[data_idx]) {
+                                        emit_arg_for_param(
+                                            n->var_decl.ctor_args[data_idx],
+                                            data_idx < nmtys
+                                                ? mtys[data_idx] : NULL);
+                                    } else if (m->var_decl.init) {
+                                        emit_expr(m->var_decl.init);
+                                    } else {
+                                        fputc('0', stdout);
+                                    }
+                                    fputs(";\n", stdout);
+                                    data_idx++;
+                                }
+                                g_current_class_def = saved_cdef;
+                                g_implicit_this_override = saved_over;
+                                return;
                             }
                             fprintf(stdout, "%.*s = (",
                                     n->var_decl.name->len,

@@ -1431,11 +1431,35 @@ static Node *primary_expr(Parser *p) {
             parser_expect(p, TK_RPAREN);
             return new_cast_node(p, ty, inner, tok);
         }
-        /* Braced-init T{...} — N4659 §8.2.3/1 alternative form. We
-         * don't model the init-list; skip the body and emit a stub. */
+        /* Braced functional cast `T{...}` — N4659 §8.2.3/1
+         * alternative form. Parse the brace-init-list as an
+         * ND_INIT_LIST and hang it off the cast operand so the
+         * emitter can lower per-member (aggregate-init, or NSDMI
+         * fill-ins for omitted elements). Without this, the elements
+         * are silently dropped and `X{1, X{2}.n}` lowers to
+         * `({ X __t; X_ctor(&__t); __t; })` — all args lost.
+         * Pattern: g++.dg/cpp1y/pr79937-3.C. */
+        Token *brace_tok = parser_peek(p);
         parser_expect(p, TK_LBRACE);
-        parser_skip_balanced(p, TK_LBRACE, TK_RBRACE);
-        return new_cast_node(p, ty, /*operand=*/NULL, tok);
+        Node *il = new_node(p, ND_INIT_LIST, brace_tok);
+        Vec elems = vec_new(p->arena);
+        if (!parser_at(p, TK_RBRACE)) {
+            Node *e0 = parse_assign_expr(p);
+            if (e0 && parser_consume(p, TK_ELLIPSIS))
+                e0->is_pack_expand = true;
+            if (e0) vec_push(&elems, e0);
+            while (parser_consume(p, TK_COMMA)) {
+                if (parser_at(p, TK_RBRACE)) break;
+                Node *en = parse_assign_expr(p);
+                if (en && parser_consume(p, TK_ELLIPSIS))
+                    en->is_pack_expand = true;
+                if (en) vec_push(&elems, en);
+            }
+        }
+        parser_expect(p, TK_RBRACE);
+        il->init_list.elems  = (Node **)elems.data;
+        il->init_list.nelems = elems.len;
+        return new_cast_node(p, ty, il, tok);
     }
 
     /* GCC __builtin_offsetof(type, member). Parse type + member-token
