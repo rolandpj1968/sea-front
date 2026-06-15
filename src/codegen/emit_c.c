@@ -11583,7 +11583,19 @@ static void emit_block(Node *n) {
 
     for (int i = 0; i < n->block.nstmts; i++) {
         Node *s = n->block.stmts[i];
-        if (g_cf.func_has_cleanups && stmt_has_class_temp(s)) {
+        /* Reference-binding-to-temp: `const T& r = TempProducing();`
+         * extends the temp's lifetime through r's enclosing scope
+         * (N4659 §15.2/6 [class.temporary]). The default mini-block
+         * scopes the temp tighter than that and runs its dtor too
+         * early, leaving r dangling for the rest of its scope. Push
+         * the temp into the OUTER block's cleanup chain instead by
+         * skipping the mini-block. Pattern: g++.dg/init/ref19.C. */
+        bool var_is_ref_init = (s && s->kind == ND_VAR_DECL &&
+                                s->var_decl.ty &&
+                                ty_is_ref(s->var_decl.ty) &&
+                                s->var_decl.init);
+        if (g_cf.func_has_cleanups && stmt_has_class_temp(s) &&
+            !var_is_ref_init) {
             /* Slice D-MiniBlock: wrap statement so its temps die
              * at end of full-expression, not end of outer block. */
             emit_stmt_with_miniblock(s);
