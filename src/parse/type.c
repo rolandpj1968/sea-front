@@ -2071,11 +2071,11 @@ bool parser_at_type_specifier(Parser *p) {
              *    should hide the type-name (§6.3.10/2).
              * Distinguish ctor-ness via the function's home region:
              * a ctor lives inside its class's region; a free function
-             * shares only the name. Pattern: gcc 4.8
+             * shares only the name. Pattern:
              *   struct token { ... };
              *   static int token(void) { ... };   // free function, NOT a ctor
              *   int u = token();                  // must be call, not decl
-             * Same shape applies to enum tags (gimple_code). */
+             * Same shape applies to enum tags. */
             if (vd && vd->type && vd->type->kind == TY_FUNC) {
                 Declaration *td = lookup_unqualified_kind(p, tok->loc,
                                                            tok->len,

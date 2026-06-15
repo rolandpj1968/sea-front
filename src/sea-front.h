@@ -364,10 +364,10 @@ typedef struct Type Type;
 
 /* C++ standard version flag */
 typedef enum {
-    CPP03,  /* C++03 (ISO 14882:2003) — gcc 4.8 bootstrap target */
+    CPP03,  /* C++03 (ISO 14882:2003) */
     CPP11,  /* C++11 (ISO 14882:2011) — lambdas, auto, move, constexpr */
-    CPP14,  /* C++14 (ISO 14882:2014) — modern gcc build requirement */
-    CPP17,  /* C++17 (ISO 14882:2017) — LLVM/Clang build requirement */
+    CPP14,  /* C++14 (ISO 14882:2014) */
+    CPP17,  /* C++17 (ISO 14882:2017) */
     CPP20,  /* C++20 (ISO 14882:2020) — concepts, coroutines, modules */
     CPP23,  /* C++23 (ISO 14882:2023) — deducing this, if consteval */
 } CppStandard;

@@ -383,6 +383,21 @@ static void mark_enum_body_emitted(Token *toks) {
  * regular emitters, which appear later in the file. */
 static void emit_expr(Node *n);
 static void emit_type(Type *ty);
+
+/* Emit the stmt-expr opener for a new-expression: `({ T *__sf_new_tmp
+ * = (T *)operand` — no trailing semicolon. Used by every new-cast
+ * lowering path (copy-init, braced-init array, value-init memset,
+ * scalar value-init). Each caller appends its own trailing logic
+ * (typically `; ...; __sf_new_tmp; })`). N4659 §5.3.4 [expr.new]. */
+static void emit_new_cast_stmt_expr_open(Node *cast) {
+    fputs("({ ", stdout);
+    emit_type(cast->cast.ty);
+    fputs(" __sf_new_tmp = (", stdout);
+    emit_type(cast->cast.ty);
+    fputc(')', stdout);
+    emit_expr(cast->cast.operand);
+}
+
 static bool emit_anon_member_rewrite(Token *name);
 static void emit_array_dims(Type *array_chain);
 /* Walks a TY_PTR/TY_ARRAY chain and emits a C declarator interleaving
@@ -7950,12 +7965,7 @@ static void emit_expr(Node *n) {
                         arg0->kind == ND_IDENT && arg0->ident.name &&
                         is_ref_param(arg0->ident.name);
                     bool need_deref = arg_is_ref || arg_is_ref_param;
-                    fputs("({ ", stdout);
-                    emit_type(n->cast.ty);
-                    fputs(" __sf_new_tmp = (", stdout);
-                    emit_type(n->cast.ty);
-                    fputc(')', stdout);
-                    emit_expr(n->cast.operand);
+                    emit_new_cast_stmt_expr_open(n);
                     fputs("; *__sf_new_tmp = ", stdout);
                     if (need_deref) {
                         /* emit_arg_for_param would auto-deref ref-
@@ -7983,12 +7993,7 @@ static void emit_expr(Node *n) {
                  * `new A[2]{1, ""}` — A(int) for [0], A(const char*)
                  * for [1]. */
                 if (n->cast.new_array_count && na > 0) {
-                    fputs("({ ", stdout);
-                    emit_type(n->cast.ty);
-                    fputs(" __sf_new_tmp = (", stdout);
-                    emit_type(n->cast.ty);
-                    fputc(')', stdout);
-                    emit_expr(n->cast.operand);
+                    emit_new_cast_stmt_expr_open(n);
                     fputs("; ", stdout);
                     for (int i = 0; i < na; i++) {
                         Node *brace_arg = n->cast.new_ctor_args[i];
@@ -8183,12 +8188,7 @@ static void emit_expr(Node *n) {
              * Use the same stmt-expr shape so the result is the
              * allocated pointer. */
             if (na == 0 && p_resolved && !p_resolved->has_default_ctor) {
-                fputs("({ ", stdout);
-                emit_type(n->cast.ty);
-                fputs(" __sf_new_tmp = (", stdout);
-                emit_type(n->cast.ty);
-                fputc(')', stdout);
-                emit_expr(n->cast.operand);
+                emit_new_cast_stmt_expr_open(n);
                 /* Size for the memset comes from the malloc-call's
                  * first arg (always size or size*count). */
                 fputs("; memset(__sf_new_tmp, 0, ", stdout);
@@ -8220,12 +8220,7 @@ static void emit_expr(Node *n) {
             n->cast.ty->base->kind != TY_ARRAY &&
             n->cast.new_value_init && n->cast.new_ctor_nargs <= 1) {
             int na = n->cast.new_ctor_nargs;
-            fputs("({ ", stdout);
-            emit_type(n->cast.ty);
-            fputs(" __sf_new_tmp = (", stdout);
-            emit_type(n->cast.ty);
-            fputc(')', stdout);
-            emit_expr(n->cast.operand);
+            emit_new_cast_stmt_expr_open(n);
             fputs("; *__sf_new_tmp = ", stdout);
             if (na == 1 && n->cast.new_ctor_args[0]) {
                 emit_expr(n->cast.new_ctor_args[0]);
@@ -12415,9 +12410,7 @@ static void emit_stmt(Node *n) {
             fputs(") ", stdout);
             emit_stmt(body);
             decl_cond_cleanup_close(dc_saved);
-            g_indent--;
-            emit_indent();
-            fputs("}\n", stdout);
+            emit_close_brace();
             return;
         }
         bool body_wrap = g_cf.func_has_cleanups && subtree_has_cleanups(body);
@@ -12654,9 +12647,7 @@ static void emit_stmt(Node *n) {
             }
             emit_close_brace();
             decl_cond_cleanup_close(dc_saved);
-            g_indent--;
-            emit_indent();
-            fputs("}\n", stdout);
+            emit_close_brace();
             return;
         }
         bool body_wrap = g_cf.func_has_cleanups && subtree_has_cleanups(body);
@@ -13100,9 +13091,7 @@ static void emit_stmt(Node *n) {
             if (n->switch_.body) emit_stmt(n->switch_.body);
             else fputs(";\n", stdout);
             decl_cond_cleanup_close(dc_saved);
-            g_indent--;
-            emit_indent();
-            fputs("}\n", stdout);
+            emit_close_brace();
             return;
         }
         fputs("switch (", stdout);
@@ -13129,9 +13118,7 @@ static void emit_stmt(Node *n) {
             emit_indent();
             emit_stmt(n->case_.stmt);
         }
-        g_indent--;
-        emit_indent();
-        fputs("}\n", stdout);
+        emit_close_brace();
         return;
     case ND_DEFAULT:
         fputs("default: {\n", stdout);
@@ -13141,9 +13128,7 @@ static void emit_stmt(Node *n) {
             emit_indent();
             emit_stmt(n->default_.stmt);
         }
-        g_indent--;
-        emit_indent();
-        fputs("}\n", stdout);
+        emit_close_brace();
         return;
     case ND_BREAK:
         if (break_needs_cleanup()) {
@@ -13276,9 +13261,7 @@ static void emit_stmt(Node *n) {
             if (h->handler.body) emit_stmt(h->handler.body);
             emit_indent();
             fprintf(stdout, "goto __SF_try_%d_after;\n", id);
-            g_indent--;
-            emit_indent();
-            fputs("}\n", stdout);
+            emit_close_brace();
         }
         /* No handler matched — re-propagate by chaining outward. */
         {
@@ -13301,9 +13284,7 @@ static void emit_stmt(Node *n) {
             fprintf(stdout, "goto %s;\n", lbl);
         }
         fprintf(stdout, "__SF_try_%d_after: ;\n", id);
-        g_indent--;
-        emit_indent();
-        fputs("}\n", stdout);
+        emit_close_brace();
         return;
     }
     default:

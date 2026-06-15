@@ -20,7 +20,8 @@
  *     subset works, but full ICS rules (§16.3.3) aren't modelled.
  *   - Constant evaluation (constexpr) is out of scope.
  *   - Two-phase name lookup is single-phase plus the cloned-subtree
- *     re-visit shortcut — close enough for the gcc-4.8 workload.
+ *     re-visit shortcut — close enough for the C++03/C++11 workloads
+ *     in practice.
  *
  * The pass is intentionally lenient — unresolved expressions get
  * resolved_type = NULL and codegen falls back to dumping the source-

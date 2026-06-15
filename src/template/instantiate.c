@@ -3743,9 +3743,14 @@ void template_instantiate(Node *tu, Arena *arena) {
 
     /* Reverse the instantiated array so that transitive dependencies
      * (discovered in later rounds) appear before the types that
-     * reference them. This is a simple heuristic that works because
-     * the fixpoint loop discovers leaf types (e.g. holder<int>)
-     * AFTER the containing types (e.g. container<int>).
+     * reference them. SHORTCUT (ours, not the standard): the
+     * fixpoint loop happens to discover leaf types (holder<int>)
+     * AFTER their containing types (container<int>), so a single
+     * reversal produces a valid topological-ish order. A full
+     * Tarjan/Kahn sort would be the standard answer; this works
+     * for the shapes sea-front actually emits.
+     * TODO(seafront#tmpl-emit-order): proper toposort when an
+     * instantiation order needs more than the fixpoint reversal.
      *
      * Also do a topological sort: reorder all_instantiated so that template
      * instantiations that are used as by-value members of other
