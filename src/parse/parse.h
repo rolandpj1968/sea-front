@@ -412,6 +412,12 @@ struct Node {
         struct {
             TokenKind op;
             Node *operand;
+            /* delete-expression discriminator: false for `delete e`,
+             * true for `delete[] e`. The parser used to drop the
+             * '[]' suffix; codegen needs it to know whether to
+             * run element-wise destructors and recover the count
+             * from the Itanium array cookie. N4659 §8.3.5 [expr.delete]. */
+            bool is_delete_array;
         } unary;
 
         /* ND_TERNARY — N4659 §8.16 [expr.cond] */

@@ -1627,6 +1627,7 @@ hoist_done:
  * Forward decls referenced in the body. */
 static bool class_has_user_default_ctor(Type *cls);
 static bool class_has_mutable_field_transitive(Type *cls);
+static bool class_dtor_is_nontrivial(Type *cls);
 static bool class_is_observably_empty(Type *cls);
 static Node *find_class_def_by_tag_args(Type *probe);
 static Node *find_class_def_by_tag_only(Type *probe);
@@ -1689,8 +1690,17 @@ static void hoist_new_expr(Node *cast, bool in_shortcircuit) {
     int id = g_cf.next_label_id++;
     char *name = make_codegen_temp_name("new", id);
     bool array_loop = is_class && need_ctor && cast->cast.new_array_count && na == 0;
+    /* Itanium-ABI array cookie: `new T[N]` with non-trivially-
+     * destructible T allocates an extra sizeof(size_t) header before
+     * the array and writes N there so delete[] can recover the count.
+     * N4659 §5.3.4/16 [expr.new] + Itanium ABI §2.7. Skip for
+     * placement-new (caller-owned storage) and scalar new (no count).
+     * Pattern: g++.dg/cpp0x/defaulted19a.C. */
+    bool needs_cookie = cast->cast.new_array_count &&
+        cast->cast.new_placement_nargs == 0 &&
+        class_dtor_is_nontrivial(p_resolved);
     char nname[40];
-    if (array_loop)
+    if (array_loop || needs_cookie)
         snprintf(nname, sizeof(nname), "__sf_new_n_%d", id);
 
     /* Decl: `T *__sf_new_<id>;` */
@@ -1704,7 +1714,7 @@ static void hoist_new_expr(Node *cast, bool in_shortcircuit) {
      * codegen_temp_name. Otherwise N would re-evaluate (with
      * side effects). Pattern: g++.dg/template/new1.C
      * `new T[Blksize()]` — Blksize() must run exactly once. */
-    if (array_loop) {
+    if (array_loop || needs_cookie) {
         emit_indent();
         fprintf(stdout, "unsigned long %s = ", nname);
         emit_expr(cast->cast.new_array_count);
@@ -1719,13 +1729,37 @@ static void hoist_new_expr(Node *cast, bool in_shortcircuit) {
             cast->cast.operand->call.args[0]->binary.lhs->codegen_temp_name = nname;
     }
 
-    /* Allocation: `__sf_new_<id> = (T *)<malloc-call>;` */
-    emit_indent();
-    fprintf(stdout, "%s = (", name);
-    emit_type(tcast);
-    fputc(')', stdout);
-    emit_expr(cast->cast.operand);
-    fputs(";\n", stdout);
+    /* Allocation: `__sf_new_<id> = (T *)<malloc-call>;`. For array
+     * cookie cases, allocate `N*sizeof(T) + sizeof(size_t)`, write
+     * N into the cookie slot, then offset past it. */
+    if (needs_cookie) {
+        char rawname[48];
+        snprintf(rawname, sizeof(rawname), "__sf_new_raw_%d", id);
+        emit_indent();
+        fprintf(stdout, "void *%s = (void *)", rawname);
+        Node *op = cast->cast.operand;
+        if (op && op->kind == ND_CALL && op->call.callee) {
+            emit_expr(op->call.callee);
+        } else {
+            fputs("_Znam", stdout);
+        }
+        fprintf(stdout, "(%s * sizeof(", nname);
+        emit_type(pointee);
+        fprintf(stdout, ") + sizeof(unsigned long));\n");
+        emit_indent();
+        fprintf(stdout, "*(unsigned long *)%s = %s;\n", rawname, nname);
+        emit_indent();
+        fprintf(stdout, "%s = (", name);
+        emit_type(tcast);
+        fprintf(stdout, ")((char *)%s + sizeof(unsigned long));\n", rawname);
+    } else {
+        emit_indent();
+        fprintf(stdout, "%s = (", name);
+        emit_type(tcast);
+        fputc(')', stdout);
+        emit_expr(cast->cast.operand);
+        fputs(";\n", stdout);
+    }
 
     /* Scalar new with explicit initializer — `new T()` (value-init
      * → 0) or `new T(x)` (direct-init). N4659 §8.5/8 [dcl.init]
@@ -1867,16 +1901,29 @@ static void hoist_new_expr(Node *cast, bool in_shortcircuit) {
                 opdel = "_ZdlPv";
         }
         emit_indent();
-        if (opdel)
-            fprintf(stdout,
-                "if (__sf_exc_state.state == __SF_UNWIND_THROW) "
-                "{ %s(%s); __SF_unwind = __SF_UNWIND_THROW; "
-                "goto %s; }\n", opdel, name, tbuf);
-        else
+        if (opdel) {
+            /* When new[] allocated a cookie, the matching operator
+             * delete[] expects the original raw allocation pointer
+             * (cookie slot), not the offset element pointer. N4659
+             * §5.3.4/16 [expr.new]. Pattern: g++.dg/eh/new1.C —
+             * the user's `operator delete[]` compares against the
+             * raw `ptr` it captured at `operator new[]` time. */
+            if (needs_cookie) {
+                fprintf(stdout,
+                    "if (__sf_exc_state.state == __SF_UNWIND_THROW) "
+                    "{ %s(__sf_new_raw_%d); __SF_unwind = __SF_UNWIND_THROW; "
+                    "goto %s; }\n", opdel, id, tbuf);
+            } else {
+                fprintf(stdout,
+                    "if (__sf_exc_state.state == __SF_UNWIND_THROW) "
+                    "{ %s(%s); __SF_unwind = __SF_UNWIND_THROW; "
+                    "goto %s; }\n", opdel, name, tbuf);
+            }
+        } else
             fprintf(stdout, "__SF_CHAIN_THROW(%s);\n", tbuf);
     }
 
-    if (array_loop)
+    if (array_loop || needs_cookie)
         cast->cast.new_array_count->codegen_temp_name = NULL;
     cast->codegen_temp_name = name;
 }
@@ -5584,6 +5631,31 @@ static void emit_expr(Node *n) {
             }
             bool has_virt_dtor = pointee && class_has_virtual_dtor(pointee);
             bool has_dtor      = pointee && pointee->has_dtor;
+            /* Array-form `delete[] p` with non-trivially-destructible
+             * pointee: the matching new[] wrote an Itanium-ABI array
+             * cookie (size_t N at `p - sizeof(size_t)`) so the count
+             * is recoverable here. Run dtors over [0, N) in reverse
+             * and call _ZdaPv on the ORIGINAL allocation (the cookie
+             * slot, not the offset element pointer). N4659 §5.3.5/6
+             * [expr.delete] + Itanium ABI §2.7. Pattern:
+             * g++.dg/cpp0x/defaulted19a.C. */
+            if (n->unary.is_delete_array && pointee &&
+                class_dtor_is_nontrivial(pointee)) {
+                fputs("({ ", stdout);
+                emit_type(pt);
+                fputs(" __sf_del = ", stdout);
+                emit_expr(opnd);
+                fputs("; if (__sf_del) { ", stdout);
+                fputs("unsigned long __sf_n = "
+                      "((unsigned long *)__sf_del)[-1]; ", stdout);
+                fputs("for (unsigned long __sf_i = __sf_n; __sf_i > 0; "
+                      "--__sf_i) ", stdout);
+                mangle_class_dtor(pointee);
+                fputs("(&__sf_del[__sf_i - 1]); ", stdout);
+                fputs("_ZdaPv((char *)__sf_del - sizeof(unsigned long));"
+                      " } })", stdout);
+                return;
+            }
             /* `delete p` is a no-op when p is null per N4659 §8.3.5/2
              * [expr.delete]. C's free(NULL) is already a no-op, but
              * sea-front prepends a dtor call (and possibly a vptr
@@ -8025,8 +8097,24 @@ static void emit_expr(Node *n) {
                      * (the args are written once). Pattern:
                      * g++.dg/expr/anew4.C `new (p) D[n]()`. */
                     bool array_loop = n->cast.new_array_count && na == 0;
+                    /* Itanium-ABI array cookie: when the element class
+                     * has a non-trivial dtor (or carries one
+                     * transitively), `new T[N]` allocates an extra
+                     * sizeof(size_t) header BEFORE the array storage
+                     * and writes N into it. delete[] reads N back and
+                     * runs the dtor over [0, N). Required even when
+                     * the user's `operator delete[]` doesn't itself
+                     * touch the cookie — gcc emits the offset
+                     * unconditionally for non-trivially-destructible
+                     * elements. N4659 §5.3.4/16 [expr.new] + Itanium
+                     * ABI §2.7. Skipped for placement-new (no
+                     * allocation happens) and scalar new (no count).
+                     * Pattern: g++.dg/cpp0x/defaulted19a.C. */
+                    bool needs_cookie = n->cast.new_array_count &&
+                        n->cast.new_placement_nargs == 0 &&
+                        class_dtor_is_nontrivial(p_resolved);
                     fputs("({ ", stdout);
-                    if (array_loop) {
+                    if (array_loop || needs_cookie) {
                         /* Capture N up front; reference it in both
                          * the malloc-call's size arg AND the ctor
                          * loop bound so the count expression's side
@@ -8059,12 +8147,41 @@ static void emit_expr(Node *n) {
                             n->cast.operand->call.args[0]->binary.lhs
                                 ->codegen_temp_name = "__sf_new_n";
                     }
-                    emit_type(n->cast.ty);
-                    fputs(" __sf_new_tmp = (", stdout);
-                    emit_type(n->cast.ty);
-                    fputc(')', stdout);
-                    emit_expr(n->cast.operand);
-                    fputs("; ", stdout);
+                    if (needs_cookie) {
+                        /* Allocate cookie + array storage in one
+                         * call, write N at the cookie slot, then
+                         * offset __sf_new_tmp past the cookie. The
+                         * size passed to the array-new operator is
+                         * therefore `N * sizeof(T) + sizeof(size_t)`.
+                         * Bypass the ND_CALL operand's own size arg
+                         * (which the parser built as `N*sizeof(T)`)
+                         * and call the operand's callee directly with
+                         * the cookie-inclusive size. */
+                        fputs("void *__sf_new_raw = (void *)", stdout);
+                        Node *op = n->cast.operand;
+                        if (op && op->kind == ND_CALL && op->call.callee) {
+                            emit_expr(op->call.callee);
+                        } else {
+                            fputs("_Znam", stdout);
+                        }
+                        fputs("(__sf_new_n * sizeof(", stdout);
+                        emit_type(n->cast.ty->base);
+                        fputs(") + sizeof(unsigned long)); ", stdout);
+                        fputs("*(unsigned long *)__sf_new_raw = "
+                              "__sf_new_n; ", stdout);
+                        emit_type(n->cast.ty);
+                        fputs(" __sf_new_tmp = (", stdout);
+                        emit_type(n->cast.ty);
+                        fputs(")((char *)__sf_new_raw "
+                              "+ sizeof(unsigned long)); ", stdout);
+                    } else {
+                        emit_type(n->cast.ty);
+                        fputs(" __sf_new_tmp = (", stdout);
+                        emit_type(n->cast.ty);
+                        fputc(')', stdout);
+                        emit_expr(n->cast.operand);
+                        fputs("; ", stdout);
+                    }
                     /* Value-init for `new T()` when T has no user-
                      * provided default ctor: zero-initialize the
                      * storage before the synth ctor runs (N4659
@@ -10800,6 +10917,62 @@ static bool class_has_mutable_field_transitive(Type *cls) {
     for (int i = 0; i < cd->class_def.nbase_types; i++) {
         if (class_has_mutable_field_transitive(cd->class_def.base_types[i]))
             return true;
+    }
+    return false;
+}
+
+/* True iff this class's destructor is non-trivial in the C++
+ * sense — N4659 §15.4/5 [class.dtor]: a dtor is trivial iff (a)
+ * it is not user-provided AND (b) every direct member and base
+ * also has a trivial dtor. Used at the array-new[] cookie
+ * decision: the Itanium cookie is required precisely when the
+ * element's dtor is non-trivial, regardless of whether the body
+ * does anything at runtime. N4659 §5.3.4/16 [expr.new] +
+ * Itanium ABI §2.7.
+ *
+ * `=delete` does NOT make a dtor user-provided in the trivial-
+ * dtor sense — N4659 §10.1.6.4/5 [dcl.fct.def.delete]: "A
+ * deleted function is implicitly an inline function." It's
+ * declared but not user-PROVIDED, so it doesn't on its own
+ * defeat triviality. Cookie can still come via subobjects.
+ * Pattern: g++.dg/cpp0x/defaulted19.C (no cookie — A has only
+ * `~A()=delete` and no members) vs g++.dg/cpp0x/defaulted19a.C
+ * (cookie — A has B b with user-provided `~B(){}`). */
+static bool class_dtor_is_nontrivial(Type *cls) {
+    if (!cls || cls->kind != TY_STRUCT) return false;
+    Node *cd = cls->class_def;
+    if (!cd) {
+        cd = find_class_def_by_tag_args(cls);
+        if (!cd) cd = find_class_def_by_tag_only(cls);
+    }
+    if (!cd) return false;
+    for (int i = 0; i < cd->class_def.nmembers; i++) {
+        Node *m = cd->class_def.members[i];
+        if (!m) continue;
+        /* User-provided dtor (ND_FUNC_DEF with body, including
+         * empty `~T() {}`): defeats triviality. */
+        if (m->kind == ND_FUNC_DEF && m->func.is_destructor)
+            return true;
+        /* ND_VAR_DECL dtor declaration: =delete, =default, or
+         * an OOL declaration. =delete / =default don't count as
+         * user-provided per §10.1.6.4; an OOL dtor would, but
+         * we conservatively skip here — the subobject walk below
+         * will catch any real run-time work via members/bases. */
+        if (m->kind == ND_VAR_DECL && m->var_decl.is_destructor)
+            continue;
+        if (m->kind != ND_VAR_DECL || !m->var_decl.ty) continue;
+        if (m->var_decl.storage_flags & DECL_STATIC) continue;
+        Type *mt = m->var_decl.ty;
+        if (mt && mt->kind == TY_ARRAY) {
+            while (mt && mt->kind == TY_ARRAY) mt = mt->base;
+        }
+        if (mt && (mt->kind == TY_STRUCT || mt->kind == TY_UNION) &&
+            class_dtor_is_nontrivial(mt))
+            return true;
+    }
+    for (int i = 0; i < cd->class_def.nbase_types; i++) {
+        Type *bt = cd->class_def.base_types[i];
+        if (bt && class_dtor_is_nontrivial(bt)) return true;
     }
     return false;
 }

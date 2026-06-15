@@ -2837,10 +2837,15 @@ static Node *unary_expr(Parser *p) {
         if (tok->kind == TK_SCOPE) parser_advance(p);
         parser_advance(p);  /* consume 'delete' */
         /* delete[] */
-        if (parser_consume(p, TK_LBRACKET))
+        bool is_array_delete = false;
+        if (parser_consume(p, TK_LBRACKET)) {
             parser_expect(p, TK_RBRACKET);
+            is_array_delete = true;
+        }
         Node *operand = unary_expr(p);
-        return new_unary_node(p, TK_KW_DELETE, operand, tok);
+        Node *del = new_unary_node(p, TK_KW_DELETE, operand, tok);
+        del->unary.is_delete_array = is_array_delete;
+        return del;
     }
 
     /* Pre-increment/decrement — §8.3.1 [expr.pre.incr] */
