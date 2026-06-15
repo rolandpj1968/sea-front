@@ -239,6 +239,28 @@ for src in $files; do
         extra_flags="$test_std"
     fi
 
+    # Pass through gcc optimization-level + a curated subset of -f
+    # flags from `dg-options` / `dg-additional-options`. Some tests
+    # rely on a specific opt level (e.g. -O3 enables -flifetime-dse
+    # which several placement-new tests depend on). Excluded:
+    #   - `-fsanitize*` (ubsan/asan runtimes link extra libraries)
+    #   - `-W*` (warning flags vary in support across gcc versions)
+    #   - `-m*` (machine-specific; can break on a different host arch)
+    # Patterns matched in the inner case statement.
+    dg_opt_blob=$(grep -oE '(dg-options|dg-additional-options)[[:space:]]*"[^"]*"' "$src" \
+                  2>/dev/null | sed -E 's/.*"([^"]*)".*/\1/' | tr '\n' ' ')
+    if [ -n "$dg_opt_blob" ]; then
+        for tok in $dg_opt_blob; do
+            case "$tok" in
+                -fsanitize*|-fno-sanitize*)
+                    ;;
+                -O*|-finline*|-fno-inline*|-fearly-inlining|-fno-early-inlining|-fpack-struct*|-ftree-*|-fno-tree-*|-flifetime-dse*|-fno-lifetime-dse*|-fstrict-aliasing|-fno-strict-aliasing)
+                    extra_flags="$extra_flags $tok"
+                    ;;
+            esac
+        done
+    fi
+
     # Parse dg-additional-sources for sibling .cc/.cpp/.C files that must
     # be linked alongside the main test source. The dg directive shape is
     # '{ dg-additional-sources "foo.cc bar.cc" }'. Resolve each relative
