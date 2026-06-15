@@ -1628,6 +1628,7 @@ hoist_done:
 static bool class_has_user_default_ctor(Type *cls);
 static bool class_has_mutable_field_transitive(Type *cls);
 static bool class_dtor_is_nontrivial(Type *cls);
+static const char *eh_typeinfo_sym_for_class(Type *ty);
 static bool class_is_observably_empty(Type *cls);
 static Node *find_class_def_by_tag_args(Type *probe);
 static Node *find_class_def_by_tag_only(Type *probe);
@@ -9179,9 +9180,10 @@ static void emit_expr(Node *n) {
                     lbl);
         } else if (op_ty &&
                    (op_ty->kind == TY_STRUCT || op_ty->kind == TY_UNION)) {
+            const char *ti = eh_typeinfo_sym_for_class(op_ty);
             fputs("({ __SF_THROW_CLASS(&(", stdout);
             emit_expr(op);
-            fprintf(stdout, "), 0, %s); 0; })", lbl);
+            fprintf(stdout, "), &%s, %s); 0; })", ti, lbl);
         } else {
             fputs("({ __SF_THROW_PRIM(", stdout);
             if (op) emit_expr(op);
@@ -11777,12 +11779,53 @@ static void emit_stmt(Node *n) {
                         emit_indent();
                         fprintf(stdout, "__SF_CHAIN_THROW(%s);\n", lbl);
                         emit_indent();
-                        fprintf(stdout, "__SF_THROW_CLASS(&%s, 0, %s);\n",
-                                tname, lbl);
+                        const char *ti = eh_typeinfo_sym_for_class(op_ty);
+                        fprintf(stdout, "__SF_THROW_CLASS(&%s, &%s, %s);\n",
+                                tname, ti, lbl);
                     } else {
-                        fputs("__SF_THROW_CLASS(&(", stdout);
-                        emit_expr(thr->throw_.operand);
-                        fprintf(stdout, "), 0, %s);\n", lbl);
+                        const char *ti = eh_typeinfo_sym_for_class(op_ty);
+                        /* `throw lvalue_T` materializes the exception
+                         * object via T's copy ctor (N4659 §18.1/3
+                         * [except.throw]). If the user defined a copy
+                         * ctor with side effects (canonical: a copy
+                         * ctor that itself throws — see g++.dg/eh/
+                         * elide2.C), those side effects MUST run. The
+                         * memberwise struct copy (default) is fine when
+                         * no user copy ctor exists. */
+                        if (class_has_user_copy_ctor(op_ty)) {
+                            int tid = g_cf.next_label_id++;
+                            char tname[32];
+                            snprintf(tname, sizeof(tname),
+                                     "__sf_thr_%d", tid);
+                            emit_indent();
+                            emit_type(op_ty);
+                            fprintf(stdout, " %s = {0};\n", tname);
+                            emit_indent();
+                            /* Copy ctor signature is `T(const T&)` —
+                             * pass a ref to const T so the mangle
+                             * picks up the const qualifier (the
+                             * Itanium scheme encodes the const on the
+                             * referenced type, not the ref itself). */
+                            Type const_op = *op_ty;
+                            const_op.is_const = true;
+                            Type rty = {0};
+                            rty.kind = TY_REF;
+                            rty.base = &const_op;
+                            Type *pty1[1] = { &rty };
+                            mangle_class_ctor(op_ty, pty1, 1);
+                            fprintf(stdout, "(&%s, &(", tname);
+                            emit_expr(thr->throw_.operand);
+                            fputs("));\n", stdout);
+                            emit_indent();
+                            fprintf(stdout, "__SF_CHAIN_THROW(%s);\n", lbl);
+                            emit_indent();
+                            fprintf(stdout, "__SF_THROW_CLASS(&%s, &%s, %s);\n",
+                                    tname, ti, lbl);
+                        } else {
+                            fprintf(stdout, "__SF_THROW_CLASS(&(");
+                            emit_expr(thr->throw_.operand);
+                            fprintf(stdout, "), &%s, %s);\n", ti, lbl);
+                        }
                     }
                 } else {
                     fputs("__SF_THROW_PRIM(", stdout);
@@ -11790,6 +11833,54 @@ static void emit_stmt(Node *n) {
                     fprintf(stdout, ", &__sf_typeinfo_int, %s);\n", lbl);
                 }
             }
+            return;
+        }
+        /* `lhs = call();` where call returns a class type may throw
+         * via TLS state. The naive `(lhs = call());` followed by
+         * CHAIN_THROW corrupts lhs first — the assignment runs even
+         * when the call returned via the throw path (the C call ABI
+         * has no idea control flow is exceptional). Hoist the call
+         * into a temp, run CHAIN_THROW, then assign. N4659 §15.1/2
+         * [except.throw]: "if exiting a function ... an active
+         * exception is in the process of being propagated, no
+         * regular return value is produced." Pattern:
+         * g++.dg/torture/pr49115.C. */
+        if (n->expr_stmt.expr &&
+            n->expr_stmt.expr->kind == ND_ASSIGN &&
+            n->expr_stmt.expr->binary.op == TK_ASSIGN &&
+            n->expr_stmt.expr->binary.lhs &&
+            n->expr_stmt.expr->binary.rhs &&
+            n->expr_stmt.expr->binary.rhs->kind == ND_CALL &&
+            n->expr_stmt.expr->binary.rhs->resolved_type &&
+            (n->expr_stmt.expr->binary.rhs->resolved_type->kind == TY_STRUCT ||
+             n->expr_stmt.expr->binary.rhs->resolved_type->kind == TY_UNION) &&
+            g_cf.func_has_cleanups) {
+            bool in_try = false;
+            int tt = find_throw_target_from(g_cf.nlive, &in_try);
+            char tbuf[32];
+            const char *tlbl;
+            if (tt >= 0) {
+                snprintf(tbuf, sizeof(tbuf),
+                         in_try ? "__SF_try_%d_handler"
+                                : "__SF_cleanup_%d", tt);
+                tlbl = tbuf;
+            } else {
+                tlbl = "__SF_epilogue";
+            }
+            int tid = g_cf.next_label_id++;
+            char tmpname[32];
+            snprintf(tmpname, sizeof(tmpname), "__sf_call_tmp_%d", tid);
+            Node *rhs = n->expr_stmt.expr->binary.rhs;
+            Node *lhs = n->expr_stmt.expr->binary.lhs;
+            emit_type(rhs->resolved_type);
+            fprintf(stdout, " %s = ", tmpname);
+            emit_expr(rhs);
+            fputs(";\n", stdout);
+            emit_indent();
+            fprintf(stdout, "__SF_CHAIN_THROW(%s);\n", tlbl);
+            emit_indent();
+            emit_expr(lhs);
+            fprintf(stdout, " = %s;\n", tmpname);
             return;
         }
         if (n->expr_stmt.expr)
@@ -13399,28 +13490,68 @@ static void emit_stmt(Node *n) {
         for (int i = 0; i < n->try_.nhandlers; i++) {
             Node *h = n->try_.handlers[i];
             emit_indent();
+            /* Determine the param's underlying type and whether it
+             * is a class type — drives both the typeinfo compare and
+             * the param-binding shape. */
+            Type *pty = h->handler.is_catch_all || !h->handler.param
+                ? NULL : h->handler.param->param.ty;
+            Type *base_pty = pty;
+            bool param_is_ref = pty &&
+                (pty->kind == TY_REF || pty->kind == TY_RVALREF);
+            if (param_is_ref && pty->base) base_pty = pty->base;
+            bool param_is_class = base_pty &&
+                (base_pty->kind == TY_STRUCT || base_pty->kind == TY_UNION);
             if (h->handler.is_catch_all) {
                 fputs("if (1) {\n", stdout);
+            } else if (param_is_class) {
+                /* Class-typed catch matches the per-class typeinfo
+                 * pointer stashed by __SF_THROW_CLASS. N4659 §15.3
+                 * [except.handle]. */
+                const char *ti = eh_typeinfo_sym_for_class(base_pty);
+                fprintf(stdout,
+                    "if (__sf_exc_state.exc_type == &%s) {\n", ti);
             } else {
-                /* Slice 4: only int (and primitives keyed to the same
-                 * single typeinfo) match. Real per-type matching ships
-                 * with class-type throws. */
+                /* Primitive catch — currently keyed to the single
+                 * `__sf_typeinfo_int` slot all primitive throws use.
+                 * Per-primitive-type dispatch lands when EH phase
+                 * extends primitives beyond int. */
                 fputs("if (__sf_exc_state.exc_type == &__sf_typeinfo_int) {\n",
                       stdout);
             }
             g_indent++;
             /* Bind the caught name (if any) to the in-flight payload.
-             * For primitives the payload was stashed via uintptr_t
-             * cast in __SF_THROW_PRIM; reverse the cast here. */
+             * Class types: copy-init from the heap-resident exception
+             * object (or take a reference). Primitives: reverse the
+             * uintptr_t cast that __SF_THROW_PRIM used. */
             if (!h->handler.is_catch_all && h->handler.param &&
                 h->handler.param->param.name) {
                 Token *nm = h->handler.param->param.name;
                 emit_indent();
-                emit_type(h->handler.param->param.ty);
-                fprintf(stdout, " %.*s = ", nm->len, nm->loc);
-                fputs("(", stdout);
-                emit_type(h->handler.param->param.ty);
-                fputs(")(uintptr_t)__sf_exc_state.exc_obj;\n", stdout);
+                if (param_is_class && param_is_ref) {
+                    /* `catch (E& e)` — bind to a pointer pointing at
+                     * the exception object. References lower to T*
+                     * in sea-front's C, so emit a pointer alias. */
+                    emit_type(base_pty);
+                    fprintf(stdout, " *%.*s = (",
+                            nm->len, nm->loc);
+                    emit_type(base_pty);
+                    fputs(" *)__sf_exc_state.exc_obj;\n", stdout);
+                } else if (param_is_class) {
+                    /* `catch (E e)` — copy-construct from the heap
+                     * object. Memberwise copy suffices for trivially-
+                     * copyable; user copy ctor handling is deferred. */
+                    emit_type(base_pty);
+                    fprintf(stdout, " %.*s = *((",
+                            nm->len, nm->loc);
+                    emit_type(base_pty);
+                    fputs(" *)__sf_exc_state.exc_obj);\n", stdout);
+                } else {
+                    emit_type(pty);
+                    fprintf(stdout, " %.*s = ", nm->len, nm->loc);
+                    fputs("(", stdout);
+                    emit_type(pty);
+                    fputs(")(uintptr_t)__sf_exc_state.exc_obj;\n", stdout);
+                }
             }
             /* Mark exception caught — clear BOTH the function-local
              * __SF_unwind and the TLS __sf_exc_state.state so
@@ -17484,8 +17615,27 @@ static void typeid_collect_walk(Node *n) {
         for (int i = 0; i < n->try_.nhandlers; i++)
             typeid_collect_walk(n->try_.handlers[i]);
         break;
-    case ND_HANDLER:   typeid_collect_walk(n->handler.body); break;
-    case ND_THROW:     typeid_collect_walk(n->throw_.operand); break;
+    case ND_HANDLER:
+        /* Catch param type contributes to the EH typeinfo set so
+         * the handler can dispatch on `exc_type == &typeinfo_<T>`
+         * for class-typed catches. Primitives are excluded — they
+         * still go through the existing __sf_typeinfo_int path. */
+        if (n->handler.param && n->handler.param->param.ty) {
+            Type *pt = n->handler.param->param.ty;
+            if (pt->kind == TY_REF || pt->kind == TY_RVALREF) pt = pt->base;
+            if (pt && (pt->kind == TY_STRUCT || pt->kind == TY_UNION))
+                eh_typeinfo_sym_for_class(pt);
+        }
+        typeid_collect_walk(n->handler.body); break;
+    case ND_THROW:
+        /* Class-typed throw operand also contributes — THROW_CLASS
+         * needs the typeinfo pointer to set exc_type. */
+        if (n->throw_.operand && n->throw_.operand->resolved_type) {
+            Type *ot = n->throw_.operand->resolved_type;
+            if (ot && (ot->kind == TY_STRUCT || ot->kind == TY_UNION))
+                eh_typeinfo_sym_for_class(ot);
+        }
+        typeid_collect_walk(n->throw_.operand); break;
     case ND_CLASS_DEF:
         for (int i = 0; i < n->class_def.nmembers; i++)
             typeid_collect_walk(n->class_def.members[i]);
@@ -17505,6 +17655,60 @@ static void emit_typeid_sentinels(void) {
     for (int i = 0; i < g_typeid_set_n; i++)
         fprintf(stdout, "static const char %s = 0;\n",
                 g_typeid_set[i].sym);
+    fputc('\n', stdout);
+}
+
+/* ----- EH typeinfo registry — N4659 §15.3 [except.handle] -------
+ * Per-class typeinfo objects used by throw/catch dispatch. THROW_CLASS
+ * passes a pointer to the typeinfo; the matching catch handler
+ * compares against the same pointer. Collected by eh_collect_walk
+ * over the TU; emitted after the typeid sentinels so the catch /
+ * throw emit can reference them. */
+typedef struct { Type *ty; char sym[TYPEID_SYM_BUFLEN]; } EhTypeinfoEntry;
+static EhTypeinfoEntry *g_eh_typeinfo_set = NULL;
+static int g_eh_typeinfo_n = 0;
+static int g_eh_typeinfo_cap = 0;
+
+static bool ty_same_class(Type *a, Type *b) {
+    if (!a || !b) return false;
+    if (a->kind != b->kind) return false;
+    if (a->kind != TY_STRUCT && a->kind != TY_UNION) return false;
+    if (!a->tag || !b->tag) return false;
+    if (a->tag->len != b->tag->len) return false;
+    return memcmp(a->tag->loc, b->tag->loc, a->tag->len) == 0;
+}
+
+static const char *eh_typeinfo_sym_for_class(Type *ty) {
+    if (!ty) return NULL;
+    for (int i = 0; i < g_eh_typeinfo_n; i++)
+        if (ty_same_class(g_eh_typeinfo_set[i].ty, ty))
+            return g_eh_typeinfo_set[i].sym;
+    if (g_eh_typeinfo_n == g_eh_typeinfo_cap) {
+        g_eh_typeinfo_cap = g_eh_typeinfo_cap ? g_eh_typeinfo_cap * 2 : 16;
+        g_eh_typeinfo_set = realloc(g_eh_typeinfo_set,
+            (size_t)g_eh_typeinfo_cap * sizeof(*g_eh_typeinfo_set));
+        if (!g_eh_typeinfo_set) abort();
+    }
+    EhTypeinfoEntry *e = &g_eh_typeinfo_set[g_eh_typeinfo_n++];
+    e->ty = ty;
+    int pos = snprintf(e->sym, sizeof(e->sym), "__sf_typeinfo_");
+    pos = mangle_type_to_buf(ty, e->sym, pos, (int)sizeof(e->sym));
+    if (pos < 0 || pos >= (int)sizeof(e->sym)) pos = (int)sizeof(e->sym) - 1;
+    e->sym[pos] = 0;
+    return e->sym;
+}
+
+static void emit_eh_typeinfo_defs(void) {
+    if (g_eh_typeinfo_n == 0) return;
+    fputs("\n/* EH typeinfo — N4659 §15.3 [except.handle] */\n", stdout);
+    for (int i = 0; i < g_eh_typeinfo_n; i++) {
+        Type *ty = g_eh_typeinfo_set[i].ty;
+        fprintf(stdout, "static const struct __sf_type_info %s = "
+                "{ \"%.*s\", 0, 0, 0 };\n",
+                g_eh_typeinfo_set[i].sym,
+                ty->tag ? ty->tag->len : 7,
+                ty->tag ? ty->tag->loc : "unknown");
+    }
     fputc('\n', stdout);
 }
 
@@ -18059,6 +18263,7 @@ void emit_c(Node *tu) {
     emit_prelude();
     typeid_collect_walk(tu);
     emit_typeid_sentinels();
+    emit_eh_typeinfo_defs();
 
     /* Forward-declare ALL struct types so pointer references
      * resolve regardless of definition order. Function forward
