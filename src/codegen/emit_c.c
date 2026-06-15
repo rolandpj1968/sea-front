@@ -641,6 +641,15 @@ static bool is_addressable_lvalue(Node *n) {
         return true;
     case ND_UNARY:
         return n->unary.op == TK_STAR;
+    case ND_CAST:
+        /* `static_cast<T&&>(x)` and `(T&)x` carry no storage of
+         * their own — the inner operand IS the lvalue. Treat the
+         * cast as addressable when its operand is. N4659 §8.2.10
+         * [expr.static.cast]. */
+        if (n->cast.ty &&
+            (n->cast.ty->kind == TY_REF || n->cast.ty->kind == TY_RVALREF))
+            return is_addressable_lvalue(n->cast.operand);
+        return false;
     default:
         return false;
     }
@@ -808,11 +817,17 @@ static void emit_arg_for_param(Node *arg, Type *param_ty) {
             !param_ty->has_dtor &&
             arg->resolved_type && is_addressable_lvalue(arg)) {
             Type *src = arg->resolved_type;
-            if (src->kind == TY_REF || src->kind == TY_RVALREF)
-                src = src->base;
+            /* Preserve TY_RVALREF when probing for the ctor — the
+             * move ctor signature is `T(T&&)` and a lvalue-stripped
+             * `T` value would equally match a (deleted) copy ctor
+             * `T(const T&)`; the rvalue source must select the
+             * move overload. N4659 §16.3.3.1.4 [over.match.ref]. */
+            Type *src_for_resolve = src;
+            if (src->kind == TY_REF) src = src->base;
+            else if (src->kind == TY_RVALREF) src = src->base;
             if (src && src->tag && param_ty->tag &&
                 tokens_equal(src->tag, param_ty->tag)) {
-                Type *at[1] = { src };
+                Type *at[1] = { src_for_resolve };
                 Type **pty = NULL;
                 Node *best = NULL;
                 int np = resolve_overload(param_ty, /*name=*/NULL,
@@ -825,8 +840,19 @@ static void emit_arg_for_param(Node *arg, Type *param_ty) {
                     emit_type(param_ty);
                     fputs(" __sf_cpy; ", stdout);
                     mangle_class_ctor(param_ty, pty, np);
+                    /* Pass the source's address: for plain lvalues
+                     * (`ident`, `obj.member`, `*p`) that's `&(expr)`;
+                     * for a reference-cast `static_cast<T&&>(x)` the
+                     * cast's own lowering is already a pointer, so
+                     * forward the inner operand's address instead
+                     * (`&((T*)&x)` would yield T**). */
                     fputs("(&__sf_cpy, &(", stdout);
-                    emit_expr(arg);
+                    if (arg->kind == ND_CAST && arg->cast.ty &&
+                        (arg->cast.ty->kind == TY_REF ||
+                         arg->cast.ty->kind == TY_RVALREF))
+                        emit_expr(arg->cast.operand);
+                    else
+                        emit_expr(arg);
                     fputs(")); __sf_cpy; })", stdout);
                     return;
                 }
@@ -12249,6 +12275,42 @@ static void emit_stmt(Node *n) {
                                                /*receiver_is_const=*/false,
                                                &pty, &resolved_ctor);
                     if (np < 0) {
+                        /* Inheriting constructor `using Base::Base`:
+                         * when the derived class has no matching ctor
+                         * but a direct base does, forward to the
+                         * base's ctor on the base subobject. N4659
+                         * §15.6.3 [class.inhctor.init]. Pattern:
+                         * g++.dg/cpp1z/inh-ctor38.C
+                         *   struct Derived : Base { using Base::Base; };
+                         *   Derived d(arg);  // → Base::Base(arg) on
+                         *                    //   &d.__sf_base. */
+                        if (na > 0 && n->var_decl.ty->class_region) {
+                            int nb = class_nbases(n->var_decl.ty);
+                            for (int bi = 0; bi < nb; bi++) {
+                                Type *base = class_base(n->var_decl.ty, bi);
+                                if (!base) continue;
+                                Type **bpty = NULL;
+                                int bnp = resolve_overload(base, NULL,
+                                              /*is_ctor=*/true, at, na,
+                                              /*receiver_is_const=*/false,
+                                              &bpty, NULL);
+                                if (bnp < 0) continue;
+                                mangle_class_ctor(base, bpty, bnp);
+                                fprintf(stdout, "(&%.*s.",
+                                        n->var_decl.name->len,
+                                        n->var_decl.name->loc);
+                                if (bi == 0) fputs("__sf_base", stdout);
+                                else fprintf(stdout, "__sf_base%d", bi);
+                                for (int j = 0; j < na; j++) {
+                                    fputs(", ", stdout);
+                                    emit_arg_for_param(
+                                        n->var_decl.ctor_args[j],
+                                        j < bnp ? bpty[j] : NULL);
+                                }
+                                fputs(");\n", stdout);
+                                return;
+                            }
+                        }
                         /* No user-declared ctor matches. For 0-arg
                          * direct-init on a class with a SYNTHESIZED
                          * default ctor (has_default_ctor=true via
