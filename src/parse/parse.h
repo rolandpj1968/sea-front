@@ -418,6 +418,14 @@ struct Node {
              * run element-wise destructors and recover the count
              * from the Itanium array cookie. N4659 §8.3.5 [expr.delete]. */
             bool is_delete_array;
+            /* True for `::delete e` / `::delete[] e` (leading `::`
+             * forces the global operator delete per N4659 §8.3.5/10
+             * [expr.delete]). False for the bare `delete e` form,
+             * which looks up `operator delete` in the pointee's
+             * class scope first. Codegen routes the global form to
+             * `_ZdlPv` / `_ZdaPv` and the class form to the class's
+             * own operator delete when defined. */
+            bool is_delete_global_scope;
         } unary;
 
         /* ND_TERNARY — N4659 §8.16 [expr.cond] */

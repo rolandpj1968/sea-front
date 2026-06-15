@@ -1629,6 +1629,32 @@ static bool class_has_user_default_ctor(Type *cls);
 static bool class_has_mutable_field_transitive(Type *cls);
 static bool class_dtor_is_nontrivial(Type *cls);
 static const char *eh_typeinfo_sym_for_class(Type *ty);
+
+/* True iff the class declares its own `operator delete(void *)` —
+ * unqualified `delete p` finds this overload first per N4659
+ * §8.3.5/10 [expr.delete]. Walk the class def for an ND_FUNC_DEF
+ * whose source name token is "operator" + the OP_DELETE suffix. */
+static bool class_has_user_op_delete(Type *cls) {
+    if (!cls || cls->kind != TY_STRUCT) return false;
+    Node *cd = cls->class_def;
+    if (!cd) {
+        cd = find_class_def_by_tag_args(cls);
+        if (!cd) cd = find_class_def_by_tag_only(cls);
+    }
+    if (!cd) return false;
+    for (int i = 0; i < cd->class_def.nmembers; i++) {
+        Node *m = cd->class_def.members[i];
+        if (!m) continue;
+        Token *nm = NULL;
+        if (m->kind == ND_FUNC_DEF) nm = m->func.name;
+        else if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
+                 m->var_decl.ty->kind == TY_FUNC) nm = m->var_decl.name;
+        if (!nm || nm->len != 8) continue;
+        if (memcmp(nm->loc, "operator", 8) != 0) continue;
+        if (operator_kind_from_method_name(nm) == OP_DELETE) return true;
+    }
+    return false;
+}
 static bool class_is_observably_empty(Type *cls);
 static Node *find_class_def_by_tag_args(Type *probe);
 static Node *find_class_def_by_tag_only(Type *probe);
@@ -5665,6 +5691,30 @@ static void emit_expr(Node *n) {
              * pre-free work to do. Pattern: g++.dg/opt/pr42508.C —
              * `~A() { delete prev; }` reached with prev == NULL. */
             bool null_guard = has_virt_dtor || has_dtor;
+            /* Pick the operator delete symbol: `::delete` always
+             * uses the global `_ZdlPv`; bare `delete` looks up
+             * `operator delete` in the pointee's class scope first
+             * per N4659 §8.3.5/10 [expr.delete]. Pattern:
+             * g++.dg/eh/delete1.C virt_del — Baz::operator delete
+             * must be called on `delete p` (no leading ::). */
+            char op_del_sym_buf[256];
+            const char *op_del_sym = "_ZdlPv";
+            if (!n->unary.is_delete_global_scope && pointee &&
+                class_has_user_op_delete(pointee)) {
+                int p2 = 0;
+                p2 += snprintf(op_del_sym_buf + p2,
+                               sizeof(op_del_sym_buf) - (size_t)p2,
+                               "_ZN");
+                p2 += snprintf(op_del_sym_buf + p2,
+                               sizeof(op_del_sym_buf) - (size_t)p2,
+                               "%d%.*s",
+                               pointee->tag->len,
+                               pointee->tag->len, pointee->tag->loc);
+                p2 += snprintf(op_del_sym_buf + p2,
+                               sizeof(op_del_sym_buf) - (size_t)p2,
+                               "dlEPv");
+                op_del_sym = op_del_sym_buf;
+            }
             /* When the delete operand may have side effects and we
              * need to read it multiple times (vptr load + dtor call
              * + free, and the null-guard), bind to a stmt-expr local
@@ -5683,16 +5733,16 @@ static void emit_expr(Node *n) {
                 if (has_virt_dtor) {
                     Type *root = vptr_owner_class(pointee);
                     if (!root) root = pointee;
-                    fputs("_ZdlPv(((struct ", stdout);
+                    fprintf(stdout, "%s(((struct ", op_del_sym);
                     mangle_class_tag(root);
                     fputs(" *)__sf_del)->__sf_vptr->__dtor((struct ", stdout);
                     mangle_class_tag(root);
                     fputs(" *)__sf_del));", stdout);
                 } else if (has_dtor) {
                     mangle_class_dtor(pointee);
-                    fputs("(__sf_del); _ZdlPv(__sf_del);", stdout);
+                    fprintf(stdout, "(__sf_del); %s(__sf_del);", op_del_sym);
                 } else {
-                    fputs("_ZdlPv(__sf_del);", stdout);
+                    fprintf(stdout, "%s(__sf_del);", op_del_sym);
                 }
                 fputs(" })", stdout);
                 return;
@@ -5726,7 +5776,7 @@ static void emit_expr(Node *n) {
                  * reject 'struct Derived *' passed to a param typed
                  * 'struct Root *'. gcc accepted it via the silent
                  * derived-to-base conversion. */
-                fputs("_ZdlPv(((struct ", stdout);
+                fprintf(stdout, "%s(((struct ", op_del_sym);
                 mangle_class_tag(root);
                 fputs(" *)(", stdout);
                 emit_expr(opnd);
@@ -5748,7 +5798,7 @@ static void emit_expr(Node *n) {
                 emit_expr(opnd);
                 fputs("), ", stdout);
             }
-            fputs("_ZdlPv(", stdout);
+            fprintf(stdout, "%s(", op_del_sym);
             emit_expr(opnd);
             if (null_guard) {
                 /* Close: `, free(p), 0) : 0)` — the comma yields 0
@@ -15270,6 +15320,20 @@ static void emit_method_signature(Node *func, Type *class_type, bool emit_inline
     }
     fputc('(', stdout);
     bool is_static = (func->func.storage_flags & DECL_STATIC) != 0;
+    /* Class-scope `operator new` / `operator delete` are implicitly
+     * static per N4659 §16.5.3/1 [basic.stc.dynamic.allocation]:
+     * "Allocation and deallocation functions are static even if
+     * not explicitly declared static." Force the static treatment
+     * so the emitted C signature omits the `this` parameter and
+     * matches what callers expect. Pattern: g++.dg/eh/delete1.C
+     * — Baz::operator delete(void *) called with the freed
+     * pointer; an extra `this` would corrupt the call. */
+    if (!is_static && is_operator_name(func->func.name)) {
+        OperatorKind ok = operator_kind_from_method_name(func->func.name);
+        if (ok == OP_NEW || ok == OP_NEW_ARRAY ||
+            ok == OP_DELETE || ok == OP_DELETE_ARRAY)
+            is_static = true;
+    }
     if (!is_static) {
         /* N4659 §10.1.7.1: const method → const this */
         if (func->func.is_const_method) fputs("const ", stdout);
@@ -17889,9 +17953,45 @@ static void emit_prelude(void) {
     if (!u_dl)
         fputs("static inline void _ZdlPv(void *__sf_p) "
               "{ free(__sf_p); }\n", stdout);
-    if (!u_da)
+    /* Default `operator delete[]` chains through `operator delete`
+     * per N4659 §16.5.3.4/3 [new.delete.array]: "The default
+     * behavior is to call operator delete(ptr)." So a user override
+     * of the scalar `operator delete` runs when `delete[]` lowers
+     * through the default array-deallocator. Pattern:
+     * g++.dg/eh/delete1.C ary() — only `::operator delete` is
+     * user-overridden; the array path must reach it.
+     *
+     * If u_dl, the user provides a strong _ZdlPv later in the TU;
+     * we need a forward decl matching the user's linkage style:
+     *   - `inline void operator delete(void*)` → static inline.
+     *   - plain `void operator delete(void*)`  → extern.
+     * Pre-scan to pick the right one; mismatched linkage triggers
+     * a C diagnostic. Pattern: g++.dg/init/new26.C uses the inline
+     * form, while g++.dg/eh/delete1.C uses the extern form. */
+    bool u_dl_inline = false;
+    if (u_dl && g_tu) {
+        for (int i = 0; i < g_tu->tu.ndecls; i++) {
+            Node *d = g_tu->tu.decls[i];
+            if (!d || d->kind != ND_FUNC_DEF) continue;
+            if (!d->func.name || d->func.name->len != 8) continue;
+            if (memcmp(d->func.name->loc, "operator", 8) != 0) continue;
+            if (operator_kind_from_method_name(d->func.name) != OP_DELETE)
+                continue;
+            if (d->func.nparams != 1) continue;
+            if (d->func.storage_flags & DECL_INLINE) u_dl_inline = true;
+            break;
+        }
+    }
+    if (!u_da) {
+        if (u_dl) {
+            if (u_dl_inline)
+                fputs("static inline void _ZdlPv(void *);\n", stdout);
+            else
+                fputs("void _ZdlPv(void *);\n", stdout);
+        }
         fputs("static inline void _ZdaPv(void *__sf_p) "
-              "{ free(__sf_p); }\n", stdout);
+              "{ _ZdlPv(__sf_p); }\n", stdout);
+    }
     /* Placement new / delete variants. The 2-arg `(size_t, void*)`
      * forms are defined inline in <new> as `return p` (new) and a
      * no-op (delete) — they have no out-of-line library symbol,

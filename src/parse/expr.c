@@ -2834,7 +2834,8 @@ static Node *unary_expr(Parser *p) {
     }
     if (tok->kind == TK_KW_DELETE ||
         (tok->kind == TK_SCOPE && parser_peek_ahead(p, 1)->kind == TK_KW_DELETE)) {
-        if (tok->kind == TK_SCOPE) parser_advance(p);
+        bool is_global = (tok->kind == TK_SCOPE);
+        if (is_global) parser_advance(p);
         parser_advance(p);  /* consume 'delete' */
         /* delete[] */
         bool is_array_delete = false;
@@ -2845,6 +2846,7 @@ static Node *unary_expr(Parser *p) {
         Node *operand = unary_expr(p);
         Node *del = new_unary_node(p, TK_KW_DELETE, operand, tok);
         del->unary.is_delete_array = is_array_delete;
+        del->unary.is_delete_global_scope = is_global;
         return del;
     }
 
