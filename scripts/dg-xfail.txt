@@ -150,3 +150,23 @@ g++.dg/torture/except-1.C
 g++.dg/torture/pr85334.C
 g++.dg/pr97627.C
 
+# --- gcc 4.8 testsuite expecting pre-modern C++ behaviors ----------------
+# These tests in the gcc 4.8 tree assert behaviors that the language
+# rules later changed; gcc 14 itself FAILs the same test programs.
+# Sea-front matches modern semantics, so the gcc-4.8 expectations no
+# longer hold.
+
+# `const int &r = A().i;` — gcc 4.8 expected the A() temp to be
+# destroyed at end of full-expression (so d==1 at the if-check); since
+# CWG 1299 / N3690 the rule extends the temp's lifetime through r's
+# scope. sea-front lifts the temp into the outer block per c1f376c,
+# matching gcc 14.
+g++.dg/init/ref19.C
+
+# `new A[5]` with `~A() = delete;` — gcc 4.8 allocated an array cookie
+# unconditionally (test asserts ap != p); gcc 14 omits the cookie when
+# the dtor is trivially-destructible (incl. deleted dtor) and the test
+# fails identically there. sea-front matches gcc 14's no-cookie
+# behavior (see class_dtor_is_nontrivial).
+g++.dg/cpp0x/defaulted19.C
+
