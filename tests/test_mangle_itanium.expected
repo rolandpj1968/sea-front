@@ -28,6 +28,9 @@ p_int_ptr_ptr: PPi
 p_int_ptr_x3_const_int_ptr: PiS_S_PKi
 p_int_array5_decays: Pi
 p_void: v
+p_int_variadic: iz
+p_int_ptr_int_variadic: Piiz
+p_only_variadic: z
 p_class_A_global: 1A
 p_class_T_std: NSt1TE
 p_class_T_ns: N2ns1TE

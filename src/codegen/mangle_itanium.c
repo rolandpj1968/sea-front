@@ -804,13 +804,17 @@ void itan_emit_type_for_mangle(Type *ty) {
  * Itanium emits no "_p_..._pe_" delimiters — params follow the
  * function name directly. With the empty-param case encoded as a
  * single 'v' (void). */
-void itan_mangle_param_suffix(Type **param_types, int nparams) {
+void itan_mangle_param_suffix(Type **param_types, int nparams, bool is_variadic) {
     ItanCtx ctx;
     ctx_reset(&ctx);
-    if (nparams == 0) {
+    if (nparams == 0 && !is_variadic) {
         fputc('v', stdout);
         return;
     }
     for (int i = 0; i < nparams; i++)
         emit_type(&ctx, normalize_param(param_types[i], i));
+    /* Itanium ABI §5.1.6: variadic functions append `z` after the
+     * final non-variadic parameter type. `void f(int, ...)` → `iz`,
+     * `void f(...)` → `z`. */
+    if (is_variadic) fputc('z', stdout);
 }

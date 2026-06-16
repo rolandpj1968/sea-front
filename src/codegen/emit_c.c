@@ -2661,10 +2661,10 @@ typedef struct {
 static FuncSig g_func_sigs[8192];
 static int g_n_func_sigs = 0;
 
-/* Build the canonical key for (name, params). Returns key length
+/* Build the canonical key for (name, params, is_variadic). Returns key length
  * written into buf (which must be at least FUNC_SIG_KEY_MAX). */
 static int func_sig_key(Token *name, Type **params, int nparams,
-                          char *buf) {
+                          bool is_variadic, char *buf) {
     int pos = 0;
     if (name && name->len > 0 && pos + name->len < FUNC_SIG_KEY_MAX) {
         memcpy(buf + pos, name->loc, name->len);
@@ -2689,7 +2689,7 @@ static int func_sig_key(Token *name, Type **params, int nparams,
             buf[pos++] = '0' + n;
         }
     }
-    pos = mangle_param_suffix_to_buf(params, nparams, buf, pos,
+    pos = mangle_param_suffix_to_buf(params, nparams, is_variadic, buf, pos,
                                        FUNC_SIG_KEY_MAX);
     return pos;
 }
@@ -2719,10 +2719,11 @@ static FuncSig *func_sig_add(Token *name, const char *key, int key_len,
 
 /* DECL dedup: a forward declaration we've seen before (any kind —
  * decl or def) gets skipped. Returns true if dup. */
-static bool func_decl_dedup_check_sig(Token *name, Type **params, int nparams) {
+static bool func_decl_dedup_check_sig(Token *name, Type **params, int nparams,
+                                        bool is_variadic) {
     if (!name) return false;
     char key[FUNC_SIG_KEY_MAX];
-    int key_len = func_sig_key(name, params, nparams, key);
+    int key_len = func_sig_key(name, params, nparams, is_variadic, key);
     if (func_sig_find_key(key, key_len)) return true;
     func_sig_add(name, key, key_len, /*is_def=*/false);
     return false;
@@ -2732,10 +2733,10 @@ static bool func_decl_dedup_check_sig(Token *name, Type **params, int nparams) {
  * (header-include duplicate). A def for a sig previously seen as a
  * decl → upgrade to def, emit. New sig → register, emit. */
 static bool func_def_dedup_check_sig(Token *name, Type **params, int nparams,
-                                       int storage_flags) {
+                                       bool is_variadic, int storage_flags) {
     if (!name) return false;
     char key[FUNC_SIG_KEY_MAX];
-    int key_len = func_sig_key(name, params, nparams, key);
+    int key_len = func_sig_key(name, params, nparams, is_variadic, key);
     FuncSig *fs = func_sig_find_key(key, key_len);
     bool is_gnu_inline =
         (storage_flags & DECL_INLINE) && (storage_flags & DECL_EXTERN);
@@ -4566,12 +4567,14 @@ static Node *find_source_class_template(Token *class_tag);
  * version of an overloaded callee. */
 static Node *find_target_versioned_func(Token *name, Token *target);
 static bool emit_free_func_ident_via_ffsig(Token *name);
-static bool ffsig_is_first_c_linkage(Token *name, Type **params, int nparams);
+static bool ffsig_is_first_c_linkage(Token *name, Type **params, int nparams,
+                                       bool is_variadic);
 static void emit_free_func_symbol(Token *name, Token *asm_name,
                                    bool c_linkage,
-                                   Type **params, int nparams);
+                                   Type **params, int nparams,
+                                   bool is_variadic);
 static void emit_free_func_mangled_name(Token *name, Type **param_types,
-                                         int nparams);
+                                         int nparams, bool is_variadic);
 
 /* The asm-label token's payload includes the surrounding quotes
  * (e.g. "strchr" with len=8). Strip them when emitting. */
@@ -4616,7 +4619,8 @@ static void emit_asm_name(Token *asm_tok) {
  * the asm/c-linkage/mangle/bare decision. */
 static void emit_free_func_symbol(Token *name, Token *asm_name,
                                    bool c_linkage,
-                                   Type **params, int nparams) {
+                                   Type **params, int nparams,
+                                   bool is_variadic) {
     /* Multi-versioning dispatch: when the callee exists in
      * target-versioned form, bind to the matching version. Inside a
      * function with a target attribute, the caller's target picks
@@ -4637,7 +4641,7 @@ static void emit_free_func_symbol(Token *name, Token *asm_name,
     } else if (c_linkage) {
         fprintf(stdout, "%.*s", name->len, name->loc);
     } else if (free_func_name_is_overloaded(name)) {
-        emit_free_func_mangled_name(name, params, nparams);
+        emit_free_func_mangled_name(name, params, nparams, is_variadic);
     } else {
         fprintf(stdout, "%.*s", name->len, name->loc);
     }
@@ -5099,7 +5103,8 @@ static void emit_expr(Node *n) {
                                        rd->asm_name,
                                        rd->c_linkage,
                                        rd->type->params,
-                                       rd->type->nparams);
+                                       rd->type->nparams,
+                                       rd->type->is_variadic);
             } else if (!rd && emit_free_func_ident_via_ffsig(n->ident.name)) {
                 /* sema didn't resolve this ident (file-scope aggregate
                  * initializer fall-through, etc.) — the g_ffsig_seen
@@ -6032,7 +6037,8 @@ static void emit_expr(Node *n) {
                 for (int i = 0; i < np; i++)
                     pty[i] = lf->func.params[i]->param.ty;
                 emit_free_func_symbol(lf->func.name, NULL,
-                                       /*c_linkage=*/false, pty, np);
+                                       /*c_linkage=*/false, pty, np,
+                                       lf->func.is_variadic);
                 fputc('(', stdout);
                 if (is_addressable_lvalue(cc)) {
                     emit_addrof_for_this(cc);
@@ -6288,7 +6294,8 @@ static void emit_expr(Node *n) {
                     emit_free_func_symbol(method_tok, qd->asm_name,
                                            qd->c_linkage,
                                            qd->type->params,
-                                           qd->type->nparams);
+                                           qd->type->nparams,
+                                           qd->type->is_variadic);
                     fputc('(', stdout);
                     for (int i = 0; i < n->call.nargs; i++) {
                         if (i > 0) fputs(", ", stdout);
@@ -6317,7 +6324,8 @@ static void emit_expr(Node *n) {
                     fputs("_ZSt", stdout);
                     fprintf(stdout, "%d%.*s",
                         method_tok->len, method_tok->len, method_tok->loc);
-                    mangle_param_suffix(qd->type->params, qd->type->nparams);
+                    mangle_param_suffix(qd->type->params, qd->type->nparams,
+                                          qd->type->is_variadic);
                     fputc('(', stdout);
                     for (int i = 0; i < n->call.nargs; i++) {
                         if (i > 0) fputs(", ", stdout);
@@ -7836,7 +7844,10 @@ static void emit_expr(Node *n) {
                 emit_free_func_symbol(n->call.callee->ident.name,
                                        asm_callee,
                                        rd_callee && rd_callee->c_linkage,
-                                       mangle_pty, mangle_np);
+                                       mangle_pty, mangle_np,
+                                       rd_callee && rd_callee->type &&
+                                       rd_callee->type->kind == TY_FUNC &&
+                                       rd_callee->type->is_variadic);
                 emitted_mangled = true;
             }
             if (!emitted_mangled) emit_expr(n->call.callee);
@@ -10058,7 +10069,8 @@ static void emit_var_decl_inner(Node *n) {
          * name; later mismatched-sig decls would clash on the bare C
          * symbol. Pattern: <cstring>'s dual strchr overloads. */
         if ((n->var_decl.storage_flags & DECL_C_LINKAGE) &&
-            !ffsig_is_first_c_linkage(n->var_decl.name, ty->params, ty->nparams))
+            !ffsig_is_first_c_linkage(n->var_decl.name, ty->params, ty->nparams,
+                                        ty->is_variadic))
             return;
         /* GCC constructor / destructor function attributes — pass
          * through to the C compiler which wires the function into
@@ -10085,7 +10097,7 @@ static void emit_var_decl_inner(Node *n) {
         fputc(' ', stdout);
         emit_free_func_symbol(n->var_decl.name, n->var_decl.asm_name,
                                (n->var_decl.storage_flags & DECL_C_LINKAGE) != 0,
-                               ty->params, ty->nparams);
+                               ty->params, ty->nparams, ty->is_variadic);
         fputc('(', stdout);
         for (int i = 0; i < ty->nparams; i++) {
             if (i > 0) fputs(", ", stdout);
@@ -14699,6 +14711,7 @@ typedef struct {
     int    key_len;
     bool   c_linkage;   /* N4659 §10.5 — extern "C": never mangle */
     bool   has_class_param; /* any param is struct/union (or ptr/ref/array thereof) */
+    bool   is_variadic; /* N4659 §11.3.5/4 — param list ends with '...' */
     Type **params;      /* malloc'd; nparams entries; for value-context
                          * emit when the call's resolved_decl is NULL. */
     int    nparams;
@@ -14718,6 +14731,7 @@ static void free_ovld_walk(Node *n) {
     Type **params = NULL;
     int    nparams = 0;
     bool   c_linkage = false;
+    bool   is_variadic = false;
     if (n->kind == ND_FUNC_DEF || n->kind == ND_FUNC_DECL) {
         name = n->func.name;
         if (name && n->kind == ND_FUNC_DEF && n->func.class_type)
@@ -14731,12 +14745,14 @@ static void free_ovld_walk(Node *n) {
             tmp[i] = n->func.params[i] ? n->func.params[i]->param.ty : NULL;
         params = tmp;
         c_linkage = (n->func.storage_flags & DECL_C_LINKAGE) != 0;
+        is_variadic = n->func.is_variadic;
     } else if (n->kind == ND_VAR_DECL && n->var_decl.ty &&
                n->var_decl.ty->kind == TY_FUNC) {
         name = n->var_decl.name;
         nparams = n->var_decl.ty->nparams;
         params = n->var_decl.ty->params;
         c_linkage = (n->var_decl.storage_flags & DECL_C_LINKAGE) != 0;
+        is_variadic = n->var_decl.ty->is_variadic;
     }
     if (!name || g_n_ffsig_seen >= 16384) {
         if (n->kind == ND_FUNC_DEF || n->kind == ND_FUNC_DECL) free(params);
@@ -14744,8 +14760,9 @@ static void free_ovld_walk(Node *n) {
     }
     FreeFuncSig *e = &g_ffsig_seen[g_n_ffsig_seen++];
     e->name = name;
-    e->key_len = func_sig_key(name, params, nparams, e->key);
+    e->key_len = func_sig_key(name, params, nparams, is_variadic, e->key);
     e->c_linkage = c_linkage;
+    e->is_variadic = is_variadic;
     e->has_class_param = false;
     e->nparams = nparams;
     e->params = nparams > 0 ? malloc(nparams * sizeof(Type *)) : NULL;
@@ -14926,7 +14943,7 @@ static bool emit_free_func_ident_via_ffsig(Token *name) {
             if (want_kind != have) continue;
         }
         emit_free_func_symbol(name, NULL, e->c_linkage,
-                               e->params, e->nparams);
+                               e->params, e->nparams, e->is_variadic);
         return true;
     }
     return false;
@@ -14941,10 +14958,11 @@ static bool emit_free_func_ident_via_ffsig(Token *name) {
  *
  * Returns true when 'this_decl' is the first extern-C entry in
  * g_ffsig_seen with this name. */
-static bool ffsig_is_first_c_linkage(Token *name, Type **params, int nparams) {
+static bool ffsig_is_first_c_linkage(Token *name, Type **params, int nparams,
+                                       bool is_variadic) {
     if (!name) return true;
     char this_key[FUNC_SIG_KEY_MAX];
-    int  this_key_len = func_sig_key(name, params, nparams, this_key);
+    int  this_key_len = func_sig_key(name, params, nparams, is_variadic, this_key);
     bool seen_other_c = false;
     for (int i = 0; i < g_n_ffsig_seen; i++) {
         FreeFuncSig *e = &g_ffsig_seen[i];
@@ -14963,7 +14981,7 @@ static bool ffsig_is_first_c_linkage(Token *name, Type **params, int nparams) {
 
 /* Emit '<name>_p_<param_suffix>_pe_' directly to stdout. */
 static void emit_free_func_mangled_name(Token *name, Type **param_types,
-                                         int nparams) {
+                                         int nparams, bool is_variadic) {
     if (!name) return;
     /* Global operator new / delete / new[] / delete[] with the
      * standard single-arg signatures (size_t for new, void* for
@@ -15027,7 +15045,7 @@ static void emit_free_func_mangled_name(Token *name, Type **param_types,
         }
         fprintf(stdout, "%.*s", name->len, name->loc);
         if (tag) fputs(tag, stdout);
-        mangle_param_suffix(param_types, nparams);
+        mangle_param_suffix(param_types, nparams, is_variadic);
         return;
     }
     /* Itanium-ABI free-function mangling: prefix '_Z<n>' so the name
@@ -15041,11 +15059,11 @@ static void emit_free_func_mangled_name(Token *name, Type **param_types,
      */
     if (g_mangle_kind == MANGLE_ITANIUM) {
         fprintf(stdout, "_Z%d%.*s", name->len, name->len, name->loc);
-        mangle_param_suffix(param_types, nparams);
+        mangle_param_suffix(param_types, nparams, is_variadic);
         return;
     }
     fprintf(stdout, "%.*s", name->len, name->loc);
-    mangle_param_suffix(param_types, nparams);
+    mangle_param_suffix(param_types, nparams, is_variadic);
 }
 
 /* Emit the function signature part AFTER storage-class keywords —
@@ -15172,7 +15190,7 @@ static void emit_free_func_header(Type *ret_ty, Token *name,
         Type *fty = ret_ty->base;
         emit_type(fty->ret);
         fputs(" (*", stdout);
-        emit_free_func_mangled_name(name, ptypes, np);
+        emit_free_func_mangled_name(name, ptypes, np, variadic);
         emit_param_list(params, nparams, variadic);
         fputs(")(", stdout);
         emit_func_param_types(fty);
@@ -15181,7 +15199,7 @@ static void emit_free_func_header(Type *ret_ty, Token *name,
     }
     emit_type(ret_ty);
     fputc(' ', stdout);
-    emit_free_func_mangled_name(name, ptypes, np);
+    emit_free_func_mangled_name(name, ptypes, np, variadic);
     emit_param_list(params, nparams, variadic);
 }
 
@@ -16529,7 +16547,7 @@ methods_phase:;
                 fputs("__", stdout);
                 emit_token_text(bname);
                 /* Param suffix keeps overloaded virtuals distinct. */
-                mangle_param_suffix(b_pty, b_pn);
+                mangle_param_suffix(b_pty, b_pn, /*is_variadic=*/false);
                 fputs("(struct ", stdout);
                 mangle_class_tag(base);
                 fputs(" *__bp", stdout);
@@ -16745,7 +16763,7 @@ methods_phase:;
                     mangle_class_tag(base);
                     fputs("__", stdout);
                     emit_token_text(bname);
-                    mangle_param_suffix(slot_pty, slot_pn);
+                    mangle_param_suffix(slot_pty, slot_pn, /*is_variadic=*/false);
                 } else {
                     /* Pass-through: emit base's method symbol IFF a
                      * body exists somewhere. Pure-virtual base methods
@@ -17281,6 +17299,7 @@ static void emit_top_level(Node *n) {
             bool dup = false;
             if (!will_be_suffixed)
                 dup = func_def_dedup_check_sig(n->func.name, params, np,
+                                                n->func.is_variadic,
                                                 n->func.storage_flags);
             free(params);
             if (dup) return;
@@ -17330,14 +17349,16 @@ static void emit_top_level(Node *n) {
             n->var_decl.name) {
             if (func_decl_dedup_check_sig(n->var_decl.name,
                                             n->var_decl.ty->params,
-                                            n->var_decl.ty->nparams))
+                                            n->var_decl.ty->nparams,
+                                            n->var_decl.ty->is_variadic))
                 return;
             /* Extern-C: only emit the first decl with this name (see
              * ffsig_is_first_c_linkage rationale). */
             if ((n->var_decl.storage_flags & DECL_C_LINKAGE) &&
                 !ffsig_is_first_c_linkage(n->var_decl.name,
                                            n->var_decl.ty->params,
-                                           n->var_decl.ty->nparams))
+                                           n->var_decl.ty->nparams,
+                                           n->var_decl.ty->is_variadic))
                 return;
             emit_source_comment(n->tok);
             {
@@ -17444,7 +17465,7 @@ static void emit_top_level(Node *n) {
             fputc(' ', stdout);
             emit_free_func_symbol(n->var_decl.name, n->var_decl.asm_name,
                                    (n->var_decl.storage_flags & DECL_C_LINKAGE) != 0,
-                                   fty->params, fty->nparams);
+                                   fty->params, fty->nparams, fty->is_variadic);
             fputc('(', stdout);
             if (fty->nparams == 0) {
                 fputs("void", stdout);

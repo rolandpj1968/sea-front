@@ -447,9 +447,9 @@ static Type *strip_top_cv(Type *ty, int slot) {
     return copy;
 }
 
-void mangle_param_suffix(Type **param_types, int nparams) {
+void mangle_param_suffix(Type **param_types, int nparams, bool is_variadic) {
     if (g_mangle_kind == MANGLE_ITANIUM) {
-        itan_mangle_param_suffix(param_types, nparams); return;
+        itan_mangle_param_suffix(param_types, nparams, is_variadic); return;
     }
     fputs("_p_", stdout);
     if (nparams == 0) {
@@ -460,6 +460,7 @@ void mangle_param_suffix(Type **param_types, int nparams) {
             emit_type_for_mangle(strip_top_cv(param_types[i], i));
         }
     }
+    if (is_variadic) fputs("_var_", stdout);
     fputs("_pe_", stdout);
 }
 
@@ -468,7 +469,7 @@ void mangle_param_suffix(Type **param_types, int nparams) {
  * decided by string comparison on the mangler's own output —
  * eliminating the need for partial-signature predicates that have
  * to be patched every time a new C++ distinction appears. */
-int mangle_param_suffix_to_buf(Type **param_types, int nparams,
+int mangle_param_suffix_to_buf(Type **param_types, int nparams, bool is_variadic,
                                 char *buf, int pos, int max) {
     int n = snprintf(buf + pos, (size_t)(max - pos), "_p_");
     if (n > 0) pos += n;
@@ -481,6 +482,10 @@ int mangle_param_suffix_to_buf(Type **param_types, int nparams,
             pos = mangle_type_to_buf(strip_top_cv(param_types[i], i),
                                       buf, pos, max);
         }
+    }
+    if (is_variadic) {
+        n = snprintf(buf + pos, (size_t)(max - pos), "_var_");
+        if (n > 0) pos += n;
     }
     n = snprintf(buf + pos, (size_t)(max - pos), "_pe_");
     if (n > 0) pos += n;
@@ -497,7 +502,7 @@ void mangle_class_method(Type *class_type, Token *method_name,
     }
     emit_class_open(class_type);
     g_mangler->append_member(g_mangler, method_name);
-    mangle_param_suffix(param_types, nparams);
+    mangle_param_suffix(param_types, nparams, /*is_variadic=*/false);
     /* N4659 §10.1.7.1 [dcl.type.cv] / §16.3.1/4: const qualifier
      * on the implicit object parameter distinguishes overloads
      * like operator[](int) vs operator[](int) const. */
@@ -528,7 +533,7 @@ void mangle_class_ctor(Type *class_type,
     }
     emit_class_open(class_type);
     g_mangler->append_ctor(g_mangler);
-    mangle_param_suffix(param_types, nparams);
+    mangle_param_suffix(param_types, nparams, /*is_variadic=*/false);
     emit_class_close();
 }
 
@@ -655,7 +660,7 @@ void mangle_class_operator(Type *class_type, OperatorKind op,
     }
     emit_class_open(class_type);
     fputs(op_human_suffix[op], stdout);
-    mangle_param_suffix(param_types, nparams);
+    mangle_param_suffix(param_types, nparams, /*is_variadic=*/false);
     if (is_const) fputs("_const", stdout);
     emit_class_close();
 }

@@ -209,9 +209,12 @@ void emit_type_for_mangle(Type *ty);
 
 /* Emit just the parameter-type suffix (_p_<types>_pe_) to stdout.
  * Exposed so emit_c.c call-site rewrites can stay in sync with the
- * canonical mangling path. */
-void mangle_param_suffix(Type **param_types, int nparams);
-int mangle_param_suffix_to_buf(Type **param_types, int nparams,
+ * canonical mangling path. `is_variadic` adds the Itanium ABI `z`
+ * suffix (§5.1.6 [mangle.fn-type]/ellipsis) — a trailing `_var_`
+ * marker in the human scheme — so `f(int)` and `f(int, ...)` mangle
+ * to distinct symbols and the dedup key distinguishes them. */
+void mangle_param_suffix(Type **param_types, int nparams, bool is_variadic);
+int mangle_param_suffix_to_buf(Type **param_types, int nparams, bool is_variadic,
                                char *buf, int pos, int max);
 
 /* Encode a type into a buffer using the same scheme as
@@ -249,6 +252,6 @@ void itan_mangle_class_conversion(Type *class_type, Type *target_type,
 void itan_mangle_class_vtable_type(Type *class_type);
 void itan_mangle_class_vtable_instance(Type *class_type);
 void itan_emit_type_for_mangle(Type *ty);
-void itan_mangle_param_suffix(Type **param_types, int nparams);
+void itan_mangle_param_suffix(Type **param_types, int nparams, bool is_variadic);
 
 #endif /* SF_CODEGEN_MANGLE_H */

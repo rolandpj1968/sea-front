@@ -114,7 +114,14 @@ static void run_fixture_type(const char *label, Type *ty) {
 
 static void run_fixture_params(const char *label, Type **params, int n) {
     printf("%s: ", label);
-    itan_mangle_param_suffix(params, n);
+    itan_mangle_param_suffix(params, n, /*is_variadic=*/false);
+    putchar('\n');
+}
+
+static void run_fixture_params_variadic(const char *label,
+                                          Type **params, int n) {
+    printf("%s: ", label);
+    itan_mangle_param_suffix(params, n, /*is_variadic=*/true);
     putchar('\n');
 }
 
@@ -214,6 +221,22 @@ int main(void) {
     {
         /* No params. */
         run_fixture_params("p_void", NULL, 0);
+    }
+
+    /* Variadic suffix — Itanium ABI §5.1.6 appends `z` after the
+     * final non-variadic param. Catches the dedup/mangle drift
+     * where `void f(int, ...)` collapsed onto `void f(int)`. */
+    {
+        Type *p[] = { &t_int };
+        run_fixture_params_variadic("p_int_variadic", p, 1);
+    }
+    {
+        Type *p[] = { &t_int_ptr, &t_int };
+        run_fixture_params_variadic("p_int_ptr_int_variadic", p, 2);
+    }
+    {
+        /* `f(...)` alone — bare `z`, no preceding `v`. */
+        run_fixture_params_variadic("p_only_variadic", NULL, 0);
     }
 
     /* ---------- Stage 2 fixtures: names + class methods ---------- */
