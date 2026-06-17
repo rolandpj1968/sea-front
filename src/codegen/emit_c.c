@@ -7051,6 +7051,27 @@ static void emit_expr(Node *n) {
                 fputs("))", stdout);
                 return;
             }
+            /* Virtual dtor — dispatch via vptr so `a->~A()` for an
+             * A* aliasing a Derived runs the most-derived dtor. N4659
+             * §15.4/10 [class.dtor] — destructor is virtual iff
+             * declared virtual in some base; the destructor selected
+             * by `p->~T()` is the dynamic-type's destructor when T's
+             * dtor is virtual. Pattern: g++.dg/overload/virtual2.C. */
+            if (class_has_virtual_dtor(ot)) {
+                /* `__del_dtor` returns this; for an explicit-dtor
+                 * call we just want the destruction side effect.
+                 * Cast away the return. */
+                fputs("((void)((", stdout);
+                if (callee->member.op == TK_DOT) fputc('&', stdout);
+                fputc('(', stdout);
+                emit_expr(obj);
+                fputs("))->__sf_vptr->__dtor(", stdout);
+                if (callee->member.op == TK_DOT) fputc('&', stdout);
+                fputc('(', stdout);
+                emit_expr(obj);
+                fputs("))))", stdout);
+                return;
+            }
             mangle_class_dtor(ot);
             fputc('(', stdout);
             if (callee->member.op == TK_DOT) fputc('&', stdout);
@@ -7705,14 +7726,31 @@ static void emit_expr(Node *n) {
                 bool is_size_t = at0 &&
                     ((at0->kind == TY_LONG || at0->kind == TY_LLONG)
                        && at0->is_unsigned);
-                bool is_void_ptr = at0 && at0->kind == TY_PTR && at0->base &&
-                                   at0->base->kind == TY_VOID;
+                /* Any pointer is acceptable for `::operator delete(p)` —
+                 * the standard signature takes void*, and C++ implicit
+                 * conversion T*→void* runs at the call site. Without
+                 * this relax the test `::operator delete(b)` where b is
+                 * B* falls through and emits the bare 'operator(b)'.
+                 * Pattern: g++.dg/overload/virtual2.C. */
+                bool is_any_ptr = at0 && at0->kind == TY_PTR;
                 const char *itan = NULL;
                 if (ck == OP_NEW          && is_size_t)   itan = "_Znwm";
                 if (ck == OP_NEW_ARRAY    && is_size_t)   itan = "_Znam";
-                if (ck == OP_DELETE       && is_void_ptr) itan = "_ZdlPv";
-                if (ck == OP_DELETE_ARRAY && is_void_ptr) itan = "_ZdaPv";
+                if (ck == OP_DELETE       && is_any_ptr) itan = "_ZdlPv";
+                if (ck == OP_DELETE_ARRAY && is_any_ptr) itan = "_ZdaPv";
                 if (itan) {
+                    if (is_any_ptr &&
+                        (ck == OP_DELETE || ck == OP_DELETE_ARRAY) &&
+                        at0->base && at0->base->kind != TY_VOID) {
+                        /* Cast non-void pointer to void* for the call —
+                         * matches the implicit conversion C++ would
+                         * insert. Emit as `_ZdlPv((void*)(arg))`. */
+                        fprintf(stdout, "%s((void*)", itan);
+                        emit_expr(n->call.args[0]);
+                        fputc(')', stdout);
+                        emitted_mangled = true;
+                        return;
+                    }
                     fputs(itan, stdout);
                     emitted_mangled = true;
                 }
