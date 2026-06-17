@@ -100,6 +100,15 @@ static Node  *g_current_func_node = NULL;
  * carrying target attributes, prefer the one whose target matches
  * this caller's. Pattern: g++.dg/ext/mv3.C. */
 static Token *g_current_func_target = NULL;
+/* When non-NULL, we're emitting a dtor whose body is a function-
+ * try-block — N4659 §15.3/15 + §15.4. Each catch handler in that
+ * outermost try-block must run base/member dtors BEFORE its body
+ * (the handler reacts to a failure *during* destruction; base
+ * subobjects need to be destroyed regardless of where we exit).
+ * Pointer goes at the dtor's class type so the handler emit can
+ * walk the bases. Reset to NULL after the outermost ND_TRY emits
+ * so nested try-blocks inside the body don't re-inject. */
+static Type *g_dtor_ftb_class = NULL;
 /* Class type of the OOL method currently being emitted. Used by
  * ND_OFFSETOF to substitute unresolvable local typedefs. */
 static Type *g_current_method_class = NULL;
@@ -13639,6 +13648,15 @@ static void emit_stmt(Node *n) {
          * try-body is deferred — slice 4 only handles bare
          * try-blocks without dtor-bearing locals. */
         int id = g_cf.next_label_id++;
+        /* Save the dtor function-try-block flag locally: only the
+         * outermost ND_TRY in a dtor's body should inject base/
+         * member dtors into its handlers. Clear the global while
+         * we emit the body and the handler bodies so nested tries
+         * see NULL; the catch-handler injection below reads the
+         * saved value, so this ND_TRY's handlers still get the
+         * injection when applicable. */
+        Type *saved_dtor_ftb_for_try = g_dtor_ftb_class;
+        g_dtor_ftb_class = NULL;
         fputs("{\n", stdout);
         g_indent++;
 
@@ -13753,6 +13771,26 @@ static void emit_stmt(Node *n) {
             fputs("__SF_unwind = __SF_UNWIND_NONE;\n", stdout);
             emit_indent();
             fputs("__sf_exc_state.state = __SF_UNWIND_NONE;\n", stdout);
+            /* Dtor function-try-block — N4659 §15.3/15 + §15.4: base/
+             * member subobjects are destroyed BEFORE the handler runs.
+             * Inject the base-dtor calls here. Only the OUTERMOST
+             * try-block in a dtor body qualifies (set via
+             * g_dtor_ftb_class in emit_func_def, saved locally
+             * before the body-emit clears it). Nested try-blocks
+             * are unaffected. */
+            if (saved_dtor_ftb_for_try && saved_dtor_ftb_for_try->class_region) {
+                int nb = saved_dtor_ftb_for_try->class_region->nbases;
+                for (int b = 0; b < nb; b++) {
+                    Type *base = saved_dtor_ftb_for_try->class_region->bases[b]
+                                   ? saved_dtor_ftb_for_try->class_region->bases[b]->owner_type
+                                   : NULL;
+                    if (!base || !base->has_dtor) continue;
+                    emit_indent();
+                    mangle_class_dtor(base);
+                    if (b == 0) fputs("(&this->__sf_base);\n", stdout);
+                    else fprintf(stdout, "(&this->__sf_base%d);\n", b);
+                }
+            }
             /* Handler body. */
             if (h->handler.body) emit_stmt(h->handler.body);
             emit_indent();
@@ -13781,6 +13819,10 @@ static void emit_stmt(Node *n) {
         }
         fprintf(stdout, "__SF_try_%d_after: ;\n", id);
         emit_close_brace();
+        /* Restore the dtor function-try-block flag for the enclosing
+         * scope. If we're a nested try-block, the outer try's loop
+         * iteration still expects to see g_dtor_ftb_class set. */
+        g_dtor_ftb_class = saved_dtor_ftb_for_try;
         return;
     }
     default:
@@ -15387,7 +15429,22 @@ static void emit_func_def(Node *n) {
                               n->func.is_variadic);
     }
     fputc(' ', stdout);
+    /* Dtor function-try-block recognition — wrapped body is
+     * ND_BLOCK { ND_TRY ... }. Stash the class type so the
+     * outermost ND_TRY's handler emit can inject base/member dtor
+     * calls per N4659 §15.3/15. Cleared after the body emit (the
+     * outermost-try handler emit itself nulls the flag so nested
+     * try-blocks aren't affected). */
+    Type *saved_dtor_ftb = g_dtor_ftb_class;
+    if (n->func.is_destructor && n->func.class_type &&
+        n->func.body && n->func.body->kind == ND_BLOCK &&
+        n->func.body->block.nstmts == 1 &&
+        n->func.body->block.stmts[0] &&
+        n->func.body->block.stmts[0]->kind == ND_TRY) {
+        g_dtor_ftb_class = n->func.class_type;
+    }
     emit_func_body(n);
+    g_dtor_ftb_class      = saved_dtor_ftb;
     g_current_func_ret_ty = saved_ret;
     g_current_func_target = saved_target;
     g_current_lambda_fn   = saved_lam;
@@ -15526,7 +15583,20 @@ static void emit_method_as_free_fn(Node *func, Type *class_type, bool emit_inlin
     g_current_func_node = func;
     emit_method_signature(func, class_type, emit_inline);
     fputc(' ', stdout);
+    /* Dtor function-try-block recognition — see emit_func_def for
+     * the rationale. emit_method_as_free_fn is the OOL-method path
+     * (`B::~B() try { ... } catch { ... }`) and needs the same
+     * detect-and-stash. */
+    Type *saved_dtor_ftb = g_dtor_ftb_class;
+    if (func->func.is_destructor && class_type &&
+        func->func.body && func->func.body->kind == ND_BLOCK &&
+        func->func.body->block.nstmts == 1 &&
+        func->func.body->block.stmts[0] &&
+        func->func.body->block.stmts[0]->kind == ND_TRY) {
+        g_dtor_ftb_class = class_type;
+    }
     emit_func_body(func);
+    g_dtor_ftb_class = saved_dtor_ftb;
     g_current_method_is_const = saved_mconst;
     g_current_method_is_static = saved_mstatic;
     g_current_func_ret_ty = saved_ret;

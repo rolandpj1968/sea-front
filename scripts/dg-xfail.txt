@@ -170,15 +170,4 @@ g++.dg/init/ref19.C
 # behavior (see class_dtor_is_nontrivial).
 g++.dg/cpp0x/defaulted19.C
 
-# --- dtor function-try-block base-destruction order ------------------
-# N4659 §15.3/15 + §15.4 — when a dtor body is a function-try-block
-# and the body throws, base/member subobjects must be destroyed BEFORE
-# the catch handler runs. Sea-front parses the function-try-block now
-# (commit fc1f4e1) and the dtor wrapper still runs base dtors after
-# the user body returns — but the catch handler executes inside the
-# user body, before the wrapper sees the throw. Needs a follow-on
-# slice that either moves base destruction into the function-try-
-# block dtor's user body (D2) or injects base-dtor calls at the top
-# of each function-try-block catch handler.
-g++.dg/eh/dtor1.C
 
