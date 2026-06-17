@@ -13906,6 +13906,60 @@ static void emit_ctor_member_inits(Node *func) {
     if (!func->func.is_constructor) return;
     if (!g_current_class_def) return;
     Node *cdef = g_current_class_def;
+    /* Delegating constructor — N4659 §15.6.2/6 [class.base.init]:
+     *   "A mem-initializer-id that designates the constructor's class
+     *    shall be the only mem-initializer; the constructor is a
+     *    delegating constructor, and the constructor selected by the
+     *    mem-initializer is the target constructor."
+     * Emit a call to the target ctor on `this` and short-circuit;
+     * base/member inits are the target ctor's responsibility. */
+    if (cdef->class_def.ty && cdef->class_def.ty->tag) {
+        Token *cls_tag = cdef->class_def.ty->tag;
+        for (int k = 0; k < func->func.n_mem_inits; k++) {
+            MemInit *mi = &func->func.mem_inits[k];
+            if (mi->name && mi->name->len == cls_tag->len &&
+                memcmp(mi->name->loc, cls_tag->loc, cls_tag->len) == 0) {
+                Type **at = NULL;
+                int na = collect_call_arg_types(mi->args, mi->nargs, &at);
+                Type **pty = NULL;
+                Node *best = NULL;
+                int np = resolve_overload(cdef->class_def.ty,
+                                            /*name=*/NULL,
+                                            /*is_ctor=*/true, at, na,
+                                            /*receiver_is_const=*/false,
+                                            &pty, &best);
+                /* Copy at/pty out of the shared static pools — the
+                 * hoist pass below also runs overload resolution and
+                 * would clobber them otherwise. */
+                Type *at_copy[16], *pty_copy[16];
+                int nat_kept = na < 16 ? na : 16;
+                for (int i = 0; i < nat_kept; i++) at_copy[i] = at[i];
+                int npty_kept = (np >= 0 && np < 16) ? np : 0;
+                for (int i = 0; i < npty_kept; i++) pty_copy[i] = pty[i];
+                /* Hoist class-typed temps out of the args. Mem-inits
+                 * don't ride the normal body-walk hoist pass, so a
+                 * functional-cast arg `A(i)` would otherwise emit
+                 * literally — `A(i)` isn't a C call. After hoisting
+                 * the arg carries codegen_temp_name and emit_expr
+                 * substitutes the temp name. */
+                for (int ai = 0; ai < mi->nargs; ai++)
+                    hoist_temps_in_expr(mi->args[ai], /*in_shortcircuit=*/false);
+                emit_indent();
+                if (np >= 0)
+                    mangle_class_ctor(cdef->class_def.ty, pty_copy, npty_kept);
+                else
+                    mangle_class_ctor(cdef->class_def.ty, at_copy, nat_kept);
+                fputs("(this", stdout);
+                for (int ai = 0; ai < mi->nargs; ai++) {
+                    fputs(", ", stdout);
+                    emit_arg_for_param(mi->args[ai],
+                        (np >= 0 && pty && ai < np) ? pty[ai] : NULL);
+                }
+                fputs(");\n", stdout);
+                return;
+            }
+        }
+    }
     /* Base subobject construction — N4659 §15.6.2/13 [class.base.init]:
      * "...non-static data members are initialized in the order
      *  they were declared in the class definition (again regardless
