@@ -209,6 +209,15 @@ void parser_skip_rest_of_line(Parser *p) {
         parser_advance(p);
 }
 
+int parser_pack_at_line(Parser *p, int line) {
+    int active = 0;
+    for (int i = 0; i < p->pack_count; i++) {
+        if (p->pack_lines[i] <= line) active = p->pack_vals[i];
+        else                          break;
+    }
+    return active;
+}
+
 void parser_skip_cxx_attributes(Parser *p) {
     while (parser_at(p, TK_LBRACKET) &&
            parser_peek_ahead(p, 1)->kind == TK_LBRACKET) {
@@ -556,15 +565,56 @@ Node *parse(TokenArray tokens, Arena *arena, CppStandard std) {
     /* Filter preprocessor leftovers (#line directives) once, up front.
      * mcpp emits '#line N "file"' tokens that can appear anywhere — we
      * drop entire #-prefixed lines so the parser never has to think
-     * about them. */
+     * about them. Before dropping, scan for `#pragma pack(N)` /
+     * `#pragma pack()` directives and record their (line, value) so
+     * struct/union creation can consult the active pack value.
+     * N4659 has no `#pragma pack` (GNU extension); see g++.dg/parse/
+     * pragma3.C. */
     Token *filtered = arena_alloc(arena, sizeof(Token) * tokens.len);
     int n = 0;
+    /* Pre-size pack arrays to upper bound = # of TK_HASH tokens. */
+    int max_pragma_lines = 0;
+    for (int i = 0; i < tokens.len; i++)
+        if (tokens.tokens[i].kind == TK_HASH) max_pragma_lines++;
+    if (max_pragma_lines > 0) {
+        p.pack_lines = arena_alloc(arena, max_pragma_lines * sizeof(int));
+        p.pack_vals  = arena_alloc(arena, max_pragma_lines * sizeof(int));
+    }
     for (int i = 0; i < tokens.len; ) {
         if (tokens.tokens[i].kind == TK_HASH) {
             int line = tokens.tokens[i].line;
-            while (i < tokens.len && tokens.tokens[i].line == line &&
-                   tokens.tokens[i].kind != TK_EOF)
-                i++;
+            /* Detect `#pragma pack(...)` and record before dropping. */
+            int j = i + 1;
+            int end = j;
+            while (end < tokens.len && tokens.tokens[end].line == line &&
+                   tokens.tokens[end].kind != TK_EOF) end++;
+            if (j < end &&
+                tokens.tokens[j].kind == TK_IDENT &&
+                tokens.tokens[j].len == 6 &&
+                memcmp(tokens.tokens[j].loc, "pragma", 6) == 0 &&
+                j + 1 < end &&
+                tokens.tokens[j+1].kind == TK_IDENT &&
+                tokens.tokens[j+1].len == 4 &&
+                memcmp(tokens.tokens[j+1].loc, "pack", 4) == 0) {
+                /* Walk to the first '(' on the line; the value (if any)
+                 * is the next TK_NUM. Empty parens reset to 0. Bare
+                 * `#pragma pack` (no parens) also resets to 0. */
+                int pack_val = 0;
+                int k = j + 2;
+                while (k < end && tokens.tokens[k].kind != TK_LPAREN) k++;
+                if (k < end) {
+                    int q = k + 1;
+                    while (q < end && tokens.tokens[q].kind != TK_RPAREN &&
+                           tokens.tokens[q].kind != TK_NUM) q++;
+                    if (q < end && tokens.tokens[q].kind == TK_NUM) {
+                        pack_val = (int)strtol(tokens.tokens[q].loc, NULL, 0);
+                    }
+                }
+                p.pack_lines[p.pack_count] = line;
+                p.pack_vals [p.pack_count] = pack_val;
+                p.pack_count++;
+            }
+            i = end;
             continue;
         }
         filtered[n++] = tokens.tokens[i++];

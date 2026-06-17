@@ -1773,6 +1773,17 @@ struct Parser {
      * function (top-level lambda in an initializer, etc.). */
     Token *cur_func_name;
     int    cur_func_lambda_count;
+    /* GNU `#pragma pack(N)` / `#pragma pack()` tracking. Sea-front's
+     * top-level pre-pass drops every # line; before dropping we scan
+     * for pack directives and record (source_line, value) entries
+     * here. A struct/union being declared on line L consults the
+     * most recent pack record with source_line <= L; nonzero value
+     * stamps `is_packed` on the new Type so codegen emits
+     * `__attribute__((packed))`. `value == 0` means "reset to
+     * default". Pattern: g++.dg/parse/pragma3.C. */
+    int *pack_lines;
+    int *pack_vals;
+    int  pack_count;
     bool split_shr;            /* true when a >> (TK_SHR) has been "split": the first >
                                 * was consumed, the second > is virtual. parser_peek()/
                                 * parser_at() return a synthetic TK_GT; parser_advance()
@@ -1827,6 +1838,12 @@ void parser_skip_to_matching_rbrace(Parser *p);
 /* Tentative parsing — save/restore parser state (position + region) */
 ParseState parser_save(Parser *p);
 void parser_restore(Parser *p, ParseState saved);
+
+/* Return the active `#pragma pack(N)` value at source line `line`,
+ * or 0 if no pragma is in effect. Linear scan of the parser's
+ * pack records — count is bounded by the # of pragma lines in
+ * the TU (small in practice). */
+int parser_pack_at_line(Parser *p, int line);
 
 /* GCC extension: __attribute__((...)) — skip any sequence of these.
  * Lexer treats __attribute__ as a plain identifier. */

@@ -274,6 +274,15 @@ DeclSpec parse_type_specifiers(Parser *p) {
             ty->is_const = is_const;
             ty->is_volatile = is_volatile;
 
+            /* `#pragma pack(N)` active at the `struct`/`union`/`class`
+             * keyword's source line stamps `is_packed`. Equivalent to
+             * a leading `__attribute__((packed))`. Resets to default
+             * via `#pragma pack()` (value 0). Pattern: g++.dg/parse/
+             * pragma3.C — inner T is packed while enclosing S isn't,
+             * because the pragma sits between them. */
+            if (parser_pack_at_line(p, tok->line) > 0)
+                ty->is_packed = true;
+
             /* C++ / GCC attributes between 'class'/'struct'/'union' and
              * the tag name (e.g. 'union [[gnu::may_alias]] X', or
              * 'struct __attribute__((packed)) X'). */
