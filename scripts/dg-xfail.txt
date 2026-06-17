@@ -170,6 +170,16 @@ g++.dg/init/ref19.C
 # behavior (see class_dtor_is_nontrivial).
 g++.dg/cpp0x/defaulted19.C
 
+# `throw nullptr` matched against `catch (void*)` BEFORE
+# `catch (nullptr_t)` — N4659 §15.3/3 [except.handle] picks the
+# first matching handler, and `void*` is a valid match for nullptr
+# per the same paragraph's last bullet. The gcc 4.8 testsuite
+# version of nullptr21 lists void* first and expects the nullptr_t
+# catch to win — modern gcc dispatches void* (first match) and
+# gcc 14's own version of this test dropped the void* handlers.
+# Sea-front matches the modern (standard-correct) dispatch order.
+g++.dg/cpp0x/nullptr21.C
+
 # --- delegating ctor with class-typed temp args ---------------------
 # `B(int i) : B(A(i)) {}` — sea-front (commit d93c40b) emits the
 # delegation call and hoists the A temp, but the temp's dtor isn't
