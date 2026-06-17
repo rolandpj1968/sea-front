@@ -1323,7 +1323,31 @@ static void parse_func_body(Parser *p, Node *func) {
         }
     }
 
-    func->func.body = parse_compound_stmt(p);
+    /* Function-try-block — N4659 §15.4 [except.handle]:
+     *   function-body: ctor-initializer(opt) compound-statement
+     *                | function-try-block
+     *   function-try-block: try ctor-initializer(opt) compound-statement
+     *                       handler-seq
+     * Lower to a synthetic { try { body } catch ... } so emit only
+     * has to handle ND_TRY in the regular way. Ctor-init lists
+     * inside function-try-blocks aren't yet supported — sea-front
+     * accepts them above but the function-try-block form below
+     * doesn't permit them (the ctor-init would have to live INSIDE
+     * the wrapped try-block per the standard). */
+    if (parser_at(p, TK_KW_TRY)) {
+        Token *try_tok = parser_peek(p);
+        Node *try_stmt = parse_stmt(p);
+        /* Wrap in a one-element block so emit's ND_FUNC_DEF body
+         * walker sees the same ND_BLOCK shape as a regular body. */
+        Node *wrap = new_node(p, ND_BLOCK, try_tok);
+        Node **stmts = arena_alloc(p->arena, sizeof(Node *));
+        stmts[0] = try_stmt;
+        wrap->block.stmts = stmts;
+        wrap->block.nstmts = 1;
+        func->func.body = wrap;
+    } else {
+        func->func.body = parse_compound_stmt(p);
+    }
     region_pop(p);  /* pop prototype scope */
     p->cur_func_name         = saved_lam_name;
     p->cur_func_lambda_count = saved_lam_count;
@@ -1664,7 +1688,8 @@ Node *parse_declaration(Parser *p) {
      * parsing the body so parameter names are visible inside.
      * The compound-statement pushes its own REGION_BLOCK as a child. */
     if (decl->var_decl.ty && decl->var_decl.ty->kind == TY_FUNC &&
-        (parser_at(p, TK_LBRACE) || parser_at(p, TK_COLON))) {
+        (parser_at(p, TK_LBRACE) || parser_at(p, TK_COLON) ||
+         parser_at(p, TK_KW_TRY))) {
 
         Node *func = new_node(p, ND_FUNC_DEF, decl->tok);
         func->func.ret_ty = decl->var_decl.ty->ret;
