@@ -1199,6 +1199,14 @@ static void collect_from_node(InstCollector *col, Node *n) {
 
 static int type_to_key(Type *ty, char *buf, int pos, int max) {
     if (!ty || pos >= max - 1) return pos;
+    /* Encode cv-qualifiers as a prefix so `Foo` and `const Foo` (or
+     * `int` and `const int`) produce distinct keys. Without this,
+     * an implicit-deduction free-function template with a const
+     * arg dedupes against the non-const instantiation — only one
+     * symbol gets emitted but two distinct call sites reference
+     * differently-mangled names → undefined reference. */
+    if (ty->is_const)    { if (pos < max - 1) buf[pos++] = 'K'; }
+    if (ty->is_volatile) { if (pos < max - 1) buf[pos++] = 'V'; }
     switch (ty->kind) {
     case TY_VOID:    pos += snprintf(buf+pos, max-pos, "v"); break;
     case TY_BOOL:    pos += snprintf(buf+pos, max-pos, "b"); break;
@@ -1213,6 +1221,11 @@ static int type_to_key(Type *ty, char *buf, int pos, int max) {
     case TY_PTR:     buf[pos++] = 'P'; pos = type_to_key(ty->base, buf, pos, max); break;
     case TY_REF:     buf[pos++] = 'R'; pos = type_to_key(ty->base, buf, pos, max); break;
     case TY_RVALREF: buf[pos++] = 'O'; pos = type_to_key(ty->base, buf, pos, max); break;
+    case TY_ENUM:
+        if (ty->tag) pos += snprintf(buf+pos, max-pos, "E%.*s",
+                                       ty->tag->len, ty->tag->loc);
+        else         pos += snprintf(buf+pos, max-pos, "E?");
+        break;
     case TY_STRUCT: case TY_UNION:
         if (ty->tag) pos += snprintf(buf+pos, max-pos, "S%.*s", ty->tag->len, ty->tag->loc);
         /* Include template args of nested template types */
