@@ -1693,6 +1693,7 @@ static bool class_has_user_default_ctor(Type *cls);
 static bool class_has_mutable_field_transitive(Type *cls);
 static bool class_dtor_is_nontrivial(Type *cls);
 static const char *eh_typeinfo_sym_for_class(Type *ty);
+static const char *eh_typeinfo_sym_for_prim(Type *ty);
 
 /* True iff the class declares its own `operator delete(void *)` —
  * unqualified `delete p` finds this overload first per N4659
@@ -9317,10 +9318,13 @@ static void emit_expr(Node *n) {
             emit_expr(op);
             fprintf(stdout, "), &%s, %s); 0; })", ti, lbl);
         } else {
+            const char *ti = eh_typeinfo_sym_for_prim(op_ty);
+            if (!ti) ti = "__sf_typeinfo_int";  /* fallback */
             fputs("({ __SF_THROW_PRIM(", stdout);
             if (op) emit_expr(op);
             else fputs("0", stdout);
-            fprintf(stdout, ", &__sf_typeinfo_int, %s); 0; })", lbl);
+            fprintf(stdout, ", &%s, %s); 0; })", ti, lbl);
+            if (op_ty) (void)eh_typeinfo_sym_for_prim(op_ty);  /* mark used */
         }
         return;
     }
@@ -11973,9 +11977,13 @@ static void emit_stmt(Node *n) {
                         }
                     }
                 } else {
+                    Type *thr_ty = thr->throw_.operand
+                        ? thr->throw_.operand->resolved_type : NULL;
+                    const char *pti = eh_typeinfo_sym_for_prim(thr_ty);
+                    if (!pti) pti = "__sf_typeinfo_int";
                     fputs("__SF_THROW_PRIM(", stdout);
                     emit_expr(thr->throw_.operand);
-                    fprintf(stdout, ", &__sf_typeinfo_int, %s);\n", lbl);
+                    fprintf(stdout, ", &%s, %s);\n", pti, lbl);
                 }
             }
             return;
@@ -13692,12 +13700,17 @@ static void emit_stmt(Node *n) {
                 fprintf(stdout,
                     "if (__sf_exc_state.exc_type == &%s) {\n", ti);
             } else {
-                /* Primitive catch — currently keyed to the single
-                 * `__sf_typeinfo_int` slot all primitive throws use.
-                 * Per-primitive-type dispatch lands when EH phase
-                 * extends primitives beyond int. */
-                fputs("if (__sf_exc_state.exc_type == &__sf_typeinfo_int) {\n",
-                      stdout);
+                /* Primitive catch — pointer-compare against the
+                 * per-primitive typeinfo for the catch parameter's
+                 * type. N4659 §15.3/3 [except.handle]: catch matches
+                 * iff the handler's type is the same type as (or a
+                 * standard-conversion-compatible from) the thrown
+                 * type. Sea-front compares typeinfo pointers — same
+                 * EhPrimKind ⇒ same pointer ⇒ match. */
+                const char *cti = eh_typeinfo_sym_for_prim(base_pty);
+                if (!cti) cti = "__sf_typeinfo_int";
+                fprintf(stdout,
+                    "if (__sf_exc_state.exc_type == &%s) {\n", cti);
             }
             g_indent++;
             /* Bind the caught name (if any) to the in-flight payload.
@@ -17820,24 +17833,30 @@ static void typeid_collect_walk(Node *n) {
             typeid_collect_walk(n->try_.handlers[i]);
         break;
     case ND_HANDLER:
-        /* Catch param type contributes to the EH typeinfo set so
-         * the handler can dispatch on `exc_type == &typeinfo_<T>`
-         * for class-typed catches. Primitives are excluded — they
-         * still go through the existing __sf_typeinfo_int path. */
+        /* Catch param type contributes to the EH typeinfo set so the
+         * handler can dispatch on `exc_type == &typeinfo_<T>`.
+         * Class types collect into the per-class registry; primitives
+         * mark a per-primitive used-flag so the prelude emits the
+         * matching typeinfo def. */
         if (n->handler.param && n->handler.param->param.ty) {
             Type *pt = n->handler.param->param.ty;
             if (pt->kind == TY_REF || pt->kind == TY_RVALREF) pt = pt->base;
             if (pt && (pt->kind == TY_STRUCT || pt->kind == TY_UNION))
                 eh_typeinfo_sym_for_class(pt);
+            else if (pt)
+                eh_typeinfo_sym_for_prim(pt);
         }
         typeid_collect_walk(n->handler.body); break;
     case ND_THROW:
-        /* Class-typed throw operand also contributes — THROW_CLASS
-         * needs the typeinfo pointer to set exc_type. */
+        /* Throw operand type also contributes — THROW_CLASS needs
+         * the typeinfo pointer to set exc_type, and THROW_PRIM now
+         * uses per-primitive typeinfos. */
         if (n->throw_.operand && n->throw_.operand->resolved_type) {
             Type *ot = n->throw_.operand->resolved_type;
             if (ot && (ot->kind == TY_STRUCT || ot->kind == TY_UNION))
                 eh_typeinfo_sym_for_class(ot);
+            else if (ot)
+                eh_typeinfo_sym_for_prim(ot);
         }
         typeid_collect_walk(n->throw_.operand); break;
     case ND_CLASS_DEF:
@@ -17914,6 +17933,134 @@ static void emit_eh_typeinfo_defs(void) {
                 ty->tag ? ty->tag->loc : "unknown");
     }
     fputc('\n', stdout);
+}
+
+/* Per-primitive EH typeinfo — N4659 §15.3 [except.handle]. Returns
+ * a stable symbol per primitive type kind (and signedness, for
+ * arithmetic types). NULL when the type isn't a primitive we have a
+ * slot for. Marks the symbol "used" via g_eh_prim_used[] so the
+ * prelude only defines the typeinfos that throw/catch sites
+ * actually reference (keeps small-program output uncluttered). */
+typedef enum {
+    EH_PRIM_VOID = 0,
+    EH_PRIM_BOOL,
+    EH_PRIM_CHAR,    EH_PRIM_UCHAR,
+    EH_PRIM_SHORT,   EH_PRIM_USHORT,
+    EH_PRIM_INT,     EH_PRIM_UINT,
+    EH_PRIM_LONG,    EH_PRIM_ULONG,
+    EH_PRIM_LLONG,   EH_PRIM_ULLONG,
+    EH_PRIM_FLOAT,
+    EH_PRIM_DOUBLE,
+    EH_PRIM_LDOUBLE,
+    EH_PRIM_VOID_PTR,    /* `void *`, also the slot for `nullptr_t` */
+    EH_PRIM_CHAR_PTR,    /* `char *` / `const char *` */
+    EH_PRIM_CONST_CHAR_PTR,
+    EH_PRIM_N
+} EhPrimKind;
+
+static const char *const g_eh_prim_sym[EH_PRIM_N] = {
+    [EH_PRIM_VOID]           = "__sf_typeinfo_void",
+    [EH_PRIM_BOOL]           = "__sf_typeinfo_bool",
+    [EH_PRIM_CHAR]           = "__sf_typeinfo_char",
+    [EH_PRIM_UCHAR]          = "__sf_typeinfo_uchar",
+    [EH_PRIM_SHORT]          = "__sf_typeinfo_short",
+    [EH_PRIM_USHORT]         = "__sf_typeinfo_ushort",
+    [EH_PRIM_INT]            = "__sf_typeinfo_int",
+    [EH_PRIM_UINT]           = "__sf_typeinfo_uint",
+    [EH_PRIM_LONG]           = "__sf_typeinfo_long",
+    [EH_PRIM_ULONG]          = "__sf_typeinfo_ulong",
+    [EH_PRIM_LLONG]          = "__sf_typeinfo_long_long",
+    [EH_PRIM_ULLONG]         = "__sf_typeinfo_ulong_long",
+    [EH_PRIM_FLOAT]          = "__sf_typeinfo_float",
+    [EH_PRIM_DOUBLE]         = "__sf_typeinfo_double",
+    [EH_PRIM_LDOUBLE]        = "__sf_typeinfo_long_double",
+    [EH_PRIM_VOID_PTR]       = "__sf_typeinfo_void_ptr",
+    [EH_PRIM_CHAR_PTR]       = "__sf_typeinfo_char_ptr",
+    [EH_PRIM_CONST_CHAR_PTR] = "__sf_typeinfo_const_char_ptr",
+};
+static const char *const g_eh_prim_name[EH_PRIM_N] = {
+    [EH_PRIM_VOID]           = "void",
+    [EH_PRIM_BOOL]           = "bool",
+    [EH_PRIM_CHAR]           = "char",
+    [EH_PRIM_UCHAR]          = "unsigned char",
+    [EH_PRIM_SHORT]          = "short",
+    [EH_PRIM_USHORT]         = "unsigned short",
+    [EH_PRIM_INT]            = "int",
+    [EH_PRIM_UINT]           = "unsigned int",
+    [EH_PRIM_LONG]           = "long",
+    [EH_PRIM_ULONG]          = "unsigned long",
+    [EH_PRIM_LLONG]          = "long long",
+    [EH_PRIM_ULLONG]         = "unsigned long long",
+    [EH_PRIM_FLOAT]          = "float",
+    [EH_PRIM_DOUBLE]         = "double",
+    [EH_PRIM_LDOUBLE]        = "long double",
+    [EH_PRIM_VOID_PTR]       = "void*",
+    [EH_PRIM_CHAR_PTR]       = "char*",
+    [EH_PRIM_CONST_CHAR_PTR] = "const char*",
+};
+static bool g_eh_prim_used[EH_PRIM_N];
+
+static int eh_prim_kind(Type *ty) {
+    if (!ty) return -1;
+    /* Pointer-to: void*, char*, const char* go to dedicated slots;
+     * other pointer-to-primitive types fall back to void* for now
+     * (catch(T*) where T is a class is handled by the class path). */
+    if (ty->kind == TY_PTR && ty->base) {
+        Type *b = ty->base;
+        if (b->kind == TY_VOID) return EH_PRIM_VOID_PTR;
+        if (b->kind == TY_CHAR && !b->is_const) return EH_PRIM_CHAR_PTR;
+        if (b->kind == TY_CHAR &&  b->is_const) return EH_PRIM_CONST_CHAR_PTR;
+        /* Everything else (incl. int*, T**, function pointers): land
+         * in the void* slot. Same-slot collisions are acceptable —
+         * Itanium ABI similarly treats all unrelated pointers as
+         * distinguishable only by mangled type info. Sea-front's
+         * scope here is to make the common cases work. */
+        return EH_PRIM_VOID_PTR;
+    }
+    switch (ty->kind) {
+    case TY_VOID:    return EH_PRIM_VOID;
+    case TY_BOOL:    return EH_PRIM_BOOL;
+    case TY_CHAR:    return ty->is_unsigned ? EH_PRIM_UCHAR  : EH_PRIM_CHAR;
+    case TY_SHORT:   return ty->is_unsigned ? EH_PRIM_USHORT : EH_PRIM_SHORT;
+    case TY_INT:     return ty->is_unsigned ? EH_PRIM_UINT   : EH_PRIM_INT;
+    case TY_LONG:    return ty->is_unsigned ? EH_PRIM_ULONG  : EH_PRIM_LONG;
+    case TY_LLONG:   return ty->is_unsigned ? EH_PRIM_ULLONG : EH_PRIM_LLONG;
+    case TY_FLOAT:   return EH_PRIM_FLOAT;
+    case TY_DOUBLE:  return EH_PRIM_DOUBLE;
+    case TY_LDOUBLE: return EH_PRIM_LDOUBLE;
+    /* TY_ENUM lands in its underlying-int slot. Catch matching
+     * across enum / int isn't standard-correct (N4659 §15.3/3 —
+     * enum and int are distinct catch types), but sea-front
+     * doesn't model the enum's underlying type precisely yet and
+     * routing enums to int avoids a missing-typeinfo segfault.
+     * TODO(seafront#eh-enum-typeinfo). */
+    case TY_ENUM:    return EH_PRIM_INT;
+    default:         return -1;
+    }
+}
+
+static const char *eh_typeinfo_sym_for_prim(Type *ty) {
+    int k = eh_prim_kind(ty);
+    if (k < 0) return NULL;
+    g_eh_prim_used[k] = true;
+    return g_eh_prim_sym[k];
+}
+
+static void emit_eh_prim_typeinfo_defs(void) {
+    bool any = false;
+    for (int k = 0; k < EH_PRIM_N; k++) any = any || g_eh_prim_used[k];
+    if (!any) return;
+    fputs("/* EH primitive typeinfo — N4659 §15.3 [except.handle] */\n",
+          stdout);
+    for (int k = 0; k < EH_PRIM_N; k++) {
+        if (!g_eh_prim_used[k]) continue;
+        /* `int` keeps a `static` slot per the prelude — newer
+         * prelude omits it so this loop covers everything. */
+        fprintf(stdout,
+                "static const struct __sf_type_info %s = "
+                "{ \"%s\", 0, 0, 0 };\n",
+                g_eh_prim_sym[k], g_eh_prim_name[k]);
+    }
 }
 
 /* Check one node for a matching operator definition; recurses
@@ -18310,14 +18457,10 @@ static void emit_prelude(void) {
     fputs("__attribute__((weak)) "
           "struct __sf_exception_state __sf_exc_state;\n", stdout);
     fputs("#endif\n", stdout);
-    /* Per-primitive type_info — pointer-compared at catch-dispatch
-     * (slice 4). Only the primitives we actually throw need a slot;
-     * a single 'int' instance is sufficient for slice 3 since
-     * unmatched throws aren't caught yet. Future slices will emit
-     * one per primitive type encountered as a throw operand. */
-    fputs("static const struct __sf_type_info __sf_typeinfo_int = "
-          "{ \"int\", 0, 0, 0 };\n",
-          stdout);
+    /* Per-primitive __sf_type_info objects — pointer-compared at
+     * catch-dispatch. Lazily emitted after the prelude by
+     * emit_eh_prim_typeinfo_defs(), per primitive kind a throw or
+     * catch in the TU references. N4659 §15.3 [except.handle]. */
     /* __SF_THROW_PRIM — set the TLS exception state and jump to
      * the innermost cleanup label, mirroring __SF_RETURN's shape.
      * For primitive integral throws the value fits in a pointer-
@@ -18504,6 +18647,7 @@ void emit_c(Node *tu) {
     typeid_collect_walk(tu);
     emit_typeid_sentinels();
     emit_eh_typeinfo_defs();
+    emit_eh_prim_typeinfo_defs();
 
     /* Forward-declare ALL struct types so pointer references
      * resolve regardless of definition order. Function forward
