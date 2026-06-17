@@ -13974,6 +13974,25 @@ static void emit_ctor_member_inits(Node *func) {
                         (np >= 0 && pty && ai < np) ? pty[ai] : NULL);
                 }
                 fputs(");\n", stdout);
+                /* Destroy hoisted class temps — N4659 §15.2/3
+                 * [class.temporary]: temporaries die at end of the
+                 * full-expression. The delegating call is one full-
+                 * expression; each class-typed temp materialised by
+                 * the hoist needs its dtor called immediately after.
+                 * (The cleanup-chain push via hoist_emit_decl only
+                 * fires when the function has __SF_PROLOGUE / labels,
+                 * which a simple ctor with no other cleanups
+                 * doesn't.) */
+                for (int ai = 0; ai < mi->nargs; ai++) {
+                    Node *a = mi->args[ai];
+                    if (!a || !a->codegen_temp_name) continue;
+                    Type *t = a->resolved_type;
+                    if (!t || !t->has_dtor) continue;
+                    if (t->kind != TY_STRUCT && t->kind != TY_UNION) continue;
+                    emit_indent();
+                    mangle_class_dtor(t);
+                    fprintf(stdout, "(&%s);\n", a->codegen_temp_name);
+                }
                 return;
             }
         }
