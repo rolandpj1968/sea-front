@@ -9319,12 +9319,10 @@ static void emit_expr(Node *n) {
             fprintf(stdout, "), &%s, %s); 0; })", ti, lbl);
         } else {
             const char *ti = eh_typeinfo_sym_for_prim(op_ty);
-            if (!ti) ti = "__sf_typeinfo_int";  /* fallback */
             fputs("({ __SF_THROW_PRIM(", stdout);
             if (op) emit_expr(op);
             else fputs("0", stdout);
             fprintf(stdout, ", &%s, %s); 0; })", ti, lbl);
-            if (op_ty) (void)eh_typeinfo_sym_for_prim(op_ty);  /* mark used */
         }
         return;
     }
@@ -11980,7 +11978,6 @@ static void emit_stmt(Node *n) {
                     Type *thr_ty = thr->throw_.operand
                         ? thr->throw_.operand->resolved_type : NULL;
                     const char *pti = eh_typeinfo_sym_for_prim(thr_ty);
-                    if (!pti) pti = "__sf_typeinfo_int";
                     fputs("__SF_THROW_PRIM(", stdout);
                     emit_expr(thr->throw_.operand);
                     fprintf(stdout, ", &%s, %s);\n", pti, lbl);
@@ -13708,7 +13705,6 @@ static void emit_stmt(Node *n) {
                  * type. Sea-front compares typeinfo pointers — same
                  * EhPrimKind ⇒ same pointer ⇒ match. */
                 const char *cti = eh_typeinfo_sym_for_prim(base_pty);
-                if (!cti) cti = "__sf_typeinfo_int";
                 fprintf(stdout,
                     "if (__sf_exc_state.exc_type == &%s) {\n", cti);
             }
@@ -17850,13 +17846,17 @@ static void typeid_collect_walk(Node *n) {
     case ND_THROW:
         /* Throw operand type also contributes — THROW_CLASS needs
          * the typeinfo pointer to set exc_type, and THROW_PRIM now
-         * uses per-primitive typeinfos. */
-        if (n->throw_.operand && n->throw_.operand->resolved_type) {
+         * uses per-primitive typeinfos. When the operand has no
+         * resolved_type (`throw` inside a partly-typed cloned body),
+         * still pre-mark the int slot — the emit-time fallback
+         * lands there and the typeinfo def must exist before the
+         * throw site. */
+        if (n->throw_.operand) {
             Type *ot = n->throw_.operand->resolved_type;
             if (ot && (ot->kind == TY_STRUCT || ot->kind == TY_UNION))
                 eh_typeinfo_sym_for_class(ot);
-            else if (ot)
-                eh_typeinfo_sym_for_prim(ot);
+            else
+                eh_typeinfo_sym_for_prim(ot);  /* helper handles NULL */
         }
         typeid_collect_walk(n->throw_.operand); break;
     case ND_CLASS_DEF:
@@ -18041,7 +18041,16 @@ static int eh_prim_kind(Type *ty) {
 
 static const char *eh_typeinfo_sym_for_prim(Type *ty) {
     int k = eh_prim_kind(ty);
-    if (k < 0) return NULL;
+    /* TY_ARRAY throws decay to pointer per N4659 §15.1/3 [except.throw]
+     * — route to the void* slot (same as other unclassified pointers).
+     * Unknown / NULL types fall back to int so the emitted C still
+     * references a declared symbol. The fallback is conservative for
+     * catch matching (catch(int) won't match an actual int*) but
+     * never produces an undeclared-symbol link error. */
+    if (k < 0) {
+        if (ty && ty->kind == TY_ARRAY) k = EH_PRIM_VOID_PTR;
+        else                              k = EH_PRIM_INT;
+    }
     g_eh_prim_used[k] = true;
     return g_eh_prim_sym[k];
 }
