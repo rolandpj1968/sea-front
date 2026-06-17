@@ -11,7 +11,7 @@
   (class-def "B2"
     (var-decl const int "N" (num 4)))
   (class-def "D2"
-    (var-decl (array int) "arr"))
+    (var-decl (array int 4) "arr"))
   (class-def "B3"
     (typedef)
     (func-def void "take" (params (param int "v"))

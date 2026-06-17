@@ -132,6 +132,74 @@ static Type *apply_pending_wrap(Parser *p, Type *ty, Type *w) {
  * pair) are defined below this function in the file, immediately
  * below the general parsers they support.
  */
+/* Fold an integer constant-expression to a value. Returns true with
+ * *out set on success; false if the expression isn't reducible.
+ * Handles: ND_NUM literals, ND_IDENT to file-scope `const int x = N;`
+ * declarations (with a recursive fold on N), ND_BINARY of
+ * `+ - * / %`, ND_UNARY `+ - !`, ND_PAREN, ND_CAST(int) of a
+ * foldable operand. Used by the array-dim parser so
+ * `T arr[NUM_VARS * DEPTH];` with file-scope const ints gets a
+ * literal C array dimension instead of falling back to the C99 VLA
+ * shape (which fails at file scope). N4659 §8.6 [expr.const]. */
+static bool fold_const_int(Parser *p, Node *n, int64_t *out);
+static bool fold_lookup_const_ident(Parser *p, Token *name, int64_t *out) {
+    if (!name) return false;
+    Declaration *d = lookup_unqualified_kind(p, name->loc, name->len, ENTITY_VARIABLE);
+    if (!d) return false;
+    if (!d->has_const_int_value) return false;
+    *out = d->const_int_value;
+    return true;
+}
+static bool fold_const_int(Parser *p, Node *n, int64_t *out) {
+    if (!n) return false;
+    switch (n->kind) {
+    case ND_NUM:
+        *out = (int64_t)n->num.lo;
+        return true;
+    case ND_BINARY: {
+        int64_t l, r;
+        if (!fold_const_int(p, n->binary.lhs, &l)) return false;
+        if (!fold_const_int(p, n->binary.rhs, &r)) return false;
+        switch (n->binary.op) {
+        case TK_PLUS:  *out = l + r; return true;
+        case TK_MINUS: *out = l - r; return true;
+        case TK_STAR:  *out = l * r; return true;
+        case TK_SLASH: if (r == 0) return false; *out = l / r; return true;
+        case TK_PERCENT: if (r == 0) return false; *out = l % r; return true;
+        case TK_SHL:   *out = l << r; return true;
+        case TK_SHR:   *out = l >> r; return true;
+        default: return false;
+        }
+    }
+    case ND_UNARY: {
+        int64_t v;
+        if (!fold_const_int(p, n->unary.operand, &v)) return false;
+        switch (n->unary.op) {
+        case TK_PLUS:  *out =  v; return true;
+        case TK_MINUS: *out = -v; return true;
+        case TK_EXCL:  *out = !v; return true;
+        case TK_TILDE: *out = ~v; return true;
+        default: return false;
+        }
+    }
+    case ND_IDENT:
+        return fold_lookup_const_ident(p, n->ident.name, out);
+    case ND_CAST: {
+        /* Cast of integer expression — keep the value (we don't
+         * truncate to the cast's exact width; the array-dim use is
+         * size_t-shaped). */
+        Type *ct = n->cast.ty;
+        if (!ct) return false;
+        if (ct->kind != TY_INT && ct->kind != TY_LONG &&
+            ct->kind != TY_LLONG && ct->kind != TY_SHORT &&
+            ct->kind != TY_CHAR && ct->kind != TY_BOOL) return false;
+        return fold_const_int(p, n->cast.operand, out);
+    }
+    default:
+        return false;
+    }
+}
+
 Node *parse_declarator(Parser *p, Type *base_ty) {
     /* ptr-operator — N4659 §11.3 [dcl.meaning]
      *   ptr-operator:
@@ -1081,8 +1149,10 @@ parse_suffixes:
         Node *size_expr = NULL;
         if (!parser_at(p, TK_RBRACKET)) {
             size_expr = parse_assign_expr(p);
-            if (size_expr && size_expr->kind == ND_NUM)
-                len = (int)size_expr->num.lo;
+            int64_t v = 0;
+            if (size_expr && fold_const_int(p, size_expr, &v) &&
+                v >= 0 && v <= 0x7fffffffLL)
+                len = (int)v;
         }
         parser_expect(p, TK_RBRACKET);
         ArrayDim *d = arena_alloc(p->arena, sizeof(*d));
@@ -2122,6 +2192,17 @@ Node *parse_declaration(Parser *p) {
         if (rd) {
             rd->asm_name = decl->var_decl.asm_name;
             rd->c_linkage = (p->extern_c_depth > 0);
+            /* Cache the integer value for `const T name = literal_expr;`
+             * — used as an array bound (§8.6 [expr.const]).
+             * fold_const_int handles literal arithmetic on previously-
+             * cached const ints. */
+            if (rd->type && rd->type->is_const && decl->var_decl.init) {
+                int64_t v;
+                if (fold_const_int(p, decl->var_decl.init, &v)) {
+                    rd->has_const_int_value = true;
+                    rd->const_int_value = v;
+                }
+            }
             /* §10.1.1/4 [dcl.stc]: static class-member flag — emit
              * uses it to rewrite member references through the
              * 'sf__<class>__<name>' TU-scope symbol. */

@@ -1559,6 +1559,14 @@ struct Declaration {
      * from this slot. NULL on non-using-decl entries. N4659
      * §10.3.3 [namespace.udecl]. */
     Type        *using_decl_source_class;
+    /* Constant-integer value for `const T name = N;` decls — N4659
+     * §8.6 [expr.const] allows these as constant expressions in
+     * array-bound / case-label / etc. C doesn't, so codegen folds
+     * such uses at parse time via this cached value. Only set for
+     * decls whose initialiser was a literal-foldable integer
+     * expression at parse-time. */
+    bool         has_const_int_value;
+    int64_t      const_int_value;
     Declaration *next;      /* hash chain within the declarative region */
 };
 
