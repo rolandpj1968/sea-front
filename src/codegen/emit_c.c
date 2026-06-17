@@ -13773,6 +13773,23 @@ static void emit_stmt(Node *n) {
                             nm->len, nm->loc);
                     emit_type(base_pty);
                     fputs(" *)__sf_exc_state.exc_obj);\n", stdout);
+                } else if (param_is_ref) {
+                    /* `catch (T&)` for a primitive T — the throw stored
+                     * the VALUE in exc_obj via uintptr_t cast; sea-front
+                     * has no native storage to bind the ref to. Recover
+                     * the value into a local, then point p at the local.
+                     * `__sf_caught_<id>` lives for the handler's scope,
+                     * which is exactly the ref's lifetime. */
+                    static int s_caught_id = 0;
+                    int cid = ++s_caught_id;
+                    emit_type(base_pty);
+                    fprintf(stdout, " __sf_caught_%d = (", cid);
+                    emit_type(base_pty);
+                    fputs(")(uintptr_t)__sf_exc_state.exc_obj;\n", stdout);
+                    emit_indent();
+                    emit_type(pty);
+                    fprintf(stdout, " %.*s = &__sf_caught_%d;\n",
+                            nm->len, nm->loc, cid);
                 } else {
                     emit_type(pty);
                     fprintf(stdout, " %.*s = ", nm->len, nm->loc);
