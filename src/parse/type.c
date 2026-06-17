@@ -1780,12 +1780,19 @@ DeclSpec parse_type_specifiers(Parser *p) {
 
             Type *ty = d->type;
             if (ty) {
-                /* Copy the type so we don't modify the declaration's type
-                 * when adding cv-qualifiers */
+                /* Copy the type so we don't modify the declaration's
+                 * type when adding cv-qualifiers. Use OR so qualifiers
+                 * inherited from the typedef (incl. `() const` on a
+                 * TY_FUNC typedef, and outer `typedef const int Cint`)
+                 * survive a use-site that adds no fresh qualifiers.
+                 * N4659 §10.1.7.2 [dcl.type.simple] — the type-name
+                 * IS the typedef's full target type, including its
+                 * cv-qualifiers; the use-site may add more, never
+                 * remove. */
                 Type *copy = arena_alloc(p->arena, sizeof(Type));
                 *copy = *ty;
-                copy->is_const = is_const;
-                copy->is_volatile = is_volatile;
+                copy->is_const    = copy->is_const    || is_const;
+                copy->is_volatile = copy->is_volatile || is_volatile;
                 result.type = copy; return result;
             }
             /* Fallback: unknown type structure, create an opaque type */
