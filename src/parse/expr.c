@@ -1317,8 +1317,16 @@ static Node *primary_expr(Parser *p) {
                             lam->resolved_type       = closure_type;
                             return lam;
                         }
-                        /* Captureless: as before, return ND_IDENT
-                         * with TY_FUNC for fn-pointer decay. */
+                        /* Captureless lambda. Function-pointer decay
+                         * (§8.1.5/6) needs an ND_IDENT-shaped result
+                         * naming the synthesised fn. But when the
+                         * lambda lives inside a template body the FD
+                         * was NOT hoisted (see in_template branch
+                         * above) — it needs to ride along on an
+                         * ND_LAMBDA so collect_inner_lambdas picks it
+                         * up per instantiation. Inside a template,
+                         * return ND_LAMBDA with closure_type=NULL.
+                         * Outside, keep the bare ND_IDENT path. */
                         Type **pt = NULL;
                         if (nparams > 0) {
                             pt = arena_alloc(p->arena,
@@ -1328,6 +1336,17 @@ static Node *primary_expr(Parser *p) {
                         }
                         Type *fty = new_func_type(p, ret_ty, pt,
                                                    nparams, false);
+                        if (in_template) {
+                            Node *lam = new_node(p, ND_LAMBDA, tok);
+                            lam->lambda.func_def     = fd;
+                            lam->lambda.captures     = NULL;
+                            lam->lambda.ncaptures    = 0;
+                            lam->lambda.default_kind = 0;
+                            lam->lambda.closure_type = NULL;
+                            lam->lambda.closure_tag  = NULL;
+                            lam->resolved_type       = fty;
+                            return lam;
+                        }
                         Node *ref = new_node(p, ND_IDENT, name_tok);
                         ref->ident.name     = name_tok;
                         ref->resolved_type  = fty;

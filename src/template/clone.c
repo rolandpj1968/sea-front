@@ -1103,6 +1103,56 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
         static int s_lambda_inst_counter = 0;
         int        idx = ++s_lambda_inst_counter;
 
+        /* Captureless-in-template shape — source ND_LAMBDA carries
+         * closure_type=NULL (§8.1.5/6 function-pointer decay path).
+         * Clone the func_def per instantiation but skip closure
+         * creation entirely; the lambda fn is a free function. */
+        if (!n->lambda.closure_type) {
+            Node *src_fd = n->lambda.func_def;
+            Node *new_fd = src_fd ? clone_node(src_fd, map, arena) : NULL;
+            if (new_fd && src_fd && src_fd->func.name) {
+                char fbuf[80];
+                int fnlen = snprintf(fbuf, sizeof(fbuf), "%.*s_inst%d",
+                                      src_fd->func.name->len,
+                                      src_fd->func.name->loc, idx);
+                char *fstr = arena_alloc(arena, fnlen + 1);
+                memcpy(fstr, fbuf, fnlen);
+                fstr[fnlen] = '\0';
+                Token *new_fname = arena_alloc(arena, sizeof(Token));
+                *new_fname = *src_fd->func.name;
+                new_fname->kind = TK_IDENT;
+                new_fname->loc  = fstr;
+                new_fname->len  = fnlen;
+                new_fd->func.name = new_fname;
+            }
+            c->lambda.func_def     = new_fd;
+            c->lambda.captures     = NULL;
+            c->lambda.ncaptures    = 0;
+            c->lambda.default_kind = 0;
+            c->lambda.closure_type = NULL;
+            c->lambda.closure_tag  = NULL;
+            /* Update the cloned ND_LAMBDA's resolved_type to point at
+             * the cloned fn's TY_FUNC so the call site mangles
+             * against the substituted name. */
+            if (new_fd) {
+                Type *fty = arena_alloc(arena, sizeof(Type));
+                memset(fty, 0, sizeof(*fty));
+                fty->kind = TY_FUNC;
+                fty->ret = new_fd->func.ret_ty;
+                fty->nparams = new_fd->func.nparams;
+                if (fty->nparams > 0) {
+                    fty->params = arena_alloc(arena,
+                        fty->nparams * sizeof(Type *));
+                    for (int i = 0; i < fty->nparams; i++)
+                        fty->params[i] = new_fd->func.params[i]
+                                       ? new_fd->func.params[i]->param.ty
+                                       : NULL;
+                }
+                c->resolved_type = fty;
+            }
+            break;
+        }
+
         /* 1. Clone captures[] with resolved_type substituted; expand
          * pack-bound captures to N entries (one per pack-bound type).
          * A capture is pack-bound when its resolved_type's leaf is a

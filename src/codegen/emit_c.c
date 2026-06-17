@@ -4853,11 +4853,18 @@ static void emit_expr(Node *n) {
          * source identifier for by-value, '&ident' for by-ref since
          * the closure member is T*.
          *
-         * Captureless lambdas don't reach this case — the parser
-         * returns ND_IDENT naming the synthesised fn directly so
-         * the §8.1.5/6 conversion-to-fn-pointer falls out of normal
-         * fn-to-ptr decay (no closure type emitted). */
+         * Captureless lambdas reach this case only when they were
+         * synthesised inside a template body (the FD needs an
+         * ND_LAMBDA shell so collect_inner_lambdas pushes it per
+         * instantiation). In that case closure_type is NULL — emit
+         * the bare lambda fn name so the §8.1.5/6 function-pointer
+         * decay falls out of normal fn-to-ptr handling. */
         Type *cty = n->lambda.closure_type;
+        if (!cty) {
+            if (n->lambda.func_def && n->lambda.func_def->func.name)
+                emit_token_text(n->lambda.func_def->func.name);
+            return;
+        }
         fputs("(struct ", stdout);
         if (cty) mangle_class_tag(cty);
         fputs("){", stdout);
