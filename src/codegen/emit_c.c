@@ -690,6 +690,25 @@ static void emit_arg_for_param(Node *arg, Type *param_ty) {
         fprintf(stdout, "}, %d}", n);
         return;
     }
+    /* `f({42})` where f takes a scalar — N4659 §8.5.4/3 [dcl.init.list]
+     * brace-init-list with a single element implicitly converts to
+     * the target scalar. C has no `{42}` expression form at call
+     * sites, so unwrap to the element directly. Empty `f({})` for a
+     * scalar yields value-init `0`. */
+    if (arg->kind == ND_INIT_LIST && param_ty &&
+        (param_ty->kind == TY_BOOL ||
+         param_ty->kind == TY_CHAR ||  param_ty->kind == TY_SHORT ||
+         param_ty->kind == TY_INT ||   param_ty->kind == TY_LONG ||
+         param_ty->kind == TY_LLONG || param_ty->kind == TY_FLOAT ||
+         param_ty->kind == TY_DOUBLE || param_ty->kind == TY_LDOUBLE ||
+         param_ty->kind == TY_ENUM ||  param_ty->kind == TY_PTR)) {
+        if (arg->init_list.nelems == 0) {
+            fputc('0', stdout);
+        } else {
+            emit_expr(arg->init_list.elems[0]);
+        }
+        return;
+    }
     /* 'vNULL' passed as a function argument to a struct-typed param:
      * same issue as the ND_ASSIGN / return paths — ND_IDENT vNULL
      * lowers to '{0}' which C only accepts in init-declarators.
@@ -1078,6 +1097,25 @@ static void emit_return_expr(Node *e) {
         fputc('(', stdout);
         emit_type(rt);
         fputs("){0}", stdout);
+        return;
+    }
+    /* `return {0}` / `return {}` for a scalar return — N4659 §8.5.4/3
+     * [dcl.init.list] copy-list-initializes the return value, and
+     * for a scalar this is just the single element (or value-init
+     * 0). C doesn't accept `return {0}` syntactically, so unwrap to
+     * the bare element. Pattern: g++.dg/cpp0x/initlist16.C. */
+    if (e && e->kind == ND_INIT_LIST && rt &&
+        (rt->kind == TY_BOOL || rt->kind == TY_CHAR ||
+         rt->kind == TY_SHORT || rt->kind == TY_INT ||
+         rt->kind == TY_LONG || rt->kind == TY_LLONG ||
+         rt->kind == TY_FLOAT || rt->kind == TY_DOUBLE ||
+         rt->kind == TY_LDOUBLE || rt->kind == TY_ENUM ||
+         rt->kind == TY_PTR)) {
+        if (e->init_list.nelems == 0) {
+            fputc('0', stdout);
+        } else {
+            emit_expr(e->init_list.elems[0]);
+        }
         return;
     }
     /* `return {}` / `return {a, b, ...}` for a struct-typed return —
