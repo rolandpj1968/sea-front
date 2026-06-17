@@ -170,4 +170,14 @@ g++.dg/init/ref19.C
 # behavior (see class_dtor_is_nontrivial).
 g++.dg/cpp0x/defaulted19.C
 
+# --- delegating ctor with class-typed temp args ---------------------
+# `B(int i) : B(A(i)) {}` — sea-front (commit d93c40b) emits the
+# delegation call and hoists the A temp, but the temp's dtor isn't
+# wired through to a cleanup label. dc6's a_ct balance test fails
+# with 2 unfreed temps. The simpler delegating ctor without class
+# args works (delegating_ctor.cpp unit test). Needs follow-on slice
+# to either emit dtor immediately after delegating call or extend
+# cf_begin_function to plant cleanup labels in this shape.
+g++.dg/cpp0x/dc6.C
+
 
