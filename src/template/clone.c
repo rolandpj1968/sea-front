@@ -900,6 +900,37 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
         c->ret.expr = clone_node(n->ret.expr, map, arena);
         break;
 
+    case ND_THROW:
+        /* N4659 §18.1 [except.pre]. Clone operand so the cloned body's
+         * throw still has its (substituted) operand. Without this
+         * the default fall-through copied only kind/tok and the
+         * throw emit fired on a NULL operand → `__SF_THROW_PRIM(, ...)`
+         * — invalid C. */
+        c->throw_ = n->throw_;
+        c->throw_.operand = clone_node(n->throw_.operand, map, arena);
+        break;
+
+    case ND_TRY:
+        /* N4659 §18.1. Clone body and handler list. */
+        c->try_ = n->try_;
+        c->try_.body = clone_node(n->try_.body, map, arena);
+        if (n->try_.nhandlers > 0 && n->try_.handlers) {
+            Node **h = arena_alloc(arena,
+                                    n->try_.nhandlers * sizeof(Node *));
+            for (int i = 0; i < n->try_.nhandlers; i++)
+                h[i] = clone_node(n->try_.handlers[i], map, arena);
+            c->try_.handlers = h;
+        }
+        break;
+
+    case ND_HANDLER:
+        /* Catch clause — clone the param (may carry a TY_DEPENDENT
+         * type that subst_type resolves) and the body. */
+        c->handler = n->handler;
+        c->handler.param = clone_node(n->handler.param, map, arena);
+        c->handler.body  = clone_node(n->handler.body, map, arena);
+        break;
+
     case ND_EXPR_STMT:
         c->expr_stmt = n->expr_stmt;
         c->expr_stmt.expr = clone_node(n->expr_stmt.expr, map, arena);

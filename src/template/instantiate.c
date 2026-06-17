@@ -907,6 +907,31 @@ static void collect_from_node(InstCollector *col, Node *n) {
         collect_from_node(col, n->ret.expr);
         break;
 
+    case ND_THROW:
+        /* Operand may contain template-id types or function-template
+         * calls — recurse so they trigger instantiation. N4659 §18.1
+         * [except.pre]. */
+        collect_from_node(col, n->throw_.operand);
+        break;
+
+    case ND_TRY:
+        /* Body + handlers may contain template instantiations. Without
+         * recursing, a `C<int> x;` declared inside `try { ... }`
+         * never reaches the class-template instantiation path and
+         * codegen emits a forward-decl-only struct. */
+        collect_from_node(col, n->try_.body);
+        for (int i = 0; i < n->try_.nhandlers; i++)
+            collect_from_node(col, n->try_.handlers[i]);
+        break;
+
+    case ND_HANDLER:
+        /* Catch param's type can be a class template-id (`catch (X<int>&)`);
+         * walk it via collect_from_type, then recurse into the body. */
+        if (n->handler.param && n->handler.param->param.ty)
+            collect_from_type(col, n->handler.param->param.ty);
+        collect_from_node(col, n->handler.body);
+        break;
+
     case ND_LABEL:
         /* labeled-statement (N4659 §9.1 [stmt.label]) wraps the next
          * statement after the label. Without this case the labeled
