@@ -13690,12 +13690,14 @@ static void emit_stmt(Node *n) {
             if (h->handler.is_catch_all) {
                 fputs("if (1) {\n", stdout);
             } else if (param_is_class) {
-                /* Class-typed catch matches the per-class typeinfo
-                 * pointer stashed by __SF_THROW_CLASS. N4659 §15.3
-                 * [except.handle]. */
+                /* Class-typed catch — N4659 §15.3 [except.handle].
+                 * Match via __sf_type_matches so `catch (Base&)` for
+                 * `throw Derived` succeeds via the typeinfo parent
+                 * chain. Pointer-eq is the inline fast path. */
                 const char *ti = eh_typeinfo_sym_for_class(base_pty);
                 fprintf(stdout,
-                    "if (__sf_exc_state.exc_type == &%s) {\n", ti);
+                    "if (__sf_type_matches(__sf_exc_state.exc_type, &%s)) {\n",
+                    ti);
             } else {
                 /* Primitive catch — pointer-compare against the
                  * per-primitive typeinfo for the catch parameter's
@@ -17923,14 +17925,56 @@ static const char *eh_typeinfo_sym_for_class(Type *ty) {
 
 static void emit_eh_typeinfo_defs(void) {
     if (g_eh_typeinfo_n == 0) return;
-    fputs("\n/* EH typeinfo — N4659 §15.3 [except.handle] */\n", stdout);
+    /* Walk each class's base chain and ensure the base's typeinfo
+     * is registered too — `catch (Base&)` for `throw Derived` needs
+     * Base's typeinfo available so __sf_type_matches's parent walk
+     * has a destination to compare against. N4659 §15.3/3
+     * [except.handle]. Only the FIRST direct non-virtual base is
+     * collected — single-inheritance fast path. Multi/virtual
+     * inheritance is the next slice (offset-aware adjust). */
     for (int i = 0; i < g_eh_typeinfo_n; i++) {
         Type *ty = g_eh_typeinfo_set[i].ty;
-        fprintf(stdout, "static const struct __sf_type_info %s = "
-                "{ \"%.*s\", 0, 0, 0 };\n",
-                g_eh_typeinfo_set[i].sym,
-                ty->tag ? ty->tag->len : 7,
-                ty->tag ? ty->tag->loc : "unknown");
+        if (!ty || !ty->class_region) continue;
+        if (ty->class_region->nbases == 0) continue;
+        Type *base = ty->class_region->bases[0]
+                       ? ty->class_region->bases[0]->owner_type : NULL;
+        if (base && (base->kind == TY_STRUCT || base->kind == TY_UNION))
+            eh_typeinfo_sym_for_class(base);
+    }
+    /* Forward-declare every typeinfo so a derived class's def can
+     * reference its base's def without ordering issues. */
+    fputs("\n/* EH typeinfo — N4659 §15.3 [except.handle] */\n", stdout);
+    for (int i = 0; i < g_eh_typeinfo_n; i++) {
+        fprintf(stdout, "extern const struct __sf_type_info %s;\n",
+                g_eh_typeinfo_set[i].sym);
+    }
+    for (int i = 0; i < g_eh_typeinfo_n; i++) {
+        Type *ty = g_eh_typeinfo_set[i].ty;
+        const char *parent_sym = NULL;
+        if (ty && ty->class_region && ty->class_region->nbases > 0 &&
+            ty->class_region->bases[0]) {
+            Type *base = ty->class_region->bases[0]->owner_type;
+            if (base && (base->kind == TY_STRUCT || base->kind == TY_UNION)) {
+                /* Reuse the registry entry — the base was registered
+                 * above so the lookup hits, no new entry created. */
+                parent_sym = eh_typeinfo_sym_for_class(base);
+            }
+        }
+        if (parent_sym)
+            fprintf(stdout,
+                    "const struct __sf_type_info %s = "
+                    "{ \"%.*s\", &%s, 0, 0 };\n",
+                    g_eh_typeinfo_set[i].sym,
+                    ty->tag ? ty->tag->len : 7,
+                    ty->tag ? ty->tag->loc : "unknown",
+                    parent_sym);
+        else
+            fprintf(stdout,
+                    "const struct __sf_type_info %s = "
+                    "{ \"%.*s\", 0, 0, 0 };\n",
+                    g_eh_typeinfo_set[i].sym,
+                    ty->tag ? ty->tag->len : 7,
+                    ty->tag ? ty->tag->loc : "unknown");
     }
     fputc('\n', stdout);
 }
@@ -18433,6 +18477,17 @@ static void emit_prelude(void) {
     fputs("    int n_parents;\n", stdout);
     fputs("    const void *parents;\n", stdout);
     fputs("};\n", stdout);
+    /* __sf_type_matches — N4659 §15.3 [except.handle]. Returns true
+     * if `src` is the same as `dst` or has `dst` in its parent
+     * chain (catch-by-base for single inheritance). Pointer-equal
+     * is the fast path; the loop walks parents for catch-of-base
+     * vs throw-of-derived. */
+    fputs("static inline int __sf_type_matches(const struct __sf_type_info *src, "
+                                              "const struct __sf_type_info *dst) {\n"
+          "    for (; src; src = src->parent) if (src == dst) return 1;\n"
+          "    return 0;\n"
+          "}\n",
+          stdout);
     fputs("struct __sf_exception_state {\n", stdout);
     fputs("    __SF_unwind_t state;\n", stdout);
     /* Heap-allocated thrown object for class-type throws; for
