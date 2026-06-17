@@ -13685,6 +13685,24 @@ static void emit_stmt(Node *n) {
          * yet). */
         emit_indent();
         fprintf(stdout, "__SF_CHAIN_THROW(__SF_try_%d_handler);\n", id);
+        /* Dtor function-try-block normal exit — base/member dtors run
+         * here too (mirror the catch-handler injection). The dtor
+         * wrapper (D1) skips its base-dtor calls when the user dtor
+         * body is a function-try-block, so D2 takes responsibility
+         * for both paths. */
+        if (saved_dtor_ftb_for_try && saved_dtor_ftb_for_try->class_region) {
+            int nb = saved_dtor_ftb_for_try->class_region->nbases;
+            for (int b = nb - 1; b >= 0; b--) {
+                Type *base = saved_dtor_ftb_for_try->class_region->bases[b]
+                               ? saved_dtor_ftb_for_try->class_region->bases[b]->owner_type
+                               : NULL;
+                if (!base || !base->has_dtor) continue;
+                emit_indent();
+                mangle_class_dtor(base);
+                if (b == 0) fputs("(&this->__sf_base);\n", stdout);
+                else fprintf(stdout, "(&this->__sf_base%d);\n", b);
+            }
+        }
         /* Body completed without throw — skip handlers. */
         emit_indent();
         fprintf(stdout, "goto __SF_try_%d_after;\n", id);
@@ -17072,20 +17090,48 @@ methods_phase:;
          * mirrors the construction order (§15.6.2/13). Virtual
          * bases destruct LAST, after all non-virtual direct
          * bases. Two passes in reverse: non-virtual first, then
-         * virtual. Pattern: g++.dg/init/dtor1.C. */
-        int nb_d = class_nbases(class_type);
-        for (int pass = 0; pass < 2; pass++) {
-            bool want_virtual = (pass == 0) ? false : true;
-            for (int b = nb_d - 1; b >= 0; b--) {
-                if (class_base_is_virtual(class_type, b) != want_virtual) continue;
-                Type *base = class_base(class_type, b);
-                if (!base || !base->has_dtor) continue;
-                emit_indent();
-                mangle_class_dtor(base);
-                fputs("(&this->", stdout);
-                if (b == 0) fputs("__sf_base", stdout);
-                else        fprintf(stdout, "__sf_base%d", b);
-                fputs(");\n", stdout);
+         * virtual. Pattern: g++.dg/init/dtor1.C.
+         *
+         * Skip when the user dtor body is a function-try-block —
+         * N4659 §15.3/15 + §15.4: base/member subobjects are
+         * destroyed BEFORE the catch handler runs. Sea-front's D2
+         * already injects base dtors at the function-try-block's
+         * normal-exit AND each catch-handler entry, so a second
+         * call here would double-destroy. Detect via the in-class
+         * user_dtor_m body shape OR by TU-walk for OOL dtors. */
+        bool dtor_is_function_try_block = false;
+        Node *user_body = NULL;
+        if (user_dtor_m && user_dtor_m->func.body)
+            user_body = user_dtor_m->func.body;
+        else if (user_dtor_m_out_of_class && g_tu &&
+                 g_tu->kind == ND_TRANSLATION_UNIT) {
+            for (int ti = 0; ti < g_tu->tu.ndecls && !user_body; ti++) {
+                Node *d = g_tu->tu.decls[ti];
+                if (d && d->kind == ND_FUNC_DEF && d->func.is_destructor &&
+                    d->func.class_type == class_type)
+                    user_body = d->func.body;
+            }
+        }
+        if (user_body && user_body->kind == ND_BLOCK &&
+            user_body->block.nstmts == 1 &&
+            user_body->block.stmts[0] &&
+            user_body->block.stmts[0]->kind == ND_TRY)
+            dtor_is_function_try_block = true;
+        if (!dtor_is_function_try_block) {
+            int nb_d = class_nbases(class_type);
+            for (int pass = 0; pass < 2; pass++) {
+                bool want_virtual = (pass == 0) ? false : true;
+                for (int b = nb_d - 1; b >= 0; b--) {
+                    if (class_base_is_virtual(class_type, b) != want_virtual) continue;
+                    Type *base = class_base(class_type, b);
+                    if (!base || !base->has_dtor) continue;
+                    emit_indent();
+                    mangle_class_dtor(base);
+                    fputs("(&this->", stdout);
+                    if (b == 0) fputs("__sf_base", stdout);
+                    else        fprintf(stdout, "__sf_base%d", b);
+                    fputs(");\n", stdout);
+                }
             }
         }
         g_indent--;
