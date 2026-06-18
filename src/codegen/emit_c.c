@@ -7693,9 +7693,22 @@ static void emit_expr(Node *n) {
                     }
                     fputc('(', stdout);
                 }
+                /* Static method dispatch: `obj.f()` / `p->f()` where f is
+                 * a static member — N4659 §11.4.9.1 [class.static.mfct]
+                 * lets the call use any object-expression, but the
+                 * call ITSELF takes NO `this` argument. Sea-front
+                 * had no static-skip here, so it passed `&obj` / obj
+                 * as the first arg and cc rejected with "too many
+                 * arguments". The qualified-id form `Class::f()`
+                 * already routed through the no-this plain_call
+                 * branch; this fixes the unqualified-receiver shape.
+                 * Pattern: g++.dg/init/lifetime3.C `pf->foo()` where
+                 * foo is static. */
+                bool winner_is_static = candidate_is_static(winner_method);
                 /* this argument: address-of for value, as-is for pointer.
                  * For inherited methods, pass &obj.__sf_base instead. */
                 int base_idx_for_this = -1;
+                if (winner_is_static) goto after_base_this_emit;
                 if (ot->class_region && callee->member.member) {
                     Token *mn = callee->member.member;
                     Declaration *own_d = region_lookup_own(
@@ -7805,7 +7818,9 @@ static void emit_expr(Node *n) {
                  * a never-fired ND_FUNC_DEF branch). N4659 §11.3.6
                  * [dcl.fct.default]. */
                 for (int i = 0; i < n->call.nargs; i++) {
-                    fputs(", ", stdout);
+                    /* Skip the leading comma on the first user arg
+                     * when no `this` was emitted (static method). */
+                    if (i > 0 || !winner_is_static) fputs(", ", stdout);
                     emit_arg_for_param(n->call.args[i],
                                         (call_pty && i < call_np)
                                             ? call_pty[i] : NULL);
