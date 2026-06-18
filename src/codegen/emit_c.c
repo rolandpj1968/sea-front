@@ -6388,6 +6388,16 @@ static void emit_expr(Node *n) {
                              n->ternary.then_->kind == ND_THROW;
         bool else_is_throw = n->ternary.else_ &&
                              n->ternary.else_->kind == ND_THROW;
+        /* Ternary in reference context — N4659 §8.16/4 [expr.cond]: if
+         * both arms are glvalues of the same type, the result is a
+         * glvalue. Sea-front lowers T& to T* at C level; an arm that
+         * reads a ref-param/ref-local would normally emit `(*p)`
+         * (deref). When the whole ternary is reference-typed, the
+         * caller expects the lowered T* pointer form, so keep the
+         * arms as the underlying pointers (suppress the deref). Pattern:
+         * g++.dg/expr/lval2.C `return a < b ? a : b;` where qMin
+         * returns T&. */
+        bool ternary_is_ref = ty_is_ref(n->resolved_type);
         fputc('(', stdout);
         emit_expr(n->ternary.cond);
         fputs(" ? ", stdout);
@@ -6412,7 +6422,10 @@ static void emit_expr(Node *n) {
             Type *saved_yield = g_throw_yield_ty;
             if (then_is_throw && !else_is_throw && et)
                 g_throw_yield_ty = et;
+            bool saved_supp = g_suppress_ref_deref;
+            if (ternary_is_ref) g_suppress_ref_deref = true;
             emit_expr(n->ternary.then_);
+            g_suppress_ref_deref = saved_supp;
             g_throw_yield_ty = saved_yield;
         }
         fputs(" : ", stdout);
@@ -6432,7 +6445,10 @@ static void emit_expr(Node *n) {
             Type *saved_yield = g_throw_yield_ty;
             if (else_is_throw && !then_is_throw && tt)
                 g_throw_yield_ty = tt;
+            bool saved_supp = g_suppress_ref_deref;
+            if (ternary_is_ref) g_suppress_ref_deref = true;
             emit_expr(n->ternary.else_);
+            g_suppress_ref_deref = saved_supp;
             g_throw_yield_ty = saved_yield;
         }
         fputc(')', stdout);
