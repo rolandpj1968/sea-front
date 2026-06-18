@@ -1162,6 +1162,52 @@ static void emit_return_expr(Node *e) {
         fputc('}', stdout);
         return;
     }
+    /* Implicit converting-ctor at return — N4659 §11.6.3/5
+     * [dcl.init.ref] / §16.3.1.5 [over.match.copy]: when the return
+     * type is class C and the return expression has a different type
+     * E, and C has a single-arg ctor accepting E (typically `C(const
+     * E&)`), the return-value is initialized via that converting
+     * ctor. Sea-front used to emit `return e;` which cc rejects
+     * ("incompatible types when returning type 'B' but 'A' was
+     * expected"). Materialize via stmt-expr:
+     *   `({ C __r; C_ctor(&__r, &(e)); __r; })`
+     * The stmt-expr value flows into __SF_RETURN's `__SF_retval = (v)`.
+     * Pattern: g++.dg/init/ref9.C `return basic();` where the
+     * enclosing function returns `ex` and ex has `ex(const basic&)`. */
+    if (rt && (rt->kind == TY_STRUCT || rt->kind == TY_UNION) && e) {
+        Type *et = e->resolved_type;
+        while (et && (et->kind == TY_REF || et->kind == TY_RVALREF))
+            et = et->base;
+        bool same_class = et && (et->kind == TY_STRUCT || et->kind == TY_UNION) &&
+                          et->tag && rt->tag &&
+                          et->tag->len == rt->tag->len &&
+                          memcmp(et->tag->loc, rt->tag->loc, rt->tag->len) == 0;
+        if (et && !same_class &&
+            (et->kind == TY_STRUCT || et->kind == TY_UNION)) {
+            /* Resolve a 1-arg ctor on rt that accepts et. */
+            Type *at[1] = { e->resolved_type };
+            Type **pty = NULL;
+            int np = resolve_overload(rt, /*name=*/NULL, /*is_ctor=*/true,
+                                       at, 1, /*recv_const=*/false,
+                                       &pty, NULL);
+            if (np == 1 && pty && pty[0]) {
+                /* Zero-init __sf_retconv so a throw from the
+                 * converting ctor leaves clean fields (dtors that
+                 * peek at bp / refcount / vptr don't deref garbage).
+                 * The stmt-expr value is the converted-into local,
+                 * which the return-protocol's `__SF_retval = (v)`
+                 * captures. */
+                fputs("({ ", stdout);
+                emit_type(rt);
+                fputs(" __sf_retconv = {0}; ", stdout);
+                mangle_class_ctor(rt, pty, 1);
+                fputs("(&__sf_retconv, ", stdout);
+                emit_arg_for_param(e, pty[0]);
+                fputs("); __sf_retconv; })", stdout);
+                return;
+            }
+        }
+    }
     if (!ty_is_ref(rt)) { emit_expr(e); return; }
     Type *et = e ? e->resolved_type : NULL;
     if (ty_is_ref(et)) {
