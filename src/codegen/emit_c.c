@@ -7052,15 +7052,19 @@ static void emit_expr(Node *n) {
                 return;
             }
             /* Virtual dtor — dispatch via vptr so `a->~A()` for an
-             * A* aliasing a Derived runs the most-derived dtor. N4659
-             * §15.4/10 [class.dtor] — destructor is virtual iff
-             * declared virtual in some base; the destructor selected
-             * by `p->~T()` is the dynamic-type's destructor when T's
-             * dtor is virtual. Pattern: g++.dg/overload/virtual2.C. */
-            if (class_has_virtual_dtor(ot)) {
-                /* `__del_dtor` returns this; for an explicit-dtor
-                 * call we just want the destruction side effect.
-                 * Cast away the return. */
+             * A* aliasing a Derived runs the most-derived dtor.
+             * N4659 §15.4/10 [class.dtor]. Only fire when ot is the
+             * vptr-OWNER class — otherwise the vptr lives in a base
+             * subobject and the simple `->__sf_vptr` access mis-fires
+             * (struct sf__B has no __sf_vptr field directly when its
+             * polymorphic root A holds the vptr). For derived-type
+             * static calls (`b->~B()` where b is B*) the direct call
+             * already produces the right runtime behaviour — B's
+             * wrapper runs B's body. Pattern: g++.dg/overload/virtual2.C
+             * (A* case fires); g++.dg/ipa/devirt-6.C (B* case falls
+             * through to the direct call below). */
+            if (class_has_virtual_dtor(ot) &&
+                vptr_owner_class(ot) == ot) {
                 fputs("((void)((", stdout);
                 if (callee->member.op == TK_DOT) fputc('&', stdout);
                 fputc('(', stdout);
