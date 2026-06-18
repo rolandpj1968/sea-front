@@ -2928,6 +2928,127 @@ static bool class_has_virtual_dtor(Type *class_type) {
     return false;
 }
 
+/* Walk the primary-base chain from vptr_owner_class(class_type) DOWN
+ * to class_type itself, writing each class into chain[]. chain[0] is
+ * always the vptr owner, chain[chain_len-1] is class_type. Returns
+ * chain_len. The chain is what the primary vtable layout must reflect
+ * — each class on the chain inherits the prior class's vtable shape
+ * and may add new virtual slots or override existing ones. N4659
+ * §13.3 [class.virtual]. */
+#define PRIMARY_CHAIN_MAX 16
+static int build_primary_chain(Type *class_type, Type **chain, int max) {
+    if (!class_type || !class_type->has_virtual_methods) return 0;
+    Type *owner = vptr_owner_class(class_type);
+    int n = 0;
+    Type *cur = class_type;
+    while (cur && n < max) {
+        chain[n++] = cur;
+        if (cur == owner) break;
+        Type *parent = NULL;
+        int nb = class_nbases(cur);
+        for (int b = 0; b < nb; b++) {
+            Type *base = class_base(cur, b);
+            if (base && base->has_virtual_methods) { parent = base; break; }
+        }
+        cur = parent;
+    }
+    /* Reverse so chain[0] is the vptr owner (root). */
+    for (int i = 0, j = n - 1; i < j; i++, j--) {
+        Type *t = chain[i]; chain[i] = chain[j]; chain[j] = t;
+    }
+    return n;
+}
+
+/* True iff m is a virtual member of chain[ci] that introduces a NEW
+ * vtable slot — i.e., no earlier (closer-to-root) class in the
+ * primary chain has a same-name+same-arity virtual member. An
+ * override of an inherited virtual returns false here; the slot was
+ * already introduced by the ancestor. Skips destructors (slot 0 is
+ * the __dtor wrapper, handled separately). */
+static bool is_introducer_virtual(Type **chain, int ci, Node *m) {
+    if (!m) return false;
+    bool is_funcdef = (m->kind == ND_FUNC_DEF && m->func.is_virtual);
+    bool is_decl = (m->kind == ND_VAR_DECL && m->var_decl.is_virtual &&
+                    m->var_decl.ty && m->var_decl.ty->kind == TY_FUNC);
+    if (!is_funcdef && !is_decl) return false;
+    if (is_funcdef && m->func.is_destructor) return false;
+    if (is_decl && m->var_decl.is_destructor) return false;
+    Token *mname = is_funcdef ? m->func.name : m->var_decl.name;
+    int np = is_funcdef ? m->func.nparams : m->var_decl.ty->nparams;
+    for (int k = 0; k < ci; k++) {
+        Node *cd = chain[k]->class_def;
+        if (!cd) continue;
+        for (int j = 0; j < cd->class_def.nmembers; j++) {
+            Node *pm = cd->class_def.members[j];
+            if (!pm) continue;
+            bool p_funcdef = (pm->kind == ND_FUNC_DEF && pm->func.is_virtual);
+            bool p_decl = (pm->kind == ND_VAR_DECL && pm->var_decl.is_virtual &&
+                           pm->var_decl.ty && pm->var_decl.ty->kind == TY_FUNC);
+            if (!p_funcdef && !p_decl) continue;
+            if (p_funcdef && pm->func.is_destructor) continue;
+            if (p_decl && pm->var_decl.is_destructor) continue;
+            Token *pn = p_funcdef ? pm->func.name : pm->var_decl.name;
+            int pnp = p_funcdef ? pm->func.nparams : pm->var_decl.ty->nparams;
+            if (!pn || !mname) continue;
+            if (pn->len == mname->len &&
+                memcmp(pn->loc, mname->loc, mname->len) == 0 && pnp == np)
+                return false;
+        }
+    }
+    return true;
+}
+
+/* Find the most-derived implementor (impl_class, impl_node) for a
+ * vtable slot introduced at chain[ci] with the given name+arity.
+ * Walks the chain bottom-up (deepest derived first); the first
+ * matching member wins. The introducer itself qualifies as a
+ * fallback when no descendant overrides. For descendants, ANY
+ * same-name+arity member is treated as an override (implicit-virtual
+ * — N4659 §13.3/2 [class.virtual]). */
+static void find_slot_impl(Type **chain, int chain_len, int ci,
+                           Token *mname, int np,
+                           Type **out_class, Node **out_node,
+                           bool *out_is_funcdef) {
+    *out_class = chain[ci];
+    *out_node = NULL;
+    *out_is_funcdef = false;
+    for (int k = chain_len - 1; k >= ci; k--) {
+        Node *cd = chain[k]->class_def;
+        if (!cd) continue;
+        for (int j = 0; j < cd->class_def.nmembers; j++) {
+            Node *pm = cd->class_def.members[j];
+            if (!pm) continue;
+            Token *pn = NULL;
+            int pnp = -1;
+            bool p_funcdef = false;
+            if (pm->kind == ND_FUNC_DEF && !pm->func.is_constructor &&
+                !pm->func.is_destructor) {
+                pn = pm->func.name; pnp = pm->func.nparams; p_funcdef = true;
+            } else if (pm->kind == ND_VAR_DECL && pm->var_decl.ty &&
+                       pm->var_decl.ty->kind == TY_FUNC &&
+                       !pm->var_decl.is_destructor) {
+                pn = pm->var_decl.name; pnp = pm->var_decl.ty->nparams;
+            } else continue;
+            /* At the introducer, require is_virtual; for descendants,
+             * any same-name+arity is an override. */
+            if (k == ci) {
+                bool is_virt = (pm->kind == ND_FUNC_DEF)
+                                   ? pm->func.is_virtual
+                                   : pm->var_decl.is_virtual;
+                if (!is_virt) continue;
+            }
+            if (!pn || !mname) continue;
+            if (pn->len == mname->len &&
+                memcmp(pn->loc, mname->loc, mname->len) == 0 && pnp == np) {
+                *out_class = chain[k];
+                *out_node = pm;
+                *out_is_funcdef = p_funcdef;
+                return;
+            }
+        }
+    }
+}
+
 /* Emit `this->__sf_vptr` when class_type owns the vptr, or walk the
  * base subobject chain via `this->__sf_base[.__sf_base...].__sf_vptr`
  * when an ancestor owns it. The pointer-cast form
@@ -16555,53 +16676,58 @@ methods_phase:;
             mangle_class_tag(class_type);
             fputs(" *);\n", stdout);
         }
-        for (int i = 0; i < n->class_def.nmembers; i++) {
-            Node *m = n->class_def.members[i];
-            if (!m) continue;
-            bool is_virt_funcdef = (m->kind == ND_FUNC_DEF && m->func.is_virtual);
-            bool is_virt_decl = (m->kind == ND_VAR_DECL && m->var_decl.is_virtual &&
-                                 m->var_decl.ty && m->var_decl.ty->kind == TY_FUNC);
-            if (!is_virt_funcdef && !is_virt_decl) continue;
-            /* Virtual dtors don't get a vtable slot — see the
-             * TODO(seafront#virt-dtor-slot) note on the vtable struct
-             * comment above. */
-            if (is_virt_funcdef && m->func.is_destructor) continue;
-            if (is_virt_decl && m->var_decl.is_destructor) continue;
+        /* Walk the primary base chain top-down so the slot order
+         * matches the vptr owner's vtable layout: any cast of
+         * '&<derived>_vtable_instance' to 'sf__<owner>__vtable *'
+         * in the ctor must be layout-compatible. Each inherited
+         * slot is emitted once at its INTRODUCER's position; an
+         * override of an inherited slot does NOT introduce a new
+         * slot — it only changes the implementor at fill-site
+         * below. New virtuals declared at the derived class
+         * append to the end. */
+        Type *vchain[PRIMARY_CHAIN_MAX];
+        int vchain_n = build_primary_chain(class_type, vchain, PRIMARY_CHAIN_MAX);
+        for (int ci = 0; ci < vchain_n; ci++) {
+            Node *cdef = vchain[ci]->class_def;
+            if (!cdef) continue;
+            for (int i = 0; i < cdef->class_def.nmembers; i++) {
+                Node *m = cdef->class_def.members[i];
+                if (!is_introducer_virtual(vchain, ci, m)) continue;
 
-            Type *ret_ty = is_virt_funcdef ? m->func.ret_ty
-                                           : m->var_decl.ty->ret;
-            Token *mname = is_virt_funcdef ? m->func.name : m->var_decl.name;
-            int nparams = is_virt_funcdef ? m->func.nparams
-                                          : m->var_decl.ty->nparams;
-            /* const-qualified method → its C signature takes
-             * 'const struct <tag> *' as the implicit this. Mirror that
-             * in the vtable slot type, otherwise storing the method's
-             * function pointer into the slot drops const and strict-C
-             * back-ends (cproc) reject the initializer with "base
-             * types of pointer assignment must be compatible". */
-            bool slot_this_const =
-                is_virt_funcdef ? m->func.is_const_method
-                                : (m->var_decl.ty && m->var_decl.ty->is_const);
+                bool is_virt_funcdef = (m->kind == ND_FUNC_DEF);
+                Type *ret_ty = is_virt_funcdef ? m->func.ret_ty
+                                               : m->var_decl.ty->ret;
+                Token *mname = is_virt_funcdef ? m->func.name : m->var_decl.name;
+                int nparams = is_virt_funcdef ? m->func.nparams
+                                              : m->var_decl.ty->nparams;
+                /* The slot type's 'this' pointer uses the INTRODUCER's
+                 * class struct so the slot is layout-compatible across
+                 * the chain. const-method introducers add 'const' to
+                 * the receiver type. */
+                bool slot_this_const =
+                    is_virt_funcdef ? m->func.is_const_method
+                                    : (m->var_decl.ty && m->var_decl.ty->is_const);
 
-            emit_indent();
-            emit_type(ret_ty);
-            fprintf(stdout, " (*%.*s)(", mname->len, mname->loc);
-            if (slot_this_const) fputs("const ", stdout);
-            fputs("struct ", stdout);
-            mangle_class_tag(class_type);
-            fputs(" *", stdout);
-            if (is_virt_funcdef) {
-                for (int k = 0; k < nparams; k++) {
-                    fputs(", ", stdout);
-                    emit_type(m->func.params[k]->param.ty);
+                emit_indent();
+                emit_type(ret_ty);
+                fprintf(stdout, " (*%.*s)(", mname->len, mname->loc);
+                if (slot_this_const) fputs("const ", stdout);
+                fputs("struct ", stdout);
+                mangle_class_tag(vchain[ci]);
+                fputs(" *", stdout);
+                if (is_virt_funcdef) {
+                    for (int k = 0; k < nparams; k++) {
+                        fputs(", ", stdout);
+                        emit_type(m->func.params[k]->param.ty);
+                    }
+                } else {
+                    for (int k = 0; k < nparams; k++) {
+                        fputs(", ", stdout);
+                        emit_type(m->var_decl.ty->params[k]);
+                    }
                 }
-            } else {
-                for (int k = 0; k < nparams; k++) {
-                    fputs(", ", stdout);
-                    emit_type(m->var_decl.ty->params[k]);
-                }
+                fputs(");\n", stdout);
             }
-            fputs(");\n", stdout);
         }
         g_indent--;
         fputs("};\n", stdout);
@@ -16629,62 +16755,99 @@ methods_phase:;
             mangle_class_tag(class_type);
             fputs("__del_dtor,\n", stdout);
         }
-        for (int i = 0; i < n->class_def.nmembers; i++) {
-            Node *m = n->class_def.members[i];
-            if (!m) continue;
-            bool is_virt_funcdef = (m->kind == ND_FUNC_DEF && m->func.is_virtual);
-            bool is_virt_decl = (m->kind == ND_VAR_DECL && m->var_decl.is_virtual &&
-                                 m->var_decl.ty && m->var_decl.ty->kind == TY_FUNC);
-            if (!is_virt_funcdef && !is_virt_decl) continue;
-            if (is_virt_funcdef && m->func.is_destructor) continue;
-            if (is_virt_decl && m->var_decl.is_destructor) continue;
-            Token *mname = is_virt_funcdef ? m->func.name : m->var_decl.name;
-            emit_indent();
-            /* Slot points at an in-TU body. ND_FUNC_DEF is the in-class
-             * inline body; ND_VAR_DECL is the in-class declaration that
-             * may pair with an out-of-class ND_FUNC_DEF in the same TU
-             * (g++.dg/ipa/devirt-2.C pattern). Search the TU for the
-             * matching OOL definition before falling back to NULL.
-             *
-             * NULL slot for genuinely declaration-only virtuals (pure
-             * virtuals or extern definitions): the slot stays in place
-             * to keep the vtable layout stable for derived classes,
-             * and a dispatched call would NULL-deref — matches Itanium
-             * __cxa_pure_virtual semantics (call to pure virtual is UB). */
-            Node *ool_def = NULL;
-            if (is_virt_decl && g_tu) {
-                for (int j = 0; j < g_tu->tu.ndecls; j++) {
-                    Node *d = g_tu->tu.decls[j];
-                    if (!d || d->kind != ND_FUNC_DEF) continue;
-                    if (d->func.class_type != class_type) continue;
-                    if (!d->func.name || !mname) continue;
-                    if (d->func.name->len == mname->len &&
-                        memcmp(d->func.name->loc, mname->loc, mname->len) == 0) {
-                        ool_def = d;
-                        break;
+        /* Walk the same chain as the struct emit above, then for
+         * each introduced slot find the most-derived implementor
+         * (closest-to-class_type override). The fill uses that
+         * implementor's mangled symbol; when implementor differs
+         * from introducer, prepend a function-pointer cast so the
+         * strict-C back-end accepts storing 'int (*)(sf__Deriv *, ...)'
+         * into a 'int (*)(sf__Intro *, ...)' slot. */
+        Type *vchain[PRIMARY_CHAIN_MAX];
+        int vchain_n = build_primary_chain(class_type, vchain, PRIMARY_CHAIN_MAX);
+        for (int ci = 0; ci < vchain_n; ci++) {
+            Node *cdef = vchain[ci]->class_def;
+            if (!cdef) continue;
+            for (int i = 0; i < cdef->class_def.nmembers; i++) {
+                Node *m = cdef->class_def.members[i];
+                if (!is_introducer_virtual(vchain, ci, m)) continue;
+
+                bool is_virt_funcdef = (m->kind == ND_FUNC_DEF);
+                Token *mname = is_virt_funcdef ? m->func.name : m->var_decl.name;
+                int np_intro = is_virt_funcdef ? m->func.nparams
+                                               : m->var_decl.ty->nparams;
+                Type *intro_ret = is_virt_funcdef ? m->func.ret_ty
+                                                  : m->var_decl.ty->ret;
+                bool intro_const =
+                    is_virt_funcdef ? m->func.is_const_method
+                                    : (m->var_decl.ty && m->var_decl.ty->is_const);
+
+                Type *impl_class = NULL;
+                Node *impl_node = NULL;
+                bool impl_is_funcdef = false;
+                find_slot_impl(vchain, vchain_n, ci, mname, np_intro,
+                               &impl_class, &impl_node, &impl_is_funcdef);
+
+                /* OOL pairing for an ND_VAR_DECL impl — search the TU
+                 * for a matching ND_FUNC_DEF on impl_class. */
+                Node *ool_def = NULL;
+                if (impl_node && !impl_is_funcdef && g_tu) {
+                    for (int j = 0; j < g_tu->tu.ndecls; j++) {
+                        Node *d = g_tu->tu.decls[j];
+                        if (!d || d->kind != ND_FUNC_DEF) continue;
+                        if (d->func.class_type != impl_class) continue;
+                        if (!d->func.name || !mname) continue;
+                        if (d->func.name->len == mname->len &&
+                            memcmp(d->func.name->loc, mname->loc, mname->len) == 0) {
+                            ool_def = d;
+                            break;
+                        }
                     }
                 }
+
+                emit_indent();
+                bool has_body = impl_node && (impl_is_funcdef || ool_def);
+                if (has_body) {
+                    bool need_cast = (impl_class != vchain[ci]);
+                    if (need_cast) {
+                        /* '(<ret> (*)(struct sf__<intro> *, <params...>))' */
+                        fputc('(', stdout);
+                        emit_type(intro_ret);
+                        fputs(" (*)(", stdout);
+                        if (intro_const) fputs("const ", stdout);
+                        fputs("struct ", stdout);
+                        mangle_class_tag(vchain[ci]);
+                        fputs(" *", stdout);
+                        if (is_virt_funcdef) {
+                            for (int k = 0; k < np_intro; k++) {
+                                fputs(", ", stdout);
+                                emit_type(m->func.params[k]->param.ty);
+                            }
+                        } else {
+                            for (int k = 0; k < np_intro; k++) {
+                                fputs(", ", stdout);
+                                emit_type(m->var_decl.ty->params[k]);
+                            }
+                        }
+                        fputs("))", stdout);
+                    }
+                    Type **pty = NULL;
+                    int np = collect_func_param_types(
+                        impl_is_funcdef ? impl_node : ool_def, &pty);
+                    bool slot_const = false;
+                    if (impl_is_funcdef)
+                        slot_const = impl_node->func.is_const_method;
+                    else if (impl_node->var_decl.ty)
+                        slot_const = impl_node->var_decl.ty->is_const;
+                    mangle_class_method(impl_class, mname, pty, np, slot_const);
+                } else {
+                    /* Pure virtual / declaration-only — leave the slot
+                     * NULL so the layout stays stable for derived
+                     * classes. Calling through it is UB (matches
+                     * Itanium __cxa_pure_virtual). */
+                    fputs("0", stdout);
+                }
+                fputs(",\n", stdout);
             }
-            if (is_virt_funcdef || ool_def) {
-                Type **pty = NULL;
-                int np = is_virt_funcdef
-                       ? collect_func_param_types(m, &pty)
-                       : collect_func_param_types(ool_def, &pty);
-                /* Mirror the actual definition's const-ness so the
-                 * vtable instance references the same mangled
-                 * symbol the body emits. 'B *clone() const' on a
-                 * virtual base needs '_const' in the suffix. */
-                bool slot_const = false;
-                if (is_virt_funcdef)
-                    slot_const = m->func.is_const_method;
-                else if (m->kind == ND_VAR_DECL && m->var_decl.ty)
-                    slot_const = m->var_decl.ty->is_const;
-                mangle_class_method(class_type, mname, pty, np,
-                                        slot_const);
-            } else {
-                fputs("0", stdout);
-            }
-            fputs(",\n", stdout);
         }
         g_indent--;
         fputs("};\n", stdout);
