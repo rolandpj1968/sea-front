@@ -2183,8 +2183,19 @@ Node *parse_declaration(Parser *p) {
         parser_expect(p, TK_RBRACE);
     }
 
-    /* N4659 §6.3.2/1 [basic.scope.pdecl]: register the variable name */
-    if (decl->var_decl.name) {
+    /* N4659 §6.3.2/1 [basic.scope.pdecl]: register the variable name.
+     *
+     * Skip for OOL ctor/dtor at qualified class scope — `A::A() =
+     * default;` would otherwise register `A` as ENTITY_VARIABLE in
+     * the enclosing namespace, shadowing the class-type lookup for
+     * downstream `A x;` declarations. Mirror the guard the regular
+     * func-def branch already uses (parse_declaration's func path
+     * skips region_declare when is_constructor / is_destructor). */
+    bool is_ool_ctor_or_dtor =
+        (p->pending_is_constructor || p->pending_is_destructor) &&
+        p->qualified_decl_scope &&
+        p->qualified_decl_scope->kind == REGION_CLASS;
+    if (decl->var_decl.name && !is_ool_ctor_or_dtor) {
         Declaration *rd = region_declare(p, decl->var_decl.name->loc,
                                           decl->var_decl.name->len,
                                           ENTITY_VARIABLE,
