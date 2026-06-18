@@ -10633,6 +10633,34 @@ static void emit_var_decl_inner(Node *n) {
      * [dcl.ptr]. After the grouped-declarator fix, these are
      * TY_PTR(TY_FUNC). C syntax interleaves name and params in the
      * declarator, so emit_type alone can't produce it. */
+    /* Reference-to-function lowers to the same C function-pointer
+     * shape as a plain pointer (refs are pointers in the C-emit
+     * model). `int (&foo)() = f;` → `int (*foo)(void) = &f;`. Same
+     * declarator structure as the TY_PTR(TY_FUNC) case below; share
+     * the emit. N4659 §11.3.2 [dcl.ref]. Pattern:
+     * g++.dg/other/default4.C `int(&foo1)() = f;`. */
+    if (ty && (ty->kind == TY_REF || ty->kind == TY_RVALREF) &&
+        ty->base && ty->base->kind == TY_FUNC && n->var_decl.name) {
+        Type *fty = ty->base;
+        emit_type(fty->ret);
+        fputs(" (*", stdout);
+        fprintf(stdout, "%.*s", n->var_decl.name->len, n->var_decl.name->loc);
+        fputs(")(", stdout);
+        emit_func_param_types(fty);
+        fputc(')', stdout);
+        if (n->var_decl.init && n->var_decl.init->kind > 0 &&
+            n->var_decl.init->kind < 200) {
+            /* `int (&foo)() = f;` — sea-front's emit_expr on bare `f`
+             * yields `f` (not `&f`). C requires `&f` to assign into
+             * a function-pointer slot, though most compilers accept
+             * either form. Add `&` for safety; the existing TY_PTR
+             * path handled this via the init being already `&f`. */
+            fputs(" = &(", stdout);
+            emit_init_with_target(n->var_decl.init, n->var_decl.ty);
+            fputc(')', stdout);
+        }
+        return;
+    }
     if (ty && ty->kind == TY_PTR && ty->base && ty->base->kind == TY_FUNC &&
         n->var_decl.name) {
         Type *fty = ty->base;
