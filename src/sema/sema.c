@@ -2475,6 +2475,14 @@ static void visit(Sema *s, Node *n) {
     case ND_CALL:      visit_call(s, n);      break;
     case ND_SUBSCRIPT: visit_subscript(s, n); break;
     case ND_MEMBER:    visit_member(s, n);    break;
+    case ND_STMT_EXPR:
+        /* GCC statement-expression `({ stmts; expr; })` — the inner
+         * block carries the real work. Without this descent the
+         * inner statements never reach visit_call etc., so any
+         * functional-cast `T(args)` inside emits unmangled and cc
+         * rejects with `invalid initializer` / `undeclared 'T'`. */
+        if (n->stmt_expr.block) visit(s, n->stmt_expr.block);
+        break;
 
     /* switch / case / labels — N4659 §9.4.2 [stmt.switch], §9.1
      * [stmt.label]. Walk the sub-expressions so identifiers inside
