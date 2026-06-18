@@ -2159,7 +2159,17 @@ static void hoist_pass_by_value_copy(Node *arg, Type *param_ty,
     emit_indent();
     mangle_class_ctor(param_ty, pty, np);
     fprintf(stdout, "(&%s, &(", name);
-    emit_expr(arg);
+    /* `static_cast<T&&>(x)` lowers to '(T *)&(x)' — already a
+     * pointer. Taking its address yields T**, which the copy
+     * ctor (expects T*) rejects. Forward the cast's inner
+     * operand so the surrounding `&(...)` produces the source
+     * lvalue's address. Mirrors emit_arg_for_param. */
+    if (arg->kind == ND_CAST && arg->cast.ty &&
+        (arg->cast.ty->kind == TY_REF ||
+         arg->cast.ty->kind == TY_RVALREF))
+        emit_expr(arg->cast.operand);
+    else
+        emit_expr(arg);
     fputs("));\n", stdout);
 
     arg->codegen_temp_name = name;
