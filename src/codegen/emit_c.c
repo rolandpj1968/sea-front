@@ -6098,15 +6098,100 @@ static void emit_expr(Node *n) {
         fputs(unop_str(n->unary.op), stdout);
         fputc(')', stdout);
         return;
-    case ND_TERNARY:
+    case ND_TERNARY: {
+        /* N4659 §8.16 [expr.cond]/6 common-type rule for class types:
+         * when one arm has type T1 and the other has T2 with T1
+         * publicly derived from T2 (or vice versa), the result has
+         * the BASE type (after derived-to-base conversion). At C
+         * level both arms of `?:` must have the same type or cc
+         * rejects with "type mismatch in conditional expression"
+         * — so for the derived arm we walk to the base subobject
+         * via `expr.__sf_base...`. Works for both call rvalues
+         * (the temp lives till end of full-expression, C11 §6.2.4)
+         * and lvalues.
+         *
+         * Pattern: g++.dg/expr/cond6.C `(true ? f() : b)` where
+         * f returns D, b is B, and D : public B. */
+        Type *tt = n->ternary.then_ ? n->ternary.then_->resolved_type : NULL;
+        Type *et = n->ternary.else_ ? n->ternary.else_->resolved_type : NULL;
+        Type *tt_class = tt;
+        Type *et_class = et;
+        while (tt_class && (tt_class->kind == TY_REF ||
+                            tt_class->kind == TY_RVALREF))
+            tt_class = tt_class->base;
+        while (et_class && (et_class->kind == TY_REF ||
+                            et_class->kind == TY_RVALREF))
+            et_class = et_class->base;
+        bool both_class = tt_class && et_class &&
+            (tt_class->kind == TY_STRUCT || tt_class->kind == TY_UNION) &&
+            (et_class->kind == TY_STRUCT || et_class->kind == TY_UNION) &&
+            !same_class_type(tt_class, et_class);
+        int  base_path[8];
+        int  base_len  = 0;
+        int  cast_arm  = 0;  /* 1 = then is derived (cast it), 2 = else */
+        if (both_class) {
+            /* Patch class_region if missing — needed for find_base_path. */
+            Type *tt_full = tt_class;
+            Type *et_full = et_class;
+            if (tt_full && !tt_full->class_region && tt_full->tag) {
+                Node *d = find_class_def_by_tag_args(tt_full);
+                if (!d) d = find_class_def_by_tag_only(tt_full);
+                if (d && d->class_def.ty) tt_full = d->class_def.ty;
+            }
+            if (et_full && !et_full->class_region && et_full->tag) {
+                Node *d = find_class_def_by_tag_args(et_full);
+                if (!d) d = find_class_def_by_tag_only(et_full);
+                if (d && d->class_def.ty) et_full = d->class_def.ty;
+            }
+            base_len = find_base_path(tt_full, et_full, base_path, 8);
+            if (base_len > 0) cast_arm = 1;
+            else {
+                base_len = find_base_path(et_full, tt_full, base_path, 8);
+                if (base_len > 0) cast_arm = 2;
+            }
+        }
         fputc('(', stdout);
         emit_expr(n->ternary.cond);
         fputs(" ? ", stdout);
-        emit_expr(n->ternary.then_);
+        if (cast_arm == 1) {
+            fputc('(', stdout);
+            emit_expr(n->ternary.then_);
+            fputc(')', stdout);
+            /* emit_base_chain trails a '.' after each step; the
+             * caller normally appends a member name. Here we want
+             * the LAST base subobject AS the value, so chain
+             * len-1 steps then emit the final `__sf_base[N]`
+             * directly without trailing punctuation. */
+            for (int i = 0; i < base_len - 1; i++) {
+                if (base_path[i] == 0) fputs(".__sf_base", stdout);
+                else fprintf(stdout, ".__sf_base%d", base_path[i]);
+            }
+            if (base_path[base_len - 1] == 0)
+                fputs(".__sf_base", stdout);
+            else
+                fprintf(stdout, ".__sf_base%d", base_path[base_len - 1]);
+        } else {
+            emit_expr(n->ternary.then_);
+        }
         fputs(" : ", stdout);
-        emit_expr(n->ternary.else_);
+        if (cast_arm == 2) {
+            fputc('(', stdout);
+            emit_expr(n->ternary.else_);
+            fputc(')', stdout);
+            for (int i = 0; i < base_len - 1; i++) {
+                if (base_path[i] == 0) fputs(".__sf_base", stdout);
+                else fprintf(stdout, ".__sf_base%d", base_path[i]);
+            }
+            if (base_path[base_len - 1] == 0)
+                fputs(".__sf_base", stdout);
+            else
+                fprintf(stdout, ".__sf_base%d", base_path[base_len - 1]);
+        } else {
+            emit_expr(n->ternary.else_);
+        }
         fputc(')', stdout);
         return;
+    }
     case ND_CALL: {
         /* Slice D-Hoist: if this call has been hoisted to a synthesized
          * temp local, just emit the local's name and skip the rest of
