@@ -19666,9 +19666,40 @@ static void emit_prelude(void) {
      * (std::terminate, which respects std::set_terminate) overrides
      * our weak fallback below per ELF strong-beats-weak rules. When
      * the binary doesn't link libstdc++ — sea-front targets bare C
-     * too — the fallback definition is what runs, and just abort()s. */
+     * too — the fallback definition consults a user-set handler
+     * (N4659 §18.5.2 [terminate]) then falls back to abort. The
+     * handler global itself is weak so multi-TU builds dedupe it
+     * to one storage cell shared by every TU's set_terminate /
+     * _ZSt9terminatev fallback. */
     fputs("extern void abort(void);\n", stdout);
-    fputs("__attribute__((weak)) void _ZSt9terminatev(void) { abort(); }\n",
+    fputs("extern void exit(int);\n", stdout);
+    fputs("typedef void (*__sf_terminate_handler_t)(void);\n", stdout);
+    fputs("__attribute__((weak)) __sf_terminate_handler_t __sf_terminate_handler = 0;\n",
+          stdout);
+    /* std::set_terminate(handler) — installs, returns previous.
+     * Mangle: _ZSt13set_terminatePFvvE — std::set_terminate(void(*)()) */
+    fputs("__attribute__((weak)) __sf_terminate_handler_t "
+          "_ZSt13set_terminatePFvvE(__sf_terminate_handler_t __sf_h) {\n"
+          "    __sf_terminate_handler_t __sf_old = __sf_terminate_handler;\n"
+          "    __sf_terminate_handler = __sf_h;\n"
+          "    return __sf_old;\n"
+          "}\n", stdout);
+    /* std::get_terminate() — mangle _ZSt13get_terminatev */
+    fputs("__attribute__((weak)) __sf_terminate_handler_t "
+          "_ZSt13get_terminatev(void) {\n"
+          "    return __sf_terminate_handler;\n"
+          "}\n", stdout);
+    fputs("__attribute__((weak)) void _ZSt9terminatev(void) {\n"
+          "    if (__sf_terminate_handler) __sf_terminate_handler();\n"
+          "    abort();\n"
+          "}\n", stdout);
+    /* std::exit / std::abort — namespaced-libc forwards. Same target
+     * as the bare libc symbols; sea-front's mangler emits the std::
+     * form when the source qualifies, so we need the dispatch to land
+     * somewhere. _ZSt4exiti / _ZSt5abortv. */
+    fputs("__attribute__((weak)) void _ZSt4exiti(int __sf_n) { exit(__sf_n); }\n",
+          stdout);
+    fputs("__attribute__((weak)) void _ZSt5abortv(void) { abort(); }\n",
           stdout);
     fputs("static inline void __sf_terminate(void) {\n"
           "    _ZSt9terminatev();\n"
