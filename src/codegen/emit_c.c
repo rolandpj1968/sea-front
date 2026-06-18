@@ -19779,6 +19779,20 @@ static void emit_prelude(void) {
           "    if (__sf_terminate_handler) __sf_terminate_handler();\n"
           "    abort();\n"
           "}\n", stdout);
+    /* std::uncaught_exception() — N4659 §18.6.4 (deprecated in C++17,
+     * removed in C++20 but still ubiquitous in pre-C++17 code). True
+     * when an exception is in flight (after throw, before its handler
+     * fully matches). Sea-front's TLS state.state == THROW IS that
+     * condition. Mangle: _ZSt18uncaught_exceptionv (deprecated form). */
+    fputs("__attribute__((weak)) _Bool _ZSt18uncaught_exceptionv(void) {\n"
+          "    return __sf_exc_state.state == __SF_UNWIND_THROW;\n"
+          "}\n", stdout);
+    /* std::uncaught_exceptions() (C++17, plural) — returns count rather
+     * than bool. We don't track nested counts; return 1 when in flight,
+     * 0 otherwise. Mangle: _ZSt19uncaught_exceptionsv. */
+    fputs("__attribute__((weak)) int _ZSt19uncaught_exceptionsv(void) {\n"
+          "    return __sf_exc_state.state == __SF_UNWIND_THROW ? 1 : 0;\n"
+          "}\n", stdout);
     /* std::exit / std::abort — namespaced-libc forwards. Same target
      * as the bare libc symbols; sea-front's mangler emits the std::
      * form when the source qualifies, so we need the dispatch to land
