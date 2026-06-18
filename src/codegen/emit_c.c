@@ -20071,13 +20071,13 @@ static void collect_hoists_from_decl(Node *n,
 }
 
 /* Pre-pass: build the EmitOrder graph. Each TU decl becomes a
- * node; consecutive TU decls get a source-order dep (i depends
- * on i-1) so emission preserves source order in the common case.
- * Hoisted local class defs are added as separate nodes; the
- * enclosing TU decl gets a dep on each hoist so the topo sort
- * emits the hoist first. Each hoist also gets the same source-
- * order dep as the enclosing decl so hoists slot in right
- * before their owner rather than at the start of the output. */
+ * node; hoisted local class defs become their own nodes with the
+ * enclosing TU decl depending on each. No explicit source-order
+ * edges between TU decls — the DFS topo sort visits nodes in
+ * insertion order and recurses through deps first, which
+ * naturally produces "source order modulo dep constraints."
+ * The only edges in the graph are real ordering requirements;
+ * everything else falls out of input order. */
 static void build_emit_order(Node *tu, EmitOrder *out) {
     /* Build the TU-known set first so the hoist walker can filter
      * out class_defs that are references to outer classes (not
@@ -20086,7 +20086,6 @@ static void build_emit_order(Node *tu, EmitOrder *out) {
     for (int i = 0; i < tu->tu.ndecls; i++)
         cset_collect(tu->tu.decls[i], &tu_known);
 
-    int prev_decl_idx = -1;
     Node **hoists = NULL;
     int hn = 0, hcap = 0;
     for (int i = 0; i < tu->tu.ndecls; i++) {
@@ -20095,17 +20094,11 @@ static void build_emit_order(Node *tu, EmitOrder *out) {
         hn = 0;
         collect_hoists_from_decl(n, &hoists, &hn, &hcap, &tu_known);
         /* Hoist nodes first so the enclosing decl can depend on them. */
-        int hoist_first = -1;
-        for (int hi = 0; hi < hn; hi++) {
-            int idx = order_push(out, hoists[hi]);
-            if (prev_decl_idx >= 0) order_add_dep(out, idx, prev_decl_idx);
-            if (hoist_first < 0) hoist_first = idx;
-        }
+        int hoist_first = out->n;
+        for (int hi = 0; hi < hn; hi++) order_push(out, hoists[hi]);
         int decl_idx = order_push(out, n);
-        if (prev_decl_idx >= 0) order_add_dep(out, decl_idx, prev_decl_idx);
         for (int hi = 0; hi < hn; hi++)
             order_add_dep(out, decl_idx, hoist_first + hi);
-        prev_decl_idx = decl_idx;
     }
     free(hoists);
     free(tu_known.items);
