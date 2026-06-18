@@ -1506,6 +1506,14 @@ static bool is_class_temp_call(Node *n) {
         n->call.callee->ident.name &&
         tokens_equal(n->call.callee->ident.name, g_current_method_class->tag))
         return true;
+    /* Class-template functional cast 'A<T>(args)' — sea-front's
+     * parser routes `T<args>(...)` here for class-template Ts.
+     * Tested BEFORE the resolved_type gate: sema may not have
+     * stamped the instantiated class Type on the call when the
+     * template is referenced outside the instantiation's TU pass.
+     * Pattern: g++.dg/other/friend2.C `foo(A<unsigned>(0))`. */
+    if (n->call.callee && n->call.callee->kind == ND_TEMPLATE_ID)
+        return true;
     if (!n->resolved_type || n->resolved_type->kind != TY_STRUCT)
         return false;
     /* Standard case: class-typed call with non-trivial dtor needs
@@ -1594,6 +1602,43 @@ static void hoist_emit_decl(Node *call, bool in_shortcircuit) {
      * symbol named 'Foo' (only the mangled sf__Foo__ctor). */
     bool is_ctor_call = false;
     Type *ctor_class_type = call->resolved_type;
+    /* Class-template functional cast `A<T>(args)` — callee is
+     * ND_TEMPLATE_ID, call->resolved_type is the instantiated class
+     * (when sema set it; otherwise look up the instantiation by
+     * (tag, args) in the TU). Mirror the ND_IDENT-with-ENTITY_TYPE
+     * case below. Pattern: g++.dg/other/friend2.C. */
+    if (call->call.callee && call->call.callee->kind == ND_TEMPLATE_ID) {
+        Node *tid = call->call.callee;
+        if (!ctor_class_type ||
+            (ctor_class_type->kind != TY_STRUCT &&
+             ctor_class_type->kind != TY_UNION)) {
+            /* Look up the instantiated class by (tag, args). */
+            Token *tname = tid->template_id.name;
+            if (tname) {
+                Type probe = {0};
+                probe.kind = TY_STRUCT;
+                probe.tag = tname;
+                int n_args = tid->template_id.nargs;
+                static Type *probe_args[16];
+                if (n_args > 0 && n_args <= 16) {
+                    for (int i = 0; i < n_args; i++) {
+                        Node *a = tid->template_id.args[i];
+                        probe_args[i] = (a && a->kind == ND_VAR_DECL)
+                            ? a->var_decl.ty : NULL;
+                    }
+                    probe.template_args = probe_args;
+                    probe.n_template_args = n_args;
+                }
+                Node *d = find_class_def_by_tag_args(&probe);
+                if (!d) d = find_class_def_by_tag_only(&probe);
+                if (d && d->class_def.ty) ctor_class_type = d->class_def.ty;
+            }
+        }
+        if (ctor_class_type &&
+            (ctor_class_type->kind == TY_STRUCT ||
+             ctor_class_type->kind == TY_UNION))
+            is_ctor_call = true;
+    }
     if (call->call.callee && call->call.callee->kind == ND_IDENT) {
         Declaration *d = call->call.callee->ident.resolved_decl;
         if (d && (d->entity == ENTITY_TYPE || d->entity == ENTITY_TAG))
