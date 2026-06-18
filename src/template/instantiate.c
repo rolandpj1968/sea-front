@@ -1374,8 +1374,61 @@ static bool deduce_from_pair(Type *P, Type *A, SubstMap *map) {
     if (P->kind == TY_REF && A->kind == TY_REF)
         return deduce_from_pair(P->base, A->base, map);
     if (P->kind == TY_REF) return !type_has_dependent(P);
-    if (P->kind == TY_ARRAY && A->kind == TY_ARRAY)
-        return deduce_from_pair(P->base, A->base, map);
+    if (P->kind == TY_ARRAY && A->kind == TY_ARRAY) {
+        if (!deduce_from_pair(P->base, A->base, map)) return false;
+        /* N4659 §17.8.2.5/8 [temp.deduct.type]: when P is `T[I]` and
+         * A is `T[N]`, the array bound I is deducible from N. Sea-
+         * front carries an unsized array-of-dependent as array_len<0
+         * with array_size_expr pointing at the NTTP ident; bind that
+         * ident to a TY_NTTP_VALUE carrying A's literal length so
+         * downstream instantiation sees the resolved I. Pattern:
+         * g++.dg/template/deduce1.C `Foo(int[4])` picks the
+         * `T const (&)[I]` overload with T=int, I=4. */
+        if (P->array_len < 0 && A->array_len >= 0 && P->array_size_expr) {
+            Node *se = P->array_size_expr;
+            if (se->kind == ND_IDENT && se->ident.name) {
+                /* Already bound? skip. */
+                bool bound = false;
+                for (int i = 0; i < map->nentries; i++) {
+                    Token *pn = map->entries[i].param_name;
+                    if (pn && tokens_equal(pn, se->ident.name)) {
+                        bound = true; break;
+                    }
+                }
+                if (!bound) {
+                    /* Synthesize a TY_NTTP_VALUE carrying the literal
+                     * length as a token. We don't have a real Token*
+                     * for an arbitrary integer at deduction time, so
+                     * stash the int in a TY_NTTP_VALUE.literal_int
+                     * slot. */
+                    char buf[24];
+                    int len = snprintf(buf, sizeof(buf), "%d", A->array_len);
+                    char *txt = arena_alloc(map->arena ? map->arena : NULL, len + 1);
+                    if (txt) {
+                        memcpy(txt, buf, len);
+                        txt[len] = '\0';
+                        Token *lit = arena_alloc(map->arena ? map->arena : NULL,
+                                                  sizeof(Token));
+                        if (lit) {
+                            memset(lit, 0, sizeof(*lit));
+                            lit->kind = TK_NUM;
+                            lit->loc = txt;
+                            lit->len = len;
+                            Type *nty = arena_alloc(map->arena ? map->arena : NULL,
+                                                     sizeof(Type));
+                            if (nty) {
+                                memset(nty, 0, sizeof(*nty));
+                                nty->kind = TY_NTTP_VALUE;
+                                nty->tag = lit;
+                                subst_map_add(map, se->ident.name, nty);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return true;
+    }
     if (P->kind == TY_ARRAY) return !type_has_dependent(P);
 
     /* Class-template specialization on both sides: recurse through
