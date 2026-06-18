@@ -109,6 +109,16 @@ static Token *g_current_func_target = NULL;
  * walk the bases. Reset to NULL after the outermost ND_TRY emits
  * so nested try-blocks inside the body don't re-inject. */
 static Type *g_dtor_ftb_class = NULL;
+/* Other-arm type for ternary-with-throw: when one arm is `throw expr`
+ * the throw lowers to a stmt-expr `({ __SF_THROW_*(...); 0; })` —
+ * the `0` is type int and C ternary rejects when it doesn't match
+ * the other arm's type. The ternary emit sets this to the other
+ * arm's resolved type before emitting the throw arm; the throw emit
+ * yields `(other_ty){0}` instead of `0` when set. NULL = use the
+ * default `0` (int).
+ *
+ * Reset after each arm emit so unrelated throws don't pick it up. */
+static Type *g_throw_yield_ty = NULL;
 /* Class type of the OOL method currently being emitted. Used by
  * ND_OFFSETOF to substitute unresolvable local typedefs. */
 static Type *g_current_method_class = NULL;
@@ -6150,6 +6160,17 @@ static void emit_expr(Node *n) {
                 if (base_len > 0) cast_arm = 2;
             }
         }
+        /* Throw arm: the lowering yields a stmt-expr whose value
+         * defaults to `0` (int). When the OTHER arm has a different
+         * type, cc rejects the ternary as type-mismatched. Steer
+         * the throw's yield to the other arm's type via the
+         * g_throw_yield_ty thread-local. Either arm may be the
+         * throw; for both-throw the lowering is fine as-is.
+         * Pattern: g++.dg/eh/cond1.C `(1 ? throw 0 : has_destructor())`. */
+        bool then_is_throw = n->ternary.then_ &&
+                             n->ternary.then_->kind == ND_THROW;
+        bool else_is_throw = n->ternary.else_ &&
+                             n->ternary.else_->kind == ND_THROW;
         fputc('(', stdout);
         emit_expr(n->ternary.cond);
         fputs(" ? ", stdout);
@@ -6171,7 +6192,11 @@ static void emit_expr(Node *n) {
             else
                 fprintf(stdout, ".__sf_base%d", base_path[base_len - 1]);
         } else {
+            Type *saved_yield = g_throw_yield_ty;
+            if (then_is_throw && !else_is_throw && et)
+                g_throw_yield_ty = et;
             emit_expr(n->ternary.then_);
+            g_throw_yield_ty = saved_yield;
         }
         fputs(" : ", stdout);
         if (cast_arm == 2) {
@@ -6187,7 +6212,11 @@ static void emit_expr(Node *n) {
             else
                 fprintf(stdout, ".__sf_base%d", base_path[base_len - 1]);
         } else {
+            Type *saved_yield = g_throw_yield_ty;
+            if (else_is_throw && !then_is_throw && tt)
+                g_throw_yield_ty = tt;
             emit_expr(n->ternary.else_);
+            g_throw_yield_ty = saved_yield;
         }
         fputc(')', stdout);
         return;
@@ -9680,12 +9709,35 @@ static void emit_expr(Node *n) {
         } else {
             lbl = "__SF_epilogue";
         }
+        /* Stmt-expr yield-value: throw never actually evaluates the
+         * value (the macro's `goto` jumps to the handler) but C needs
+         * it for type-compat with the surrounding context. Default
+         * `0` (int) works for most callers, but a ternary with a
+         * class-typed other arm needs `(T){0}` to match.
+         * g_throw_yield_ty is set by the ternary emit before emitting
+         * its throw arm. */
+        char yield_buf[128];
+        if (g_throw_yield_ty) {
+            yield_buf[0] = '(';
+            /* Compose `(T){0}` via a small probe: emit_type writes
+             * to stdout, so capture by redirecting through fmemopen.
+             * Simpler: just write the type spelling via emit_type to
+             * stdout inline by deferring the yield into a small
+             * sub-emit at the close. */
+            yield_buf[0] = '\0';  /* sentinel: use inline form below */
+        } else {
+            snprintf(yield_buf, sizeof(yield_buf), "0");
+        }
         if (n->throw_.is_rethrow) {
-            fprintf(stdout,
-                    "({ __sf_exc_state.state = __SF_UNWIND_THROW; "
-                    "__SF_unwind = __SF_UNWIND_THROW; "
-                    "goto %s; 0; })",
-                    lbl);
+            fputs("({ __sf_exc_state.state = __SF_UNWIND_THROW; "
+                  "__SF_unwind = __SF_UNWIND_THROW; goto ", stdout);
+            fputs(lbl, stdout);
+            fputs("; ", stdout);
+            if (g_throw_yield_ty) {
+                fputc('(', stdout); emit_type(g_throw_yield_ty);
+                fputs("){0}", stdout);
+            } else fputs("0", stdout);
+            fputs("; })", stdout);
             return;
         }
         /* Peel TY_REF / TY_RVALREF before classifying: `throw r`
@@ -9701,7 +9753,12 @@ static void emit_expr(Node *n) {
                 const char *ti = eh_typeinfo_sym_for_class(bare);
                 fputs("({ __SF_THROW_CLASS(&(", stdout);
                 emit_expr(op);
-                fprintf(stdout, "), &%s, %s); 0; })", ti, lbl);
+                fprintf(stdout, "), &%s, %s); ", ti, lbl);
+                if (g_throw_yield_ty) {
+                    fputc('(', stdout); emit_type(g_throw_yield_ty);
+                    fputs("){0}", stdout);
+                } else fputs("0", stdout);
+                fputs("; })", stdout);
                 return;
             }
         }
@@ -9710,7 +9767,12 @@ static void emit_expr(Node *n) {
             fputs("({ __SF_THROW_PRIM(", stdout);
             if (op) emit_expr(op);
             else fputs("0", stdout);
-            fprintf(stdout, ", &%s, %s); 0; })", ti, lbl);
+            fprintf(stdout, ", &%s, %s); ", ti, lbl);
+            if (g_throw_yield_ty) {
+                fputc('(', stdout); emit_type(g_throw_yield_ty);
+                fputs("){0}", stdout);
+            } else fputs("0", stdout);
+            fputs("; })", stdout);
         }
         return;
     }
