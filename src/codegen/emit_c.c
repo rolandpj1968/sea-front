@@ -10295,7 +10295,17 @@ static void emit_var_decl_inner(Node *n) {
         n->var_decl.name) {
         Type *fty = ty->base;
         emit_type(fty->ret);
-        fprintf(stdout, " (*%.*s)(", n->var_decl.name->len, n->var_decl.name->loc);
+        fputs(" (*", stdout);
+        if (n->var_decl.class_type) {
+            /* Out-of-class / weak in-class definition of a static
+             * function-pointer data member — emit the mangled
+             * `sf__C__name` so it matches the class's symbol. */
+            mangle_class_static_data_member(n->var_decl.class_type,
+                                             n->var_decl.name);
+        } else {
+            fprintf(stdout, "%.*s", n->var_decl.name->len, n->var_decl.name->loc);
+        }
+        fputs(")(", stdout);
         emit_func_param_types(fty);
         fputc(')', stdout);
         if (n->var_decl.init && n->var_decl.init->kind > 0 &&
@@ -16370,11 +16380,28 @@ static void emit_class_def(Node *n) {
          * static data member uneditable in C: 'static int count;'
          * came out as 'static const int sf__C__count;', breaking
          * '++count' in every member function body. */
-        emit_type(m->var_decl.ty);
-        fputc(' ', stdout);
-        mangle_class_tag(class_type);
-        fputs("__", stdout);
-        emit_token_text(m->var_decl.name);
+        /* TY_PTR(TY_FUNC) static member needs the name INSIDE the
+         * grouped declarator: `void (*sf__C__h)(void);` not the
+         * invalid `void (*)(void) sf__C__h;`. N4659 §11.3.5
+         * [dcl.fct]. */
+        if (m->var_decl.ty->kind == TY_PTR && m->var_decl.ty->base &&
+            m->var_decl.ty->base->kind == TY_FUNC) {
+            Type *fty = m->var_decl.ty->base;
+            emit_type(fty->ret);
+            fputs(" (*", stdout);
+            mangle_class_tag(class_type);
+            fputs("__", stdout);
+            emit_token_text(m->var_decl.name);
+            fputs(")(", stdout);
+            emit_func_param_types(fty);
+            fputc(')', stdout);
+        } else {
+            emit_type(m->var_decl.ty);
+            fputc(' ', stdout);
+            mangle_class_tag(class_type);
+            fputs("__", stdout);
+            emit_token_text(m->var_decl.name);
+        }
         if (m->var_decl.init) {
             fputs(" = ", stdout);
             emit_expr(m->var_decl.init);
