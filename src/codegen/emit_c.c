@@ -5612,6 +5612,24 @@ static void emit_expr(Node *n) {
             fputc(')', stdout);
             return;
         }
+        /* Cast-to-ref as LHS — N4659 §8.16/2 [expr.cond]: a ref-typed
+         * cast is an lvalue. Sea-front lowers refs to pointers, so
+         * `static_cast<Base&>(sub)` emits as `(struct sf__Base *)
+         * &(sub).__sf_base` — a pointer rvalue. To use as an
+         * assignment target, deref it: `*(<cast>) = rhs`. Pattern:
+         * g++.dg/expr/assign1.C `static_cast<Base&>(sub) = *base;`. */
+        if (n->binary.op == TK_ASSIGN && n->binary.lhs &&
+            n->binary.lhs->kind == ND_CAST && n->binary.lhs->cast.ty &&
+            (n->binary.lhs->cast.ty->kind == TY_REF ||
+             n->binary.lhs->cast.ty->kind == TY_RVALREF)) {
+            fputc('(', stdout);
+            fputs("*(", stdout);
+            emit_expr(n->binary.lhs);
+            fputs(") = ", stdout);
+            emit_expr(n->binary.rhs);
+            fputc(')', stdout);
+            return;
+        }
         /* Compound assignment on struct: a += b → Class__plus_assign(&a, b)
          * Same value-vs-pointer distinction as ND_BINARY — TY_PTR lhs
          * is native C pointer arithmetic, not a class operator. */
