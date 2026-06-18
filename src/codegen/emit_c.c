@@ -1018,12 +1018,37 @@ static void emit_arg_for_param(Node *arg, Type *param_ty) {
      * not the bare '&(d)' a generic lvalue→ref binding would emit.
      * Without this, the callee dereferences an offset of zero into D when
      * it expects the B layout — silent corruption / segv. */
-    if (at && param_ty->base && at != param_ty->base &&
-        (at->kind == TY_STRUCT || at->kind == TY_UNION) &&
+    /* Ternary arg with two class arms in a base/derived relationship:
+     * the ternary's emit handles the conversion itself by walking
+     * the derived arm to its base subobject. Treat `at` as the
+     * common base so the wrap below sees param_ty->base == at and
+     * skips, preventing double-conversion. N4659 §8.16/6 [expr.cond]
+     * common-type rule. */
+    Type *at_effective = at;
+    if (arg && arg->kind == ND_TERNARY && arg->ternary.then_ &&
+        arg->ternary.else_) {
+        Type *tt = arg->ternary.then_->resolved_type;
+        Type *et = arg->ternary.else_->resolved_type;
+        while (tt && (tt->kind == TY_REF || tt->kind == TY_RVALREF))
+            tt = tt->base;
+        while (et && (et->kind == TY_REF || et->kind == TY_RVALREF))
+            et = et->base;
+        if (tt && et && tt != et &&
+            (tt->kind == TY_STRUCT || tt->kind == TY_UNION) &&
+            (et->kind == TY_STRUCT || et->kind == TY_UNION)) {
+            int probe_path[8];
+            if (find_base_path(tt, et, probe_path, 8) > 0)
+                at_effective = et;          /* tt derives from et → common = et */
+            else if (find_base_path(et, tt, probe_path, 8) > 0)
+                at_effective = tt;          /* et derives from tt → common = tt */
+        }
+    }
+    if (at_effective && param_ty->base && at_effective != param_ty->base &&
+        (at_effective->kind == TY_STRUCT || at_effective->kind == TY_UNION) &&
         (param_ty->base->kind == TY_STRUCT || param_ty->base->kind == TY_UNION)) {
         /* Recover class_region if the Type copy lost it (typedef path,
          * subst_type result, etc.) — same fallback ND_MEMBER uses. */
-        Type *deriv = at;
+        Type *deriv = at_effective;
         if (!deriv->class_region && deriv->tag) {
             Node *d = find_class_def_by_tag_args(deriv);
             if (!d) d = find_class_def_by_tag_only(deriv);
@@ -4235,9 +4260,26 @@ static bool class_has_user_op_assign(Type *class_type) {
                     mn->len, mn->loc, mn->len);
         /* Method names tokenize as `operator=` (the lexer joins
          * 'operator' with the operator suffix into one TK_IDENT). */
-        if (mn->len == 8 && memcmp(mn->loc, "operator", 8) == 0 &&
-            operator_kind_from_method_name(mn) == OP_ASSIGN)
-            return true;
+        if (mn->len != 8 || memcmp(mn->loc, "operator", 8) != 0 ||
+            operator_kind_from_method_name(mn) != OP_ASSIGN)
+            continue;
+        /* `operator= = default` / `= delete` doesn't count as a
+         * USER op= — there's no body to call, so dispatch sites
+         * would link-fail. Fall back to implicit memberwise copy
+         * (sea-front's C struct copy already covers the
+         * defaulted-op= semantics for non-array members; the
+         * array-memberwise fallback handles arrays). The parser
+         * stashes the marker as init = ND_NULLPTR carrying the
+         * TK_KW_DEFAULT / TK_KW_DELETE token (see parse_declaration).
+         * Pattern: g++.dg/cpp0x/defaulted1.C
+         * `A& operator=(const A&) = default;`. */
+        if (m->kind == ND_VAR_DECL && m->var_decl.init &&
+            m->var_decl.init->kind == ND_NULLPTR &&
+            m->var_decl.init->tok &&
+            (m->var_decl.init->tok->kind == TK_KW_DEFAULT ||
+             m->var_decl.init->tok->kind == TK_KW_DELETE))
+            continue;
+        return true;
     }
     return false;
 }
@@ -5672,6 +5714,46 @@ static void emit_expr(Node *n) {
             emit_expr(n->binary.lhs);
             fputs(") = ", stdout);
             emit_expr(n->binary.rhs);
+            fputc(')', stdout);
+            return;
+        }
+        /* Plain `=` on a class LHS with a user-defined operator=:
+         * dispatch to Class__operator_assign(&lhs, rhs) instead of
+         * letting C's bitwise struct copy run. N4659 §15.8 [class.copy]:
+         * if the class declares its own operator=, that's what runs;
+         * the implicit memberwise assign only fires when the user
+         * didn't write one.
+         *
+         * The dispatch mirrors the compound-assignment path below
+         * exactly; the difference is just op==TK_ASSIGN + OP_ASSIGN.
+         * The array-memberwise-assign path further down already gates
+         * on `!class_has_user_op_assign(cls)` — its expected upstream
+         * is THIS new branch.
+         *
+         * Result value: the user op= typically returns `T&` lowered to
+         * `T*`. For the dominant uses (statement-discarded `a = b;`,
+         * truthy test `if ((a = b))`) the call's return value either
+         * goes unused or evaluates as "non-NULL pointer = true" — both
+         * correct. Chained assignment `a = b = c` is a separate slice. */
+        Type *lhs_ty_assign = n->binary.lhs ? n->binary.lhs->resolved_type : NULL;
+        if (ty_is_ref(lhs_ty_assign)) lhs_ty_assign = lhs_ty_assign->base;
+        if (n->binary.op == TK_ASSIGN && n->binary.lhs && n->binary.rhs &&
+            lhs_ty_assign &&
+            (lhs_ty_assign->kind == TY_STRUCT || lhs_ty_assign->kind == TY_UNION) &&
+            lhs_ty_assign->tag && class_has_user_op_assign(lhs_ty_assign)) {
+            Type *rhs_ty = n->binary.rhs->resolved_type;
+            Type *args[1] = { rhs_ty };
+            Type **pty = NULL;
+            bool lhs_const = receiver_type_is_const(
+                n->binary.lhs->resolved_type);
+            int np = emit_class_op_mangled_name(lhs_ty_assign, OP_ASSIGN,
+                                                 args, 1, lhs_const,
+                                                 &pty, NULL);
+            fputc('(', stdout);
+            emit_addrof_for_this(n->binary.lhs);
+            fputs(", ", stdout);
+            emit_arg_for_param(n->binary.rhs,
+                                (pty && np > 0) ? pty[0] : NULL);
             fputc(')', stdout);
             return;
         }
@@ -12742,8 +12824,31 @@ static void emit_stmt(Node *n) {
             emit_indent();
             fprintf(stdout, "__SF_CHAIN_THROW(%s);\n", tlbl);
             emit_indent();
-            emit_expr(lhs);
-            fprintf(stdout, " = %s;\n", tmpname);
+            /* Dispatch to user-defined operator= when the LHS class
+             * declares one — same logic the ND_ASSIGN emit applies
+             * for `lhs = rhs`. This hoist bypasses the normal
+             * assignment emit (because of the call-throw machinery),
+             * so the dispatch must be repeated here. */
+            Type *lhs_ty = lhs ? lhs->resolved_type : NULL;
+            if (ty_is_ref(lhs_ty)) lhs_ty = lhs_ty->base;
+            if (lhs_ty &&
+                (lhs_ty->kind == TY_STRUCT || lhs_ty->kind == TY_UNION) &&
+                lhs_ty->tag && class_has_user_op_assign(lhs_ty)) {
+                Type *args[1] = { rhs->resolved_type };
+                Type **pty = NULL;
+                bool lhs_const = receiver_type_is_const(
+                    lhs->resolved_type);
+                int np = emit_class_op_mangled_name(lhs_ty, OP_ASSIGN,
+                                                     args, 1, lhs_const,
+                                                     &pty, NULL);
+                (void)np;
+                fputc('(', stdout);
+                emit_addrof_for_this(lhs);
+                fprintf(stdout, ", &(%s));\n", tmpname);
+            } else {
+                emit_expr(lhs);
+                fprintf(stdout, " = %s;\n", tmpname);
+            }
             return;
         }
         if (n->expr_stmt.expr)

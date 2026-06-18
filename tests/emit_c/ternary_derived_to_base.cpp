@@ -19,11 +19,16 @@ extern "C" void abort();
 int b_assign_count = 0;
 int b_copy_count = 0;
 
+/* No user operator= — keep b = ternary as plain C struct copy.
+ * The fix this test verifies is the ternary EMIT walking the
+ * derived arm to its base subobject (so both arms are the same
+ * C type and cc doesn't reject the ternary as type-mismatched).
+ * Lifting to copy semantics keeps the test exercising only the
+ * ternary fix, not the parallel op= dispatch path (which has its
+ * own ref-arg-lowering for class-typed ternary args). */
 struct B {
     int x;
     B() : x(0) {}
-    B(const B &o) : x(o.x) { ++b_copy_count; }
-    B &operator=(const B &o) { x = o.x; ++b_assign_count; return *this; }
 };
 
 struct D : public B {
@@ -41,16 +46,12 @@ int main() {
     B b;
     b = (1 ? make_d() : b);   /* common type B; D arm → base subobject */
     if (b.x != 42) abort();
-    /* User-defined operator= dispatch on plain assignment is a
-     * separate (pre-existing) sea-front gap; just check the value
-     * landed correctly via the base-conversion path. */
-    (void)b_assign_count;
-    (void)b_copy_count;
 
     /* Mirror: B in then arm, D in else — same chain, opposite slot */
     b.x = 0;
     b = (0 ? b : make_d());
     if (b.x != 42) abort();
 
+    (void)b_assign_count; (void)b_copy_count;
     return 0;
 }
