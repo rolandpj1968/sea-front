@@ -20126,6 +20126,174 @@ static void order_wire_struct_deps(EmitOrder *o) {
     }
 }
 
+/* Recursively walk an expression/statement, adding type-dep edges
+ * from `unit_idx` for every class type referenced. Used by the
+ * function-body and global-var-init walks below — what they need
+ * is the same: every class type whose definition must be complete
+ * before this code compiles.
+ *
+ * The walk is "best effort" — it covers the common AST shapes that
+ * carry types, but misses (typeids deep in template metaprogramming,
+ * NTTP-resolved types, etc.) just mean an over-broad ordering
+ * dep — caught by the unconditional emit_forward_decl_structs
+ * safety net for fwd-decl needs, and only matters for completeness
+ * when a body needs a FULL definition. Real-world miss = function
+ * body uses by-value class T that this walk didn't enumerate;
+ * topo emits the function body before T → cc error. Add the
+ * missing case here when one surfaces. */
+static void order_walk_for_type_deps(Node *n, EmitOrder *o, int unit_idx) {
+    if (!n) return;
+    switch (n->kind) {
+    case ND_VAR_DECL:
+        order_add_struct_dep(o, unit_idx, n->var_decl.ty);
+        order_walk_for_type_deps(n->var_decl.init, o, unit_idx);
+        for (int i = 0; i < n->var_decl.ctor_nargs; i++)
+            order_walk_for_type_deps(n->var_decl.ctor_args[i], o, unit_idx);
+        break;
+    case ND_CAST:
+        order_add_struct_dep(o, unit_idx, n->cast.ty);
+        order_walk_for_type_deps(n->cast.operand, o, unit_idx);
+        for (int i = 0; i < n->cast.new_placement_nargs; i++)
+            order_walk_for_type_deps(n->cast.new_placement_args[i],
+                                      o, unit_idx);
+        for (int i = 0; i < n->cast.new_ctor_nargs; i++)
+            order_walk_for_type_deps(n->cast.new_ctor_args[i], o, unit_idx);
+        order_walk_for_type_deps(n->cast.new_array_count, o, unit_idx);
+        break;
+    case ND_BINARY: case ND_ASSIGN:
+        order_walk_for_type_deps(n->binary.lhs, o, unit_idx);
+        order_walk_for_type_deps(n->binary.rhs, o, unit_idx);
+        break;
+    case ND_UNARY: case ND_POSTFIX:
+        order_walk_for_type_deps(n->unary.operand, o, unit_idx);
+        break;
+    case ND_TERNARY:
+        order_walk_for_type_deps(n->ternary.cond, o, unit_idx);
+        order_walk_for_type_deps(n->ternary.then_, o, unit_idx);
+        order_walk_for_type_deps(n->ternary.else_, o, unit_idx);
+        break;
+    case ND_COMMA:
+        order_walk_for_type_deps(n->comma.lhs, o, unit_idx);
+        order_walk_for_type_deps(n->comma.rhs, o, unit_idx);
+        break;
+    case ND_CALL:
+        order_walk_for_type_deps(n->call.callee, o, unit_idx);
+        for (int i = 0; i < n->call.nargs; i++)
+            order_walk_for_type_deps(n->call.args[i], o, unit_idx);
+        if (n->resolved_type)
+            order_add_struct_dep(o, unit_idx, n->resolved_type);
+        break;
+    case ND_MEMBER:
+        order_walk_for_type_deps(n->member.obj, o, unit_idx);
+        if (n->member.obj && n->member.obj->resolved_type)
+            order_add_struct_dep(o, unit_idx, n->member.obj->resolved_type);
+        break;
+    case ND_SUBSCRIPT:
+        order_walk_for_type_deps(n->subscript.base, o, unit_idx);
+        order_walk_for_type_deps(n->subscript.index, o, unit_idx);
+        break;
+    case ND_IDENT:
+        if (n->resolved_type)
+            order_add_struct_dep(o, unit_idx, n->resolved_type);
+        break;
+    case ND_THROW:
+        order_walk_for_type_deps(n->throw_.operand, o, unit_idx);
+        break;
+    case ND_RETURN:
+        order_walk_for_type_deps(n->ret.expr, o, unit_idx);
+        break;
+    case ND_EXPR_STMT:
+        order_walk_for_type_deps(n->expr_stmt.expr, o, unit_idx);
+        break;
+    case ND_BLOCK:
+        for (int i = 0; i < n->block.nstmts; i++)
+            order_walk_for_type_deps(n->block.stmts[i], o, unit_idx);
+        break;
+    case ND_IF:
+        order_walk_for_type_deps(n->if_.init, o, unit_idx);
+        order_walk_for_type_deps(n->if_.cond, o, unit_idx);
+        order_walk_for_type_deps(n->if_.then_, o, unit_idx);
+        order_walk_for_type_deps(n->if_.else_, o, unit_idx);
+        break;
+    case ND_WHILE:
+        order_walk_for_type_deps(n->while_.cond, o, unit_idx);
+        order_walk_for_type_deps(n->while_.body, o, unit_idx);
+        break;
+    case ND_DO:
+        order_walk_for_type_deps(n->do_.body, o, unit_idx);
+        order_walk_for_type_deps(n->do_.cond, o, unit_idx);
+        break;
+    case ND_FOR:
+        order_walk_for_type_deps(n->for_.init, o, unit_idx);
+        order_walk_for_type_deps(n->for_.cond, o, unit_idx);
+        order_walk_for_type_deps(n->for_.inc, o, unit_idx);
+        order_walk_for_type_deps(n->for_.body, o, unit_idx);
+        break;
+    case ND_SWITCH:
+        order_walk_for_type_deps(n->switch_.init, o, unit_idx);
+        order_walk_for_type_deps(n->switch_.expr, o, unit_idx);
+        order_walk_for_type_deps(n->switch_.body, o, unit_idx);
+        break;
+    case ND_CASE:
+        order_walk_for_type_deps(n->case_.expr, o, unit_idx);
+        order_walk_for_type_deps(n->case_.stmt, o, unit_idx);
+        break;
+    case ND_DEFAULT:
+        order_walk_for_type_deps(n->default_.stmt, o, unit_idx);
+        break;
+    case ND_LABEL:
+        order_walk_for_type_deps(n->label.stmt, o, unit_idx);
+        break;
+    case ND_TRY:
+        order_walk_for_type_deps(n->try_.body, o, unit_idx);
+        for (int i = 0; i < n->try_.nhandlers; i++) {
+            Node *h = n->try_.handlers[i];
+            if (h) order_walk_for_type_deps(h->handler.body, o, unit_idx);
+        }
+        break;
+    case ND_STMT_EXPR:
+        order_walk_for_type_deps(n->stmt_expr.block, o, unit_idx);
+        break;
+    default:
+        if (n->resolved_type)
+            order_add_struct_dep(o, unit_idx, n->resolved_type);
+        break;
+    }
+}
+
+/* For each function-def / var-decl unit in the order, walk the
+ * body/initializer and register a dep on every class type
+ * referenced. Lets the topo sort guarantee a function body emits
+ * only after every struct it uses by value is complete (and only
+ * after the unconditional forward-decl pass has declared every
+ * pointer-referenced struct's tag). */
+static void order_wire_body_deps(EmitOrder *o) {
+    for (int i = 0; i < o->n; i++) {
+        Node *n = o->items[i].node;
+        if (!n) continue;
+        Node *target = n;
+        if (target->kind == ND_TEMPLATE_DECL)
+            target = target->template_decl.decl;
+        if (!target) continue;
+        if (target->kind == ND_FUNC_DEF) {
+            order_walk_for_type_deps(target->func.body, o, i);
+            for (int p = 0; p < target->func.nparams; p++) {
+                Node *param = target->func.params[p];
+                if (param) {
+                    order_add_struct_dep(o, i, param->param.ty);
+                    order_walk_for_type_deps(param->param.default_value, o, i);
+                }
+            }
+            order_add_struct_dep(o, i, target->func.ret_ty);
+        } else if (target->kind == ND_VAR_DECL) {
+            order_walk_for_type_deps(target->var_decl.init, o, i);
+            for (int k = 0; k < target->var_decl.ctor_nargs; k++)
+                order_walk_for_type_deps(target->var_decl.ctor_args[k],
+                                          o, i);
+        }
+    }
+}
+
 /* Pre-pass: build the EmitOrder graph. Each TU decl becomes a
  * node; hoisted local class defs become their own nodes with the
  * enclosing TU decl depending on each. Structural struct→struct
@@ -20160,6 +20328,7 @@ static void build_emit_order(Node *tu, EmitOrder *out) {
     free(tu_known.items);
 
     order_wire_struct_deps(out);
+    order_wire_body_deps(out);
     order_topo_sort(out);
 }
 
