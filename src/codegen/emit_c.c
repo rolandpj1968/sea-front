@@ -6656,16 +6656,64 @@ static void emit_expr(Node *n) {
                             ltid->template_id.nargs > 0) {
                             stub.n_template_args = ltid->template_id.nargs;
                             static Type *stub_args_buf[16];
+                            /* NTTP literal Types live alongside the
+                             * pointer buffer — same one-shot static
+                             * storage (emit-time scope is process
+                             * lifetime, so reuse is fine since the
+                             * mangler reads each call site once
+                             * before reuse). */
+                            static Type stub_nttp_buf[16];
                             int n = stub.n_template_args < 16
                                       ? stub.n_template_args : 16;
                             for (int i = 0; i < n; i++) {
                                 Node *a = ltid->template_id.args[i];
-                                stub_args_buf[i] = (a && a->kind == ND_VAR_DECL)
-                                                     ? a->var_decl.ty : NULL;
+                                if (a && a->kind == ND_VAR_DECL) {
+                                    stub_args_buf[i] = a->var_decl.ty;
+                                    continue;
+                                }
+                                /* NTTP literal arg (ND_NUM, ND_BOOL_LIT,
+                                 * etc.) — wrap as TY_NTTP_VALUE so the
+                                 * mangler renders the literal value
+                                 * (otherwise NULL → "v" and distinct
+                                 * NTTP instantiations collide on the
+                                 * same C symbol).
+                                 * Pattern: g++.dg/cpp0x/variadic-init.C
+                                 * `S<0,1,2>::foo()`. */
+                                Token *lit_tok = NULL;
+                                if (a) {
+                                    switch (a->kind) {
+                                    case ND_NUM: case ND_FNUM:
+                                    case ND_BOOL_LIT: case ND_NULLPTR:
+                                        lit_tok = a->tok; break;
+                                    case ND_CHAR: lit_tok = a->chr.tok; break;
+                                    case ND_STR:  lit_tok = a->str.tok; break;
+                                    default: break;
+                                    }
+                                }
+                                if (lit_tok) {
+                                    memset(&stub_nttp_buf[i], 0, sizeof(Type));
+                                    stub_nttp_buf[i].kind = TY_NTTP_VALUE;
+                                    stub_nttp_buf[i].tag  = lit_tok;
+                                    stub_args_buf[i] = &stub_nttp_buf[i];
+                                } else {
+                                    stub_args_buf[i] = NULL;
+                                }
                             }
                             stub.template_args = stub_args_buf;
                         }
                         mangle_ctype = &stub;
+                        /* Prefer the canonical instantiated class
+                         * Type when we can find it by (tag, args).
+                         * Its template_args carry `nttp_decl_type`,
+                         * which the mangler needs for Itanium
+                         * `L<type><value>E` encoding — the stub we
+                         * just built has the literal token but no
+                         * type attribution. */
+                        if (stub.n_template_args > 0) {
+                            Node *cdef = find_class_def_by_tag_args(&stub);
+                            if (cdef && cdef->class_def.ty)
+                                mangle_ctype = cdef->class_def.ty;
+                        }
                     }
                     /* Member-template fallback fb_pty / fb_np set in
                      * the else branch below; declared at outer scope

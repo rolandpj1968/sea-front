@@ -2042,9 +2042,17 @@ static void build_inst_template_args(Type *inst_ty, Node *tmpl,
          * Without this, builtin_code() falls back and every bool/int/long
          * NTTP collapses to the same Itanium `Li0E` literal encoding. */
         if (t && t->kind == TY_NTTP_VALUE && tmpl &&
-            i < tmpl->template_decl.nparams) {
-            Node *param = tmpl->template_decl.params[i];
-            if (param && param->kind == ND_PARAM && param->param.ty) {
+            tmpl->template_decl.nparams > 0) {
+            /* For NTTP packs (`template<int... Values>`) the param
+             * list has 1 entry but the args list can have N. Trailing
+             * pack-expanded args share the pack's declared type, so
+             * clamp the param index to min(i, last) when the last
+             * param is a pack. N4659 §17.5.3 [temp.variadic]. */
+            int pi = i < tmpl->template_decl.nparams
+                       ? i : tmpl->template_decl.nparams - 1;
+            Node *param = tmpl->template_decl.params[pi];
+            if (param && param->kind == ND_PARAM && param->param.ty &&
+                (pi == i || param->param.is_pack)) {
                 Type *resolved = subst_type(param->param.ty, map, arena);
                 t->nttp_decl_type = resolved ? resolved : param->param.ty;
             }

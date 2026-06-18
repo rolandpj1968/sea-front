@@ -312,9 +312,19 @@ DeclSpec parse_type_specifiers(Parser *p) {
                         ty->template_args = arena_alloc(p->arena,
                             tid->template_id.nargs * sizeof(Type *));
                         for (int i = 0; i < tid->template_id.nargs; i++) {
-                            Node *arg = tid->template_id.args[i];
-                            ty->template_args[i] = (arg && arg->kind == ND_VAR_DECL)
-                                ? arg->var_decl.ty : NULL;
+                            /* template_arg_to_arg_type handles both
+                             * type args (ND_VAR_DECL with ty) and NTTP
+                             * literal args (ND_NUM, ND_BOOL_LIT, etc.)
+                             * by wrapping the literal as TY_NTTP_VALUE.
+                             * Without it, NTTP packs like `S<0,1,2>`
+                             * stored NULL in template_args and the
+                             * mangler emitted `S<v,v,v>` (three voids)
+                             * — distinct call sites collapsed onto the
+                             * same C symbol and the link failed for
+                             * the absent value-specific instantiations.
+                             * Pattern: g++.dg/cpp0x/variadic-init.C. */
+                            ty->template_args[i] = template_arg_to_arg_type(
+                                tid->template_id.args[i], p->arena);
                         }
                     }
                 }
@@ -357,11 +367,13 @@ DeclSpec parse_type_specifiers(Parser *p) {
                         ty->template_args = arena_alloc(p->arena,
                             tid->template_id.nargs * sizeof(Type *));
                         for (int i = 0; i < tid->template_id.nargs; i++) {
-                            Node *arg = tid->template_id.args[i];
-                            /* Type args are ND_VAR_DECL with var_decl.ty;
-                             * expression args (non-type params) have no type. */
-                            ty->template_args[i] = (arg && arg->kind == ND_VAR_DECL)
-                                ? arg->var_decl.ty : NULL;
+                            /* Wrap NTTP literal args as TY_NTTP_VALUE
+                             * so the mangler distinguishes
+                             * `S<0,1,2>` from `S<3,4,5>`. See the
+                             * parallel comment in the elaborated-type-
+                             * specifier branch above. */
+                            ty->template_args[i] = template_arg_to_arg_type(
+                                tid->template_id.args[i], p->arena);
                         }
                     }
                 }
