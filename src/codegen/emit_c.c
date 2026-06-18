@@ -2557,6 +2557,19 @@ static void hoist_stmt_temps(Node *s) {
      * local but no CL_VAR entry. */
     switch (s->kind) {
     case ND_VAR_DECL: {
+        /* Direct-init ctor args: `A a(B(13))` — sea-front parses as
+         * `A a` with ctor_args=[B(13)]. The ND_VAR_DECL emit below
+         * dispatches each arg via emit_arg_for_param, which wraps
+         * ref-typed args in `&(arg)`. For a call rvalue `B(13)`,
+         * `&(B(13))` is invalid C — must hoist the call into a
+         * named temp first. The non-class init path below already
+         * does this for ND_VAR_DECL.init; mirror for ctor_args.
+         * Pattern: `A a(B(13))` where A has `A(const B&)`. */
+        if (s->var_decl.has_ctor_init && s->var_decl.ctor_args) {
+            for (int i = 0; i < s->var_decl.ctor_nargs; i++)
+                hoist_temps_in_expr(s->var_decl.ctor_args[i],
+                                     /*in_shortcircuit=*/false);
+        }
         Node *init = s->var_decl.init;
         if (!init) return;
         bool direct_init =
