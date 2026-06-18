@@ -20070,14 +20070,70 @@ static void collect_hoists_from_decl(Node *n,
     }
 }
 
+/* Find the EmitOrder node that emits class_def `cdef` (matched by
+ * Node-pointer identity). Returns -1 if not present — caller must
+ * handle (e.g. type defined in another TU, or template
+ * instantiation not yet hoisted as a node). */
+static int order_find_class_def(EmitOrder *o, Node *cdef) {
+    if (!cdef) return -1;
+    for (int i = 0; i < o->n; i++) {
+        Node *n = o->items[i].node;
+        if (n == cdef) return i;
+        /* Template-wrapped class def. */
+        if (n && n->kind == ND_TEMPLATE_DECL &&
+            n->template_decl.decl == cdef)
+            return i;
+    }
+    return -1;
+}
+
+/* Add a struct→struct dep: class with index `class_idx` depends on
+ * the class definition reached through `ty` (a by-value member /
+ * base class type). Walks through arrays to the element. */
+static void order_add_struct_dep(EmitOrder *o, int class_idx, Type *ty) {
+    while (ty && ty->kind == TY_ARRAY && ty->base) ty = ty->base;
+    if (!ty || (ty->kind != TY_STRUCT && ty->kind != TY_UNION)) return;
+    if (!ty->class_def) return;
+    int dep_idx = order_find_class_def(o, ty->class_def);
+    if (dep_idx >= 0 && dep_idx != class_idx)
+        order_add_dep(o, class_idx, dep_idx);
+}
+
+/* For each ND_CLASS_DEF node in the order, register dep edges for
+ * structural requirements that C complete-type rules impose:
+ *   - base classes: B : A → B depends on A
+ *   - by-value member types: struct B { A a; } → B depends on A
+ *   - by-value member arrays: struct B { A a[N]; } → B depends on A
+ * Pointer / reference members do NOT add deps — a forward decl
+ * suffices for them, and pointer-cycles between structs need to
+ * stay decoupled. */
+static void order_wire_struct_deps(EmitOrder *o) {
+    for (int i = 0; i < o->n; i++) {
+        Node *n = o->items[i].node;
+        if (!n) continue;
+        Node *cdef = n;
+        if (cdef->kind == ND_TEMPLATE_DECL) cdef = cdef->template_decl.decl;
+        if (!cdef || cdef->kind != ND_CLASS_DEF) continue;
+        /* Base classes. */
+        for (int b = 0; b < cdef->class_def.nbase_types; b++)
+            order_add_struct_dep(o, i, cdef->class_def.base_types[b]);
+        /* By-value data members. */
+        for (int m = 0; m < cdef->class_def.nmembers; m++) {
+            Node *mem = cdef->class_def.members[m];
+            if (!mem || mem->kind != ND_VAR_DECL) continue;
+            order_add_struct_dep(o, i, mem->var_decl.ty);
+        }
+    }
+}
+
 /* Pre-pass: build the EmitOrder graph. Each TU decl becomes a
  * node; hoisted local class defs become their own nodes with the
- * enclosing TU decl depending on each. No explicit source-order
- * edges between TU decls — the DFS topo sort visits nodes in
- * insertion order and recurses through deps first, which
- * naturally produces "source order modulo dep constraints."
- * The only edges in the graph are real ordering requirements;
- * everything else falls out of input order. */
+ * enclosing TU decl depending on each. Structural struct→struct
+ * deps (base classes, by-value member types) are wired in a
+ * second pass once all nodes are present. No explicit source-
+ * order edges between TU decls — the DFS topo sort visits nodes
+ * in insertion order and recurses through deps first, which
+ * naturally produces "source order modulo dep constraints." */
 static void build_emit_order(Node *tu, EmitOrder *out) {
     /* Build the TU-known set first so the hoist walker can filter
      * out class_defs that are references to outer classes (not
@@ -20103,6 +20159,7 @@ static void build_emit_order(Node *tu, EmitOrder *out) {
     free(hoists);
     free(tu_known.items);
 
+    order_wire_struct_deps(out);
     order_topo_sort(out);
 }
 
