@@ -3053,10 +3053,14 @@ static Node *parse_template_parameter(Parser *p) {
      * e.g., 'int N', 'bool B = true', 'auto V', 'size_t... Idx' */
     Type *ty = parse_type_specifiers(p).type;
     /* Pack expansion '...' between the type and the name —
-     * 'template<size_t... _Idx>'. */
-    parser_consume(p, TK_ELLIPSIS);
+     * 'template<size_t... _Idx>'. N4659 §17.5.3 [temp.variadic].
+     * Capture so later phases (instantiate, sema) can expand the
+     * NTTP pack to a list of values bound from the explicit /
+     * deduced template arg suffix. */
+    bool is_nttp_pack = parser_consume(p, TK_ELLIPSIS);
     Node *param = parse_declarator(p, ty);
     param->kind = ND_PARAM;
+    param->param.is_pack = is_nttp_pack;
 
     /* Register non-type parameter name */
     if (param->param.name)

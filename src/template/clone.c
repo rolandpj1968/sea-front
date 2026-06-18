@@ -500,15 +500,49 @@ static Node **clone_node_array_pack(Node **arr, int n, SubstMap *map,
                             c->param.name = synth_pack_name(src->param.name,
                                                              j, arena);
                     } else {
-                        /* Clone the expression first, then if it's an
-                         * ND_IDENT naming the pack, rewrite the name
-                         * to <orig>_<i>. Other shapes (e.g. expr that
-                         * contains the pack ident) are not yet handled
-                         * — they'd need pack-aware deep rewrite. */
+                        /* Clone the expression first. Then dispatch
+                         * by the pack element's binding shape:
+                         *  - TY_NTTP_VALUE (NTTP pack — `T... Values`,
+                         *    `(M+N)...`-style packs): morph the
+                         *    cloned ND_IDENT into the literal NodeKind
+                         *    carried by pack_types[j]->tag. Mirrors
+                         *    the non-pack NTTP path in the ND_IDENT
+                         *    case below (TK_NUM → ND_NUM etc.).
+                         *  - Otherwise (type pack — `typename... Ts`):
+                         *    rewrite the pack ident's NAME to
+                         *    `<orig>_<j>`; per-index decls were
+                         *    synthesised by the ND_PARAM expansion
+                         *    branch above. */
                         c = clone_node(src, map, arena);
-                        if (c && c->kind == ND_IDENT && c->ident.name)
+                        Type *pe_t = pe->pack_types[j];
+                        if (c && c->kind == ND_IDENT && c->ident.name &&
+                            pe_t && pe_t->kind == TY_NTTP_VALUE && pe_t->tag) {
+                            Token *bound = pe_t->tag;
+                            NodeKind lit_kind = ND_IDENT;
+                            switch (bound->kind) {
+                            case TK_NUM:        lit_kind = ND_NUM;      break;
+                            case TK_FNUM:       lit_kind = ND_FNUM;     break;
+                            case TK_KW_TRUE:
+                            case TK_KW_FALSE:   lit_kind = ND_BOOL_LIT; break;
+                            case TK_KW_NULLPTR: lit_kind = ND_NULLPTR;  break;
+                            case TK_CHAR:       lit_kind = ND_CHAR;     break;
+                            case TK_STR:        lit_kind = ND_STR;      break;
+                            default: break;
+                            }
+                            if (lit_kind != ND_IDENT) {
+                                c->kind = lit_kind;
+                                c->tok = bound;
+                                if (lit_kind == ND_CHAR)
+                                    c->chr.tok = bound;
+                                else if (lit_kind == ND_STR) {
+                                    c->str.tok = bound;
+                                    c->str.ntoks = 1;
+                                }
+                            }
+                        } else if (c && c->kind == ND_IDENT && c->ident.name) {
                             c->ident.name = synth_pack_name(c->ident.name,
                                                              j, arena);
+                        }
                         c->is_pack_expand = false;
                     }
                     out[oi++] = c;

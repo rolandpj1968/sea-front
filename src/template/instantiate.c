@@ -2157,12 +2157,25 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
              * can expand pack-expansion sites in the body. */
             if (param->param.is_pack) {
                 int npack = (nargs > i) ? (nargs - i) : 0;
-                if (npack == 1) {
-                    /* Single-arg fallback: bind as non-pack so the
-                     * cloner leaves the param name un-renamed. See
-                     * matching note in deduce_template_args. */
-                    Type *t = type_arg_from_node(
-                        template_id->template_id.args[i]);
+                /* NTTP packs (`template<typename T, T... Values>`)
+                 * carry literal arg Nodes; the type-pack path's
+                 * type_arg_from_node only recognises ND_VAR_DECL.
+                 * template_arg_to_arg_type_resolved wraps literals
+                 * as TY_NTTP_VALUE, which the cloner's pack-expansion
+                 * morphing then renders back as literal Nodes.
+                 * N4659 §17.5.3 [temp.variadic] + §17.1/4. */
+                /* Single-arg fallback (bind as non-pack so the cloner
+                 * leaves the param name un-renamed): applies only to
+                 * TYPE packs (`typename... Ts`), where the function
+                 * param-pack expansion already produces the per-index
+                 * param decl. NTTP packs need the pack path even at
+                 * npack==1 because body references `Values` must
+                 * morph into literals — without a pack binding,
+                 * `{Values...}` would expand to an undefined ident. */
+                bool is_nttp_pack = (param->param.ty != NULL);
+                if (npack == 1 && !is_nttp_pack) {
+                    Type *t = template_arg_to_arg_type_resolved(
+                        template_id->template_id.args[i], arena, tu);
                     if (t) subst_map_add(&map, pname, t);
                     continue;
                 }
@@ -2174,7 +2187,8 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
                     ? arena_alloc(arena, sizeof(Type *) * npack) : NULL;
                 int pi = 0;
                 for (int j = i; j < nargs; j++) {
-                    Type *t = type_arg_from_node(template_id->template_id.args[j]);
+                    Type *t = template_arg_to_arg_type_resolved(
+                        template_id->template_id.args[j], arena, tu);
                     if (t) pack_list[pi++] = t;
                 }
                 subst_map_add_pack(&map, pname, pack_list, pi);
