@@ -9553,13 +9553,26 @@ static void emit_expr(Node *n) {
                     "__SF_unwind = __SF_UNWIND_THROW; "
                     "goto %s; 0; })",
                     lbl);
-        } else if (op_ty &&
-                   (op_ty->kind == TY_STRUCT || op_ty->kind == TY_UNION)) {
-            const char *ti = eh_typeinfo_sym_for_class(op_ty);
-            fputs("({ __SF_THROW_CLASS(&(", stdout);
-            emit_expr(op);
-            fprintf(stdout, "), &%s, %s); 0; })", ti, lbl);
-        } else {
+            return;
+        }
+        /* Peel TY_REF / TY_RVALREF before classifying: `throw r`
+         * where r has type `S&` is throwing an S (not a ref) per
+         * N4659 §8.17/3 [expr.throw]. The catch dispatch needs
+         * the typeinfo for S, and __SF_THROW_CLASS takes the
+         * object's address. */
+        {
+            Type *bare = op_ty;
+            while (bare && (bare->kind == TY_REF || bare->kind == TY_RVALREF))
+                bare = bare->base;
+            if (bare && (bare->kind == TY_STRUCT || bare->kind == TY_UNION)) {
+                const char *ti = eh_typeinfo_sym_for_class(bare);
+                fputs("({ __SF_THROW_CLASS(&(", stdout);
+                emit_expr(op);
+                fprintf(stdout, "), &%s, %s); 0; })", ti, lbl);
+                return;
+            }
+        }
+        {
             const char *ti = eh_typeinfo_sym_for_prim(op_ty);
             fputs("({ __SF_THROW_PRIM(", stdout);
             if (op) emit_expr(op);
@@ -12108,6 +12121,14 @@ static void emit_stmt(Node *n) {
                  * g++.dg/eh/dtor3.C 'throw excep();'. */
                 Type *op_ty = thr->throw_.operand
                     ? thr->throw_.operand->resolved_type : NULL;
+                /* Peel TY_REF / TY_RVALREF: `throw refvar` where
+                 * refvar is `T&` is throwing a T, not a ref. The
+                 * catch dispatch needs T's typeinfo and
+                 * __SF_THROW_CLASS takes the object's address.
+                 * N4659 §8.17/3 [expr.throw]. */
+                while (op_ty &&
+                       (op_ty->kind == TY_REF || op_ty->kind == TY_RVALREF))
+                    op_ty = op_ty->base;
                 bool op_is_class = op_ty &&
                     (op_ty->kind == TY_STRUCT || op_ty->kind == TY_UNION);
                 if (op_is_class) {
@@ -18376,6 +18397,10 @@ static void typeid_collect_walk(Node *n) {
          * throw site. */
         if (n->throw_.operand) {
             Type *ot = n->throw_.operand->resolved_type;
+            /* Mirror the throw emit's ref-peel — `throw refvar`
+             * where refvar is `S&` is throwing an S, not a ref. */
+            while (ot && (ot->kind == TY_REF || ot->kind == TY_RVALREF))
+                ot = ot->base;
             if (ot && (ot->kind == TY_STRUCT || ot->kind == TY_UNION))
                 eh_typeinfo_sym_for_class(ot);
             else
