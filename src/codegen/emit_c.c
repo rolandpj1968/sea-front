@@ -19818,6 +19818,198 @@ static void emit_forward_decl_structs(Node *tu) {
         emit_fwd_decl_structs_only(tu->tu.decls[i]);
 }
 
+/* TU-level emit-unit. One per thing that needs file-scope emission.
+ * The driver iterates a unit list rather than tu->tu.decls directly
+ * so the pre-pass can add hoisted units (local classes inside
+ * function bodies, lambda fn defs, instantiations discovered late,
+ * etc.) at appropriate positions without disturbing source-order
+ * preservation for the common case. Dependency edges come in a
+ * later slice; for now deps are implicit source order via the
+ * insertion sequence in build_emit_units. */
+typedef struct EmitUnit {
+    Node *node;     /* the TU-level decl to emit (passed to emit_top_level) */
+} EmitUnit;
+
+typedef struct EmitUnitList {
+    EmitUnit *items;
+    int n;
+    int cap;
+} EmitUnitList;
+
+static void unit_list_init(EmitUnitList *l) {
+    l->items = NULL; l->n = 0; l->cap = 0;
+}
+
+static void unit_list_push(EmitUnitList *l, Node *node) {
+    if (l->n == l->cap) {
+        int nc = l->cap ? l->cap * 2 : 16;
+        l->items = realloc(l->items, nc * sizeof(EmitUnit));
+        l->cap = nc;
+    }
+    l->items[l->n].node = node;
+    l->n++;
+}
+
+static void unit_list_free(EmitUnitList *l) {
+    free(l->items);
+    l->items = NULL; l->n = 0; l->cap = 0;
+}
+
+/* Set of class_def Nodes that already have file-scope identity —
+ * tu.decls children plus class members (recursively). Populated
+ * once per build_emit_units call so the local-class hoist can
+ * filter out var_decls whose type points back to a TU-known class
+ * (`Box copy(*this);` where Box is an outer class — not local). */
+typedef struct ClassDefSet {
+    Node **items;
+    int n;
+    int cap;
+} ClassDefSet;
+
+static void cset_add(ClassDefSet *s, Node *cdef) {
+    if (!cdef) return;
+    if (s->n == s->cap) {
+        int nc = s->cap ? s->cap * 2 : 64;
+        s->items = realloc(s->items, nc * sizeof(Node *));
+        s->cap = nc;
+    }
+    s->items[s->n++] = cdef;
+}
+
+static bool cset_contains(ClassDefSet *s, Node *cdef) {
+    for (int i = 0; i < s->n; i++)
+        if (s->items[i] == cdef) return true;
+    return false;
+}
+
+static void cset_collect(Node *n, ClassDefSet *s) {
+    if (!n) return;
+    if (n->kind == ND_CLASS_DEF) {
+        cset_add(s, n);
+        for (int i = 0; i < n->class_def.nmembers; i++)
+            cset_collect(n->class_def.members[i], s);
+        return;
+    }
+    if (n->kind == ND_TEMPLATE_DECL)
+        cset_collect(n->template_decl.decl, s);
+}
+
+/* Walk a statement subtree looking for class_defs that must be
+ * hoisted to file scope. C forbids function definitions at block
+ * scope, so a local class's method bodies can't be emitted in
+ * place — sea-front would otherwise produce `static inline void
+ * _ZN1OD2Ev(...) { body }` inside a function, which cc rejects.
+ * Each found class_def becomes an emit unit registered before the
+ * enclosing function. emit_class_def's codegen_emitted dedup then
+ * makes the in-body inline-emit a no-op when control reaches it
+ * in pass 2.
+ *
+ * Two shapes carry a class_def at block scope:
+ *   - bare ND_CLASS_DEF statement (`struct O { ... };`)
+ *   - ND_VAR_DECL whose type's class_def has the body (`struct O
+ *     { ... } o;` — most common form).
+ * Both register the same Node — the in-body emit detects
+ * codegen_emitted and skips.
+ *
+ * Filter: class_defs already known at TU scope (via the cset)
+ * are reference-only (`Box copy(*this)` where Box is outer) and
+ * must NOT be hoisted — pushing them as units before their own
+ * defining TU decl is a use-before-def cycle. */
+static void collect_local_class_units(Node *n, EmitUnitList *out,
+                                       ClassDefSet *tu_known) {
+    if (!n) return;
+    switch (n->kind) {
+    case ND_CLASS_DEF:
+        if (n->class_def.ty && !cset_contains(tu_known, n))
+            unit_list_push(out, n);
+        return;
+    case ND_VAR_DECL: {
+        Type *dep = n->var_decl.ty;
+        while (dep && (dep->kind == TY_ARRAY || dep->kind == TY_PTR) &&
+               dep->base) dep = dep->base;
+        if (dep && (dep->kind == TY_STRUCT || dep->kind == TY_UNION) &&
+            dep->class_def && dep->class_def->kind == ND_CLASS_DEF &&
+            dep->class_def->class_def.ty &&
+            !cset_contains(tu_known, dep->class_def))
+            unit_list_push(out, dep->class_def);
+        return;
+    }
+    case ND_BLOCK:
+        for (int i = 0; i < n->block.nstmts; i++)
+            collect_local_class_units(n->block.stmts[i], out, tu_known);
+        return;
+    case ND_IF:
+        collect_local_class_units(n->if_.then_, out, tu_known);
+        collect_local_class_units(n->if_.else_, out, tu_known);
+        return;
+    case ND_FOR:
+        collect_local_class_units(n->for_.init, out, tu_known);
+        collect_local_class_units(n->for_.body, out, tu_known);
+        return;
+    case ND_WHILE:
+        collect_local_class_units(n->while_.body, out, tu_known);
+        return;
+    case ND_DO:
+        collect_local_class_units(n->do_.body, out, tu_known);
+        return;
+    case ND_SWITCH:
+        collect_local_class_units(n->switch_.body, out, tu_known);
+        return;
+    case ND_TRY:
+        collect_local_class_units(n->try_.body, out, tu_known);
+        for (int i = 0; i < n->try_.nhandlers; i++) {
+            Node *h = n->try_.handlers[i];
+            if (h) collect_local_class_units(h->handler.body, out, tu_known);
+        }
+        return;
+    default:
+        return;
+    }
+}
+
+/* Walk a TU decl looking for function bodies that may carry local
+ * class defs. Function bodies live directly on ND_FUNC_DEF, and
+ * also as in-class method definitions on each ND_CLASS_DEF member
+ * (potentially recursive — nested classes). Out-of-class method
+ * definitions appear as their own ND_FUNC_DEF in the TU list. */
+static void collect_hoists_from_decl(Node *n, EmitUnitList *out,
+                                      ClassDefSet *tu_known) {
+    if (!n) return;
+    if (n->kind == ND_FUNC_DEF && n->func.body) {
+        collect_local_class_units(n->func.body, out, tu_known);
+        return;
+    }
+    if (n->kind == ND_CLASS_DEF) {
+        for (int i = 0; i < n->class_def.nmembers; i++)
+            collect_hoists_from_decl(n->class_def.members[i], out, tu_known);
+        return;
+    }
+    if (n->kind == ND_TEMPLATE_DECL && n->template_decl.decl) {
+        collect_hoists_from_decl(n->template_decl.decl, out, tu_known);
+        return;
+    }
+}
+
+/* Pre-pass: collect TU-level decls + hoisted local class defs into
+ * the emit unit list. Hoisted classes precede their enclosing
+ * function so pass 1 emits them at file scope (struct body +
+ * method forward decls) and pass 2 emits method bodies. */
+static void build_emit_units(Node *tu, EmitUnitList *out) {
+    /* Build the TU-known set first so the hoist walker can filter
+     * out class_defs that are references to outer classes (not
+     * locally defined). */
+    ClassDefSet tu_known = {0};
+    for (int i = 0; i < tu->tu.ndecls; i++)
+        cset_collect(tu->tu.decls[i], &tu_known);
+    for (int i = 0; i < tu->tu.ndecls; i++) {
+        Node *n = tu->tu.decls[i];
+        if (!n) continue;
+        collect_hoists_from_decl(n, out, &tu_known);
+        unit_list_push(out, n);
+    }
+    free(tu_known.items);
+}
+
 void emit_c(Node *tu) {
     if (!tu || tu->kind != ND_TRANSLATION_UNIT) return;
     g_tu = tu;
@@ -19826,7 +20018,20 @@ void emit_c(Node *tu) {
      * symbol at link time. */
     free_ovld_populate(tu);
     emit_prelude();
-    typeid_collect_walk(tu);
+
+    /* Build emit-unit list early so typeid + forward-decl passes
+     * can walk hoisted units (local class defs lifted to file
+     * scope) alongside the tu.decls children. */
+    EmitUnitList units;
+    unit_list_init(&units);
+    build_emit_units(tu, &units);
+
+    /* Typeinfo collection walks every unit's node — covers both
+     * tu.decls and hoisted local classes whose member bodies
+     * carry throws/typeids the TU walk wouldn't reach (the local
+     * class hangs off var_decl.ty, not as a TU child). */
+    for (int i = 0; i < units.n; i++)
+        typeid_collect_walk(units.items[i].node);
     emit_typeid_sentinels();
     emit_eh_typeinfo_defs();
     emit_eh_prim_typeinfo_defs();
@@ -19875,21 +20080,21 @@ void emit_c(Node *tu) {
      *   non-body decls (enums, vars) interleave with struct
      *   bodies in source order. */
     g_emit_phase = PHASE_STRUCTS;
-    for (int i = 0; i < tu->tu.ndecls; i++) {
-        Node *n = tu->tu.decls[i];
-        if (!n) continue;
+    for (int i = 0; i < units.n; i++) {
         /* emit_top_level itself skips ND_FUNC_DEF in PHASE_STRUCTS
          * (covers nesting through ND_TEMPLATE_DECL / ND_BLOCK). */
         fputc('\n', stdout);
-        emit_top_level(n);
+        emit_top_level(units.items[i].node);
     }
 
     g_emit_phase = PHASE_METHODS;
-    for (int i = 0; i < tu->tu.ndecls; i++) {
+    for (int i = 0; i < units.n; i++) {
         fputc('\n', stdout);
-        emit_top_level(tu->tu.decls[i]);
+        emit_top_level(units.items[i].node);
     }
     g_emit_phase = 0;
+
+    unit_list_free(&units);
 
     /* File-scope dynamic initialisation: C++ runs class-type globals
      * through their ctor before main; C requires constant initialisers
