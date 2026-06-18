@@ -15664,6 +15664,40 @@ static void emit_func_body(Node *func) {
         fputs("int __sf_entry_throw = "
               "(__sf_exc_state.state == __SF_UNWIND_THROW);\n", stdout);
     }
+    /* N4659 §15.2/3: if a destructor invoked during stack unwinding
+     * exits with an exception, std::terminate is called. Two-part
+     * mechanism:
+     *
+     * 1. Isolate the dtor body from the caller's THROW state. The
+     *    body's `__SF_CHAIN_THROW(handler)` macros would otherwise
+     *    fire on the inherited state and short-circuit the body
+     *    entirely — dtors invoked during unwind would skip their
+     *    own statements, which is wrong (dtors EXIST to run during
+     *    unwind). Save the outer state, clear it, restore at the
+     *    epilogue if the dtor body didn't itself throw.
+     *
+     * 2. Snapshot the throw sequence at entry; if it changed by
+     *    epilogue AND we were entered during unwind, the dtor body
+     *    issued its own throw and that throw escaped — terminate.
+     *
+     * Pattern: g++.dg/eh/filter2.C — ~a's inner `throw e1()` falls
+     * through its `catch (e2&)` and escapes while the outer
+     * ex_test() unwind already had e1 in flight. */
+    if (func->func.is_destructor && g_cf.func_has_cleanups) {
+        emit_indent();
+        fputs("__SF_unwind_t __sf_dtor_saved_state = __sf_exc_state.state;\n",
+              stdout);
+        emit_indent();
+        fputs("void *__sf_dtor_saved_obj = __sf_exc_state.exc_obj;\n",
+              stdout);
+        emit_indent();
+        fputs("const struct __sf_type_info *__sf_dtor_saved_type = "
+              "__sf_exc_state.exc_type;\n", stdout);
+        emit_indent();
+        fputs("unsigned __sf_dtor_entry_seq = __sf_exc_state.seq;\n", stdout);
+        emit_indent();
+        fputs("__sf_exc_state.state = __SF_UNWIND_NONE;\n", stdout);
+    }
     if (has_member_inits) emit_ctor_member_inits(func);
     /* Skip emitting the user body block entirely when it has zero
      * statements — the wrapper's own braces are already emitted, so
@@ -15678,16 +15712,57 @@ static void emit_func_body(Node *func) {
     }
     if (g_cf.func_has_cleanups) {
         emit_indent();
-        if (func->func.is_nothrow) {
-            /* No-throw spec: an exception propagating out of this
-             * function is a spec violation. N4659 §18.4 [except.spec]:
-             * `noexcept` / `throw()` violations terminate. Expand
-             * __SF_EPILOGUE inline so the THROW check lands AFTER the
-             * label (the cleanup-chain gotos to __SF_epilogue, so the
-             * check would otherwise be unreachable). Call std::terminate
-             * via the Itanium-mangled libstdc++ symbol so a user's
-             * std::set_terminate handler is respected. Pattern:
-             * g++.dg/eh/spec10.C. */
+        if (func->func.is_destructor) {
+            /* Dtor epilogue (paired with the entry snapshot above):
+             *
+             * - If the body issued a new throw (seq advanced) and
+             *   we were entered during unwind OR the dtor has a
+             *   no-throw spec, terminate. The first case is
+             *   §15.2/3 [except.ctor] "dtor during unwinding
+             *   exits with an exception". The second is §18.4
+             *   [except.spec] no-throw violation.
+             *
+             * - Otherwise: if no new throw, restore the outer
+             *   state so propagation continues. If new throw but
+             *   not entered during unwind, leave the new state in
+             *   place — dtor invoked outside unwind without a
+             *   no-throw spec is free to throw.
+             *
+             * Same inline-EPILOGUE shape as the nothrow-only path
+             * below so the check lands AFTER the label. */
+            fputs("__SF_epilogue: ;\n", stdout);
+            emit_indent();
+            if (func->func.is_nothrow) {
+                fputs("if (__sf_exc_state.seq != __sf_dtor_entry_seq) "
+                      "__sf_terminate();\n", stdout);
+            } else {
+                fputs("if (__sf_dtor_saved_state == __SF_UNWIND_THROW && "
+                      "__sf_exc_state.seq != __sf_dtor_entry_seq) "
+                      "__sf_terminate();\n", stdout);
+            }
+            emit_indent();
+            fputs("if (__sf_exc_state.seq == __sf_dtor_entry_seq) {\n",
+                  stdout);
+            emit_indent();
+            fputs("    __sf_exc_state.state = __sf_dtor_saved_state;\n",
+                  stdout);
+            emit_indent();
+            fputs("    __sf_exc_state.exc_obj = __sf_dtor_saved_obj;\n",
+                  stdout);
+            emit_indent();
+            fputs("    __sf_exc_state.exc_type = __sf_dtor_saved_type;\n",
+                  stdout);
+            emit_indent();
+            fputs("    if (__sf_dtor_saved_state == __SF_UNWIND_THROW) "
+                  "__SF_unwind = __SF_UNWIND_THROW;\n", stdout);
+            emit_indent();
+            fputs("}\n", stdout);
+            emit_indent();
+            fputs(void_ret ? "return;\n" : "return __SF_retval;\n", stdout);
+        } else if (func->func.is_nothrow) {
+            /* No-throw spec on a non-dtor: §18.4 [except.spec].
+             * Expand __SF_EPILOGUE inline so the THROW check
+             * lands AFTER the label. Pattern: g++.dg/eh/spec10.C. */
             fputs("__SF_epilogue: ;\n", stdout);
             emit_indent();
             fputs("if (__sf_exc_state.state == __SF_UNWIND_THROW && "
@@ -19605,6 +19680,15 @@ static void emit_prelude(void) {
     fputs("    void *exc_obj;\n", stdout);
     fputs("    const struct __sf_type_info *exc_type;\n", stdout);
     fputs("    void (*exc_dtor)(void *);\n", stdout);
+    /* Monotonic throw counter — N4659 §15.2/3 [except.ctor] requires
+     * std::terminate if a destructor invoked during stack unwinding
+     * exits with an exception. The dtor body snapshots `seq` at
+     * entry and checks at exit: if state is still THROW and seq
+     * changed, the dtor body issued its own throw and that throw
+     * escaped — terminate. Pointer-comparing exc_obj would be wrong
+     * for primitive throws (value-in-pointer collides on same
+     * literal); the monotonic counter is the only safe diff. */
+    fputs("    unsigned seq;\n", stdout);
     fputs("};\n", stdout);
     /* C11 thread-local storage. Standard rather than __thread so
      * cproc / non-GNU C compilers stay supported. Single-threaded
@@ -19642,6 +19726,7 @@ static void emit_prelude(void) {
           "do { __sf_exc_state.exc_obj = (void *)(uintptr_t)(val); "
           "__sf_exc_state.exc_type = (ti); "
           "__sf_exc_state.exc_dtor = 0; "
+          "__sf_exc_state.seq++; "
           "__sf_exc_state.state = __SF_UNWIND_THROW; "
           "__SF_unwind = __SF_UNWIND_THROW; "
           "goto lbl; } while (0)\n",
@@ -19656,6 +19741,7 @@ static void emit_prelude(void) {
           "do { __sf_exc_state.exc_obj = (void *)(p_val); "
           "__sf_exc_state.exc_type = (ti); "
           "__sf_exc_state.exc_dtor = 0; "
+          "__sf_exc_state.seq++; "
           "__sf_exc_state.state = __SF_UNWIND_THROW; "
           "__SF_unwind = __SF_UNWIND_THROW; "
           "goto lbl; } while (0)\n",
