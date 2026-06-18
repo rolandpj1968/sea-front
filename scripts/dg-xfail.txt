@@ -49,6 +49,13 @@ g++.dg/abi/pr39188-1a.C
 g++.dg/abi/pr39188-2a.C
 g++.dg/abi/pr60336-4.C
 g++.dg/abi/structret1.C
+# offsetof of an inherited int through a polymorphic base — gcc places
+# the vptr at offset 0 (Itanium ABI), so C.i lands at sizeof(void*).
+# sea-front places __sf_vptr AFTER the inherited base subobject (B's
+# layout is { A; vptr; }), so C.i is at offset 0. Same "layout differs"
+# bucket as the rest. Sea-front parses + emits correctly; the offset
+# the test checks just doesn't match.
+g++.dg/abi/offsetof.C
 
 # --- Out-of-scope C++11 features ----------------------------------------
 # These need substantial C++11 work that sea-front hasn't built out yet.

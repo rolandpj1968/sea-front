@@ -8920,7 +8920,16 @@ static void emit_expr(Node *n) {
                     if (!descended && !found) slen--;
                 }
                 if (found && final_len > 0) {
+                    /* Same precedence guard as the !did_base_rewrite
+                     * branch — `->`/`.` binds tighter than cast, so
+                     * `(T*)x->m` reparses as `(T*)(x->m)`. Wrap the
+                     * cast in parens. Pattern: g++.dg/abi/offsetof.C
+                     * — `((C*)0)->__sf_base.__sf_base.i`. */
+                    bool needs_paren = n->member.obj &&
+                                       n->member.obj->kind == ND_CAST;
+                    if (needs_paren) fputc('(', stdout);
                     emit_expr(n->member.obj);
+                    if (needs_paren) fputc(')', stdout);
                     fputs(access_op, stdout);
                     for (int j = 0; j < final_len; j++) {
                         int bi = final_path[j];
