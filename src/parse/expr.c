@@ -2545,6 +2545,21 @@ static Node *unary_expr(Parser *p) {
          * the comma-separated args. */
         Node **placement_args = NULL;
         int    placement_nargs = 0;
+        /* For the `new (type-id)` disambiguation below — see N4659
+         * §8.3.4/1 [expr.new]:
+         *   new-expression: ::opt new new-placement(opt) new-type-id
+         *                                              new-initializer(opt)
+         *                  | ::opt new new-placement(opt) ( type-id )
+         *                                              new-initializer(opt)
+         * The parens-around-type-id form is ambiguous with placement-
+         * args at the parens prefix; only what follows the closing
+         * paren disambiguates.
+         *
+         * Forward-declared so the dual-path block below can either
+         * leave it NULL (normal type-parse path takes over) or set it
+         * (parenthesised-type-id path commits the type early). */
+        Type *new_paren_type = NULL;
+        ParseState saved_before_paren = parser_save(p);
         if (parser_at(p, TK_LPAREN) &&
             !(parser_peek_ahead(p, 1)->kind == TK_RPAREN)) {
             ParseState saved = parser_save(p);
@@ -2569,6 +2584,25 @@ static Node *unary_expr(Parser *p) {
                 parser_expect(p, TK_RPAREN);
                 placement_args  = (Node **)pargs.data;
                 placement_nargs = pargs.len;
+                /* Disambiguate `new (...)` vs `new (T)` — if nothing
+                 * type-shaped follows the closing paren, this was
+                 * actually the `new (type-id)` form, not placement.
+                 * Rewind and re-parse the parens as a type-id.
+                 * Pattern: g++.dg/init/new11.C `new (X);`. */
+                TokenKind nk = parser_peek(p)->kind;
+                if (nk == TK_SEMI || nk == TK_COMMA || nk == TK_RPAREN ||
+                    nk == TK_RBRACE || nk == TK_RBRACKET || nk == TK_QUESTION ||
+                    nk == TK_COLON || nk == TK_EOF) {
+                    parser_restore(p, saved_before_paren);
+                    placement_args = NULL;
+                    placement_nargs = 0;
+                    parser_advance(p);              /* ( */
+                    bool saved_int = p->in_new_type_id;
+                    p->in_new_type_id = true;
+                    new_paren_type = parse_type_name(p);
+                    p->in_new_type_id = saved_int;
+                    parser_expect(p, TK_RPAREN);
+                }
             } else {
                 parser_restore(p, saved);
             }
@@ -2577,7 +2611,7 @@ static Node *unary_expr(Parser *p) {
         /* Type being allocated. If it's an unknown bare identifier
          * (e.g. a class member type used before its point of declaration
          * in the same class body), accept it as an opaque type. */
-        Type *ty = NULL;
+        Type *ty = new_paren_type;
         /* Bare-name path: when the next token is a plain identifier
          * (not a built-in type-specifier, not a template-id, not a
          * scoped name), consume it as a bare class-type name. This
@@ -2588,7 +2622,11 @@ static Node *unary_expr(Parser *p) {
          * declarator shape. Pattern: 'new B()' in g++.dg/cpp0x/
          * defaulted22.C lowered to a function-pointer cast and dropped
          * the ctor call. */
-        if (parser_peek(p)->kind == TK_IDENT &&
+        if (ty) {
+            /* Parenthesised-type-id form already consumed the type
+             * (see new_paren_type above). Skip the type-parse paths
+             * below. */
+        } else if (parser_peek(p)->kind == TK_IDENT &&
             parser_peek_ahead(p, 1)->kind != TK_LT &&
             parser_peek_ahead(p, 1)->kind != TK_SCOPE) {
             Token *name_tok = parser_advance(p);
