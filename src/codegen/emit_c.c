@@ -19818,41 +19818,92 @@ static void emit_forward_decl_structs(Node *tu) {
         emit_fwd_decl_structs_only(tu->tu.decls[i]);
 }
 
-/* TU-level emit-unit. One per thing that needs file-scope emission.
- * The driver iterates a unit list rather than tu->tu.decls directly
- * so the pre-pass can add hoisted units (local classes inside
- * function bodies, lambda fn defs, instantiations discovered late,
- * etc.) at appropriate positions without disturbing source-order
- * preservation for the common case. Dependency edges come in a
- * later slice; for now deps are implicit source order via the
- * insertion sequence in build_emit_units. */
-typedef struct EmitUnit {
-    Node *node;     /* the TU-level decl to emit (passed to emit_top_level) */
-} EmitUnit;
+/* TU-level emit-ordering node. One per thing that needs file-scope
+ * emission. Each node carries an explicit list of indices (deps)
+ * naming OTHER nodes in the same EmitOrder that MUST be emitted
+ * BEFORE it. The driver runs a topological sort over those edges
+ * to produce the final emission order, freeing the pre-pass from
+ * needing to insert nodes in their final position. */
+typedef struct EmitOrderNode {
+    Node *node;       /* the TU-level decl to emit (passed to emit_top_level) */
+    int  *deps;       /* indices of nodes that must precede this one */
+    int   ndeps;
+    int   dep_cap;
+} EmitOrderNode;
 
-typedef struct EmitUnitList {
-    EmitUnit *items;
+typedef struct EmitOrder {
+    EmitOrderNode *items;
     int n;
     int cap;
-} EmitUnitList;
+    int *sorted;      /* indices into items[] in topological order */
+} EmitOrder;
 
-static void unit_list_init(EmitUnitList *l) {
-    l->items = NULL; l->n = 0; l->cap = 0;
+static void order_init(EmitOrder *o) {
+    o->items = NULL; o->n = 0; o->cap = 0; o->sorted = NULL;
 }
 
-static void unit_list_push(EmitUnitList *l, Node *node) {
-    if (l->n == l->cap) {
-        int nc = l->cap ? l->cap * 2 : 16;
-        l->items = realloc(l->items, nc * sizeof(EmitUnit));
-        l->cap = nc;
+/* Append a new node, return its index. */
+static int order_push(EmitOrder *o, Node *node) {
+    if (o->n == o->cap) {
+        int nc = o->cap ? o->cap * 2 : 16;
+        o->items = realloc(o->items, nc * sizeof(EmitOrderNode));
+        o->cap = nc;
     }
-    l->items[l->n].node = node;
-    l->n++;
+    EmitOrderNode *e = &o->items[o->n];
+    e->node = node;
+    e->deps = NULL; e->ndeps = 0; e->dep_cap = 0;
+    return o->n++;
 }
 
-static void unit_list_free(EmitUnitList *l) {
-    free(l->items);
-    l->items = NULL; l->n = 0; l->cap = 0;
+/* Register a "before" edge: node `before` must be emitted before
+ * node `after`. */
+static void order_add_dep(EmitOrder *o, int after, int before) {
+    if (after < 0 || before < 0) return;
+    EmitOrderNode *e = &o->items[after];
+    if (e->ndeps == e->dep_cap) {
+        int nc = e->dep_cap ? e->dep_cap * 2 : 4;
+        e->deps = realloc(e->deps, nc * sizeof(int));
+        e->dep_cap = nc;
+    }
+    e->deps[e->ndeps++] = before;
+}
+
+static void order_free(EmitOrder *o) {
+    for (int i = 0; i < o->n; i++) free(o->items[i].deps);
+    free(o->items);
+    free(o->sorted);
+    o->items = NULL; o->n = 0; o->cap = 0; o->sorted = NULL;
+}
+
+/* DFS topological sort. Output: o->sorted is an array of indices
+ * with deps-respecting order — for each pair (i,j) where j depends
+ * on i, sorted-index(i) < sorted-index(j).
+ *
+ * Cycle handling: a cycle would be a sea-front bug (every
+ * registered dep represents a hard ordering constraint). We
+ * detect via the IN_PROGRESS state and abort with a diagnostic
+ * rather than silently produce a broken order. */
+static void order_topo_visit(EmitOrder *o, int idx, char *state, int *out, int *out_n) {
+    if (state[idx] == 2) return;          /* already emitted */
+    if (state[idx] == 1) {
+        fprintf(stderr, "sea-front: emit-order cycle through node %d\n", idx);
+        abort();
+    }
+    state[idx] = 1;
+    EmitOrderNode *e = &o->items[idx];
+    for (int i = 0; i < e->ndeps; i++)
+        order_topo_visit(o, e->deps[i], state, out, out_n);
+    state[idx] = 2;
+    out[(*out_n)++] = idx;
+}
+
+static void order_topo_sort(EmitOrder *o) {
+    o->sorted = realloc(o->sorted, o->n * sizeof(int));
+    char *state = calloc(o->n, 1);   /* 0=fresh, 1=in-progress, 2=done */
+    int out_n = 0;
+    for (int i = 0; i < o->n; i++)
+        order_topo_visit(o, i, state, o->sorted, &out_n);
+    free(state);
 }
 
 /* Set of class_def Nodes that already have file-scope identity —
@@ -19899,29 +19950,36 @@ static void cset_collect(Node *n, ClassDefSet *s) {
  * scope, so a local class's method bodies can't be emitted in
  * place — sea-front would otherwise produce `static inline void
  * _ZN1OD2Ev(...) { body }` inside a function, which cc rejects.
- * Each found class_def becomes an emit unit registered before the
- * enclosing function. emit_class_def's codegen_emitted dedup then
- * makes the in-body inline-emit a no-op when control reaches it
- * in pass 2.
+ * Each found class_def becomes its own ordering node; the
+ * enclosing function's node gets a dep edge pointing at it so the
+ * topo sort emits the hoist first. emit_class_def's codegen_emitted
+ * dedup then makes the in-body inline-emit a no-op when control
+ * reaches it in pass 2.
  *
  * Two shapes carry a class_def at block scope:
  *   - bare ND_CLASS_DEF statement (`struct O { ... };`)
  *   - ND_VAR_DECL whose type's class_def has the body (`struct O
  *     { ... } o;` — most common form).
- * Both register the same Node — the in-body emit detects
- * codegen_emitted and skips.
  *
  * Filter: class_defs already known at TU scope (via the cset)
  * are reference-only (`Box copy(*this)` where Box is outer) and
- * must NOT be hoisted — pushing them as units before their own
- * defining TU decl is a use-before-def cycle. */
-static void collect_local_class_units(Node *n, EmitUnitList *out,
+ * must NOT be hoisted — adding them as separate nodes with a
+ * back-edge from the enclosing TU decl would create a cycle. */
+static void collect_local_class_nodes(Node *n,
+                                       Node ***out_classes,
+                                       int *out_n, int *out_cap,
                                        ClassDefSet *tu_known) {
     if (!n) return;
     switch (n->kind) {
     case ND_CLASS_DEF:
-        if (n->class_def.ty && !cset_contains(tu_known, n))
-            unit_list_push(out, n);
+        if (n->class_def.ty && !cset_contains(tu_known, n)) {
+            if (*out_n == *out_cap) {
+                int nc = *out_cap ? *out_cap * 2 : 4;
+                *out_classes = realloc(*out_classes, nc * sizeof(Node *));
+                *out_cap = nc;
+            }
+            (*out_classes)[(*out_n)++] = n;
+        }
         return;
     case ND_VAR_DECL: {
         Type *dep = n->var_decl.ty;
@@ -19930,36 +19988,53 @@ static void collect_local_class_units(Node *n, EmitUnitList *out,
         if (dep && (dep->kind == TY_STRUCT || dep->kind == TY_UNION) &&
             dep->class_def && dep->class_def->kind == ND_CLASS_DEF &&
             dep->class_def->class_def.ty &&
-            !cset_contains(tu_known, dep->class_def))
-            unit_list_push(out, dep->class_def);
+            !cset_contains(tu_known, dep->class_def)) {
+            if (*out_n == *out_cap) {
+                int nc = *out_cap ? *out_cap * 2 : 4;
+                *out_classes = realloc(*out_classes, nc * sizeof(Node *));
+                *out_cap = nc;
+            }
+            (*out_classes)[(*out_n)++] = dep->class_def;
+        }
         return;
     }
     case ND_BLOCK:
         for (int i = 0; i < n->block.nstmts; i++)
-            collect_local_class_units(n->block.stmts[i], out, tu_known);
+            collect_local_class_nodes(n->block.stmts[i],
+                                       out_classes, out_n, out_cap, tu_known);
         return;
     case ND_IF:
-        collect_local_class_units(n->if_.then_, out, tu_known);
-        collect_local_class_units(n->if_.else_, out, tu_known);
+        collect_local_class_nodes(n->if_.then_,
+                                   out_classes, out_n, out_cap, tu_known);
+        collect_local_class_nodes(n->if_.else_,
+                                   out_classes, out_n, out_cap, tu_known);
         return;
     case ND_FOR:
-        collect_local_class_units(n->for_.init, out, tu_known);
-        collect_local_class_units(n->for_.body, out, tu_known);
+        collect_local_class_nodes(n->for_.init,
+                                   out_classes, out_n, out_cap, tu_known);
+        collect_local_class_nodes(n->for_.body,
+                                   out_classes, out_n, out_cap, tu_known);
         return;
     case ND_WHILE:
-        collect_local_class_units(n->while_.body, out, tu_known);
+        collect_local_class_nodes(n->while_.body,
+                                   out_classes, out_n, out_cap, tu_known);
         return;
     case ND_DO:
-        collect_local_class_units(n->do_.body, out, tu_known);
+        collect_local_class_nodes(n->do_.body,
+                                   out_classes, out_n, out_cap, tu_known);
         return;
     case ND_SWITCH:
-        collect_local_class_units(n->switch_.body, out, tu_known);
+        collect_local_class_nodes(n->switch_.body,
+                                   out_classes, out_n, out_cap, tu_known);
         return;
     case ND_TRY:
-        collect_local_class_units(n->try_.body, out, tu_known);
+        collect_local_class_nodes(n->try_.body,
+                                   out_classes, out_n, out_cap, tu_known);
         for (int i = 0; i < n->try_.nhandlers; i++) {
             Node *h = n->try_.handlers[i];
-            if (h) collect_local_class_units(h->handler.body, out, tu_known);
+            if (h) collect_local_class_nodes(h->handler.body,
+                                              out_classes, out_n, out_cap,
+                                              tu_known);
         }
         return;
     default:
@@ -19972,42 +20047,70 @@ static void collect_local_class_units(Node *n, EmitUnitList *out,
  * also as in-class method definitions on each ND_CLASS_DEF member
  * (potentially recursive — nested classes). Out-of-class method
  * definitions appear as their own ND_FUNC_DEF in the TU list. */
-static void collect_hoists_from_decl(Node *n, EmitUnitList *out,
+static void collect_hoists_from_decl(Node *n,
+                                      Node ***out_classes,
+                                      int *out_n, int *out_cap,
                                       ClassDefSet *tu_known) {
     if (!n) return;
     if (n->kind == ND_FUNC_DEF && n->func.body) {
-        collect_local_class_units(n->func.body, out, tu_known);
+        collect_local_class_nodes(n->func.body,
+                                   out_classes, out_n, out_cap, tu_known);
         return;
     }
     if (n->kind == ND_CLASS_DEF) {
         for (int i = 0; i < n->class_def.nmembers; i++)
-            collect_hoists_from_decl(n->class_def.members[i], out, tu_known);
+            collect_hoists_from_decl(n->class_def.members[i],
+                                      out_classes, out_n, out_cap, tu_known);
         return;
     }
     if (n->kind == ND_TEMPLATE_DECL && n->template_decl.decl) {
-        collect_hoists_from_decl(n->template_decl.decl, out, tu_known);
+        collect_hoists_from_decl(n->template_decl.decl,
+                                  out_classes, out_n, out_cap, tu_known);
         return;
     }
 }
 
-/* Pre-pass: collect TU-level decls + hoisted local class defs into
- * the emit unit list. Hoisted classes precede their enclosing
- * function so pass 1 emits them at file scope (struct body +
- * method forward decls) and pass 2 emits method bodies. */
-static void build_emit_units(Node *tu, EmitUnitList *out) {
+/* Pre-pass: build the EmitOrder graph. Each TU decl becomes a
+ * node; consecutive TU decls get a source-order dep (i depends
+ * on i-1) so emission preserves source order in the common case.
+ * Hoisted local class defs are added as separate nodes; the
+ * enclosing TU decl gets a dep on each hoist so the topo sort
+ * emits the hoist first. Each hoist also gets the same source-
+ * order dep as the enclosing decl so hoists slot in right
+ * before their owner rather than at the start of the output. */
+static void build_emit_order(Node *tu, EmitOrder *out) {
     /* Build the TU-known set first so the hoist walker can filter
      * out class_defs that are references to outer classes (not
      * locally defined). */
     ClassDefSet tu_known = {0};
     for (int i = 0; i < tu->tu.ndecls; i++)
         cset_collect(tu->tu.decls[i], &tu_known);
+
+    int prev_decl_idx = -1;
+    Node **hoists = NULL;
+    int hn = 0, hcap = 0;
     for (int i = 0; i < tu->tu.ndecls; i++) {
         Node *n = tu->tu.decls[i];
         if (!n) continue;
-        collect_hoists_from_decl(n, out, &tu_known);
-        unit_list_push(out, n);
+        hn = 0;
+        collect_hoists_from_decl(n, &hoists, &hn, &hcap, &tu_known);
+        /* Hoist nodes first so the enclosing decl can depend on them. */
+        int hoist_first = -1;
+        for (int hi = 0; hi < hn; hi++) {
+            int idx = order_push(out, hoists[hi]);
+            if (prev_decl_idx >= 0) order_add_dep(out, idx, prev_decl_idx);
+            if (hoist_first < 0) hoist_first = idx;
+        }
+        int decl_idx = order_push(out, n);
+        if (prev_decl_idx >= 0) order_add_dep(out, decl_idx, prev_decl_idx);
+        for (int hi = 0; hi < hn; hi++)
+            order_add_dep(out, decl_idx, hoist_first + hi);
+        prev_decl_idx = decl_idx;
     }
+    free(hoists);
     free(tu_known.items);
+
+    order_topo_sort(out);
 }
 
 void emit_c(Node *tu) {
@@ -20019,19 +20122,23 @@ void emit_c(Node *tu) {
     free_ovld_populate(tu);
     emit_prelude();
 
-    /* Build emit-unit list early so typeid + forward-decl passes
-     * can walk hoisted units (local class defs lifted to file
-     * scope) alongside the tu.decls children. */
-    EmitUnitList units;
-    unit_list_init(&units);
-    build_emit_units(tu, &units);
+    /* Build the EmitOrder graph early so typeid + forward-decl
+     * passes can walk hoisted nodes (local class defs lifted to
+     * file scope) alongside the tu.decls children. The topo sort
+     * runs inside build_emit_order; downstream consumers iterate
+     * either insertion order (for set-style walks where order
+     * doesn't matter) or sorted order (for actual emission). */
+    EmitOrder order;
+    order_init(&order);
+    build_emit_order(tu, &order);
 
-    /* Typeinfo collection walks every unit's node — covers both
-     * tu.decls and hoisted local classes whose member bodies
-     * carry throws/typeids the TU walk wouldn't reach (the local
-     * class hangs off var_decl.ty, not as a TU child). */
-    for (int i = 0; i < units.n; i++)
-        typeid_collect_walk(units.items[i].node);
+    /* Typeinfo collection walks every node — covers both tu.decls
+     * and hoisted local classes whose member bodies carry throws /
+     * typeids the TU walk wouldn't reach (the local class hangs
+     * off var_decl.ty, not as a TU child). Insertion-order walk
+     * is fine: typeid_set_add dedups. */
+    for (int i = 0; i < order.n; i++)
+        typeid_collect_walk(order.items[i].node);
     emit_typeid_sentinels();
     emit_eh_typeinfo_defs();
     emit_eh_prim_typeinfo_defs();
@@ -20080,21 +20187,21 @@ void emit_c(Node *tu) {
      *   non-body decls (enums, vars) interleave with struct
      *   bodies in source order. */
     g_emit_phase = PHASE_STRUCTS;
-    for (int i = 0; i < units.n; i++) {
+    for (int i = 0; i < order.n; i++) {
         /* emit_top_level itself skips ND_FUNC_DEF in PHASE_STRUCTS
          * (covers nesting through ND_TEMPLATE_DECL / ND_BLOCK). */
         fputc('\n', stdout);
-        emit_top_level(units.items[i].node);
+        emit_top_level(order.items[order.sorted[i]].node);
     }
 
     g_emit_phase = PHASE_METHODS;
-    for (int i = 0; i < units.n; i++) {
+    for (int i = 0; i < order.n; i++) {
         fputc('\n', stdout);
-        emit_top_level(units.items[i].node);
+        emit_top_level(order.items[order.sorted[i]].node);
     }
     g_emit_phase = 0;
 
-    unit_list_free(&units);
+    order_free(&order);
 
     /* File-scope dynamic initialisation: C++ runs class-type globals
      * through their ctor before main; C requires constant initialisers
