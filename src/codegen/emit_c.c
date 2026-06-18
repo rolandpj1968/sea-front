@@ -12290,15 +12290,43 @@ static void emit_stmt(Node *n) {
              * other paths that drop t cleanly destroys t in those
              * other paths. No runtime flag needed. */
             bool moved = false;
-            if (n->ret.expr && n->ret.expr->kind == ND_IDENT &&
-                g_cf.nlive > 0 &&
+            if (n->ret.expr && g_cf.nlive > 0 &&
                 g_cf.live[g_cf.nlive - 1].kind == CL_VAR) {
                 Node *top_var = g_cf.live[g_cf.nlive - 1].var_decl;
-                Token *top_name = top_var ? top_var->var_decl.name : NULL;
-                Token *ret_name = n->ret.expr->ident.name;
-                if (top_name && ret_name &&
-                    top_name->len == ret_name->len &&
-                    memcmp(top_name->loc, ret_name->loc, top_name->len) == 0) {
+                /* The live entry may track either an ND_VAR_DECL (a
+                 * user-named local) OR an ND_CALL/etc. (a hoisted
+                 * synthesized temp). Get the right name string from
+                 * each shape. */
+                const char *top_name_str = NULL;
+                int         top_name_len = 0;
+                if (top_var) {
+                    if (top_var->kind == ND_VAR_DECL &&
+                        top_var->var_decl.name) {
+                        top_name_str = top_var->var_decl.name->loc;
+                        top_name_len = top_var->var_decl.name->len;
+                    } else if (top_var->codegen_temp_name) {
+                        top_name_str = top_var->codegen_temp_name;
+                        top_name_len = (int)strlen(top_var->codegen_temp_name);
+                    }
+                }
+                /* Compare against the return expression's name. For
+                 * an ND_IDENT it's ident.name->loc; for a hoisted
+                 * call/ctor it's codegen_temp_name (the return expr
+                 * may BE the same ND_CALL pointer that was tagged
+                 * during hoist). */
+                const char *ret_name_str = NULL;
+                int         ret_name_len = 0;
+                if (n->ret.expr->kind == ND_IDENT &&
+                    n->ret.expr->ident.name) {
+                    ret_name_str = n->ret.expr->ident.name->loc;
+                    ret_name_len = n->ret.expr->ident.name->len;
+                } else if (n->ret.expr->codegen_temp_name) {
+                    ret_name_str = n->ret.expr->codegen_temp_name;
+                    ret_name_len = (int)strlen(n->ret.expr->codegen_temp_name);
+                }
+                if (top_name_str && ret_name_str &&
+                    top_name_len == ret_name_len &&
+                    memcmp(top_name_str, ret_name_str, top_name_len) == 0) {
                     moved = true;
                 }
             }
