@@ -176,6 +176,12 @@ static bool is_ref_param(Token *name) {
  * ND_MEMBER before emitting its object (the -> already derefs),
  * and by ND_UNARY TK_AMP (address-of a ref is the pointer itself). */
 static bool g_suppress_ref_deref = false;
+/* When true, the pending-assign hoist emit produces
+ * `(temp = call(), &temp)` instead of `(temp = call(), temp)` so the
+ * surrounding ref-binding code can skip the wrapping `&` (which on
+ * a comma-expr would be invalid C). Set by the ternary-as-ref-init
+ * push-`&`-inside path. */
+static bool g_ref_bind_amp_into_hoist = false;
 
 /* Suppresses the '(*...)' wrap that the method-call emit normally
  * adds around a reference-returning call. Set by the ND_UNARY TK_AMP
@@ -5027,7 +5033,14 @@ static void emit_expr(Node *n) {
             n->codegen_temp_name = NULL;
             fprintf(stdout, "(%s = ", name);
             emit_expr(n);
-            fprintf(stdout, ", %s)", name);
+            /* When a ref-binding context wants `&this_arm` and the
+             * arm IS this hoisted comma form, emit `&temp` as the
+             * comma's value so the surrounding code doesn't need
+             * the now-illegal outer `&` on a comma-expr. */
+            if (g_ref_bind_amp_into_hoist)
+                fprintf(stdout, ", &%s)", name);
+            else
+                fprintf(stdout, ", %s)", name);
             n->codegen_temp_name = name;
             return;
         }
@@ -11023,6 +11036,60 @@ static void emit_var_decl_inner(Node *n) {
                 emit_expr(init_e->comma.lhs);
                 fputs(", &", stdout);
                 emit_expr(init_e->comma.rhs);
+                fputc(')', stdout);
+            } else if (init_e && init_e->kind == ND_TERNARY &&
+                       init_e->ternary.then_ && init_e->ternary.else_) {
+                /* Ternary init for a reference var: `const A &r =
+                 * i ? *ap : f();` is bound to whichever arm runs.
+                 * C++ §8.16/2 keeps the result a glvalue when both
+                 * arms are lvalues; C makes `?:` always an rvalue.
+                 * Sea-front already hoists class-rvalue arms to
+                 * named temps (the call gets codegen_temp_pending_
+                 * assign so emit_expr produces `(temp=call(), temp)`).
+                 * For each arm: take its address, but for the
+                 * pending-assign form route the `&` INTO the comma
+                 * via g_ref_bind_amp_into_hoist (otherwise the
+                 * outer `&(temp=call(), temp)` is invalid C).
+                 * Pattern: g++.dg/init/ref16.C `const A &ar =
+                 * i ? *ap : f();`. */
+                fputc('(', stdout);
+                emit_expr(init_e->ternary.cond);
+                fputs(" ? ", stdout);
+                Node *ta = init_e->ternary.then_;
+                bool ta_pending = ta && ta->codegen_temp_pending_assign;
+                if (ta && ta->kind == ND_COMMA && ta->comma.rhs) {
+                    fputc('(', stdout);
+                    emit_expr(ta->comma.lhs);
+                    fputs(", &", stdout);
+                    emit_expr(ta->comma.rhs);
+                    fputc(')', stdout);
+                } else if (ta_pending) {
+                    bool saved = g_ref_bind_amp_into_hoist;
+                    g_ref_bind_amp_into_hoist = true;
+                    emit_expr(ta);
+                    g_ref_bind_amp_into_hoist = saved;
+                } else {
+                    fputc('&', stdout);
+                    emit_expr(ta);
+                }
+                fputs(" : ", stdout);
+                Node *ea = init_e->ternary.else_;
+                bool ea_pending = ea && ea->codegen_temp_pending_assign;
+                if (ea && ea->kind == ND_COMMA && ea->comma.rhs) {
+                    fputc('(', stdout);
+                    emit_expr(ea->comma.lhs);
+                    fputs(", &", stdout);
+                    emit_expr(ea->comma.rhs);
+                    fputc(')', stdout);
+                } else if (ea_pending) {
+                    bool saved = g_ref_bind_amp_into_hoist;
+                    g_ref_bind_amp_into_hoist = true;
+                    emit_expr(ea);
+                    g_ref_bind_amp_into_hoist = saved;
+                } else {
+                    fputc('&', stdout);
+                    emit_expr(ea);
+                }
                 fputc(')', stdout);
             } else {
                 fputc('&', stdout);

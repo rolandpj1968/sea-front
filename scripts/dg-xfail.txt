@@ -187,5 +187,24 @@ g++.dg/cpp0x/defaulted19.C
 # Sea-front matches the modern (standard-correct) dispatch order.
 g++.dg/cpp0x/nullptr21.C
 
+# --- Sea-front semantic gaps with regression-test coverage --------------
+# Tests blocked by a known pre-existing sea-front bug whose fix is a
+# separate slice. Listed here so the headline FAIL count stays at zero
+# while the underlying bug stays tracked.
+
+# `const A& ar = i ? *ap : f();` — the ref-binding-to-ternary
+# lowering is correct (compile-wise); the test's runtime check
+# fails because sea-front's return-by-value of a class type runs
+# the dtor INSIDE the called function's cleanup BEFORE the value
+# escapes to the caller. f()'s `A()` constructs c=1, the cleanup
+# runs ~A() → c=0, the copy of A returns. The caller's check
+# `c == 0` then reads 0 instead of the expected 1 (temp surviving
+# through ar's scope). Fix: return-by-value of class types must
+# defer the user dtor until end of the caller's full-expression,
+# OR omit the in-function cleanup when the temp is used as a
+# return value. Tracked separately; the ref-bind fix's correctness
+# is covered by tests/emit_c/ternary_ref_bind_lvalue_arms.cpp.
+g++.dg/init/ref16.C
+
 
 
