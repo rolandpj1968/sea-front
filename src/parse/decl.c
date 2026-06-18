@@ -2206,10 +2206,18 @@ Node *parse_declaration(Parser *p) {
             /* Cache the integer value for `const T name = literal_expr;`
              * — used as an array bound (§8.6 [expr.const]).
              * fold_const_int handles literal arithmetic on previously-
-             * cached const ints. */
-            if (rd->type && rd->type->is_const && decl->var_decl.init) {
+             * cached const ints. ALSO recognise the direct-init paren
+             * form `const T name(literal_expr);` (parsed as ctor_args
+             * with no init), which is equivalent to the copy-init form
+             * for built-in T. Pattern: g++.dg/template/init8.C
+             * `const int c(2); int d[c] = { ... };`. */
+            Node *fold_src = decl->var_decl.init;
+            if (!fold_src && decl->var_decl.has_ctor_init &&
+                decl->var_decl.ctor_nargs == 1 && decl->var_decl.ctor_args)
+                fold_src = decl->var_decl.ctor_args[0];
+            if (rd->type && rd->type->is_const && fold_src) {
                 int64_t v;
-                if (fold_const_int(p, decl->var_decl.init, &v)) {
+                if (fold_const_int(p, fold_src, &v)) {
                     rd->has_const_int_value = true;
                     rd->const_int_value = v;
                 }
