@@ -723,6 +723,17 @@ static void visit_func_def(Sema *s, Node *n) {
     /* Enter the function's prototype scope so parameter names resolve. */
     if (n->func.param_scope) s->cur_scope = n->func.param_scope;
     if (n->func.class_type) s->cur_class_type = n->func.class_type;
+    /* Parameter default values (N4659 §11.3.6 [dcl.fct.default]) —
+     * the default expression is substituted at each call site that
+     * omits the trailing arg, so it must be sema-classified once
+     * here. Without this, `void g(S s = S())` leaves `S()` as an
+     * untouched ND_CALL with is_type_call=false; the call-site
+     * substitution then emits a bare `S()` that cc rejects. */
+    for (int i = 0; i < n->func.nparams; i++) {
+        Node *p = n->func.params[i];
+        if (p && p->param.default_value)
+            visit(s, p->param.default_value);
+    }
     /* Mem-initializers (N4659 §15.6.2 [class.base.init]) are part of
      * the constructor — their initializer expressions need sema'ing
      * too, otherwise references like 'o.v' on a TY_REF parameter 'o'
@@ -2175,25 +2186,80 @@ static void visit_call(Sema *s, Node *n) {
     }
 
     /* Functional-cast / explicit-type-conversion: 'Foo(args)' where
-     * Foo is a type-name. N4659 §8.2.3 [expr.type.conv]: a simple-
+     * Foo is a type-name. N4659 §5.2.3 [expr.type.conv]: a simple-
      * type-specifier (or typename-specifier) followed by a
      * parenthesised expression-list is an explicit type conversion
      * whose value is a prvalue of that type. For class types the
      * prvalue materialises a temporary via direct-initialisation
-     * from the argument list — codegen emits that via D-Hoist when
-     * the type has a non-trivial dtor.
+     * from the argument list — for non-class (scalar/enum) types
+     * it's a C-style cast (§5.2.3/2 makes single-arg form equivalent
+     * to (T)(x); zero-arg is value-initialization).
      *
-     * The callee is an ND_IDENT whose resolved declaration is either
-     * ENTITY_TYPE or ENTITY_TAG (a class tag can be registered as
-     * both; see §10.1.7.3 [dcl.type.elab]/2 and the injected-class-
-     * name rule §12.2 [class.pre]/2). */
+     * The parser leaves `IDENT(args)` as ND_CALL because it can't
+     * disambiguate function vs type-name without name lookup. Sema's
+     * job is to perform that lookup and flip `is_type_call` so
+     * codegen's many ctor-emit sites can stop re-deriving the same
+     * predicate. Four sub-cases the classifier covers (mirroring the
+     * historical scatter across emit_c.c):
+     *
+     *   (a) ND_IDENT with resolved_decl ENTITY_TYPE/TAG — the simple
+     *       case, including class names, typedefs, scalar typedefs.
+     *       (N4659 §10.1.7.3 [dcl.type.elab]/2 and the injected-class-
+     *        name rule §12.2 [class.pre]/2 explain why both entities
+     *        can name the same class.)
+     *
+     *   (b) ND_IDENT whose name matches the enclosing class's tag —
+     *       `static T factory() { return T(args); }`. Sema's lookup
+     *       of T inside T's class scope may resolve to one of T's
+     *       ctors (entity=VARIABLE, ret-type=void) rather than the
+     *       class tag itself. Fall back to a self-class-tag match
+     *       so the call gets recognised as a type-call. Real-world
+     *       hit: gcc 14 libcpp label_text class.
+     *
+     *   (c) ND_IDENT unresolved but matching a TU class tag — sema
+     *       didn't tag the resolved_decl (happens for typedef names
+     *       at file scope). Probe the TU by tag to recover the type.
+     *
+     *   (d) ND_TEMPLATE_ID naming a class template — `vec<int>()`.
+     *       The callee is ND_TEMPLATE_ID; we look up the
+     *       instantiated class by tag (template-args matching is
+     *       handled by find_class_def_in_tu's structural equality).
+     *
+     * For class targets we also resolve the matching ctor up-front
+     * and stash it in n->call.resolved_ctor so codegen needn't
+     * re-run overload resolution. */
+    Type *tc_type = NULL;
     if (n->call.callee && n->call.callee->kind == ND_IDENT) {
         Declaration *d = n->call.callee->ident.resolved_decl;
+        Token *cn = n->call.callee->ident.name;
         if (d && (d->entity == ENTITY_TYPE || d->entity == ENTITY_TAG) &&
-            d->type && d->type->kind == TY_STRUCT) {
-            n->resolved_type = d->type;
-            return;
+            d->type) {
+            tc_type = d->type;                                   /* (a) */
+        } else if (s->cur_class_type && s->cur_class_type->tag &&
+                   cn && tokens_equal(cn, s->cur_class_type->tag)) {
+            tc_type = s->cur_class_type;                         /* (b) */
+        } else if (!d && cn) {
+            Type probe = {0};
+            probe.kind = TY_STRUCT;
+            probe.tag = cn;
+            Node *cdef = find_class_def_in_tu(s->tu, &probe);
+            if (cdef && cdef->class_def.ty)
+                tc_type = cdef->class_def.ty;                    /* (c) */
         }
+    } else if (n->call.callee &&
+               n->call.callee->kind == ND_TEMPLATE_ID &&
+               n->call.callee->template_id.name) {
+        Type probe = {0};
+        probe.kind = TY_STRUCT;
+        probe.tag = n->call.callee->template_id.name;
+        Node *cdef = find_class_def_in_tu(s->tu, &probe);
+        if (cdef && cdef->class_def.ty)
+            tc_type = cdef->class_def.ty;                        /* (d) */
+    }
+    if (tc_type) {
+        n->call.is_type_call = true;
+        n->resolved_type = tc_type;
+        return;
     }
     /* Result type comes from the callee's TY_FUNC.ret. The callee may
      * be a function pointer (TY_PTR → TY_FUNC); handle that too. */

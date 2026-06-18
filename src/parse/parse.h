@@ -448,6 +448,26 @@ struct Node {
             Node *callee;
             Node **args;
             int nargs;
+            /* True when the callee names a type — the ND_CALL is a
+             * functional-cast / temp-construction per N4659 §5.2.3
+             * [expr.type.conv]. `T(args)` in source is grammatically
+             * a postfix-expression '(' expression-list ')' — the same
+             * production as a real function call — so the parser
+             * produces ND_CALL and defers the type-vs-function
+             * decision to sema (§6.4 [basic.lookup]).
+             *
+             * When set, n->resolved_type holds the target type;
+             * codegen dispatches on resolved_type->kind: class →
+             * direct-init via ctor (resolved_ctor names the picked
+             * one); scalar/enum → C-style cast (§5.2.3/2 single-arg
+             * equivalence to (T)(x); zero-arg value-init). */
+            bool is_type_call;
+            /* Matched constructor for is_type_call class targets,
+             * resolved at sema time so codegen needn't re-run
+             * overload resolution. NULL for the synth default-ctor
+             * path (no user ctor matches) and for non-class
+             * targets. */
+            Node *resolved_ctor;
         } call;
 
         /* ND_MEMBER — N4659 §8.2.5 [expr.ref]

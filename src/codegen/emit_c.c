@@ -1510,50 +1510,29 @@ static void hoist_seq_scalar(Node *rhs) {
 
 static bool is_class_temp_call(Node *n) {
     if (!n || n->kind != ND_CALL || n->codegen_temp_name) return false;
-    /* Self-class value-construction inside the same class body —
-     * 'static T factory() { return T(args); }'. Sema's lookup of T
-     * inside T's class scope can resolve to one of the ctors
-     * (entity=VARIABLE, return-type void) instead of the class tag,
-     * giving a TY_VOID resolved_type that the regular
-     * resolved_type->kind==TY_STRUCT check below rejects. The call
-     * IS a class-temp construction; force-recognise it via the
-     * callee-name == enclosing-class-tag match. Real-world hit:
-     * gcc 14 libcpp/include/rich-location.h's label_text class with
-     * static borrow() / take() factories returning 'label_text(...)'.
-     * N4659 §6.4.1 [basic.lookup.unqual] really wants type-names to
-     * win this lookup, but our lookup doesn't do that ordering yet
-     * — patch up at codegen instead.
-     * TODO(seafront#class-name-lookup): fix sema's lookup ordering
-     * so 'T(args)' inside T's body resolves to T-the-tag rather than
-     * one of T's ctors. Then this codegen patch becomes redundant. */
-    if (g_current_method_class && g_current_method_class->tag &&
-        n->call.callee && n->call.callee->kind == ND_IDENT &&
-        n->call.callee->ident.name &&
-        tokens_equal(n->call.callee->ident.name, g_current_method_class->tag))
+    /* Functional-cast / temp-construction on a CLASS type
+     * (N4659 §5.2.3 [expr.type.conv]) — sema's classifier set
+     * is_type_call and resolved_type. Only class targets need
+     * the hoist; scalar `T(x)` lowers to a C cast inline in the
+     * expression-emit path. */
+    if (n->call.is_type_call && n->resolved_type &&
+        (n->resolved_type->kind == TY_STRUCT ||
+         n->resolved_type->kind == TY_UNION))
         return true;
-    /* Class-template functional cast 'A<T>(args)' — sea-front's
-     * parser routes `T<args>(...)` here for class-template Ts.
-     * Tested BEFORE the resolved_type gate: sema may not have
-     * stamped the instantiated class Type on the call when the
-     * template is referenced outside the instantiation's TU pass.
-     * Pattern: g++.dg/other/friend2.C `foo(A<unsigned>(0))`. */
+    /* Class-rvalue call with a non-trivial dtor needs hoisting so
+     * the dtor fires at the end of the enclosing full-expression
+     * (N4659 §15.4 [class.dtor], §6.7.7/4 [class.temporary]).
+     * Independent of whether the callee names a type — `make_T()`
+     * (a regular function returning T by value) also lands here. */
+    if (n->resolved_type && n->resolved_type->kind == TY_STRUCT &&
+        n->resolved_type->has_dtor)
+        return true;
+    /* ND_TEMPLATE_ID callee that sema didn't tie to a TU class def
+     * (lazy instantiation). The hoist still applies — the downstream
+     * ctor-emit code re-runs the tag-args lookup itself. Pattern:
+     * g++.dg/other/friend2.C `foo(A<unsigned>(0))`. */
     if (n->call.callee && n->call.callee->kind == ND_TEMPLATE_ID)
         return true;
-    if (!n->resolved_type || n->resolved_type->kind != TY_STRUCT)
-        return false;
-    /* Standard case: class-typed call with non-trivial dtor needs
-     * hoisting so the dtor fires at the right scope. */
-    if (n->resolved_type->has_dtor) return true;
-    /* Ctor-call shape: 'Foo(args)' where the callee is a type-name
-     * needs hoisting even when Foo has no dtor — there's no Foo()
-     * function in the lowered C, only the mangled
-     * sf__Foo__ctor(struct sf__Foo *, ...). The temp gets a slot
-     * but no cleanup-chain registration. */
-    if (n->call.callee && n->call.callee->kind == ND_IDENT) {
-        Declaration *d = n->call.callee->ident.resolved_decl;
-        if (d && (d->entity == ENTITY_TYPE || d->entity == ENTITY_TAG))
-            return true;
-    }
     return false;
 }
 
@@ -1616,73 +1595,49 @@ static void hoist_emit_decl(Node *call, bool in_shortcircuit) {
         return;
     }
 
-    /* Detect ctor-call shape: callee is an ND_IDENT whose
-     * resolved_decl is a type-name (ENTITY_TYPE). For these we
-     * emit the two-line construction form
+    /* Ctor-call shape (callee names a type → functional cast,
+     * N4659 §5.2.3 [expr.type.conv]): emit two-line construction
      *     struct sf__T __SF_temp_<n>;
      *     sf__T__ctor(&__SF_temp_<n>, args);
-     * instead of the single-line assignment-init form
-     *     struct sf__T __SF_temp_<n> = some_call();
-     * because Foo(args) isn't a function call in C — there's no
-     * symbol named 'Foo' (only the mangled sf__Foo__ctor). */
+     * not single-line assignment-init `struct sf__T t = Foo(...);`,
+     * because `Foo` itself isn't a C function — only the mangled
+     * `sf__Foo__ctor` exists.
+     *
+     * Two ways to detect: sema's is_type_call covers the cases its
+     * classifier reached. ND_TEMPLATE_ID callees that sema couldn't
+     * tie to a TU class def (lazy instantiation) get a tag-args
+     * lookup right here. */
     bool is_ctor_call = false;
     Type *ctor_class_type = call->resolved_type;
-    /* Class-template functional cast `A<T>(args)` — callee is
-     * ND_TEMPLATE_ID, call->resolved_type is the instantiated class
-     * (when sema set it; otherwise look up the instantiation by
-     * (tag, args) in the TU). Mirror the ND_IDENT-with-ENTITY_TYPE
-     * case below. Pattern: g++.dg/other/friend2.C. */
-    if (call->call.callee && call->call.callee->kind == ND_TEMPLATE_ID) {
+    if (call->call.is_type_call && ctor_class_type &&
+        (ctor_class_type->kind == TY_STRUCT ||
+         ctor_class_type->kind == TY_UNION))
+        is_ctor_call = true;
+    if (!is_ctor_call && call->call.callee &&
+        call->call.callee->kind == ND_TEMPLATE_ID) {
         Node *tid = call->call.callee;
-        if (!ctor_class_type ||
-            (ctor_class_type->kind != TY_STRUCT &&
-             ctor_class_type->kind != TY_UNION)) {
-            /* Look up the instantiated class by (tag, args). */
-            Token *tname = tid->template_id.name;
-            if (tname) {
-                Type probe = {0};
-                probe.kind = TY_STRUCT;
-                probe.tag = tname;
-                int n_args = tid->template_id.nargs;
-                static Type *probe_args[16];
-                if (n_args > 0 && n_args <= 16) {
-                    for (int i = 0; i < n_args; i++) {
-                        Node *a = tid->template_id.args[i];
-                        probe_args[i] = (a && a->kind == ND_VAR_DECL)
-                            ? a->var_decl.ty : NULL;
-                    }
-                    probe.template_args = probe_args;
-                    probe.n_template_args = n_args;
+        Token *tname = tid->template_id.name;
+        if (tname) {
+            Type probe = {0};
+            probe.kind = TY_STRUCT;
+            probe.tag = tname;
+            int n_args = tid->template_id.nargs;
+            static Type *probe_args[16];
+            if (n_args > 0 && n_args <= 16) {
+                for (int i = 0; i < n_args; i++) {
+                    Node *a = tid->template_id.args[i];
+                    probe_args[i] = (a && a->kind == ND_VAR_DECL)
+                        ? a->var_decl.ty : NULL;
                 }
-                Node *d = find_class_def_by_tag_args(&probe);
-                if (!d) d = find_class_def_by_tag_only(&probe);
-                if (d && d->class_def.ty) ctor_class_type = d->class_def.ty;
+                probe.template_args = probe_args;
+                probe.n_template_args = n_args;
             }
-        }
-        if (ctor_class_type &&
-            (ctor_class_type->kind == TY_STRUCT ||
-             ctor_class_type->kind == TY_UNION))
-            is_ctor_call = true;
-    }
-    if (call->call.callee && call->call.callee->kind == ND_IDENT) {
-        Declaration *d = call->call.callee->ident.resolved_decl;
-        if (d && (d->entity == ENTITY_TYPE || d->entity == ENTITY_TAG))
-            is_ctor_call = true;
-        /* Self-class value-construction inside the same class —
-         * sema's lookup may have resolved the callee to a ctor
-         * (entity=VARIABLE, return-type void), so the entity check
-         * above misses it. The is_class_temp_call gate already
-         * promoted this to a hoist; mirror the recognition here so
-         * we emit as ctor call (not as 'void temp;' followed by a
-         * void function call). Type comes from the enclosing class.
-         * See is_class_temp_call's comment for the libcpp pattern. */
-        if (!is_ctor_call && g_current_method_class &&
-            g_current_method_class->tag &&
-            call->call.callee->ident.name &&
-            tokens_equal(call->call.callee->ident.name,
-                         g_current_method_class->tag)) {
-            is_ctor_call = true;
-            ctor_class_type = g_current_method_class;
+            Node *d = find_class_def_by_tag_args(&probe);
+            if (!d) d = find_class_def_by_tag_only(&probe);
+            if (d && d->class_def.ty) {
+                ctor_class_type = d->class_def.ty;
+                is_ctor_call = true;
+            }
         }
     }
 
@@ -6463,12 +6418,12 @@ static void emit_expr(Node *n) {
             fputs(n->codegen_temp_name, stdout);
             return;
         }
-        /* Zero-arg functional cast 'T()' to a non-template class name —
-         * N4659 §8.2.3 [expr.type.conv]. The callee is ND_IDENT whose
-         * resolved_decl is ENTITY_TYPE/ENTITY_TAG and there are no
-         * args; lower to a value-init compound literal '(struct T){0}'.
-         * Without this, 'Derived()' in expression position emitted as
-         * a literal call to a function named 'Derived' — cc rejected.
+        /* Zero-arg functional cast 'T()' — N4659 §5.2.3 [expr.type.conv]
+         * value-init of T. Sema's classifier sets is_type_call when
+         * the callee resolves to a type-name. Lowers to a compound
+         * literal `(struct T){0}` for the non-polymorphic case;
+         * polymorphic classes need the ctor to install the vptr
+         * and go through the stmt-expr path below.
          *
          * Skip when the callee's ident ALSO has an in-scope function
          * declaration with the same name — per §6.3.10/2, the function
@@ -6497,25 +6452,8 @@ static void emit_expr(Node *n) {
                     goto skip_functional_cast;
             }
         }
-        if (n->call.nargs == 0 && n->call.callee &&
-            n->call.callee->kind == ND_IDENT) {
-            Declaration *rd = n->call.callee->ident.resolved_decl;
-            Token *cname = n->call.callee->ident.name;
-            Type *probe_ty = NULL;
-            if (rd && (rd->entity == ENTITY_TYPE ||
-                       rd->entity == ENTITY_TAG) && rd->type) {
-                probe_ty = rd->type;
-            } else if (cname) {
-                /* Sema didn't tag the resolved_decl (e.g. typedef
-                 * names at file scope). Probe the TU by tag to see
-                 * if 'cname' names a class. */
-                Type probe = {0};
-                probe.kind = TY_STRUCT;
-                probe.tag = cname;
-                Node *cdef = find_class_def_by_tag_only(&probe);
-                if (cdef && cdef->class_def.ty)
-                    probe_ty = cdef->class_def.ty;
-            }
+        if (n->call.nargs == 0 && n->call.is_type_call) {
+            Type *probe_ty = n->resolved_type;
             if (probe_ty &&
                 (probe_ty->kind == TY_STRUCT ||
                  probe_ty->kind == TY_UNION)) {
@@ -6562,21 +6500,18 @@ static void emit_expr(Node *n) {
          * method-call path (because the typedef's resolved Declaration
          * has a class home), where overload resolution fails and
          * die_no_overload aborts. */
-        if (n->call.nargs == 1 && n->call.callee &&
-            n->call.callee->kind == ND_IDENT) {
-            Declaration *rd = n->call.callee->ident.resolved_decl;
-            if (rd && rd->entity == ENTITY_TYPE && rd->type &&
-                rd->type->kind != TY_STRUCT && rd->type->kind != TY_UNION) {
-                fputc('(', stdout);
-                fputc('(', stdout);
-                emit_type(rd->type);
-                fputc(')', stdout);
-                fputc('(', stdout);
-                emit_expr(n->call.args[0]);
-                fputc(')', stdout);
-                fputc(')', stdout);
-                return;
-            }
+        if (n->call.nargs == 1 && n->call.is_type_call && n->resolved_type &&
+            n->resolved_type->kind != TY_STRUCT &&
+            n->resolved_type->kind != TY_UNION) {
+            fputc('(', stdout);
+            fputc('(', stdout);
+            emit_type(n->resolved_type);
+            fputc(')', stdout);
+            fputc('(', stdout);
+            emit_expr(n->call.args[0]);
+            fputc(')', stdout);
+            fputc(')', stdout);
+            return;
         }
         /* Capturing-lambda call — N4659 §8.1.5/3 [expr.prim.lambda].
          * Invoking the closure invokes its function call operator;
@@ -6672,65 +6607,34 @@ static void emit_expr(Node *n) {
                 }
             }
         }
-        /* Class-template functional cast 'vec<T,A,L>()' (value-init).
-         * The callee is ND_TEMPLATE_ID naming a class template, with
-         * no args. Emit a compound literal of the instantiated struct:
-         *   (struct sf__vec_t_..._te_){0}
-         * Only handle the 0-arg form — ctor-with-args would need
-         * hoisting to a temp + ctor call. Real-world shape:
-         *   return vec<ipa_agg_jf_item, va_heap, vl_ptr>();
-         * N4659 §8.2.3/2 [expr.type.conv]. */
-        if (n->call.callee && n->call.callee->kind == ND_TEMPLATE_ID &&
-            n->call.nargs == 0) {
-            Node *tid = n->call.callee;
-            /* Build a Type from (tag=tid.name, template_args=tid.args)
-             * and look up the instantiated class in the TU. */
-            Token *tname = tid->template_id.name;
-            if (tname) {
-                Type probe = {0};
-                probe.kind = TY_STRUCT;
-                probe.tag = tname;
-                int n_args = tid->template_id.nargs;
-                probe.n_template_args = n_args;
-                static Type *probe_args[16];
-                if (n_args > 0 && n_args <= 16) {
-                    for (int i = 0; i < n_args; i++) {
-                        Node *a = tid->template_id.args[i];
-                        probe_args[i] = (a && a->kind == ND_VAR_DECL)
-                            ? a->var_decl.ty : NULL;
-                    }
-                    probe.template_args = probe_args;
-                }
-                Node *d = find_class_def_by_tag_args(&probe);
-                if (!d) d = find_class_def_by_tag_only(&probe);
-                if (d && d->class_def.ty) {
-                    fputc('(', stdout);
-                    emit_type(d->class_def.ty);
-                    fputs("){0}", stdout);
-                    return;
-                }
-            }
+        /* Class-template functional cast 'vec<T,A,L>()' (value-init,
+         * N4659 §5.2.3/2 [expr.type.conv]). Sema's classifier resolves
+         * the ND_TEMPLATE_ID callee to the instantiated class via TU
+         * tag lookup and sets is_type_call. Emit a compound literal
+         * of the instantiated struct. Only the 0-arg form lands here
+         * — ctor-with-args goes through hoist_emit_decl. */
+        if (n->call.is_type_call && n->call.nargs == 0 &&
+            n->resolved_type &&
+            (n->resolved_type->kind == TY_STRUCT ||
+             n->resolved_type->kind == TY_UNION) &&
+            n->call.callee && n->call.callee->kind == ND_TEMPLATE_ID) {
+            fputc('(', stdout);
+            emit_type(n->resolved_type);
+            fputs("){0}", stdout);
+            return;
         }
-        /* Function-style cast / value-init: 'T()' or 'T(v)' where T
-         * names a non-class type. This arises after template
-         * instantiation: 'val(T())' inside a template becomes
-         * 'val(int())' — which in C++ is int{0}. The ND_IDENT callee
-         * still names the template param ('T') but its resolved_type
-         * was substituted to a concrete type (int). Emit as a C99
-         * compound literal or cast so the concrete type comes out:
-         *   T()  → (int){0}          (0-arg value-init)
-         *   T(v) → ((int)(v))        (1-arg conversion)
-         * Struct/union types keep flowing through the ctor path
-         * (hoist_emit_decl) which has its own handling.
-         * N4659 §8.2.3/2 [expr.type.conv]. */
-        if (n->call.callee && n->call.callee->kind == ND_IDENT &&
-            n->call.callee->ident.resolved_decl &&
-            n->call.callee->ident.resolved_decl->entity == ENTITY_TYPE) {
-            /* Callee's resolved_type was post-subst'd to the concrete
-             * type; the CALL node's resolved_type may be NULL because
-             * sema's ND_CALL handler only copies ret-type from TY_FUNC
-             * callees. */
+        /* Functional cast / value-init: `T()` or `T(v)` where the
+         * callee names a type (N4659 §5.2.3 [expr.type.conv]). Post-
+         * template-substitution shape: `val(T())` cloned into
+         * `val(int())` keeps the ND_IDENT callee naming T while
+         * resolved_type carries the concrete int. Emit a C99
+         * compound literal (0-arg) or C cast (1-arg) for non-class
+         * targets; class targets fall through to the ctor-aware
+         * hoist path. */
+        if (n->call.is_type_call &&
+            n->call.callee && n->call.callee->kind == ND_IDENT) {
             Type *conc = n->call.callee->resolved_type;
+            if (!conc) conc = n->resolved_type;
             if (conc && conc->kind != TY_STRUCT && conc->kind != TY_UNION &&
                 conc->kind != TY_DEPENDENT) {
                 if (n->call.nargs == 0) {
@@ -6747,13 +6651,13 @@ static void emit_expr(Node *n) {
                 }
                 return;
             }
-            /* Struct/union T() → '(struct sf__T){0}' compound literal.
-             * Happens when T is a TYPEDEF to a class template instance
-             * (e.g. 'typedef vec<T> name;'),
-             * called as 'name()' in a function-call expression.
-             * Real-world shape: 'histogram_values values =
-             * histogram_values();'. */
-            if (!conc) conc = n->call.callee->ident.resolved_decl->type;
+            /* Struct/union `T()` → `(struct sf__T){0}` compound
+             * literal. Hits when T is a typedef to a class template
+             * instance (e.g. `typedef vec<T> name;`) called as
+             * `name()`. */
+            if (!conc) conc = n->call.callee->ident.resolved_decl
+                                 ? n->call.callee->ident.resolved_decl->type
+                                 : NULL;
             if (conc && (conc->kind == TY_STRUCT || conc->kind == TY_UNION) &&
                 n->call.nargs == 0 && conc->tag) {
                 /* Class temporary `T()` / `T{}` whose ctor has a side
@@ -11101,53 +11005,20 @@ static void emit_var_decl_inner(Node *n) {
     }
     if (n->var_decl.init) {
         fputs(" = ", stdout);
-        /* Zero-arg functional-cast init of a struct var:
-         *   static vinsn_vec_t x = vinsn_vec_t();
-         * The init is ND_CALL with a bare ident callee whose
-         * resolved_decl didn't make it through sema (happens for
-         * typedef names at file scope when sema can't look them up).
-         * Still-invalid to emit as 'x = vinsn_vec_t()' — there's no
-         * such function. Detect the shape and substitute '{0}'.
-         * Gate on: callee's ident name matches the var's type's tag
-         * OR resolved_decl is ENTITY_TYPE — otherwise this is a real
-         * function call ('Point b = make();') that must pass through.
-         * Real-world shape:
-         *   static vinsn_vec_t vec_bookkeeping_blocked_vinsns
-         *     = vinsn_vec_t(); */
         if (n->var_decl.init->kind == ND_CALL &&
             n->var_decl.init->call.nargs == 0 &&
-            n->var_decl.init->call.callee &&
-            n->var_decl.init->call.callee->kind == ND_IDENT &&
             ty && (ty->kind == TY_STRUCT || ty->kind == TY_UNION)) {
-            bool is_func_cast = false;
+            /* `T x = T();` — value-init via functional cast
+             * (N4659 §5.2.3 + §11.6/8 [dcl.init]). Sema marks
+             * is_type_call when the callee resolves. An unresolved
+             * ident as a struct-var init is treated the same way:
+             * sea-front can't emit a call to an unknown function,
+             * so `{0}` is the conservative lowering. */
+            bool is_func_cast = n->var_decl.init->call.is_type_call;
             Node *cid = n->var_decl.init->call.callee;
-            if (cid->ident.resolved_decl &&
-                cid->ident.resolved_decl->entity == ENTITY_TYPE)
+            if (!is_func_cast && cid && cid->kind == ND_IDENT &&
+                !cid->ident.resolved_decl && cid->ident.name)
                 is_func_cast = true;
-            else if (!cid->ident.resolved_decl && cid->ident.name &&
-                     ty->tag) {
-                /* Unresolved ident — sema didn't find it as a function.
-                 * If the LHS declaration used the same name as the
-                 * ident, it's a functional cast (typedef name). */
-                /* var_decl.ty->tag is the canonical struct tag, which
-                 * may differ from the typedef name. Compare against
-                 * the decl-specifier tag captured at parse time — not
-                 * easily accessible here, so use a broader heuristic:
-                 * the type's tag (may be a mangled template name) OR
-                 * the original decl-specifier if present. */
-                if (cid->ident.name->len == ty->tag->len &&
-                    memcmp(cid->ident.name->loc, ty->tag->loc,
-                           ty->tag->len) == 0) {
-                    is_func_cast = true;
-                } else {
-                    /* Fallback: any 0-arg unresolved-ident call as a
-                     * struct var init — sea-front can't emit a call
-                     * to an unknown function anyway, so '{0}' is the
-                     * safer lowering. For real functions, resolved_decl
-                     * is set. */
-                    is_func_cast = true;
-                }
-            }
             if (is_func_cast) {
                 /* Classes with virtual methods or a default ctor need
                  * the ctor body to run — fall through to emit_expr,
@@ -11176,22 +11047,14 @@ static void emit_var_decl_inner(Node *n) {
         if (n->var_decl.init &&
             n->var_decl.init->kind == ND_CALL &&
             n->var_decl.init->call.nargs == 1 &&
-            n->var_decl.init->call.callee &&
-            n->var_decl.init->call.callee->kind == ND_IDENT &&
             ty && (ty->kind == TY_STRUCT || ty->kind == TY_UNION)) {
-            Node *cid = n->var_decl.init->call.callee;
-            bool callee_is_type =
-                cid->ident.resolved_decl &&
-                (cid->ident.resolved_decl->entity == ENTITY_TYPE ||
-                 cid->ident.resolved_decl->entity == ENTITY_TAG);
-            /* Unresolved ident matching the lhs class tag — same
-             * fallback the 0-arg branch above uses. */
-            if (!callee_is_type && !cid->ident.resolved_decl &&
-                cid->ident.name && ty->tag &&
-                cid->ident.name->len == ty->tag->len &&
-                memcmp(cid->ident.name->loc, ty->tag->loc,
-                       ty->tag->len) == 0)
-                callee_is_type = true;
+            /* `T b = T(x);` — single-arg functional cast equivalent
+             * to direct-init `T b(x);` (N4659 §5.2.3/2). For a class
+             * with no user copy-ctor the implicit-copy-ctor's
+             * memberwise copy reduces to bitwise copy in C, so
+             * emitting `T b = x;` (after the same_class check below)
+             * is correct. */
+            bool callee_is_type = n->var_decl.init->call.is_type_call;
             if (callee_is_type) {
                 Node *arg0 = n->var_decl.init->call.args[0];
                 Type *art = arg0 ? arg0->resolved_type : NULL;
@@ -11730,12 +11593,13 @@ static void decl_cond_cleanup_close(int saved_nlive) {
 /* `T v = T(args);` — copy-init from a temp constructed inline —
  * should invoke T's ctor on v (with elision). The C-level
  * `T v = (T){0};` is bitwise zero, skipping T's ctor side effects.
- * Detect the explicit ctor-call shape: init is ND_CALL whose callee
- * is a type-name (ENTITY_TYPE/ENTITY_TAG) AND the target class has
- * a default ctor (otherwise zero-init via init list is the right
- * lowering for a trivially-constructible class). Plain
- * `T v = func();` does NOT match — that's a function returning T
- * and the C-level copy semantics are correct.
+ * Detect the explicit ctor-call shape: init is a functional-cast
+ * ND_CALL (is_type_call) AND the target class has a default ctor
+ * (otherwise zero-init via init list is the right lowering for a
+ * trivially-constructible class). Plain `T v = func();` does NOT
+ * match — that's a function returning T and the C-level copy
+ * semantics are correct.
+ *
  * Rewrites `n` in place into has_ctor_init form so the existing
  * has_ctor_init emit path (`T v; T_ctor(&v, args);`) takes over.
  * N4659 §11.6/14 [dcl.init.aggr] — copy-init from a ctor-call
@@ -12209,11 +12073,11 @@ static void rewrite_copy_init_ctor_call(Node *n) {
     if (n->var_decl.has_ctor_init) return;
     if (!n->var_decl.ty || n->var_decl.ty->kind != TY_STRUCT) return;
     if (!n->var_decl.ty->has_default_ctor) return;
-    Node *callee = n->var_decl.init->call.callee;
-    if (!callee || callee->kind != ND_IDENT) return;
-    Declaration *d = callee->ident.resolved_decl;
-    if (!d || (d->entity != ENTITY_TYPE && d->entity != ENTITY_TAG))
-        return;
+    /* `T v = T(args);` — sema flagged the RHS as a functional cast
+     * (N4659 §5.2.3). Promote to direct-init `T v(args);` so the
+     * has_ctor_init emit path (`T v; T_ctor(&v, args);`) takes
+     * over and elides the copy. */
+    if (!n->var_decl.init->call.is_type_call) return;
     Node *call = n->var_decl.init;
     n->var_decl.has_ctor_init = true;
     n->var_decl.ctor_args = call->call.args;
