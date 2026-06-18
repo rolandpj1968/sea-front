@@ -16552,6 +16552,19 @@ static void emit_class_def(Node *n) {
             {
                 bool m_is_static = (m->var_decl.storage_flags & DECL_STATIC) != 0;
                 bool m_is_const = m->var_decl.ty && m->var_decl.ty->is_const;
+                /* Class-scope `operator new` / `operator delete` are
+                 * implicitly static per N4659 §16.5.3/1
+                 * [basic.stc.dynamic.allocation] regardless of an
+                 * explicit `static`. The OOL definition path already
+                 * promotes (emit_method_signature); mirror the same
+                 * promotion here so the in-class forward decl matches.
+                 * Pattern: g++.dg/init/new27.C. */
+                if (!m_is_static && is_operator_name(m->var_decl.name)) {
+                    OperatorKind ok = operator_kind_from_method_name(m->var_decl.name);
+                    if (ok == OP_NEW || ok == OP_NEW_ARRAY ||
+                        ok == OP_DELETE || ok == OP_DELETE_ARRAY)
+                        m_is_static = true;
+                }
                 fputc('(', stdout);
                 if (!m_is_static) {
                     /* N4659 §10.1.7.1 [dcl.type.cv]: const method → const this */
