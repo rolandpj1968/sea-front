@@ -2386,16 +2386,21 @@ no_grouped_abstract:;
     }
 
     /* Abstract array suffix — N4659 §11.3.4 [dcl.array]
-     *   abstract-declarator [ constant-expression(opt) ] */
+     *   abstract-declarator [ constant-expression(opt) ]
+     * Non-literal expressions (e.g. `new T[n]()`) keep their
+     * parsed Node on array_size_expr so the new-expression
+     * lowering can multiply it into the malloc size. */
     while (parser_consume(p, TK_LBRACKET)) {
-        int len = -1;
+        int   len  = -1;
+        Node *size = NULL;
         if (!parser_at(p, TK_RBRACKET)) {
-            Node *size = parse_assign_expr(p);
+            size = parse_assign_expr(p);
             if (size && size->kind == ND_NUM)
                 len = (int)size->num.lo;
         }
         parser_expect(p, TK_RBRACKET);
         base = new_array_type(p, base, len);
+        if (size && len < 0) base->array_size_expr = size;
     }
 
     return base;

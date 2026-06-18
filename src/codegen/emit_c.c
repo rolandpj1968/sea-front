@@ -1872,13 +1872,30 @@ static void hoist_new_expr(Node *cast, bool in_shortcircuit) {
      * ill-formed for scalar; fall through. */
     if (!is_class && cast->cast.new_value_init && na <= 1 &&
         pointee && pointee->kind != TY_ARRAY && pointee->kind != TY_FUNC) {
-        emit_indent();
-        fprintf(stdout, "*%s = ", name);
-        if (na == 1 && cast->cast.new_ctor_args[0])
-            emit_expr(cast->cast.new_ctor_args[0]);
-        else
-            fputc('0', stdout);
-        fputs(";\n", stdout);
+        if (cast->cast.new_array_count) {
+            /* `new T[n]()` — value-init zero-fills all n elements.
+             * For non-class T this is a single memset over the
+             * whole allocation. N4659 §8.5/8 + §8.3.4/17.
+             * Pattern: g++.dg/expr/anew1.C `new (p) int[n]()`. */
+            emit_indent();
+            fprintf(stdout, "memset(%s, 0, ", name);
+            if (cast->cast.operand &&
+                cast->cast.operand->kind == ND_CALL &&
+                cast->cast.operand->call.nargs >= 1 &&
+                cast->cast.operand->call.args[0])
+                emit_expr(cast->cast.operand->call.args[0]);
+            else
+                fprintf(stdout, "sizeof(*%s)", name);
+            fputs(");\n", stdout);
+        } else {
+            emit_indent();
+            fprintf(stdout, "*%s = ", name);
+            if (na == 1 && cast->cast.new_ctor_args[0])
+                emit_expr(cast->cast.new_ctor_args[0]);
+            else
+                fputc('0', stdout);
+            fputs(";\n", stdout);
+        }
     }
     /* Value-init memset, when applicable. */
     if (is_class && cast->cast.new_value_init && na == 0 &&
