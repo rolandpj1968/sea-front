@@ -2507,9 +2507,28 @@ static void hoist_stmt_temps(Node *s) {
             if (init->call.callee) hoist_temps_in_expr(init->call.callee, /*in_shortcircuit=*/false);
             for (int i = 0; i < init->call.nargs; i++)
                 hoist_temps_in_expr(init->call.args[i], /*in_shortcircuit=*/false);
-        } else {
-            hoist_temps_in_expr(init, /*in_shortcircuit=*/false);
+            return;
         }
+        /* Reference-bind-to-class-call-rvalue: `const T &r = f();`
+         * lowers to `T *r = &f();` — illegal C ('lvalue required as
+         * unary & operand'). Hoist the call into a named temp first
+         * so the ref binds to its address: `T __SF_temp_N = f();
+         * T *r = &__SF_temp_N;`. The temp's lifetime extends through
+         * r's scope per N4659 §15.2/6 [class.temporary]. Pattern:
+         * g++.dg/init/ref9.C `const ex & tmpex = b.eval();`. */
+        if (s->var_decl.ty && ty_is_ref(s->var_decl.ty) &&
+            init->kind == ND_CALL && init->resolved_type &&
+            (init->resolved_type->kind == TY_STRUCT ||
+             init->resolved_type->kind == TY_UNION) &&
+            !init->codegen_temp_name) {
+            if (init->call.callee)
+                hoist_temps_in_expr(init->call.callee, /*in_shortcircuit=*/false);
+            for (int i = 0; i < init->call.nargs; i++)
+                hoist_temps_in_expr(init->call.args[i], /*in_shortcircuit=*/false);
+            hoist_emit_decl(init, /*in_shortcircuit=*/false);
+            return;
+        }
+        hoist_temps_in_expr(init, /*in_shortcircuit=*/false);
         return;
     }
     case ND_EXPR_STMT:
