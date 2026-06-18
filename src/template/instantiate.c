@@ -371,6 +371,21 @@ static Node *registry_find_specialization(TmplRegistry *reg,
         /* Skip the primary template (no template_id_node on inner class) */
         Node *spec_decl = tmpl->template_decl.decl;
         if (!spec_decl) continue;
+        /* Skip explicit-instantiation declarations — N4659 §17.7.2
+         * [temp.explicit] `extern template class basic_string<char>;`.
+         * The parser produces a template-decl with nparams=0 wrapping
+         * a bodyless, nameless ND_VAR_DECL whose ty is the
+         * template-id. It is NOT a specialization to clone from — the
+         * actual instantiation lives in another TU. Treating it as a
+         * full specialization returned `inst = spec->template_decl.decl`
+         * (the nameless var-decl), which the dedup_add gated on
+         * `inst->kind == ND_CLASS_DEF` then skipped — every later
+         * request for the same template-id re-issued the same
+         * instantiation and the worklist loop never terminated. */
+        if (spec_decl->kind == ND_VAR_DECL &&
+            !spec_decl->var_decl.name &&
+            !spec_decl->var_decl.init)
+            continue;
         Type *spec_ty = NULL;
         if (spec_decl->kind == ND_CLASS_DEF)
             spec_ty = spec_decl->class_def.ty;
