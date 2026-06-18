@@ -15628,7 +15628,13 @@ static void emit_func_body(Node *func) {
      * Non-ctors only need the wrap when they have cleanups. */
     bool has_member_inits = func->func.is_constructor &&
                             g_current_class_def != NULL;
-    if (!g_cf.func_has_cleanups && !has_member_inits) {
+    /* Destructors always need the wrap so the dtor-during-unwind
+     * detection (N4659 §15.2/3) can snapshot at entry and check at
+     * exit — even a body with no cleanups can call functions that
+     * throw, and the dtor must terminate if such a throw escapes
+     * while the dtor was invoked during unwinding. */
+    bool needs_dtor_wrap = func->func.is_destructor;
+    if (!g_cf.func_has_cleanups && !has_member_inits && !needs_dtor_wrap) {
         emit_block(func->func.body);
         return;
     }
@@ -15638,7 +15644,7 @@ static void emit_func_body(Node *func) {
      * __SF_EPILOGUE (label + return). */
     emit_open_brace();
     bool void_ret = func->func.ret_ty && func->func.ret_ty->kind == TY_VOID;
-    if (g_cf.func_has_cleanups) {
+    if (g_cf.func_has_cleanups || needs_dtor_wrap) {
         emit_indent();
         if (void_ret) {
             fputs("__SF_PROLOGUE_VOID;\n", stdout);
@@ -15683,7 +15689,7 @@ static void emit_func_body(Node *func) {
      * Pattern: g++.dg/eh/filter2.C — ~a's inner `throw e1()` falls
      * through its `catch (e2&)` and escapes while the outer
      * ex_test() unwind already had e1 in flight. */
-    if (func->func.is_destructor && g_cf.func_has_cleanups) {
+    if (func->func.is_destructor) {
         emit_indent();
         fputs("__SF_unwind_t __sf_dtor_saved_state = __sf_exc_state.state;\n",
               stdout);
@@ -15695,8 +15701,18 @@ static void emit_func_body(Node *func) {
               "__sf_exc_state.exc_type;\n", stdout);
         emit_indent();
         fputs("unsigned __sf_dtor_entry_seq = __sf_exc_state.seq;\n", stdout);
-        emit_indent();
-        fputs("__sf_exc_state.state = __SF_UNWIND_NONE;\n", stdout);
+        /* Only clear state when the body has cleanups (try/catch
+         * or internal throw) — without internal cleanups, the body
+         * has no __SF_CHAIN_THROW macros to short-circuit, so the
+         * inherited state can pass through safely. Critically,
+         * clearing would also hide the in-flight exception from
+         * std::uncaught_exception() called inside the dtor body —
+         * a common pattern: `~T() { if (uncaught_exception()) ... }`.
+         * Pattern: dg-test eh_uncaught_exception. */
+        if (g_cf.func_has_cleanups) {
+            emit_indent();
+            fputs("__sf_exc_state.state = __SF_UNWIND_NONE;\n", stdout);
+        }
     }
     if (has_member_inits) emit_ctor_member_inits(func);
     /* Skip emitting the user body block entirely when it has zero
@@ -15710,7 +15726,7 @@ static void emit_func_body(Node *func) {
         emit_indent();
         emit_block(body);
     }
-    if (g_cf.func_has_cleanups) {
+    if (g_cf.func_has_cleanups || needs_dtor_wrap) {
         emit_indent();
         if (func->func.is_destructor) {
             /* Dtor epilogue (paired with the entry snapshot above):
