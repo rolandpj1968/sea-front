@@ -710,8 +710,16 @@ DeclSpec parse_type_specifiers(Parser *p) {
                 for (int mi = 0; mi < members.len; mi++) {
                     Node *m = ((Node **)members.data)[mi];
                     if (!m) continue;
-                    Node *fn = (m->kind == ND_TEMPLATE_DECL)
-                                  ? m->template_decl.decl : m;
+                    Node *fn = m;
+                    /* Unwrap ND_TEMPLATE_DECL (member template) and
+                     * ND_FRIEND (in-class friend def, at namespace
+                     * scope but inside complete-class context per
+                     * N4659 §14.3 [class.friend] — its body can
+                     * reference later-declared class members). */
+                    if (fn->kind == ND_TEMPLATE_DECL)
+                        fn = fn->template_decl.decl;
+                    if (fn && fn->kind == ND_FRIEND)
+                        fn = fn->friend_decl.decl;
                     if (fn && fn->kind == ND_FUNC_DEF &&
                         fn->func.body_start_pos >= 0)
                         parse_deferred_func_body(p, fn);

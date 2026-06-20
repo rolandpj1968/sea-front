@@ -15855,6 +15855,33 @@ static void free_ovld_walk(Node *n) {
             free_ovld_walk(n->block.stmts[i]);
         return;
     }
+    /* In-class friend function definitions are at namespace scope
+     * (N4659 §14.3 [class.friend]) — they participate in free-fn
+     * overload resolution alongside top-level decls. Walk into the
+     * class body to register each one before resuming the
+     * top-level decl scan. */
+    if (n->kind == ND_CLASS_DEF) {
+        for (int i = 0; i < n->class_def.nmembers; i++) {
+            Node *m = n->class_def.members[i];
+            if (m && m->kind == ND_FRIEND && m->friend_decl.decl)
+                free_ovld_walk(m->friend_decl.decl);
+            if (m && m->kind == ND_CLASS_DEF)
+                free_ovld_walk(m);   /* nested class */
+        }
+        return;
+    }
+    /* Recurse into ND_TEMPLATE_DECL ONLY when the wrapped entity is
+     * a class — to reach friend defs inside class templates. A
+     * template function wrapped in ND_TEMPLATE_DECL has its own
+     * instantiation pipeline and must NOT enter the free-fn
+     * overload registry (registering it would over-set the
+     * overload count and force the registry-based mangle on
+     * unrelated calls — breaks sfinae15 etc.). */
+    if (n->kind == ND_TEMPLATE_DECL && n->template_decl.decl &&
+        n->template_decl.decl->kind == ND_CLASS_DEF) {
+        free_ovld_walk(n->template_decl.decl);
+        return;
+    }
     Token *name = NULL;
     Type **params = NULL;
     int    nparams = 0;
@@ -20212,6 +20239,47 @@ static void collect_hoists_from_decl(Node *n,
     }
 }
 
+/* Append a Node* to a growable list. Shared by the friend-hoist
+ * collector and the local-class collector. */
+static void node_list_push(Node ***list, int *n, int *cap, Node *v) {
+    if (*n == *cap) {
+        int nc = *cap ? *cap * 2 : 4;
+        *list = realloc(*list, nc * sizeof(Node *));
+        *cap = nc;
+    }
+    (*list)[(*n)++] = v;
+}
+
+/* Walk a TU decl recursively, collecting in-class friend function
+ * definitions. N4659 §14.3 [class.friend]: a friend function
+ * defined inside a class body has namespace scope — it must be
+ * emitted at file scope to match. Parser wraps each as ND_FRIEND
+ * around an ND_FUNC_DEF; sea-front had no codegen path that
+ * reached the wrapped def, so calls to the friend link-failed. */
+static void collect_friend_funcs(Node *n,
+                                   Node ***out_friends,
+                                   int *out_n, int *out_cap) {
+    if (!n) return;
+    if (n->kind == ND_CLASS_DEF) {
+        for (int i = 0; i < n->class_def.nmembers; i++) {
+            Node *m = n->class_def.members[i];
+            if (!m) continue;
+            if (m->kind == ND_FRIEND && m->friend_decl.decl) {
+                Node *inner = m->friend_decl.decl;
+                if (inner->kind == ND_FUNC_DEF && inner->func.body)
+                    node_list_push(out_friends, out_n, out_cap, inner);
+            }
+            /* Recurse for nested classes. */
+            if (m->kind == ND_CLASS_DEF)
+                collect_friend_funcs(m, out_friends, out_n, out_cap);
+        }
+        return;
+    }
+    if (n->kind == ND_TEMPLATE_DECL && n->template_decl.decl)
+        collect_friend_funcs(n->template_decl.decl,
+                              out_friends, out_n, out_cap);
+}
+
 /* Find the EmitOrder node that emits class_def `cdef` (matched by
  * Node-pointer identity). Returns -1 if not present — caller must
  * handle (e.g. type defined in another TU, or template
@@ -20465,6 +20533,17 @@ static void build_emit_order(Node *tu, EmitOrder *out) {
         int decl_idx = order_push(out, n);
         for (int hi = 0; hi < hn; hi++)
             order_add_dep(out, decl_idx, hoist_first + hi);
+        /* In-class friend function definitions (N4659 §14.3) live
+         * at namespace scope but are syntactically inside the
+         * class. Push each as an independent TU unit — no
+         * enclosing-decl back-edge (a friend's body may USE the
+         * class's members, so the dependency runs friend→class,
+         * wired by body→type deps). */
+        Node **friends = NULL;
+        int fn = 0, fcap = 0;
+        collect_friend_funcs(n, &friends, &fn, &fcap);
+        for (int fi = 0; fi < fn; fi++) order_push(out, friends[fi]);
+        free(friends);
     }
     free(hoists);
     free(tu_known.items);
