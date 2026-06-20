@@ -2643,6 +2643,21 @@ Token *nttp_arg_to_literal_token(Node *arg) {
         return arg->chr.tok;
     case ND_STR:
         return arg->str.tok;
+    case ND_UNARY:
+        /* `&entity` as a pointer/function-pointer NTTP arg —
+         * N4659 §17.3.2/1 [temp.arg.nontype]: a constant
+         * expression that designates the address of an entity
+         * with static storage duration. Strip the address-of so
+         * the bare ident path binds; the param's pointer type
+         * (param.ty) provides the indirection. */
+        if (arg->unary.op == TK_AMP)
+            return nttp_arg_to_literal_token(arg->unary.operand);
+        break;
+    case ND_IDENT:
+        /* Function-pointer / object-pointer NTTP with implicit
+         * function-to-pointer or array-to-pointer conversion —
+         * N4659 §17.3.2/2. Bind the ident's name directly. */
+        return arg->ident.name;
     default:
         break;
     }
@@ -2656,6 +2671,12 @@ Type *template_arg_to_arg_type(Node *arg, Arena *arena) {
     if (!arg) return NULL;
     if (arg->kind == ND_VAR_DECL && arg->var_decl.ty)
         return arg->var_decl.ty;
+    /* Route through the shared literal-token extractor so the
+     * pointer/function-pointer NTTP shapes (`Pin<&g>`,
+     * `call_with<&fn>`) and arithmetic shapes route the same way.
+     * Arena-allocate any synthetic integer token to match arena
+     * lifetime — nttp_arg_to_literal_token's eval path uses
+     * malloc'd storage which would leak through arena. */
     Token *lit_tok = NULL;
     switch (arg->kind) {
     case ND_NUM:
@@ -2670,14 +2691,18 @@ Type *template_arg_to_arg_type(Node *arg, Arena *arena) {
     case ND_STR:
         lit_tok = arg->str.tok;
         break;
+    case ND_UNARY:
+        if (arg->unary.op == TK_AMP && arg->unary.operand &&
+            arg->unary.operand->kind == ND_IDENT)
+            lit_tok = arg->unary.operand->ident.name;
+        break;
+    case ND_IDENT:
+        lit_tok = arg->ident.name;
+        break;
     default:
         break;
     }
     if (!lit_tok) {
-        /* Try constant evaluation for non-literal NTTP arg
-         * expressions: `Pin<5+2>`, `Pin<(int)5>`, `Pin<myint(5)>`,
-         * `Pin<sizeof(int)+1>` (the last needs ND_SIZEOF
-         * support — not yet). */
         int64_t v;
         if (eval_const_int(arg, &v))
             lit_tok = make_synthetic_int_token(v, arena);
