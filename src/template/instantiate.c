@@ -1117,6 +1117,27 @@ static void collect_from_node(InstCollector *col, Node *n) {
         collect_from_node(col, n->cast.operand);
         break;
 
+    case ND_SIZEOF:
+        /* sizeof(T) where T is a class-template specialisation —
+         * `sizeof(Box<int>)`, or pack-expanded `sizeof(Box<Ts>)...`
+         * after per-iteration shadow-bind in clone_node_array_pack.
+         * Without this, the dep-collector misses the embedded
+         * template-id and the type stays forward-declared (incomplete
+         * type at sizeof site). N4659 §8.3.3 [expr.sizeof]. */
+        if (n->sizeof_.is_type)
+            collect_from_type(col, n->sizeof_.ty);
+        else
+            collect_from_node(col, n->sizeof_.expr);
+        break;
+
+    case ND_ALIGNOF:
+        collect_from_type(col, n->alignof_.ty);
+        break;
+
+    case ND_OFFSETOF:
+        collect_from_type(col, n->offsetof_.ty);
+        break;
+
     case ND_COMMA:
         collect_from_node(col, n->binary.lhs);
         collect_from_node(col, n->binary.rhs);
