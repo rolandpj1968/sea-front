@@ -357,6 +357,15 @@ struct Node {
              * Owned by the parser arena; callers read only. */
             Declaration **overload_set;
             int n_overloads;
+            /* Instantiation-pass-set: for unqualified sibling calls
+             * that started as ND_TEMPLATE_ID (`inner<U>(u)`) and
+             * were reduced to ND_IDENT (implicit_this=true) so
+             * codegen lowers via the standard class-method dispatch
+             * — preserve the ORIGINAL template-id so the call-site
+             * mangle can emit the `<method>I<args>E` Itanium segment
+             * matching the body. NULL when the ident was originally
+             * a plain unqualified name. N4659 §17.2/3 [temp.names]. */
+            Node *method_template_id;
         } ident;
 
         /* ND_QUALIFIED — N4659 §8.1.4.3 [expr.prim.id.qual]

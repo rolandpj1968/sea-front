@@ -7479,7 +7479,48 @@ static void emit_expr(Node *n) {
                 }
                 {
                     bool mc = candidate_is_const(winner);
-                    mangle_class_method(class_type, mname, call_pty, np, mc);
+                    /* Sibling member-template call (`inner<U>(u)` from
+                     * inside a class-template member body, reduced to
+                     * ND_IDENT(implicit_this) by the instantiation
+                     * pass): ident.method_template_id preserves the
+                     * pre-reduction template-id args so the call mangle
+                     * emits the `<method>I<args>E` Itanium segment
+                     * matching the body. NULL for callers that started
+                     * as plain idents. */
+                    Type **mtargs3 = NULL;
+                    int n_mtargs3 = 0;
+                    Node *mtid3 = (callee && callee->kind == ND_IDENT)
+                        ? callee->ident.method_template_id : NULL;
+                    static Type *mt3_buf[16];
+                    static Type mt3_nttp_buf[16];
+                    static Type mt3_int = { .kind = TY_INT };
+                    if (mtid3 && mtid3->kind == ND_TEMPLATE_ID &&
+                        mtid3->template_id.nargs > 0) {
+                        int n = mtid3->template_id.nargs;
+                        if (n > 16) n = 16;
+                        for (int i = 0; i < n; i++) {
+                            Node *a = mtid3->template_id.args[i];
+                            mt3_buf[i] = NULL;
+                            if (!a) continue;
+                            if (a->kind == ND_VAR_DECL) {
+                                mt3_buf[i] = a->var_decl.ty;
+                                continue;
+                            }
+                            Token *lt = nttp_arg_to_literal_token(a);
+                            if (lt) {
+                                memset(&mt3_nttp_buf[i], 0, sizeof(Type));
+                                mt3_nttp_buf[i].kind = TY_NTTP_VALUE;
+                                mt3_nttp_buf[i].tag = lt;
+                                if (lt->kind == TK_NUM)
+                                    mt3_nttp_buf[i].nttp_decl_type = &mt3_int;
+                                mt3_buf[i] = &mt3_nttp_buf[i];
+                            }
+                        }
+                        mtargs3 = mt3_buf;
+                        n_mtargs3 = n;
+                    }
+                    mangle_class_method_tid(class_type, mname, mtargs3,
+                                            n_mtargs3, call_pty, np, mc);
                 }
                 /* N4659 §11.4.9 [class.static]: static member functions
                  * have no implicit 'this'. Open the arg list with no
@@ -8061,8 +8102,46 @@ static void emit_expr(Node *n) {
                                 call_np = cty->nparams;
                             }
                             bool mc = candidate_is_const(winner);
-                            mangle_class_method(method_class,
+                            /* Member-template explicit-args call
+                             * (`obj.combine<int>(...)`): thread
+                             * member.template_id through so the
+                             * call mangle includes the
+                             * `<method>I<args>E` Itanium segment
+                             * matching the body. */
+                            Type **mtargs2 = NULL;
+                            int n_mtargs2 = 0;
+                            Node *mtid = callee->member.template_id;
+                            static Type *mt2_buf[16];
+                            static Type mt2_nttp_buf[16];
+                            static Type mt2_int = { .kind = TY_INT };
+                            if (mtid && mtid->kind == ND_TEMPLATE_ID &&
+                                mtid->template_id.nargs > 0) {
+                                int n = mtid->template_id.nargs;
+                                if (n > 16) n = 16;
+                                for (int i = 0; i < n; i++) {
+                                    Node *a = mtid->template_id.args[i];
+                                    mt2_buf[i] = NULL;
+                                    if (!a) continue;
+                                    if (a->kind == ND_VAR_DECL) {
+                                        mt2_buf[i] = a->var_decl.ty;
+                                        continue;
+                                    }
+                                    Token *lt = nttp_arg_to_literal_token(a);
+                                    if (lt) {
+                                        memset(&mt2_nttp_buf[i], 0, sizeof(Type));
+                                        mt2_nttp_buf[i].kind = TY_NTTP_VALUE;
+                                        mt2_nttp_buf[i].tag = lt;
+                                        if (lt->kind == TK_NUM)
+                                            mt2_nttp_buf[i].nttp_decl_type = &mt2_int;
+                                        mt2_buf[i] = &mt2_nttp_buf[i];
+                                    }
+                                }
+                                mtargs2 = mt2_buf;
+                                n_mtargs2 = n;
+                            }
+                            mangle_class_method_tid(method_class,
                                                      callee->member.member,
+                                                     mtargs2, n_mtargs2,
                                                      call_pty, call_np, mc);
                         }
                     }
@@ -16697,8 +16776,22 @@ static void emit_method_signature(Node *func, Type *class_type, bool emit_inline
     } else {
         Type **pty = NULL;
         int np = collect_func_param_types(func, &pty);
-        mangle_class_method(class_type, func->func.name, pty, np,
-                                func->func.is_const_method);
+        /* Member-template body mangle: when this clone is a
+         * member-template instantiation (template_args set by the
+         * instantiation pass — from qualified tail_tid, member
+         * template_id, or sibling-reduced ident.method_template_id),
+         * route through mangle_class_method_tid so the body symbol
+         * carries the `<method-name>I<args>E` Itanium segment that
+         * matches every call site's mangle. N4659 §17.2/3. */
+        if (func->func.n_template_args > 0 && func->func.template_args)
+            mangle_class_method_tid(class_type, func->func.name,
+                                     func->func.template_args,
+                                     func->func.n_template_args,
+                                     pty, np,
+                                     func->func.is_const_method);
+        else
+            mangle_class_method(class_type, func->func.name, pty, np,
+                                    func->func.is_const_method);
     }
     fputc('(', stdout);
     bool is_static = (func->func.storage_flags & DECL_STATIC) != 0;

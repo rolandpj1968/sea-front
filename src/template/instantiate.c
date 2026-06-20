@@ -3004,12 +3004,28 @@ void template_instantiate(Node *tu, Arena *arena) {
                     if (!param->param.ty) continue;  /* type-param, not NTTP */
                     if (!param->param.name) continue;
                     Node *a = xtid->template_id.args[i];
-                    if (a && a->kind == ND_IDENT && a->ident.name) {
-                        subst_map_add_tt(&deduced, param->param.name, a->ident.name);
-                    } else {
-                        Token *lit = nttp_arg_to_literal_token(a);
-                        if (lit)
-                            subst_map_add_tt(&deduced, param->param.name, lit);
+                    Token *lit = NULL;
+                    if (a && a->kind == ND_IDENT && a->ident.name)
+                        lit = a->ident.name;
+                    else
+                        lit = nttp_arg_to_literal_token(a);
+                    if (lit) {
+                        /* Add a concrete_type TY_NTTP_VALUE so the
+                         * dedup key (which reads concrete_type per
+                         * entry) discriminates foo<3> from foo<7> —
+                         * tt_bound_name alone leaves both entries
+                         * with concrete_type=NULL and the second
+                         * specialization dedup-collides with the
+                         * first. nttp_decl_type comes from the
+                         * method param so the mangler renders the
+                         * literal value (Itanium ABI §5.1.6.7). */
+                        Type *nttp_ty = arena_alloc(arena, sizeof(Type));
+                        memset(nttp_ty, 0, sizeof(Type));
+                        nttp_ty->kind = TY_NTTP_VALUE;
+                        nttp_ty->tag = lit;
+                        nttp_ty->nttp_decl_type = param->param.ty;
+                        subst_map_add(&deduced, param->param.name, nttp_ty);
+                        subst_map_add_tt(&deduced, param->param.name, lit);
                     }
                 }
             }
@@ -3236,6 +3252,48 @@ void template_instantiate(Node *tu, Arena *arena) {
             cloned->func.class_type = mr->enclosing_class;
         }
 
+        /* Method-template explicit args (qualified `S<10>::foo<3>()`
+         * via tail_tid; member `obj.m<U>()` via member.template_id;
+         * sibling `m<U>()` via the bare ND_TEMPLATE_ID callee).
+         * Thread the args into the cloned func's template_args slot
+         * so emit_func_def's mangle picks them up and emits the
+         * `<method-name>I<args>E` Itanium segment that matches the
+         * call-site mangle. N4659 §17.2/3 [temp.names] +
+         * §17.7.1 [temp.inst]. */
+        {
+            Node *cb2 = mr->call_node ? mr->call_node->call.callee : NULL;
+            Node *xtid2 = NULL;
+            if (cb2) {
+                if (cb2->kind == ND_TEMPLATE_ID)
+                    xtid2 = cb2;
+                else if (cb2->kind == ND_MEMBER && cb2->member.template_id)
+                    xtid2 = cb2->member.template_id;
+                else if (cb2->kind == ND_QUALIFIED && cb2->qualified.tail_tid)
+                    xtid2 = cb2->qualified.tail_tid;
+                else if (cb2->kind == ND_IDENT && cb2->ident.method_template_id)
+                    xtid2 = cb2->ident.method_template_id;
+            }
+            if (xtid2 && xtid2->kind == ND_TEMPLATE_ID &&
+                xtid2->template_id.nargs > 0) {
+                int xn = xtid2->template_id.nargs;
+                cloned->func.n_template_args = xn;
+                cloned->func.template_args =
+                    arena_alloc(arena, xn * sizeof(Type *));
+                for (int i = 0; i < xn; i++) {
+                    Type *t = template_arg_to_arg_type(
+                        xtid2->template_id.args[i], arena);
+                    if (t && t->kind == TY_NTTP_VALUE && tmpl &&
+                        i < tmpl->template_decl.nparams) {
+                        Node *p = tmpl->template_decl.params[i];
+                        if (p && p->kind == ND_PARAM && p->param.ty)
+                            t->nttp_decl_type = p->param.ty;
+                    }
+                    cloned->func.template_args[i] = t;
+                }
+                cloned->func.source_template = tmpl;
+            }
+        }
+
         /* N4659 §16.3 [over.match]: build TY_FUNC from cloned params
          * and set as resolved_type on the call-site callee so the
          * param suffix matches between definition and call. Store
@@ -3259,12 +3317,25 @@ void template_instantiate(Node *tu, Arena *arena) {
                 cb->template_id.name &&
                 mr->enclosing_class) {
                 Token *bare = cb->template_id.name;
+                /* Save the pre-reduction template-id on a fresh
+                 * clone so the call-site mangle can re-thread its
+                 * args. Allocating a copy is necessary because the
+                 * union storage gets overwritten when cb->kind
+                 * changes. */
+                Node *saved_tid = NULL;
+                if (cb->template_id.nargs > 0) {
+                    saved_tid = arena_alloc(arena, sizeof(Node));
+                    memset(saved_tid, 0, sizeof(Node));
+                    saved_tid->kind = ND_TEMPLATE_ID;
+                    saved_tid->template_id = cb->template_id;
+                }
                 cb->kind = ND_IDENT;
                 cb->ident.name = bare;
                 cb->ident.implicit_this = true;
                 cb->ident.resolved_decl = NULL;
                 cb->ident.overload_set = NULL;
                 cb->ident.n_overloads = 0;
+                cb->ident.method_template_id = saved_tid;
             }
         }
 
