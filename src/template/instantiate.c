@@ -2153,9 +2153,12 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
      * can morph body references to the param into the literal node.
      * +1 for the injected-class-name entry, +outer for the
      * enclosing class-template's params when this is a member of a
-     * class template (N4659 §17.5.2 [temp.mem]/2). */
+     * class template (N4659 §17.5.2 [temp.mem]/2).
+     * +1 headroom for clone_node_array_pack's per-iteration shadow
+     * of the pack binding (used when a pack name appears inside a
+     * TYPE such as `sizeof(Ts)...`). */
     SubstMap map = subst_map_new_with_registry(arena,
-        (nparams > 0 ? nparams * 2 : 1) + 1 + outer_nparams * 2, reg);
+        (nparams > 0 ? nparams * 2 : 1) + 2 + outer_nparams * 2, reg);
 
     /* Seed with outer-template param→arg bindings BEFORE the inner
      * head's bindings, so a body that references both T (outer) and

@@ -512,8 +512,32 @@ static Node **clone_node_array_pack(Node **arr, int n, SubstMap *map,
                          *    rewrite the pack ident's NAME to
                          *    `<orig>_<j>`; per-index decls were
                          *    synthesised by the ND_PARAM expansion
-                         *    branch above. */
+                         *    branch above.
+                         *
+                         * Pack-element type binding: for `sizeof(Ts)...`
+                         * and similar shapes where the pack name appears
+                         * inside a TYPE (not as an ident), subst_type
+                         * needs to see Ts→pack_types[j] for THIS
+                         * iteration. Temporarily shadow the pack entry
+                         * with a single-element non-pack entry whose
+                         * concrete_type is pack_types[j]; subst_map_lookup
+                         * returns the first match and skips is_pack
+                         * entries, so the shadow wins. Pop after the
+                         * clone. Requires +1 capacity headroom in the
+                         * SubstMap (handled at the instantiate site). */
+                        int saved_nentries = map->nentries;
+                        if (pe->param_name && pe->pack_types &&
+                            map->nentries < map->capacity) {
+                            map->entries[map->nentries].param_name = pe->param_name;
+                            map->entries[map->nentries].concrete_type = pe->pack_types[j];
+                            map->entries[map->nentries].tt_bound_name = NULL;
+                            map->entries[map->nentries].pack_types = NULL;
+                            map->entries[map->nentries].pack_ntypes = 0;
+                            map->entries[map->nentries].is_pack = false;
+                            map->nentries++;
+                        }
                         c = clone_node(src, map, arena);
+                        map->nentries = saved_nentries;
                         Type *pe_t = pe->pack_types[j];
                         if (c && c->kind == ND_IDENT && c->ident.name &&
                             pe_t && pe_t->kind == TY_NTTP_VALUE && pe_t->tag) {
