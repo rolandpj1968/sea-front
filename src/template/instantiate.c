@@ -2360,16 +2360,17 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
                  * explicit args specified so far and evaluated at
                  * the template-id's instantiation point.
                  *
-                 * Sea-front handles the type-trait shape directly:
+                 * Type-trait shape is handled directly (it depends
+                 * on the SubstMap, not on a constant-int evaluator):
                  * substitute each arg type via the current SubstMap,
                  * call eval_type_trait, synthesize a Token carrying
-                 * the literal text "0" or "1" for the NTTP binding.
-                 * Other expression shapes (literal, arithmetic, ...)
-                 * fall back to binding the original default expr's
-                 * token text — works for literal defaults like
-                 * 'bool b = true' but not for more complex shapes.
-                 * TODO(seafront#nttp-default-eval): full constant-
-                 * evaluator for arbitrary NTTP defaults. */
+                 * "0" or "1" for the NTTP binding.
+                 *
+                 * Everything else routes through
+                 * nttp_arg_to_literal_token, which covers literals
+                 * directly and arbitrary const-int expressions
+                 * (5+3, sizeof(int), (int)5, myint(5), ...) via the
+                 * eval_const_int fallback. */
                 Node *def = param->param.default_value;
                 Token *bound_tok = NULL;
                 if (def->kind == ND_TYPE_TRAIT) {
@@ -2382,11 +2383,8 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
                     t->loc  = result ? "1" : "0";
                     t->len  = 1;
                     bound_tok = t;
-                } else if (def->kind == ND_NUM || def->kind == ND_FNUM ||
-                           def->kind == ND_BOOL_LIT || def->kind == ND_NULLPTR) {
-                    bound_tok = def->tok;
-                } else if (def->kind == ND_IDENT) {
-                    bound_tok = def->ident.name;
+                } else {
+                    bound_tok = nttp_arg_to_literal_token(def);
                 }
                 if (bound_tok)
                     subst_map_add_tt(&map, pname, bound_tok);
@@ -3235,11 +3233,18 @@ void template_instantiate(Node *tu, Arena *arena) {
                 continue;
             }
             /* NTTP default evaluation (only when no explicit arg).
-             * Currently handles the type-trait shape; other shapes
-             * fall through and remain unbound (mangled as "unknown"
-             * — TODO(seafront#nttp-default-eval)). */
+             * Type-trait short-cut handled inline (it consults
+             * tmp_map); other expression shapes route through
+             * nttp_arg_to_literal_token, which covers literals and
+             * arbitrary const-int expressions via eval_const_int.
+             * The result is wrapped in a synthetic ND_VAR_DECL +
+             * TY_NTTP_VALUE so downstream sites that extract the
+             * type via the 'a->kind == ND_VAR_DECL ? a->var_decl.ty
+             * : NULL' shape (stub builders, mangler, dedup) see the
+             * value — mangler emits 'Li<N>E'. */
             if (i >= na && param->param.default_value) {
                 Node *def = param->param.default_value;
+                Token *bound_tok = NULL;
                 if (def->kind == ND_TYPE_TRAIT) {
                     Type *a0 = subst_type(def->type_trait.arg0, &tmp_map, arena);
                     Type *a1 = subst_type(def->type_trait.arg1, &tmp_map, arena);
@@ -3249,16 +3254,15 @@ void template_instantiate(Node *tu, Arena *arena) {
                     t->kind = TK_NUM;
                     t->loc  = result ? "1" : "0";
                     t->len  = 1;
-                    /* Wrap in ND_VAR_DECL carrying a TY_NTTP_VALUE so
-                     * every site that extracts the Type via the
-                     * 'a->kind == ND_VAR_DECL ? a->var_decl.ty : NULL'
-                     * shape (stub builders, mangler, dedup) sees it.
-                     * The TY_NTTP_VALUE.tag points at the literal token
-                     * so the mangler emits 'Li1E' / 'Li0E'. */
+                    bound_tok = t;
+                } else {
+                    bound_tok = nttp_arg_to_literal_token(def);
+                }
+                if (bound_tok) {
                     Type *nttp_ty = arena_alloc(arena, sizeof(Type));
                     memset(nttp_ty, 0, sizeof(Type));
                     nttp_ty->kind = TY_NTTP_VALUE;
-                    nttp_ty->tag  = t;
+                    nttp_ty->tag  = bound_tok;
                     if (param->param.ty)
                         nttp_ty->nttp_decl_type = param->param.ty;
                     Node *vd = arena_alloc(arena, sizeof(Node));
