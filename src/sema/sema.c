@@ -2282,12 +2282,47 @@ static void visit_call(Sema *s, Node *n) {
     } else if (n->call.callee &&
                n->call.callee->kind == ND_TEMPLATE_ID &&
                n->call.callee->template_id.name) {
+        Node *tid = n->call.callee;
         Type probe = {0};
         probe.kind = TY_STRUCT;
-        probe.tag = n->call.callee->template_id.name;
+        probe.tag = tid->template_id.name;
         Node *cdef = find_class_def_in_tu(s->tu, &probe);
-        if (cdef && cdef->class_def.ty)
+        if (cdef && cdef->class_def.ty) {
             tc_type = cdef->class_def.ty;                        /* (d) */
+            /* Synthesise a per-instantiation Type carrying the
+             * template-id's args so downstream deduction can see
+             * them (`Foo<I>(A<I> a)` against an A<2>() temp).
+             * Without this the bare primary-template Type leaked
+             * through and the call mangle / deduction collapsed
+             * all instantiations of A. */
+            int n_args = tid->template_id.nargs;
+            if (n_args > 0) {
+                Type *inst_ty = arena_alloc(s->arena, sizeof(Type));
+                *inst_ty = *tc_type;
+                inst_ty->template_id_node = tid;
+                inst_ty->n_template_args = n_args;
+                inst_ty->template_args = arena_alloc(s->arena,
+                    n_args * sizeof(Type *));
+                for (int i = 0; i < n_args; i++) {
+                    Node *a = tid->template_id.args[i];
+                    Type *at = NULL;
+                    if (a && a->kind == ND_VAR_DECL) {
+                        at = a->var_decl.ty;
+                    } else if (a) {
+                        Token *lit = nttp_arg_to_literal_token(a);
+                        if (lit) {
+                            Type *nv = arena_alloc(s->arena, sizeof(Type));
+                            memset(nv, 0, sizeof(Type));
+                            nv->kind = TY_NTTP_VALUE;
+                            nv->tag = lit;
+                            at = nv;
+                        }
+                    }
+                    inst_ty->template_args[i] = at;
+                }
+                tc_type = inst_ty;
+            }
+        }
     }
     if (tc_type) {
         n->call.is_type_call = true;

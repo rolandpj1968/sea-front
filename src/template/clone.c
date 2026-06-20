@@ -254,12 +254,24 @@ Type *subst_type(Type *ty, SubstMap *map, Arena *arena) {
          * type contains a dependent name anywhere in its structure —
          * not just at the top level. 'vec<T*, A, vl_embed>' has args[0]
          * = TY_PTR(TY_DEPENDENT(T)), which needs substitution even
-         * though the outermost kind isn't TY_DEPENDENT. */
+         * though the outermost kind isn't TY_DEPENDENT.
+         *
+         * Also: ND_IDENT args naming an NTTP template parameter
+         * (`A<I>`) are dependent on the outer template's binding.
+         * Recognising them here lets `Foo<I>(A<I> a)` cloned with
+         * I=5 produce `A<5>` in the cloned param type. */
         bool needs_subst = false;
         for (int i = 0; i < tid->template_id.nargs; i++) {
             Node *a = tid->template_id.args[i];
             Type *at = (a && a->kind == ND_VAR_DECL) ? a->var_decl.ty : NULL;
             if (at && type_has_dependent(at)) { needs_subst = true; break; }
+            if (a && a->kind == ND_IDENT && a->ident.name) {
+                Token *bound = subst_map_lookup_tt(map,
+                    a->ident.name->loc, a->ident.name->len);
+                Type *bt = subst_map_lookup(map,
+                    a->ident.name->loc, a->ident.name->len);
+                if (bound || bt) { needs_subst = true; break; }
+            }
         }
 
         if (needs_subst) {
@@ -278,6 +290,35 @@ Type *subst_type(Type *ty, SubstMap *map, Arena *arena) {
                     *ac = *a;
                     ac->var_decl.ty = sub;
                     tid_copy->template_id.args[i] = ac;
+                } else if (a && a->kind == ND_IDENT && a->ident.name) {
+                    /* NTTP arg referencing an outer template param —
+                     * morph into the concrete value from the map. The
+                     * tt-binding carries the literal token; build a
+                     * synth ND_NUM (or ND_IDENT for non-literal
+                     * fallbacks) that downstream code can treat as
+                     * the resolved arg. */
+                    Token *bound = subst_map_lookup_tt(map,
+                        a->ident.name->loc, a->ident.name->len);
+                    Type *bt = subst_map_lookup(map,
+                        a->ident.name->loc, a->ident.name->len);
+                    if (bound) {
+                        Node *ac = arena_alloc(arena, sizeof(Node));
+                        memset(ac, 0, sizeof(Node));
+                        ac->kind = (bound->kind == TK_NUM) ? ND_NUM : ND_IDENT;
+                        ac->tok = bound;
+                        if (ac->kind == ND_IDENT) ac->ident.name = bound;
+                        tid_copy->template_id.args[i] = ac;
+                    } else if (bt) {
+                        /* Wrap in a synth ND_VAR_DECL so downstream
+                         * code that reads var_decl.ty sees the type. */
+                        Node *ac = arena_alloc(arena, sizeof(Node));
+                        memset(ac, 0, sizeof(Node));
+                        ac->kind = ND_VAR_DECL;
+                        ac->var_decl.ty = bt;
+                        tid_copy->template_id.args[i] = ac;
+                    } else {
+                        tid_copy->template_id.args[i] = a;
+                    }
                 } else {
                     tid_copy->template_id.args[i] = a;
                 }
@@ -292,8 +333,22 @@ Type *subst_type(Type *ty, SubstMap *map, Arena *arena) {
             copy->n_template_args = na;
             for (int i = 0; i < na; i++) {
                 Node *a = tid_copy->template_id.args[i];
-                copy->template_args[i] = (a && a->kind == ND_VAR_DECL)
-                    ? a->var_decl.ty : NULL;
+                Type *at = NULL;
+                if (a && a->kind == ND_VAR_DECL) {
+                    at = a->var_decl.ty;
+                } else if (a) {
+                    /* Wrap NTTP-literal args as TY_NTTP_VALUE so
+                     * mangling sees the value, not NULL. */
+                    Token *lit = nttp_arg_to_literal_token(a);
+                    if (lit) {
+                        Type *nv = arena_alloc(arena, sizeof(Type));
+                        memset(nv, 0, sizeof(Type));
+                        nv->kind = TY_NTTP_VALUE;
+                        nv->tag = lit;
+                        at = nv;
+                    }
+                }
+                copy->template_args[i] = at;
             }
             return copy;
         }
