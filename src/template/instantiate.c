@@ -2147,11 +2147,15 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
      * positions bind the spec's param to the usage arg; concrete
      * positions must match exactly (already checked by the
      * specialization finder). */
-    /* +1 capacity for the injected-class-name entry, +outer for the
+    /* Each non-type template param consumes up to TWO slots — one
+     * concrete_type binding via subst_map_add, plus a tt_bound_name
+     * binding via subst_map_add_tt so clone.c's ND_IDENT handler
+     * can morph body references to the param into the literal node.
+     * +1 for the injected-class-name entry, +outer for the
      * enclosing class-template's params when this is a member of a
      * class template (N4659 §17.5.2 [temp.mem]/2). */
     SubstMap map = subst_map_new_with_registry(arena,
-        (nparams > 0 ? nparams : 1) + 1 + outer_nparams, reg);
+        (nparams > 0 ? nparams * 2 : 1) + 1 + outer_nparams * 2, reg);
 
     /* Seed with outer-template param→arg bindings BEFORE the inner
      * head's bindings, so a body that references both T (outer) and
@@ -2272,8 +2276,18 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
             }
 
             Type *arg_ty = NULL;
-            if (i < nargs)
+            if (i < nargs) {
                 arg_ty = type_arg_from_node(template_id->template_id.args[i]);
+                /* type_arg_from_node only handles ND_VAR_DECL.
+                 * For non-literal NTTP expressions (`Pin<5+2>`,
+                 * `Pin<myint(5)>`, ...), fall through to the
+                 * constant-int evaluator routed through
+                 * template_arg_to_arg_type. N4659 §17.6.2 +
+                 * §5.20 [expr.const]. */
+                if (!arg_ty)
+                    arg_ty = template_arg_to_arg_type(
+                                template_id->template_id.args[i], arena);
+            }
             /* Fall back to type-param default if no explicit argument
              * — N4659 §17.1/8 [temp.param]. NTTP defaults live in
              * param.default_value and are handled in the else-if

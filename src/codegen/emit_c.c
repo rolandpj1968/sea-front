@@ -6974,17 +6974,7 @@ static void emit_expr(Node *n) {
                                  * same C symbol).
                                  * Pattern: g++.dg/cpp0x/variadic-init.C
                                  * `S<0,1,2>::foo()`. */
-                                Token *lit_tok = NULL;
-                                if (a) {
-                                    switch (a->kind) {
-                                    case ND_NUM: case ND_FNUM:
-                                    case ND_BOOL_LIT: case ND_NULLPTR:
-                                        lit_tok = a->tok; break;
-                                    case ND_CHAR: lit_tok = a->chr.tok; break;
-                                    case ND_STR:  lit_tok = a->str.tok; break;
-                                    default: break;
-                                    }
-                                }
+                                Token *lit_tok = nttp_arg_to_literal_token(a);
                                 if (lit_tok) {
                                     memset(&stub_nttp_buf[i], 0, sizeof(Type));
                                     stub_nttp_buf[i].kind = TY_NTTP_VALUE;
@@ -9662,15 +9652,7 @@ static void emit_expr(Node *n) {
                             buf[i] = a->var_decl.ty;
                             continue;
                         }
-                        Token *lit_tok = NULL;
-                        switch (a->kind) {
-                        case ND_NUM: case ND_FNUM:
-                        case ND_BOOL_LIT: case ND_NULLPTR:
-                            lit_tok = a->tok; break;
-                        case ND_CHAR: lit_tok = a->chr.tok; break;
-                        case ND_STR:  lit_tok = a->str.tok; break;
-                        default: break;
-                        }
+                        Token *lit_tok = nttp_arg_to_literal_token(a);
                         if (lit_tok) {
                             nttp_buf[i].kind = TY_NTTP_VALUE;
                             nttp_buf[i].tag  = lit_tok;

@@ -2505,6 +2505,153 @@ Node *find_class_def_in_tu(Node *tu, Type *class_ty) {
     return NULL;
 }
 
+/* Constant integer evaluation for NTTP arguments — N4659 §5.20
+ * [expr.const] subset. Sea-front's NTTP binding originally took
+ * literal tokens only, so `Pin<5+2>` (binary expression) couldn't
+ * bind N → instantiation failed. This Tier-2 evaluator handles the
+ * forms that show up in real-world NTTP usage: arithmetic, casts,
+ * functional casts to scalar types, unary +/-/~.
+ *
+ * Strictly, the spec wants full constant evaluation; the Itanium
+ * NTTP mangle also requires the VALUE (so `Pin<5+2>` and `Pin<7>`
+ * share a symbol). Tier-2 covers the common case. Constexpr
+ * function calls, NTTP-as-operand, and more complex expressions
+ * (e.g. `Pin<sizeof(T)>` where T is a class) are deferred.
+ *
+ * Returns true on success with *out populated. */
+static bool eval_const_int(Node *n, int64_t *out) {
+    if (!n) return false;
+    switch (n->kind) {
+    case ND_NUM:
+        *out = (int64_t)n->num.lo;
+        if (n->num.is_signed && (n->num.lo >> 63))
+            *out = -(int64_t)(~n->num.lo + 1);
+        return true;
+    case ND_BOOL_LIT:
+        if (n->tok && n->tok->len == 4 &&
+            memcmp(n->tok->loc, "true", 4) == 0) {
+            *out = 1; return true;
+        }
+        *out = 0; return true;
+    case ND_CHAR:
+        if (n->chr.tok) {
+            *out = (int64_t)(unsigned char)n->chr.tok->loc[1];
+            return true;
+        }
+        return false;
+    case ND_UNARY: {
+        int64_t v;
+        if (!eval_const_int(n->unary.operand, &v)) return false;
+        switch (n->unary.op) {
+        case TK_PLUS:  *out =  v;  return true;
+        case TK_MINUS: *out = -v;  return true;
+        case TK_TILDE: *out = ~v;  return true;
+        case TK_EXCL:  *out = !v;  return true;
+        default: return false;
+        }
+    }
+    case ND_BINARY: {
+        int64_t lhs, rhs;
+        if (!eval_const_int(n->binary.lhs, &lhs)) return false;
+        if (!eval_const_int(n->binary.rhs, &rhs)) return false;
+        switch (n->binary.op) {
+        case TK_PLUS:   *out = lhs + rhs;            return true;
+        case TK_MINUS:  *out = lhs - rhs;            return true;
+        case TK_STAR:   *out = lhs * rhs;            return true;
+        case TK_SLASH:  if (rhs == 0) return false;
+                        *out = lhs / rhs;            return true;
+        case TK_PERCENT:if (rhs == 0) return false;
+                        *out = lhs % rhs;            return true;
+        case TK_AMP:    *out = lhs & rhs;            return true;
+        case TK_PIPE:   *out = lhs | rhs;            return true;
+        case TK_CARET:  *out = lhs ^ rhs;            return true;
+        case TK_SHL:    *out = lhs << rhs;           return true;
+        case TK_SHR:    *out = lhs >> rhs;           return true;
+        case TK_EQ:     *out = lhs == rhs;           return true;
+        case TK_NE:     *out = lhs != rhs;           return true;
+        case TK_LT:     *out = lhs <  rhs;           return true;
+        case TK_GT:     *out = lhs >  rhs;           return true;
+        case TK_LE:     *out = lhs <= rhs;           return true;
+        case TK_GE:     *out = lhs >= rhs;           return true;
+        case TK_LAND:   *out = lhs && rhs;           return true;
+        case TK_LOR:    *out = lhs || rhs;           return true;
+        default: return false;
+        }
+    }
+    case ND_CAST:
+        /* C-style cast to a scalar type — `(int)5`, `(long)x`.
+         * Operand value reaches through unchanged (truncation
+         * to the target width happens implicitly when the
+         * Itanium mangle re-renders the int). */
+        return eval_const_int(n->cast.operand, out);
+    case ND_CALL:
+        /* Functional cast `T(x)` for scalar T — N4659 §5.2.3/2
+         * is equivalent to `(T)x`. is_type_call discriminates from
+         * a real function call. Sema's classifier sets the flag. */
+        if (n->call.is_type_call && n->call.nargs == 1)
+            return eval_const_int(n->call.args[0], out);
+        return false;
+    default:
+        return false;
+    }
+}
+
+/* Synthesize a number-token whose text reads the decimal of `v`,
+ * pointing into arena-owned storage. Used by template_arg_to_arg_type
+ * to wrap an evaluated NTTP value in TY_NTTP_VALUE. */
+static Token *make_synthetic_int_token(int64_t v, Arena *arena) {
+    char buf[32];
+    int len = snprintf(buf, sizeof(buf), "%lld", (long long)v);
+    char *txt = arena_alloc(arena, len + 1);
+    memcpy(txt, buf, len);
+    txt[len] = '\0';
+    Token *t = arena_alloc(arena, sizeof(Token));
+    memset(t, 0, sizeof(*t));
+    t->kind = TK_NUM;
+    t->loc = txt;
+    t->len = len;
+    return t;
+}
+
+/* malloc-allocated variant for callers without arena access
+ * (emit_c.c). Caller owns the returned Token's storage. */
+static Token *make_synthetic_int_token_malloc(int64_t v) {
+    char buf[32];
+    int len = snprintf(buf, sizeof(buf), "%lld", (long long)v);
+    char *txt = malloc((size_t)len + 1);
+    if (!txt) return NULL;
+    memcpy(txt, buf, len);
+    txt[len] = '\0';
+    Token *t = malloc(sizeof(Token));
+    if (!t) { free(txt); return NULL; }
+    memset(t, 0, sizeof(*t));
+    t->kind = TK_NUM;
+    t->loc = txt;
+    t->len = len;
+    return t;
+}
+
+Token *nttp_arg_to_literal_token(Node *arg) {
+    if (!arg) return NULL;
+    switch (arg->kind) {
+    case ND_NUM:
+    case ND_FNUM:
+    case ND_BOOL_LIT:
+    case ND_NULLPTR:
+        return arg->tok;
+    case ND_CHAR:
+        return arg->chr.tok;
+    case ND_STR:
+        return arg->str.tok;
+    default:
+        break;
+    }
+    int64_t v;
+    if (eval_const_int(arg, &v))
+        return make_synthetic_int_token_malloc(v);
+    return NULL;
+}
+
 Type *template_arg_to_arg_type(Node *arg, Arena *arena) {
     if (!arg) return NULL;
     if (arg->kind == ND_VAR_DECL && arg->var_decl.ty)
@@ -2525,6 +2672,15 @@ Type *template_arg_to_arg_type(Node *arg, Arena *arena) {
         break;
     default:
         break;
+    }
+    if (!lit_tok) {
+        /* Try constant evaluation for non-literal NTTP arg
+         * expressions: `Pin<5+2>`, `Pin<(int)5>`, `Pin<myint(5)>`,
+         * `Pin<sizeof(int)+1>` (the last needs ND_SIZEOF
+         * support — not yet). */
+        int64_t v;
+        if (eval_const_int(arg, &v))
+            lit_tok = make_synthetic_int_token(v, arena);
     }
     if (!lit_tok) return NULL;
     Type *t = arena_alloc(arena, sizeof(Type));

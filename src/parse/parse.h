@@ -2148,6 +2148,16 @@ Type *func_type_from_func_def(Arena *arena, Node *fn);
  * for dedup, equivalence, and mangling. */
 Type *template_arg_to_arg_type(Node *arg, Arena *arena);
 
+/* Extract a literal token suitable for TY_NTTP_VALUE from an NTTP
+ * argument expression. Handles literal nodes directly (ND_NUM,
+ * ND_BOOL_LIT, ND_CHAR, ND_STR, ND_NULLPTR, ND_FNUM) and runs the
+ * constant-int evaluator for non-literal expressions (`5+2`,
+ * `(int)5`, `myint(5)`, etc.). Returns NULL when neither path
+ * applies. Allocates the token via malloc when synthesizing — the
+ * caller owns the storage and must outlive any TY_NTTP_VALUE
+ * referencing it. */
+Token *nttp_arg_to_literal_token(Node *arg);
+
 /* Check if current token starts a declaration (type-specifier keyword
  * or, with name lookup, a user-defined type-name) */
 bool parser_at_type_specifier(Parser *p);
