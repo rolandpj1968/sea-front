@@ -457,6 +457,16 @@ static Node **clone_node_array_pack(Node **arr, int n, SubstMap *map,
     assert(n >= 0);
     if (n == 0) { *out_n = 0; return NULL; }
     assert(arr != NULL);
+    /* Count packs in the map to handle multi-pack expansion
+     * (`(M + N)...` references both M and N). */
+    int n_packs_in_map = 0;
+    int common_pack_len_pre = -1;
+    for (int z = 0; z < map->nentries; z++) {
+        if (!map->entries[z].is_pack) continue;
+        if (common_pack_len_pre < 0)
+            common_pack_len_pre = map->entries[z].pack_ntypes;
+        n_packs_in_map++;
+    }
     /* First pass: compute output count. */
     int total = 0;
     for (int i = 0; i < n; i++) {
@@ -471,11 +481,36 @@ static Node **clone_node_array_pack(Node **arr, int n, SubstMap *map,
                 pe = subst_map_lookup_pack(map, src->param.ty->tag);
             if (!pe) pe = subst_map_single_pack(map);
             if (pe) { total += pe->pack_ntypes; continue; }
+            /* Multi-pack expression expansion — count using the
+             * common pack length. Only kicks in for expression
+             * expansions (param-pack expansion handles only its
+             * own pack). */
+            if (is_pack_expr && n_packs_in_map >= 2 &&
+                common_pack_len_pre > 0) {
+                total += common_pack_len_pre;
+                continue;
+            }
         }
         total++;
     }
     Node **out = arena_alloc(arena, total * sizeof(Node *));
     int oi = 0;
+    /* Multi-pack expansion: when the expanded expression references
+     * more than one pack (`(M + N)...` with both M and N packs),
+     * single_pack returns NULL. Iterate to the COMMON pack length
+     * (N4659 §17.5.3.4/2 [temp.variadic.expand] requires all packs
+     * in an expansion to share the same length) and per-iteration
+     * shadow ALL packs so subst_type/ident-morph sees each pack's
+     * j-th element. */
+    int n_all_packs = 0;
+    SubstEntry *all_packs[16];
+    int common_pack_len = -1;
+    for (int z = 0; z < map->nentries && n_all_packs < 16; z++) {
+        if (!map->entries[z].is_pack) continue;
+        if (common_pack_len < 0) common_pack_len = map->entries[z].pack_ntypes;
+        else if (map->entries[z].pack_ntypes != common_pack_len) continue;
+        all_packs[n_all_packs++] = &map->entries[z];
+    }
     for (int i = 0; i < n; i++) {
         Node *src = arr[i];
         if (!src) { out[oi++] = NULL; continue; }
@@ -487,6 +522,37 @@ static Node **clone_node_array_pack(Node **arr, int n, SubstMap *map,
                 src->param.ty->kind == TY_DEPENDENT)
                 pe = subst_map_lookup_pack(map, src->param.ty->tag);
             if (!pe) pe = subst_map_single_pack(map);
+            /* If single_pack returned NULL (multiple packs) AND this
+             * is an EXPRESSION expansion (not a param-pack expansion),
+             * fall back to the multi-pack iteration. Param-pack
+             * expansion only sensibly handles its own pack. */
+            if (!pe && is_pack_expr && n_all_packs >= 2 &&
+                common_pack_len > 0) {
+                for (int j = 0; j < common_pack_len; j++) {
+                    int saved_nentries = map->nentries;
+                    /* Shadow every pack at iteration j. */
+                    for (int k = 0; k < n_all_packs &&
+                                    map->nentries < map->capacity; k++) {
+                        SubstEntry *pk = all_packs[k];
+                        if (!pk->param_name || !pk->pack_types) continue;
+                        map->entries[map->nentries].param_name = pk->param_name;
+                        map->entries[map->nentries].concrete_type = pk->pack_types[j];
+                        map->entries[map->nentries].tt_bound_name =
+                            (pk->pack_types[j] &&
+                             pk->pack_types[j]->kind == TY_NTTP_VALUE)
+                            ? pk->pack_types[j]->tag : NULL;
+                        map->entries[map->nentries].pack_types = NULL;
+                        map->entries[map->nentries].pack_ntypes = 0;
+                        map->entries[map->nentries].is_pack = false;
+                        map->nentries++;
+                    }
+                    Node *c2 = clone_node(src, map, arena);
+                    map->nentries = saved_nentries;
+                    if (c2) c2->is_pack_expand = false;
+                    out[oi++] = c2;
+                }
+                continue;
+            }
             if (pe) {
                 for (int j = 0; j < pe->pack_ntypes; j++) {
                     Node *c = arena_alloc(arena, sizeof(Node));

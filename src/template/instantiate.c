@@ -2912,10 +2912,25 @@ void template_instantiate(Node *tu, Arena *arena) {
             int onp = outer_tmpl->template_decl.nparams;
             if (mr->class_tid && mr->class_tid->kind == ND_TEMPLATE_ID) {
                 int xna = mr->class_tid->template_id.nargs;
-                int n = onp < xna ? onp : xna;
-                for (int i = 0; i < n; i++) {
+                /* For pack params, all trailing template-args fold
+                 * into ONE pack entry. Non-pack params bind 1:1.
+                 * N4659 §17.5.3 [temp.variadic]. */
+                for (int i = 0; i < onp; i++) {
                     Node *p = outer_tmpl->template_decl.params[i];
                     if (!p || !p->param.name) continue;
+                    if (p->param.is_pack) {
+                        int npack = (xna > i) ? (xna - i) : 0;
+                        Type **plist = npack > 0
+                            ? arena_alloc(arena, npack * sizeof(Type *))
+                            : NULL;
+                        for (int j = 0; j < npack; j++)
+                            plist[j] = template_arg_to_arg_type(
+                                mr->class_tid->template_id.args[i + j], arena);
+                        subst_map_add_pack(&deduced, p->param.name,
+                                            plist, npack);
+                        break;
+                    }
+                    if (i >= xna) break;
                     Node *a = mr->class_tid->template_id.args[i];
                     /* Use template_arg_to_arg_type instead of
                      * type_arg_from_node so NTTP literal args
@@ -2998,11 +3013,37 @@ void template_instantiate(Node *tu, Arena *arena) {
             }
             if (xtid) {
                 int xna = xtid->template_id.nargs;
-                for (int i = 0; i < np && i < xna; i++) {
+                for (int i = 0; i < np; i++) {
                     Node *param = tmpl->template_decl.params[i];
                     if (!param || param->kind != ND_PARAM) continue;
-                    if (!param->param.ty) continue;  /* type-param, not NTTP */
                     if (!param->param.name) continue;
+                    /* Pack: fold all trailing args into one pack
+                     * entry so the cloner's pack-expansion can
+                     * iterate them. Covers both type-packs
+                     * (`typename... US`, param.ty == NULL) and
+                     * NTTP-packs (`int... N`, param.ty != NULL).
+                     * Without this, foo<int,double,long> on a
+                     * `template<typename... US>` only bound US to
+                     * the first arg and `sizeof(US)...` expanded
+                     * to one element. N4659 §17.5.3 [temp.variadic]. */
+                    if (param->param.is_pack) {
+                        int npack = (xna > i) ? (xna - i) : 0;
+                        Type **plist = npack > 0
+                            ? arena_alloc(arena, npack * sizeof(Type *))
+                            : NULL;
+                        for (int j = 0; j < npack; j++) {
+                            Node *a = xtid->template_id.args[i + j];
+                            plist[j] = template_arg_to_arg_type(a, arena);
+                            if (plist[j] && param->param.ty &&
+                                plist[j]->kind == TY_NTTP_VALUE)
+                                plist[j]->nttp_decl_type = param->param.ty;
+                        }
+                        subst_map_add_pack(&deduced, param->param.name,
+                                            plist, npack);
+                        break;
+                    }
+                    if (!param->param.ty) continue;  /* type-param non-pack — handled elsewhere */
+                    if (i >= xna) break;
                     Node *a = xtid->template_id.args[i];
                     Token *lit = NULL;
                     if (a && a->kind == ND_IDENT && a->ident.name)
@@ -3083,9 +3124,22 @@ void template_instantiate(Node *tu, Arena *arena) {
         }
         key[pos++] = '\0';
         for (int i = 0; i < deduced.nentries; i++) {
-            pos = type_to_key(deduced.entries[i].concrete_type,
-                              key, pos, MAX_DEDUP_KEY);
-            key[pos++] = '\0';
+            if (deduced.entries[i].is_pack) {
+                /* Pack entry: include EVERY pack element in the
+                 * dedup key — concrete_type is NULL for packs, so
+                 * without this loop foo<10,20,30> and foo<0,1,2>
+                 * would dedup to the same instantiation. */
+                int npk = deduced.entries[i].pack_ntypes;
+                for (int j = 0; j < npk; j++) {
+                    pos = type_to_key(deduced.entries[i].pack_types[j],
+                                      key, pos, MAX_DEDUP_KEY);
+                    key[pos++] = '\0';
+                }
+            } else {
+                pos = type_to_key(deduced.entries[i].concrete_type,
+                                  key, pos, MAX_DEDUP_KEY);
+                key[pos++] = '\0';
+            }
         }
         {
             /* Member-template dedup hit: the (class, member, args)
@@ -3228,9 +3282,20 @@ void template_instantiate(Node *tu, Arena *arena) {
                     if (cta && cta->kind == TY_NTTP_VALUE &&
                         outer_tmpl_n &&
                         outer_tmpl_n->kind == ND_TEMPLATE_DECL &&
-                        i < outer_tmpl_n->template_decl.nparams) {
-                        Node *p = outer_tmpl_n->template_decl.params[i];
-                        if (p && p->kind == ND_PARAM && p->param.ty)
+                        outer_tmpl_n->template_decl.nparams > 0) {
+                        /* Clamp param index to the pack's slot when
+                         * the trailing param is a pack — args beyond
+                         * nparams-1 share the pack's declared type.
+                         * N4659 §17.5.3 [temp.variadic]. Without
+                         * this, S<0,1,2> with `int... N` only got
+                         * nttp_decl_type on arg 0; args 1+ fell to
+                         * the Itanium `Li0E` fallback and collapsed
+                         * S<0,1,2> to `Li0ELi0ELi0E`. */
+                        int onp = outer_tmpl_n->template_decl.nparams;
+                        int pi = i < onp ? i : onp - 1;
+                        Node *p = outer_tmpl_n->template_decl.params[pi];
+                        if (p && p->kind == ND_PARAM && p->param.ty &&
+                            (pi == i || p->param.is_pack))
                             cta->nttp_decl_type = p->param.ty;
                     }
                     ct->template_args[i] = cta;
@@ -3279,13 +3344,21 @@ void template_instantiate(Node *tu, Arena *arena) {
                 cloned->func.n_template_args = xn;
                 cloned->func.template_args =
                     arena_alloc(arena, xn * sizeof(Type *));
+                int tnp = tmpl ? tmpl->template_decl.nparams : 0;
                 for (int i = 0; i < xn; i++) {
                     Type *t = template_arg_to_arg_type(
                         xtid2->template_id.args[i], arena);
-                    if (t && t->kind == TY_NTTP_VALUE && tmpl &&
-                        i < tmpl->template_decl.nparams) {
-                        Node *p = tmpl->template_decl.params[i];
-                        if (p && p->kind == ND_PARAM && p->param.ty)
+                    if (t && t->kind == TY_NTTP_VALUE && tnp > 0) {
+                        /* Pack-clamp: for `template<int... N>` foo
+                         * called as foo<0,1,2>, all 3 args share
+                         * the pack's declared type — without
+                         * clamping only arg 0 gets nttp_decl_type
+                         * and args 1+ hit the Itanium `Li0E`
+                         * fallback. N4659 §17.5.3 [temp.variadic]. */
+                        int pi = i < tnp ? i : tnp - 1;
+                        Node *p = tmpl->template_decl.params[pi];
+                        if (p && p->kind == ND_PARAM && p->param.ty &&
+                            (pi == i || p->param.is_pack))
                             t->nttp_decl_type = p->param.ty;
                     }
                     cloned->func.template_args[i] = t;
