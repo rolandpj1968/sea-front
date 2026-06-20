@@ -2196,12 +2196,16 @@ static Node *primary_expr(Parser *p) {
          *   sizeof ... ( identifier )
          * Captures the pack identifier so the instantiation pass
          * can replace this whole expression with the integer
-         * literal N (number of types the pack binds to). */
+         * literal N (number of types the pack binds to).
+         *
+         * GNU extension: parens optional — `sizeof... N` accepted
+         * the same way (used by g++.dg/cpp0x/variadic-init.C when
+         * compiled with -std=gnu++0x). */
         if (parser_consume(p, TK_ELLIPSIS)) {
-            parser_expect(p, TK_LPAREN);
+            bool has_paren = parser_consume(p, TK_LPAREN);
             Token *pack_name = NULL;
             if (parser_at(p, TK_IDENT)) pack_name = parser_advance(p);
-            parser_expect(p, TK_RPAREN);
+            if (has_paren) parser_expect(p, TK_RPAREN);
             node->sizeof_.is_type = false;
             node->sizeof_.is_pack = true;
             node->sizeof_.pack_name = pack_name;
