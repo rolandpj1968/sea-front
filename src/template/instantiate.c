@@ -1520,8 +1520,9 @@ static bool deduce_from_pair(Type *P, Type *A, SubstMap *map) {
         if (np_args != na_args) return true;
         for (int i = 0; i < np_args; i++) {
             Type *pt = NULL;
+            Node *pa = NULL;
             if (ptid && ptid->kind == ND_TEMPLATE_ID) {
-                Node *pa = ptid->template_id.args[i];
+                pa = ptid->template_id.args[i];
                 pt = (pa && pa->kind == ND_VAR_DECL) ? pa->var_decl.ty : NULL;
             } else {
                 pt = P->template_args[i];
@@ -1530,8 +1531,38 @@ static bool deduce_from_pair(Type *P, Type *A, SubstMap *map) {
             if (atid && atid->kind == ND_TEMPLATE_ID) {
                 Node *aa = atid->template_id.args[i];
                 at = (aa && aa->kind == ND_VAR_DECL) ? aa->var_decl.ty : NULL;
-            } else {
+            }
+            /* template_id_node args are ND_NUM for NTTP literal args
+             * (`A<5>`); the ND_VAR_DECL extraction returns NULL.
+             * Fall back to A->template_args[i] which is the
+             * post-instantiation TY_NTTP_VALUE that carries the
+             * literal token in `tag`. Without this, NTTP-arg
+             * deduction (`A<I>` vs `A<5>`) couldn't see the
+             * literal and silently no-op'd. */
+            if (!at && A->template_args && i < A->n_template_args)
                 at = A->template_args[i];
+            /* NTTP-arg pattern: `A<I>` where I is a non-type
+             * template parameter — the parser stored it as an
+             * ND_IDENT, so the ND_VAR_DECL extraction above gave
+             * NULL and the deduce_from_pair call became a no-op.
+             * Bind the param-name to A's NTTP value directly so
+             * downstream argument-type deduction (`A<I>` vs `A<5>`
+             * binds I=5) succeeds. N4659 §17.8.2.5 [temp.deduct.type]. */
+            if (!pt && pa && pa->kind == ND_IDENT && pa->ident.name &&
+                at && at->kind == TY_NTTP_VALUE) {
+                bool bound = false;
+                for (int z = 0; z < map->nentries; z++) {
+                    Token *pn = map->entries[z].param_name;
+                    if (pn && tokens_equal(pn, pa->ident.name)) {
+                        bound = true; break;
+                    }
+                }
+                if (!bound) {
+                    subst_map_add(map, pa->ident.name, at);
+                    if (at->tag)
+                        subst_map_add_tt(map, pa->ident.name, at->tag);
+                }
+                continue;
             }
             if (!deduce_from_pair(pt, at, map)) return false;
         }
