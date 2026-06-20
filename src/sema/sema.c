@@ -549,6 +549,38 @@ static void visit_ternary(Sema *s, Node *n) {
          * on one side and a non-class on the other drive different
          * codegen (method dispatch, ctor materialisation, ref
          * handling, etc.), or two different struct tags. */
+        /* N4659 §8.16/6 [expr.cond]: one of the arms can undergo
+         * lvalue-to-rvalue, qualification, derived-to-base, or
+         * function-to-pointer conversion to reach a common type.
+         * Peel cv and refs from both arms before comparing tags so
+         * `cond ? cls_value : cls_ref` (kind 18 vs 14 — TY_STRUCT
+         * vs TY_REF to the same struct) is recognised as
+         * compatible rather than warned-as-mismatched. */
+        Type *tt_p = tt, *et_p = et;
+        while (tt_p && (tt_p->kind == TY_REF || tt_p->kind == TY_RVALREF))
+            tt_p = tt_p->base;
+        while (et_p && (et_p->kind == TY_REF || et_p->kind == TY_RVALREF))
+            et_p = et_p->base;
+        if (tt_p && et_p && tt_p != tt && et_p == et && tt_p == et_p) {
+            /* then-arm value, else-arm ref-to-same-class — converge. */
+            n->resolved_type = tt;
+            goto ternary_resolved;
+        }
+        if (tt_p && et_p && et_p != et && tt_p == tt && et_p == tt_p) {
+            /* then-arm ref-to-class, else-arm value of same class. */
+            n->resolved_type = et;
+            goto ternary_resolved;
+        }
+        /* Same tag after peel: pick the non-ref arm (closer to the
+         * common type per §8.16/6). */
+        if (tt_p && et_p && tt_p->tag && et_p->tag &&
+            tt_p->kind == et_p->kind &&
+            (tt_p->kind == TY_STRUCT || tt_p->kind == TY_UNION) &&
+            tt_p->tag->len == et_p->tag->len &&
+            memcmp(tt_p->tag->loc, et_p->tag->loc, tt_p->tag->len) == 0) {
+            n->resolved_type = (tt == tt_p) ? tt : et;
+            goto ternary_resolved;
+        }
         bool tt_cls = tt->kind == TY_STRUCT || tt->kind == TY_UNION;
         bool et_cls = et->kind == TY_STRUCT || et->kind == TY_UNION;
         /* Enums interconvert with int per §7.3 [conv]; ternary
@@ -592,6 +624,7 @@ static void visit_ternary(Sema *s, Node *n) {
         n->resolved_type = et;
     else
         n->resolved_type = tt;
+ternary_resolved:;
     if ((n->ternary.cond && n->ternary.cond->is_type_dependent) ||
         (n->ternary.then_ && n->ternary.then_->is_type_dependent) ||
         (n->ternary.else_ && n->ternary.else_->is_type_dependent))
