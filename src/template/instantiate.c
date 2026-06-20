@@ -2641,7 +2641,25 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
         pos += snprintf(buf + pos, bufsize - pos, "_t_");
         for (int i = 0; i < n; i++) {
             if (i > 0 && pos < bufsize - 1) buf[pos++] = '_';
-            Type *at = type_arg_from_node(template_id->template_id.args[i]);
+            /* template_arg_to_arg_type handles both ND_VAR_DECL (type
+             * args) and literal NTTP / function-pointer NTTP shapes
+             * — wraps the latter as TY_NTTP_VALUE with the bound
+             * token in `tag`. Replaces type_arg_from_node which
+             * dropped literals and gave `unknown` for every NTTP
+             * arg, collapsing distinct func-ptr instantiations like
+             * `call_with<&square>` and `call_with<&cube>` to the
+             * same mangled symbol. */
+            Type *at = template_arg_to_arg_type(
+                template_id->template_id.args[i], arena);
+            /* Propagate the param's declared type so the mangler
+             * renders typed NTTPs (`int_5`, `bool_1`, etc.) rather
+             * than dropping to the bare tag. */
+            if (at && at->kind == TY_NTTP_VALUE && tmpl &&
+                i < tmpl->template_decl.nparams) {
+                Node *p = tmpl->template_decl.params[i];
+                if (p && p->kind == ND_PARAM && p->param.ty)
+                    at->nttp_decl_type = p->param.ty;
+            }
             pos = mangle_type_to_buf(at, buf, pos, bufsize);
         }
         pos += snprintf(buf + pos, bufsize - pos, "_te_");
@@ -3685,8 +3703,21 @@ void template_instantiate(Node *tu, Arena *arena) {
                 pos += snprintf(buf + pos, bufsize - pos, "_t_");
                 for (int i = 0; i < na; i++) {
                     if (i > 0 && pos < bufsize - 1) buf[pos++] = '_';
-                    Type *at = type_arg_from_node(
-                        req->template_id->template_id.args[i]);
+                    /* Same template_arg_to_arg_type swap as the
+                     * first-instantiation site: cover NTTP literals
+                     * and func-pointer NTTPs so distinct args
+                     * mangle distinctly. Without it the dedup-hit
+                     * path emitted `_unknown_` for every NTTP and
+                     * second-and-later call sites mangled to a
+                     * symbol that didn't match the body. */
+                    Type *at = template_arg_to_arg_type(
+                        req->template_id->template_id.args[i], arena);
+                    if (at && at->kind == TY_NTTP_VALUE && tmpl &&
+                        i < tmpl->template_decl.nparams) {
+                        Node *p = tmpl->template_decl.params[i];
+                        if (p && p->kind == ND_PARAM && p->param.ty)
+                            at->nttp_decl_type = p->param.ty;
+                    }
                     pos = mangle_type_to_buf(at, buf, pos, bufsize);
                 }
                 pos += snprintf(buf + pos, bufsize - pos, "_te_");
