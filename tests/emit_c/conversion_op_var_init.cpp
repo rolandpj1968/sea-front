@@ -29,6 +29,8 @@ struct Counter {
     operator bool() const { ++bool_calls; return v != 0; }
 };
 
+int twice(int x) { return x * 2; }
+
 int main() {
     Counter c(42);
 
@@ -36,6 +38,10 @@ int main() {
     int x = c;
     if (x != 42) abort();
     if (int_calls != 1) abort();
+
+    /* Function-call arg context — same conversion dispatch. */
+    if (twice(c) != 84) abort();
+    if (int_calls != 2) abort();
 
     /* Bool target picks the bool conversion. */
     bool b = c;

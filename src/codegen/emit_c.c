@@ -492,6 +492,7 @@ static inline bool ty_is_indirect(Type *t) {
     return t && (t->kind == TY_PTR || t->kind == TY_REF || t->kind == TY_RVALREF);
 }
 static void emit_arg_for_param(Node *arg, Type *param_ty);  /* fwd */
+static bool try_emit_conversion_op_init(Type *target_ty, Node *init);  /* fwd */
 static bool ty_is_std_initializer_list(Type *t);             /* fwd */
 static void push_user_var_cleanup(Node *s);                  /* fwd */
 static bool var_decl_is_initializer_list_brace_init(Node *n);/* fwd */
@@ -690,6 +691,14 @@ static Type *class_base(Type *class_type, int i);
 
 static void emit_arg_for_param(Node *arg, Type *param_ty) {
     if (!arg) return;
+    /* User-defined conversion operator at call site: `f(c)` where
+     * f takes T and c's class has `operator T()`. N4659 §16.3.1.5
+     * [over.match.conv]. Routes through the same helper var-decl
+     * init uses. Caller hasn't emitted anything yet for this arg,
+     * so the helper's emit lands inline. */
+    if (param_ty && arg->resolved_type &&
+        try_emit_conversion_op_init(param_ty, arg))
+        return;
     /* std::initializer_list<E> param taking a braced-init-list arg
      * — N4659 §11.6.4/5 [dcl.init.list]. Lower to a C99 compound
      * literal pair: the outer struct holds {backing_array, length},
