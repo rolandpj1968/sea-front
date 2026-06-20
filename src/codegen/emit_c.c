@@ -279,6 +279,17 @@ typedef struct CleanupEntry {
     int         label_id;       /* CL_VAR: cleanup label / CL_LOOP: break_label */
     int         cont_label_id;  /* CL_LOOP only */
     Node       *var_decl;       /* CL_VAR only */
+    /* CL_VAR with a non-trivial ctor that may throw: id of the
+     * `__sf_ctor_ok_<N>` guard. The guard is declared 0 right
+     * before the ctor call and set to 1 AFTER the ctor returns
+     * without an in-flight throw; the cleanup-chain dtor emit
+     * wraps the call in `if (__sf_ctor_ok_<N>) { ... }` so a
+     * partially-constructed object doesn't get its dtor run
+     * (N4659 §15.2/2 [except.ctor]). Zero (no guard) when the
+     * class has no user-declared ctor, the ctor is known
+     * noexcept, or the var was hoisted (codegen_temp_name set
+     * — those already have hoisted-completion semantics). */
+    int         ctor_guard_id;
 } CleanupEntry;
 
 static struct {
@@ -1770,6 +1781,7 @@ hoist_done:
         g_cf.live[g_cf.nlive].label_id = id;
         g_cf.live[g_cf.nlive].cont_label_id = -1;
         g_cf.live[g_cf.nlive].var_decl = call;  /* not an ND_VAR_DECL — flagged via codegen_temp_name */
+        g_cf.live[g_cf.nlive].ctor_guard_id = 0;
         g_cf.nlive++;
     }
 }
@@ -11425,6 +11437,15 @@ static void emit_cleanup_chain_for_added(int saved_nlive) {
         emit_indent();
         fprintf(stdout, "__SF_cleanup_%d: ;\n", e->label_id);
         emit_indent();
+        /* Ctor-completed guard wrapper: a class var-decl with a
+         * non-trivial ctor may have thrown partway through (the
+         * cleanup-chain goto fires before the post-ctor `guard =
+         * 1` runs). Skip the dtor on partial construction —
+         * N4659 §15.2/2 [except.ctor]. */
+        if (e->ctor_guard_id > 0) {
+            fprintf(stdout, "if (__sf_ctor_ok_%d) ",
+                    e->ctor_guard_id);
+        }
         if (v->codegen_temp_name) {
             /* Slice D-Hoist temp: 'var_decl' is actually the
              * original ND_CALL whose result was hoisted to the
@@ -11707,6 +11728,7 @@ static void push_loop_marker(int *out_brk, int *out_cnt) {
     g_cf.live[g_cf.nlive].label_id = *out_brk;
     g_cf.live[g_cf.nlive].cont_label_id = *out_cnt;
     g_cf.live[g_cf.nlive].var_decl = NULL;
+    g_cf.live[g_cf.nlive].ctor_guard_id = 0;
     g_cf.nlive++;
 }
 
@@ -12233,6 +12255,67 @@ static void rewrite_copy_init_ctor_call(Node *n) {
  * fire for every element at scope exit. emit_cleanup_chain_for_added
  * detects the array shape and emits a loop. Pattern:
  * g++.dg/init/array14.C. */
+/* Most-recently-prepared ctor-guard id. Set by
+ * prepare_ctor_guard before emit_stmt fires the ctor call;
+ * picked up by the matching push_user_var_cleanup after the
+ * ctor returns and the guard is set to 1. Zero when no guard
+ * was prepared (trivial case, array, hoisted temp, etc.). */
+static int g_pending_ctor_guard = 0;
+
+/* True if `s` is a class-typed user var-decl whose ctor invocation
+ * could throw. Used to decide whether to install the ctor-completed
+ * guard before the var-decl emit. The conservative answer is "yes
+ * for any class with a dtor and an actually-invoked ctor" — the
+ * guard's runtime cost is one stack bool per local plus one
+ * `if (guard)` per cleanup. */
+static bool var_decl_needs_ctor_guard(Node *s) {
+    if (!s) return false;
+    while (s->kind == ND_LABEL && s->label.stmt) s = s->label.stmt;
+    if (s->kind != ND_VAR_DECL || !s->var_decl.ty || !s->var_decl.name)
+        return false;
+    Type *ty = s->var_decl.ty;
+    if (ty->kind != TY_STRUCT || !ty->has_dtor) return false;
+    /* Trivial-ctor / no-ctor-args / aggregate-init cases don't
+     * actually invoke a user ctor — the storage is either zero-
+     * inited (`= {0}` or `__SF_aggregate_init`) or filled by
+     * inline copy. Skip the guard in those cases: there's no
+     * point where a partial-construction transition exists. */
+    if (!s->var_decl.has_ctor_init) return false;
+    return true;
+}
+
+/* Allocate a ctor-guard id for the next var-decl emission. Emits
+ * `int __sf_ctor_ok_<N> = 0;` before the caller emits the var-decl
+ * body. The guard stays at 0 if the ctor throws (control jumps to
+ * the cleanup chain before the post-emit `= 1` runs); the cleanup
+ * dtor then sees 0 and skips. N4659 §15.2/2 [except.ctor]. */
+static int prepare_ctor_guard(Node *s) {
+    if (!g_cf.func_has_cleanups) return 0;
+    if (!var_decl_needs_ctor_guard(s)) return 0;
+    int id = g_cf.next_label_id++;
+    emit_indent();
+    fprintf(stdout, "int __sf_ctor_ok_%d = 0;\n", id);
+    g_pending_ctor_guard = id;
+    return id;
+}
+
+/* After a guarded var-decl's ctor returns: set the guard iff the
+ * ctor didn't throw. The sea-front EH protocol has the ctor return
+ * normally even when it threw — the throw state lives on
+ * __sf_exc_state.state, polled by the surrounding __SF_CHAIN macros.
+ * A bare `= 1` would set the guard regardless and the cleanup
+ * chain would fire the dtor on partial construction. Gate on the
+ * THROW state so the guard stays 0 when the ctor failed. Does NOT
+ * clear g_pending_ctor_guard — push_user_var_cleanup needs to
+ * read the id immediately after to stash on the cleanup entry. */
+static void commit_ctor_guard(int id) {
+    if (id <= 0) return;
+    emit_indent();
+    fprintf(stdout,
+            "if (__sf_exc_state.state != __SF_UNWIND_THROW) "
+            "__sf_ctor_ok_%d = 1;\n", id);
+}
+
 static void push_user_var_cleanup(Node *s) {
     if (!g_cf.func_has_cleanups || !s)
         return;
@@ -12252,6 +12335,8 @@ static void push_user_var_cleanup(Node *s) {
     g_cf.live[g_cf.nlive].label_id = g_cf.next_label_id++;
     g_cf.live[g_cf.nlive].cont_label_id = -1;
     g_cf.live[g_cf.nlive].var_decl = s;
+    g_cf.live[g_cf.nlive].ctor_guard_id = g_pending_ctor_guard;
+    g_pending_ctor_guard = 0;
     g_cf.nlive++;
 }
 
@@ -12438,10 +12523,21 @@ static void emit_block(Node *n) {
         } else {
             /* Regular path: hoist (no-op if no temps), emit, then
              * register the user var as a CL_VAR if it's a class
-             * local with a dtor. */
+             * local with a dtor.
+             *
+             * For class-local-with-ctor-init the surrounding
+             * prepare_ctor_guard / commit_ctor_guard pair installs
+             * `__sf_ctor_ok_<id>` semantics so a throwing ctor
+             * doesn't leave the cleanup chain firing the dtor on a
+             * partially-constructed object (N4659 §15.2/2). The
+             * guard's `int ... = 0;` is emitted BEFORE the
+             * var-decl line; the `... = 1;` AFTER the ctor call
+             * returns successfully. */
+            int guard = prepare_ctor_guard(s);
             hoist_stmt_temps(s);
             emit_indent();
             emit_stmt(s);
+            commit_ctor_guard(guard);
             push_user_var_cleanup(s);
         }
     }
