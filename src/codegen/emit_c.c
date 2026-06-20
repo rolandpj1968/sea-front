@@ -10594,6 +10594,76 @@ static void emit_initializer_list_var_decl(Node *n) {
             n->var_decl.name->len, n->var_decl.name->loc, aid, nelems);
 }
 
+/* Find a conversion operator on `class_ty` that returns a type
+ * compatible with `target_ty`. Returns the ND_FUNC_DEF member or
+ * NULL when no match.
+ *
+ * Matches non-class targets by Type::kind (scalar / enum); class
+ * targets via types_equivalent. N4659 §16.3.1.5 [over.match.conv]
+ * — the conversion type is the function's return type. Conversion
+ * operator names are TK_KW_OPERATOR-kind tokens (parser stores
+ * the conv-target as the function's ret_ty per §16.3.2). */
+static Node *find_conversion_op(Type *class_ty, Type *target_ty) {
+    if (!class_ty || !target_ty) return NULL;
+    Node *cdef = class_ty->class_def;
+    if (!cdef && class_ty->tag) {
+        cdef = find_class_def_by_tag_args(class_ty);
+        if (!cdef) cdef = find_class_def_by_tag_only(class_ty);
+    }
+    if (!cdef || cdef->kind != ND_CLASS_DEF) return NULL;
+    for (int i = 0; i < cdef->class_def.nmembers; i++) {
+        Node *m = cdef->class_def.members[i];
+        if (!m || m->kind != ND_FUNC_DEF) continue;
+        if (!m->func.name || m->func.name->kind != TK_KW_OPERATOR) continue;
+        /* Conversion ops take no explicit arguments (just implicit
+         * this). Filters out binary ops like `int operator-(const
+         * T&)` whose int return type would otherwise look like a
+         * conversion target. N4659 §16.3.2/1. */
+        if (m->func.nparams != 0) continue;
+        Type *rt = m->func.ret_ty;
+        if (!rt) continue;
+        /* Class-target match. */
+        if ((target_ty->kind == TY_STRUCT || target_ty->kind == TY_UNION) &&
+            (rt->kind == TY_STRUCT || rt->kind == TY_UNION)) {
+            if (types_equivalent(rt, target_ty)) return m;
+            continue;
+        }
+        /* Non-class match by kind. */
+        if (rt->kind == target_ty->kind) return m;
+    }
+    return NULL;
+}
+
+/* Attempt to emit `init` as a conversion-operator call into a
+ * variable of type `target_ty`. Returns true if dispatch fired
+ * and the init expression was written; false if no conversion op
+ * applies and the caller should emit the init normally.
+ *
+ * Shape: `T x = c;` where T is non-class and `c` has a class type
+ * with `operator T() const` becomes `T x = _ZNK<C>cv<T>Ev(&c);`.
+ * N4659 §16.3.1.5 [over.match.conv]. Caller has already emitted
+ * the `= ` separator. */
+static bool try_emit_conversion_op_init(Type *target_ty, Node *init) {
+    if (!target_ty || !init) return false;
+    if (target_ty->kind == TY_STRUCT || target_ty->kind == TY_UNION ||
+        target_ty->kind == TY_PTR || target_ty->kind == TY_REF ||
+        target_ty->kind == TY_RVALREF || target_ty->kind == TY_ARRAY)
+        return false;
+    Type *src = init->resolved_type;
+    if (!src) return false;
+    /* Class-typed source (peel any ref the source carries). */
+    while (src->kind == TY_REF || src->kind == TY_RVALREF) src = src->base;
+    if (!src || (src->kind != TY_STRUCT && src->kind != TY_UNION))
+        return false;
+    Node *conv = find_conversion_op(src, target_ty);
+    if (!conv) return false;
+    mangle_class_conversion(src, target_ty, conv->func.is_const_method);
+    fputs("(&(", stdout);
+    emit_expr(init);
+    fputs("))", stdout);
+    return true;
+}
+
 static void emit_var_decl_init_suffix(Node *n) {
     if (!n->var_decl.init) return;
     /* Aggregate init with at least one user-copy-ctor member is
@@ -10614,6 +10684,8 @@ static void emit_var_decl_init_suffix(Node *n) {
      * g++.dg/opt/empty1.C. */
     if (class_is_observably_empty(n->var_decl.ty)) return;
     fputs(" = ", stdout);
+    if (try_emit_conversion_op_init(n->var_decl.ty, n->var_decl.init))
+        return;
     emit_init_with_target(n->var_decl.init, n->var_decl.ty);
 }
 
@@ -11219,6 +11291,10 @@ static void emit_var_decl_inner(Node *n) {
             g_suppress_ref_deref = true;
             emit_expr(init_e);
             g_suppress_ref_deref = saved;
+        } else if (try_emit_conversion_op_init(n->var_decl.ty,
+                                                 n->var_decl.init)) {
+            /* `T x = c;` with class c carrying `operator T()` —
+             * N4659 §16.3.1.5 [over.match.conv]. */
         } else {
             emit_init_with_target(n->var_decl.init, n->var_decl.ty);
         }
