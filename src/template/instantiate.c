@@ -1139,8 +1139,16 @@ static void collect_from_node(InstCollector *col, Node *n) {
         break;
 
     case ND_COMMA:
-        collect_from_node(col, n->binary.lhs);
-        collect_from_node(col, n->binary.rhs);
+        /* ND_COMMA's struct layout differs from ND_BINARY's (no `op`
+         * field), so the union-aliasing `n->binary.lhs` reads from
+         * the wrong offset and silently skipped the LHS. Sema had
+         * the same fix in visit_comma. Without walking both sides
+         * a comma-LHS expression like `(A<1>(), A<2>())` had
+         * A<1> uncollected — A<2> still got instantiated via the
+         * surrounding param-type walk but A<1> never reached
+         * codegen. */
+        collect_from_node(col, n->comma.lhs);
+        collect_from_node(col, n->comma.rhs);
         break;
 
     case ND_EXPR_STMT:

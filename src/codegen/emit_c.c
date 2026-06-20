@@ -1645,11 +1645,31 @@ static void hoist_emit_decl(Node *call, bool in_shortcircuit) {
             probe.tag = tname;
             int n_args = tid->template_id.nargs;
             static Type *probe_args[16];
+            static Type probe_nttp_buf[16];
             if (n_args > 0 && n_args <= 16) {
                 for (int i = 0; i < n_args; i++) {
                     Node *a = tid->template_id.args[i];
-                    probe_args[i] = (a && a->kind == ND_VAR_DECL)
-                        ? a->var_decl.ty : NULL;
+                    probe_args[i] = NULL;
+                    if (!a) continue;
+                    if (a->kind == ND_VAR_DECL) {
+                        probe_args[i] = a->var_decl.ty;
+                        continue;
+                    }
+                    /* Literal NTTP arg — `A<1>()` shape. Wrap as
+                     * TY_NTTP_VALUE so find_class_def_by_tag_args
+                     * matches the actual instantiated class_def
+                     * (whose template_args[] also use TY_NTTP_VALUE).
+                     * Without this, probe_args[i] stayed NULL and
+                     * the lookup fell through to is_ctor_call=false
+                     * — hoist emitted a question-mark-typed temp
+                     * with the bare class name (no template args). */
+                    Token *lit = nttp_arg_to_literal_token(a);
+                    if (lit) {
+                        memset(&probe_nttp_buf[i], 0, sizeof(Type));
+                        probe_nttp_buf[i].kind = TY_NTTP_VALUE;
+                        probe_nttp_buf[i].tag = lit;
+                        probe_args[i] = &probe_nttp_buf[i];
+                    }
                 }
                 probe.template_args = probe_args;
                 probe.n_template_args = n_args;
