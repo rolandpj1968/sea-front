@@ -732,6 +732,21 @@ static void collect_from_type(InstCollector *col, Type *ty) {
         Node *arg = tid->template_id.args[i];
         Type *aty = (arg && arg->kind == ND_VAR_DECL) ? arg->var_decl.ty : NULL;
         if (aty && aty->kind == TY_DEPENDENT) return;
+        /* NTTP arg as ND_IDENT — a template parameter reference like
+         * `A<I>` inside `template<int I> ... A<I>`. The arg's
+         * resolved_decl points at a REGION_PROTOTYPE entry (the
+         * outer template's param). Treat as dependent (skip
+         * instantiation) — the class will be instantiated with the
+         * concrete value once the enclosing template instantiates.
+         * Without this skip the collector created a request with
+         * `I` as the literal value, producing a spurious `A<I>`
+         * (kind 22 TY_NTTP_VALUE with tag "I") instantiation that
+         * broke at codegen time. N4659 §17.7.2 [temp.dep]. */
+        if (arg && arg->kind == ND_IDENT &&
+            arg->ident.resolved_decl &&
+            arg->ident.resolved_decl->home &&
+            arg->ident.resolved_decl->home->kind == REGION_TEMPLATE)
+            return;
     }
 
     Node *tmpl = tid->template_id.resolved_tmpl;
