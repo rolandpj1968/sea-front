@@ -2879,7 +2879,15 @@ void template_instantiate(Node *tu, Arena *arena) {
                        ? mr->class_tid->template_id.nargs
                        : (mr->enclosing_class
                           ? mr->enclosing_class->n_template_args : 0);
-        int cap = np + outer_np;
+        /* Capacity covers both concrete_type and tt_bound_name slots
+         * per param — NTTPs land in BOTH (one for type substitution,
+         * one for ident-morph). Without the doubling, a class param
+         * binding plus a member-template param binding overflow at
+         * the second add and silently drop. Pattern: S<10>::foo<3>()
+         * binds N=10 (concrete + tt = 2 slots) and M=3 (concrete +
+         * tt = 2 slots), needs >= 4 slots; the unblown legacy
+         * `np + outer_np = 2` would drop M entirely. */
+        int cap = (np + outer_np) * 2;
         if (cap < 1) cap = 1;
         SubstMap deduced = subst_map_new_with_registry(arena, cap, &reg);
 
@@ -2996,11 +3004,6 @@ void template_instantiate(Node *tu, Arena *arena) {
                     if (!param->param.ty) continue;  /* type-param, not NTTP */
                     if (!param->param.name) continue;
                     Node *a = xtid->template_id.args[i];
-                    /* Bind both the ident-shape (already handled) and
-                     * the literal-shape (ND_NUM etc.) so NTTPs passed
-                     * as integer literals from a qualified call
-                     * (`foo<3>()`) end up in the SubstMap. Mirrors
-                     * the instantiate_one main loop's binding logic. */
                     if (a && a->kind == ND_IDENT && a->ident.name) {
                         subst_map_add_tt(&deduced, param->param.name, a->ident.name);
                     } else {
@@ -3189,9 +3192,33 @@ void template_instantiate(Node *tu, Arena *arena) {
                 *ct = *mr->entry->owner_class;
                 ct->n_template_args = tna;
                 ct->template_args = arena_alloc(arena, tna * sizeof(Type *));
-                for (int i = 0; i < tna; i++)
-                    ct->template_args[i] = type_arg_from_node(
-                        mr->class_tid->template_id.args[i]);
+                /* template_arg_to_arg_type handles both ND_VAR_DECL
+                 * (type args) and literal NTTP args; type_arg_from_node
+                 * drops literals, so S<10> would leave the cloned
+                 * class with template_args[0]=NULL and the Itanium
+                 * mangler emitted `Iv` (void) — collapsing every
+                 * NTTP-instantiation of the class to the same mangled
+                 * prefix. Attribute nttp_decl_type from the outer
+                 * template's param so the mangler renders the literal
+                 * value (Itanium ABI §5.1.6.7). */
+                Node *outer_tmpl_n = mr->entry->owner_class->tag
+                    ? registry_find(&reg,
+                          mr->entry->owner_class->tag->loc,
+                          mr->entry->owner_class->tag->len)
+                    : NULL;
+                for (int i = 0; i < tna; i++) {
+                    Type *cta = template_arg_to_arg_type(
+                        mr->class_tid->template_id.args[i], arena);
+                    if (cta && cta->kind == TY_NTTP_VALUE &&
+                        outer_tmpl_n &&
+                        outer_tmpl_n->kind == ND_TEMPLATE_DECL &&
+                        i < outer_tmpl_n->template_decl.nparams) {
+                        Node *p = outer_tmpl_n->template_decl.params[i];
+                        if (p && p->kind == ND_PARAM && p->param.ty)
+                            cta->nttp_decl_type = p->param.ty;
+                    }
+                    ct->template_args[i] = cta;
+                }
                 cloned->func.class_type = ct;
             }
         } else if (mr->enclosing_class &&
