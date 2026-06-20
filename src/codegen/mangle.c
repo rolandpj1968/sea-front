@@ -495,13 +495,34 @@ int mangle_param_suffix_to_buf(Type **param_types, int nparams, bool is_variadic
 void mangle_class_method(Type *class_type, Token *method_name,
                           Type **param_types, int nparams,
                           bool is_const) {
+    mangle_class_method_tid(class_type, method_name,
+                             /*method_targs=*/NULL, /*n_method_targs=*/0,
+                             param_types, nparams, is_const);
+}
+
+void mangle_class_method_tid(Type *class_type, Token *method_name,
+                              Type **method_targs, int n_method_targs,
+                              Type **param_types, int nparams,
+                              bool is_const) {
     if (g_mangle_kind == MANGLE_ITANIUM) {
-        itan_mangle_class_method(class_type, method_name,
-                                     param_types, nparams, is_const);
+        itan_mangle_class_method_tid(class_type, method_name,
+                                      method_targs, n_method_targs,
+                                      param_types, nparams, is_const);
         return;
     }
     emit_class_open(class_type);
     g_mangler->append_member(g_mangler, method_name);
+    /* Human-mangling appends method-template args as a grep-friendly
+     * suffix on the source-name: `<int>` in source becomes `_tid_int`
+     * in the symbol. Uses the same type-renderer as the param-suffix
+     * so the two stay in lockstep when new Type kinds appear. */
+    if (n_method_targs > 0 && method_targs) {
+        fputs("_tid", stdout);
+        for (int i = 0; i < n_method_targs; i++) {
+            fputc('_', stdout);
+            emit_type_for_mangle(method_targs[i]);
+        }
+    }
     mangle_param_suffix(param_types, nparams, /*is_variadic=*/false);
     /* N4659 §10.1.7.1 [dcl.type.cv] / §16.3.1/4: const qualifier
      * on the implicit object parameter distinguishes overloads

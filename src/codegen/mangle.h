@@ -93,6 +93,10 @@ void mangle_class_tag(Type *class_type);
  *
  * is_const distinguishes const from non-const method overloads
  * (N4659 §16.3.1/4). */
+void mangle_class_method_tid(Type *class_type, Token *method_name,
+                              Type **method_targs, int n_method_targs,
+                              Type **param_types, int nparams,
+                              bool is_const);
 void mangle_class_method(Type *class_type, Token *method_name,
                           Type **param_types, int nparams,
                           bool is_const);
@@ -238,6 +242,10 @@ void itan_mangle_class_tag(Type *class_type);
 void itan_mangle_class_method(Type *class_type, Token *method_name,
                                Type **param_types, int nparams,
                                bool is_const);
+void itan_mangle_class_method_tid(Type *class_type, Token *method_name,
+                                   Type **method_targs, int n_method_targs,
+                                   Type **param_types, int nparams,
+                                   bool is_const);
 void itan_mangle_class_ctor(Type *class_type,
                              Type **param_types, int nparams);
 void itan_mangle_class_dtor(Type *class_type);

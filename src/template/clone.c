@@ -815,6 +815,13 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
             c->qualified.lead_tid = clone_node(n->qualified.lead_tid,
                                                 map, arena);
         }
+        /* tail_tid (the method's own template-id) needs the same
+         * substitution treatment so `S<T>::foo<U>` survives both
+         * the outer T binding and any inner U pack expansion. */
+        if (n->qualified.tail_tid) {
+            c->qualified.tail_tid = clone_node(n->qualified.tail_tid,
+                                                map, arena);
+        }
         break;
 
     /* -- Binary expressions -- */

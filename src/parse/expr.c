@@ -1748,6 +1748,7 @@ static Node *primary_expr(Parser *p) {
         bool global_scope = false;
         Vec parts = vec_new(p->arena);
         Node *lead_tid = NULL;  /* template-id for leading qualified segment */
+        Node *tail_tid = NULL;  /* template-id for trailing (method) segment */
 
         /* Leading :: means global scope */
         if (tok->kind == TK_SCOPE) {
@@ -1879,8 +1880,16 @@ static Node *primary_expr(Parser *p) {
                         p->tentative = prev_t;
                         p->tentative_failed = saved_failed;
                         parser_restore(p, saved2);
-                        if (ok)
-                            parse_template_id(p, name);
+                        if (ok) {
+                            /* Capture the tail template-id for the
+                             * method segment: `S<10>::foo<3>(...)` —
+                             * carry <3> on tail_tid so the call mangle
+                             * and the dep-collector see the method's
+                             * explicit args. N4659 §17.2/3 [temp.names]. */
+                            Node *mtid = parse_template_id(p, name);
+                            if (!parser_at(p, TK_SCOPE))
+                                tail_tid = mtid;
+                        }
                     }
                 } else if (parser_at(p, TK_TILDE)) {
                     /* Qualified destructor: A::~B */
@@ -2013,6 +2022,7 @@ static Node *primary_expr(Parser *p) {
             Node *qn = new_qualified_node(p, (Token **)parts.data, parts.len,
                                           global_scope, tok);
             qn->qualified.lead_tid = lead_tid;
+            qn->qualified.tail_tid = tail_tid;
             return qn;
         }
     }

@@ -1206,6 +1206,15 @@ static void collect_from_node(InstCollector *col, Node *n) {
              * by the program. */
             collect_from_type(col, n->qualified.resolved_class_type);
         }
+        /* tail_tid carries the method's explicit template-args
+         * (`S<10>::foo<3>(...)` → tail_tid=<3>). Recurse into it
+         * so the function-template ND_TEMPLATE_ID path queues an
+         * instantiation request for foo<3>. Without this the call
+         * site mangles `_ZN1SILi10EE3fooILi3EEEv` but no body is
+         * ever emitted and link fails. N4659 §17.2/3 [temp.names]
+         * + §17.7.1 [temp.inst]. */
+        if (n->qualified.tail_tid)
+            collect_from_node(col, n->qualified.tail_tid);
         break;
 
     case ND_TEMPLATE_ID: {
@@ -2899,9 +2908,20 @@ void template_instantiate(Node *tu, Arena *arena) {
                 for (int i = 0; i < n; i++) {
                     Node *p = outer_tmpl->template_decl.params[i];
                     if (!p || !p->param.name) continue;
-                    Type *cta = type_arg_from_node(
-                        mr->class_tid->template_id.args[i]);
-                    if (cta) subst_map_add(&deduced, p->param.name, cta);
+                    Node *a = mr->class_tid->template_id.args[i];
+                    /* Use template_arg_to_arg_type instead of
+                     * type_arg_from_node so NTTP literal args
+                     * (S<10>) wrap as TY_NTTP_VALUE and seed the
+                     * map. type_arg_from_node only recognises the
+                     * ND_VAR_DECL shape and drops literals,
+                     * leaving N unbound for a qualified
+                     * member-template call like S<10>::foo<3>(). */
+                    Type *cta = template_arg_to_arg_type(a, arena);
+                    if (cta) {
+                        subst_map_add(&deduced, p->param.name, cta);
+                        if (cta->kind == TY_NTTP_VALUE && cta->tag)
+                            subst_map_add_tt(&deduced, p->param.name, cta->tag);
+                    }
                 }
             } else if (mr->enclosing_class &&
                        mr->enclosing_class->n_template_args > 0) {
@@ -2916,7 +2936,20 @@ void template_instantiate(Node *tu, Arena *arena) {
             }
         }
 
-        if (!deduce_template_args(inner, mr->arg_types, mr->nargs, &deduced))
+        /* deduce_template_args returns false when nothing NEW was
+         * bound (its return is `out->nentries > 0`). For a method
+         * with no function args (`foo<3>()`), there are 0 deduction
+         * pairs and the function returns false even if the outer-
+         * class seed already populated entries. Bail only when
+         * deduction was actually needed AND failed — i.e. there were
+         * call args but no bindings emerged. Explicit template-id
+         * args (handled below) bind directly without going through
+         * deduction. N4659 §17.8.2/1 [temp.deduct] only requires
+         * deduction for params not covered by explicit args. */
+        int entries_before_deduce = deduced.nentries;
+        bool deduce_ok = deduce_template_args(inner, mr->arg_types, mr->nargs, &deduced);
+        if (!deduce_ok && deduced.nentries == entries_before_deduce &&
+            mr->nargs > 0)
             continue;
 
         /* N4659 §17.1/4 [temp.param] + §17.8.2/1 [temp.deduct]: when
@@ -2946,6 +2979,14 @@ void template_instantiate(Node *tu, Arena *arena) {
                     xtid = cb;
                 else if (cb->kind == ND_MEMBER && cb->member.template_id)
                     xtid = cb->member.template_id;
+                else if (cb->kind == ND_QUALIFIED && cb->qualified.tail_tid)
+                    /* Qualified-call shape `S<10>::foo<3>(...)` —
+                     * tail_tid carries the method's explicit args.
+                     * Without this arm the M=3 binding never enters
+                     * the SubstMap and foo's body is cloned with M
+                     * still dependent (or with deduce_template_args
+                     * failing outright for no-arg calls). */
+                    xtid = cb->qualified.tail_tid;
             }
             if (xtid) {
                 int xna = xtid->template_id.nargs;
@@ -2955,8 +2996,18 @@ void template_instantiate(Node *tu, Arena *arena) {
                     if (!param->param.ty) continue;  /* type-param, not NTTP */
                     if (!param->param.name) continue;
                     Node *a = xtid->template_id.args[i];
-                    if (a && a->kind == ND_IDENT && a->ident.name)
+                    /* Bind both the ident-shape (already handled) and
+                     * the literal-shape (ND_NUM etc.) so NTTPs passed
+                     * as integer literals from a qualified call
+                     * (`foo<3>()`) end up in the SubstMap. Mirrors
+                     * the instantiate_one main loop's binding logic. */
+                    if (a && a->kind == ND_IDENT && a->ident.name) {
                         subst_map_add_tt(&deduced, param->param.name, a->ident.name);
+                    } else {
+                        Token *lit = nttp_arg_to_literal_token(a);
+                        if (lit)
+                            subst_map_add_tt(&deduced, param->param.name, lit);
+                    }
                 }
             }
         }

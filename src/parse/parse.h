@@ -374,6 +374,14 @@ struct Node {
                                     * template-args (e.g. Box<int>::test
                                     * → lead_tid carries <int>). NULL if
                                     * the leading part has no template args. */
+            Node   *tail_tid;      /* ND_TEMPLATE_ID for the TRAILING
+                                    * (method) part's explicit template-
+                                    * args — `S<10>::foo<3>` carries
+                                    * lead_tid=<10> AND tail_tid=<3>.
+                                    * Without this the call mangle
+                                    * collapses to S<10>::foo and the
+                                    * dep-collector misses the foo<3>
+                                    * instantiation. N4659 §17.2/3. */
             Type   *resolved_class_type;
                                     /* Sema-populated: when 'parts[0]' is
                                      * a typedef alias for a class type

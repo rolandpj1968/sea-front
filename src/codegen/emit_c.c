@@ -7242,8 +7242,50 @@ static void emit_expr(Node *n) {
                     /* Single mangling call — emits the full linker
                      * symbol consistently under whichever scheme is
                      * active. Replaces the manual prefix + member +
-                     * suffix concat. */
-                    mangle_class_method(mangle_ctype, method_tok,
+                     * suffix concat. tail_tid carries the method's
+                     * explicit template-args (`Class<T>::foo<U>(...)`
+                     * → tail_tid=<U>); routed through
+                     * mangle_class_method_tid so the symbol includes
+                     * the method-template-id segment (Itanium
+                     * `<method-name>I<args>E`, human `_tid_<args>`).
+                     * Default nttp_decl_type to int when the literal
+                     * is an integer token — without it the Itanium
+                     * mangler hits its `Li0E` fallback and distinct
+                     * args collide. */
+                    Type **mtargs = NULL;
+                    int n_mtargs = 0;
+                    Node *ttid = callee_q->qualified.tail_tid;
+                    static Type *mtarg_buf[16];
+                    static Type mtarg_nttp_buf[16];
+                    static Type mtarg_int_type = { .kind = TY_INT };
+                    if (ttid && ttid->kind == ND_TEMPLATE_ID &&
+                        ttid->template_id.nargs > 0) {
+                        int n = ttid->template_id.nargs;
+                        if (n > 16) n = 16;
+                        for (int i = 0; i < n; i++) {
+                            Node *a = ttid->template_id.args[i];
+                            mtarg_buf[i] = NULL;
+                            if (!a) continue;
+                            if (a->kind == ND_VAR_DECL) {
+                                mtarg_buf[i] = a->var_decl.ty;
+                                continue;
+                            }
+                            Token *lit_tok = nttp_arg_to_literal_token(a);
+                            if (lit_tok) {
+                                memset(&mtarg_nttp_buf[i], 0, sizeof(Type));
+                                mtarg_nttp_buf[i].kind = TY_NTTP_VALUE;
+                                mtarg_nttp_buf[i].tag  = lit_tok;
+                                if (lit_tok->kind == TK_NUM)
+                                    mtarg_nttp_buf[i].nttp_decl_type =
+                                        &mtarg_int_type;
+                                mtarg_buf[i] = &mtarg_nttp_buf[i];
+                            }
+                        }
+                        mtargs   = mtarg_buf;
+                        n_mtargs = n;
+                    }
+                    mangle_class_method_tid(mangle_ctype, method_tok,
+                                            mtargs, n_mtargs,
                                             final_pty, final_np,
                                             /*is_const=*/false);
                     fputc('(', stdout);

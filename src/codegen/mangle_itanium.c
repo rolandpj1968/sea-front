@@ -605,10 +605,32 @@ static void emit_params_close(ItanCtx *ctx,
 void itan_mangle_class_method(Type *class_type, Token *method_name,
                                   Type **param_types, int nparams,
                                   bool is_const) {
+    itan_mangle_class_method_tid(class_type, method_name,
+                                  /*method_targs=*/NULL,
+                                  /*n_method_targs=*/0,
+                                  param_types, nparams, is_const);
+}
+
+/* Method-template-id mangle — Itanium ABI §5.1.6.7
+ * [mangle.template-id]: a member function template's explicit args
+ * (`Class::foo<3>()` → `_ZN5ClassE3fooILi3EEv`) sit BETWEEN the
+ * method source-name and the parameter-list-close. When the call
+ * has no method template args, the emitted form is identical to
+ * the non-template path. */
+void itan_mangle_class_method_tid(Type *class_type, Token *method_name,
+                                   Type **method_targs, int n_method_targs,
+                                   Type **param_types, int nparams,
+                                   bool is_const) {
     ItanCtx ctx;
     ctx_reset(&ctx);
     emit_prefix_open(&ctx, class_type, is_const);
     emit_source_name(method_name);
+    if (n_method_targs > 0 && method_targs) {
+        fputc('I', stdout);
+        for (int i = 0; i < n_method_targs; i++)
+            emit_type(&ctx, method_targs[i]);
+        fputc('E', stdout);
+    }
     emit_params_close(&ctx, param_types, nparams);
 }
 
