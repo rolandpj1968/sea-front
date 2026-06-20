@@ -493,6 +493,8 @@ static inline bool ty_is_indirect(Type *t) {
 }
 static void emit_arg_for_param(Node *arg, Type *param_ty);  /* fwd */
 static bool try_emit_conversion_op_init(Type *target_ty, Node *init);  /* fwd */
+static bool find_conversion_op(Type *class_ty, Type *target_ty,
+                                Type **out_ret_ty, bool *out_is_const);  /* fwd */
 static bool ty_is_std_initializer_list(Type *t);             /* fwd */
 static void push_user_var_cleanup(Node *s);                  /* fwd */
 static bool var_decl_is_initializer_list_brace_init(Node *n);/* fwd */
@@ -6020,6 +6022,27 @@ static void emit_expr(Node *n) {
                 return;
             }
         }
+        /* `!c` with class c and no user `operator!` but a conversion
+         * to bool / int — N4659 §16.3.1.5 [over.match.conv] makes
+         * the operand convertible. Emit `!<conv>(&c)`. */
+        if (n->unary.op == TK_EXCL && ot &&
+            (ot->kind == TY_STRUCT || ot->kind == TY_UNION)) {
+            Type bool_ty = {.kind = TY_BOOL};
+            Type int_ty = {.kind = TY_INT};
+            Type *conv_ret = NULL;
+            bool conv_const = false;
+            bool found =
+                find_conversion_op(ot, &bool_ty, &conv_ret, &conv_const) ||
+                find_conversion_op(ot, &int_ty,  &conv_ret, &conv_const);
+            if (found) {
+                fputc('!', stdout);
+                mangle_class_conversion(ot, conv_ret, conv_const);
+                fputs("(&(", stdout);
+                emit_expr(n->unary.operand);
+                fputs("))", stdout);
+                return;
+            }
+        }
         /* '&ref_param' — N4659 §8.3.2 [dcl.ref]: a reference IS the
          * referent at the language level, so &ref yields the address
          * of the referent. In our C lowering the ref is already a
@@ -10604,43 +10627,70 @@ static void emit_initializer_list_var_decl(Node *n) {
 }
 
 /* Find a conversion operator on `class_ty` that returns a type
- * compatible with `target_ty`. Returns the ND_FUNC_DEF member or
- * NULL when no match.
+ * compatible with `target_ty`. Returns true on match with
+ * `*out_ret_ty` / `*out_is_const` populated from the matched
+ * member; false otherwise.
  *
  * Matches non-class targets by Type::kind (scalar / enum); class
  * targets via types_equivalent. N4659 §16.3.1.5 [over.match.conv]
  * — the conversion type is the function's return type. Conversion
- * operator names are TK_KW_OPERATOR-kind tokens (parser stores
- * the conv-target as the function's ret_ty per §16.3.2). */
-static Node *find_conversion_op(Type *class_ty, Type *target_ty) {
-    if (!class_ty || !target_ty) return NULL;
+ * operator names are TK_KW_OPERATOR-kind tokens.
+ *
+ * Two member shapes are recognised:
+ *   - ND_FUNC_DEF (in-class body)
+ *   - ND_VAR_DECL with TY_FUNC (in-class declaration whose body
+ *     lives out-of-line as a separate ND_FUNC_DEF at TU scope) */
+static bool find_conversion_op(Type *class_ty, Type *target_ty,
+                                Type **out_ret_ty, bool *out_is_const) {
+    if (!class_ty || !target_ty) return false;
     Node *cdef = class_ty->class_def;
     if (!cdef && class_ty->tag) {
         cdef = find_class_def_by_tag_args(class_ty);
         if (!cdef) cdef = find_class_def_by_tag_only(class_ty);
     }
-    if (!cdef || cdef->kind != ND_CLASS_DEF) return NULL;
+    if (!cdef || cdef->kind != ND_CLASS_DEF) return false;
     for (int i = 0; i < cdef->class_def.nmembers; i++) {
         Node *m = cdef->class_def.members[i];
-        if (!m || m->kind != ND_FUNC_DEF) continue;
-        if (!m->func.name || m->func.name->kind != TK_KW_OPERATOR) continue;
+        if (!m) continue;
+        Token *mname = NULL;
+        Type *rt = NULL;
+        int nparams = 0;
+        bool is_const = false;
+        if (m->kind == ND_FUNC_DEF) {
+            mname = m->func.name;
+            rt = m->func.ret_ty;
+            nparams = m->func.nparams;
+            is_const = m->func.is_const_method;
+        } else if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
+                   m->var_decl.ty->kind == TY_FUNC) {
+            mname = m->var_decl.name;
+            rt = m->var_decl.ty->ret;
+            nparams = m->var_decl.ty->nparams;
+            /* TY_FUNC's is_const carries the const-method
+             * qualifier (`int f() const;` — see method_is_const). */
+            is_const = m->var_decl.ty->is_const;
+        } else {
+            continue;
+        }
+        if (!mname || mname->kind != TK_KW_OPERATOR) continue;
         /* Conversion ops take no explicit arguments (just implicit
          * this). Filters out binary ops like `int operator-(const
          * T&)` whose int return type would otherwise look like a
          * conversion target. N4659 §16.3.2/1. */
-        if (m->func.nparams != 0) continue;
-        Type *rt = m->func.ret_ty;
+        if (nparams != 0) continue;
         if (!rt) continue;
-        /* Class-target match. */
+        bool match = false;
         if ((target_ty->kind == TY_STRUCT || target_ty->kind == TY_UNION) &&
-            (rt->kind == TY_STRUCT || rt->kind == TY_UNION)) {
-            if (types_equivalent(rt, target_ty)) return m;
-            continue;
-        }
-        /* Non-class match by kind. */
-        if (rt->kind == target_ty->kind) return m;
+            (rt->kind == TY_STRUCT || rt->kind == TY_UNION))
+            match = types_equivalent(rt, target_ty);
+        else
+            match = (rt->kind == target_ty->kind);
+        if (!match) continue;
+        if (out_ret_ty) *out_ret_ty = rt;
+        if (out_is_const) *out_is_const = is_const;
+        return true;
     }
-    return NULL;
+    return false;
 }
 
 /* Attempt to emit `init` as a conversion-operator call into a
@@ -10664,12 +10714,15 @@ static bool try_emit_conversion_op_init(Type *target_ty, Node *init) {
     while (src->kind == TY_REF || src->kind == TY_RVALREF) src = src->base;
     if (!src || (src->kind != TY_STRUCT && src->kind != TY_UNION))
         return false;
-    Node *conv = find_conversion_op(src, target_ty);
-    if (!conv) return false;
-    mangle_class_conversion(src, target_ty, conv->func.is_const_method);
+    Type *conv_ret = NULL;
+    bool conv_const = false;
+    if (!find_conversion_op(src, target_ty, &conv_ret, &conv_const))
+        return false;
+    mangle_class_conversion(src, target_ty, conv_const);
     fputs("(&(", stdout);
     emit_expr(init);
     fputs("))", stdout);
+    (void)conv_ret;
     return true;
 }
 
@@ -12428,17 +12481,21 @@ static void emit_bool_context_expr(Node *expr) {
     if (!expr) return;
     Type *t = expr->resolved_type;
     if (ty_is_ref(t)) t = t->base;
-    if (t && (t->kind == TY_STRUCT || t->kind == TY_UNION) &&
-        t->tag && t->class_region) {
-        Declaration *opd = lookup_in_scope(t->class_region, "operator", 8);
-        if (opd && opd->type && opd->type->kind == TY_FUNC) {
-            /* Conversion operator — Itanium encodes as cv<T> per
-             * §5.1.4.1; the human path encodes as `__op_<T>`.
-             * Either way the mangling module owns the dispatch. */
-            Token op_tok = { .kind = TK_IDENT, .loc = "operator", .len = 8 };
-            bool mc = method_is_const(t, &op_tok);
-            Type *target = opd->type->ret;
-            mangle_class_conversion(t, target, mc);
+    if (t && (t->kind == TY_STRUCT || t->kind == TY_UNION)) {
+        /* `if (c)` etc. with class c: prefer operator bool() per
+         * N4659 §6.4 [conv]/3, falling back to operator int() and
+         * operator T() for any scalar T. find_conversion_op filters
+         * by 0-arity, distinguishing conversion ops from binary
+         * operators like `operator-(int)` that also live under
+         * the "operator" source name. */
+        Type bool_ty = {.kind = TY_BOOL};
+        Type int_ty = {.kind = TY_INT};
+        Type *conv_ret = NULL;
+        bool conv_const = false;
+        bool found = find_conversion_op(t, &bool_ty, &conv_ret, &conv_const) ||
+                     find_conversion_op(t, &int_ty,  &conv_ret, &conv_const);
+        if (found) {
+            mangle_class_conversion(t, conv_ret, conv_const);
             fputs("(&(", stdout);
             emit_expr(expr);
             fputs("))", stdout);

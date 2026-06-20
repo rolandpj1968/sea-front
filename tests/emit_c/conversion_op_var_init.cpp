@@ -54,5 +54,14 @@ int main() {
     if (zb) abort();
     if (bool_calls != 2) abort();
 
+    /* Boolean context — `if (counter)` invokes operator bool().
+     * emit_bool_context_expr's lookup must filter out binary
+     * operators on the class (none here, but the finder still
+     * gates on 0-arity for correctness). */
+    if (!c) abort();
+    if (bool_calls != 3) abort();
+    if (z) abort();
+    if (bool_calls != 4) abort();
+
     return 0;
 }
