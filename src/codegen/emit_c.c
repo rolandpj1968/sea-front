@@ -10470,19 +10470,48 @@ static void emit_stmt(Node *n);
  * [conv.ptr]. Falls through to plain emit_expr for non-conversion
  * cases. */
 static void emit_init_with_target(Node *init, Type *target_ty) {
-    if (!init || !target_ty || target_ty->kind != TY_PTR ||
-        !target_ty->base ||
-        (target_ty->base->kind != TY_STRUCT &&
-         target_ty->base->kind != TY_UNION)) {
+    if (!init || !target_ty) {
+        emit_expr(init); return;
+    }
+    /* Peel TY_REF/TY_RVALREF on target — `A &aa = b` produces a
+     * var_decl whose type is still TY_REF (sea-front lowers refs
+     * to pointers downstream, but at this entry point we still
+     * see the source form). Treat it the same as TY_PTR for the
+     * derived-to-base check below. */
+    Type *target_base = NULL;
+    bool target_is_ref_or_ptr = false;
+    if (target_ty->kind == TY_PTR) {
+        target_base = target_ty->base;
+        target_is_ref_or_ptr = true;
+    } else if (target_ty->kind == TY_REF || target_ty->kind == TY_RVALREF) {
+        target_base = target_ty->base;
+        target_is_ref_or_ptr = true;
+    }
+    if (!target_is_ref_or_ptr || !target_base ||
+        (target_base->kind != TY_STRUCT &&
+         target_base->kind != TY_UNION)) {
         emit_expr(init); return;
     }
     Type *src = init->resolved_type;
-    if (!src || src->kind != TY_PTR || !src->base ||
-        (src->base->kind != TY_STRUCT && src->base->kind != TY_UNION) ||
-        src->base == target_ty->base) {
+    /* Source may be a pointer (a function returning T*) OR a plain
+     * class lvalue (ND_IDENT of class type, as in `A &aa = b;`).
+     * For the lvalue form sea-front already emits `&<expr>` for the
+     * ref-as-ptr lowering; we need to thread the derived-to-base
+     * chain through that address-of so the offset is correct. */
+    Type *src_class = NULL;
+    bool src_via_addr_of_lvalue = false;
+    if (src && src->kind == TY_PTR && src->base &&
+        (src->base->kind == TY_STRUCT || src->base->kind == TY_UNION)) {
+        src_class = src->base;
+    } else if (src &&
+               (src->kind == TY_STRUCT || src->kind == TY_UNION)) {
+        src_class = src;
+        src_via_addr_of_lvalue = true;
+    }
+    if (!src_class || src_class == target_base) {
         emit_expr(init); return;
     }
-    Type *deriv = src->base;
+    Type *deriv = src_class;
     if (!deriv->class_region && deriv->tag) {
         Node *d = find_class_def_by_tag_args(deriv);
         if (!d) d = find_class_def_by_tag_only(deriv);
@@ -10490,9 +10519,9 @@ static void emit_init_with_target(Node *init, Type *target_ty) {
             deriv = d->class_def.ty;
     }
     int base_path[8];
-    int base_len = find_base_path(deriv, target_ty->base, base_path, 8);
-    if (base_len == 0 && target_ty->base->tag) {
-        Type *tgt = target_ty->base;
+    int base_len = find_base_path(deriv, target_base, base_path, 8);
+    if (base_len == 0 && target_base->tag) {
+        Type *tgt = target_base;
         int nb = class_nbases(deriv);
         for (int b = 0; b < nb; b++) {
             Type *base = class_base(deriv, b);
@@ -10505,9 +10534,21 @@ static void emit_init_with_target(Node *init, Type *target_ty) {
         }
     }
     if (base_len == 0) { emit_expr(init); return; }
-    fputs("&(", stdout);
-    emit_expr(init);
-    fputs(")->", stdout);
+    if (src_via_addr_of_lvalue) {
+        /* `T &r = expr;` form — expr is an lvalue of class type; the
+         * surrounding init context emits `&` BEFORE calling us, then
+         * appends our output. Emit `(expr).__sf_baseN` so the
+         * concatenation produces `&(expr).__sf_baseN` — the address
+         * of the derived's base subobject, the correct upcast for
+         * a derived-to-base reference binding. */
+        fputc('(', stdout);
+        emit_expr(init);
+        fputs(").", stdout);
+    } else {
+        fputs("&(", stdout);
+        emit_expr(init);
+        fputs(")->", stdout);
+    }
     if (base_len > 1) emit_base_chain(base_path, base_len - 1);
     int last = base_path[base_len - 1];
     if (last == 0) fputs("__sf_base", stdout);
