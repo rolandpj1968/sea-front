@@ -2429,6 +2429,12 @@ Node *parse_declaration(Parser *p) {
  */
 Node *parse_top_level_decl(Parser *p) {
     skip_extension(p);
+    /* C++11 attribute-specifier-seq prefix on a top-level
+     * declaration — `[[gnu::mode(QI)]] int a;`. N4659 §10.6.6
+     * [dcl.attr.grammar]. Sea-front's type system doesn't model
+     * the attribute payload, so skip the spelling and parse the
+     * decl normally. Pattern: g++.dg/cpp0x/gen-attrs-3.C. */
+    parser_skip_cxx_attributes(p);
     /* Empty declaration — N4659 §10/6 */
     if (parser_consume(p, TK_SEMI))
         return NULL;
