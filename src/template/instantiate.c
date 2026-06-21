@@ -1170,6 +1170,15 @@ static void collect_from_node(InstCollector *col, Node *n) {
         collect_from_node(col, n->expr_stmt.expr);
         break;
 
+    /* GCC statement-expression `({ ... })` — its block may contain
+     * template-id uses (e.g. `({ A<1>(); })`). Without descending the
+     * template-instantiation discovery skips them and codegen later
+     * emits the bare ident (`A()`), losing the instantiation entirely.
+     * Pattern: g++.dg/ext/stmtexpr1.C — `({ A<1>(); A<2>(); ;})`. */
+    case ND_STMT_EXPR:
+        collect_from_node(col, n->stmt_expr.block);
+        break;
+
     case ND_SWITCH:
         collect_from_node(col, n->switch_.expr);
         collect_from_node(col, n->switch_.body);
@@ -4517,6 +4526,9 @@ static void patch_node_types(Node *n, DedupSet *ds, Arena *arena) {
         break;
     case ND_EXPR_STMT:
         patch_node_types(n->expr_stmt.expr, ds, arena);
+        break;
+    case ND_STMT_EXPR:
+        patch_node_types(n->stmt_expr.block, ds, arena);
         break;
     case ND_SWITCH:
         patch_node_types(n->switch_.init, ds, arena);
