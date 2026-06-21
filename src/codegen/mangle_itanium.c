@@ -440,11 +440,31 @@ static void emit_type(ItanCtx *c, Type *ty) {
         Type *dty = ty->nttp_decl_type;
         const char *typecode = builtin_code(dty);
         if (!typecode) {
-            /* Fallback when nttp_decl_type wasn't propagated — e.g.
-             * pointer-typed NTTPs (which currently aren't tracked).
-             * Emit `Li0E` to keep output Itanium-shaped; collisions
-             * surface at link time. */
-            fputs("Li0E", stdout);
+            /* Non-integral/bool NTTP — typically a function- or
+             * object-pointer NTTP (`template<int(*F)(...)>`,
+             * `template<T*>`). Itanium ABI §5.1.6.7 prescribes
+             * `XadL_Z<entity-mangle>EE` for `&entity` template args.
+             * We don't have the entity's full signature mangle here,
+             * but the tag carries the entity's source ident — embed
+             * that so three distinct `tmpl<..., &fa/&fb/&fc>` calls
+             * produce three distinct symbols instead of collapsing
+             * to `Li0E` (which causes C-level static-inline
+             * redefinitions when sea-front emits each as a separate
+             * body — observed on gcc 4.8 hash_table::traverse). */
+            if (ty->tag && ty->tag->len > 0) {
+                fputs("XadL_Z", stdout);
+                fprintf(stdout, "%d", ty->tag->len);
+                for (int i = 0; i < ty->tag->len; i++) {
+                    unsigned char c = (unsigned char)ty->tag->loc[i];
+                    bool ok = (c >= 'a' && c <= 'z') ||
+                              (c >= 'A' && c <= 'Z') ||
+                              (c >= '0' && c <= '9') || c == '_';
+                    fputc(ok ? c : '_', stdout);
+                }
+                fputs("EE", stdout);
+            } else {
+                fputs("Li0E", stdout);
+            }
             return;
         }
         const char *s = ty->tag ? ty->tag->loc : "";
