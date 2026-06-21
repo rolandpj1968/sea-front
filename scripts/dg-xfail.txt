@@ -190,3 +190,31 @@ g++.dg/cpp0x/nullptr21.C
 
 
 
+
+# --- Synthesized derived virtual operator= override -------------------
+# A derived class inheriting a virtual op= from its base requires
+# sea-front to synthesize an implicitly-declared B::operator=, mark it
+# as a virtual override, wire it into B's vtable instance, AND route
+# the call site `ar = b2` through the vtable rather than direct call.
+# Today sea-front synthesizes neither the body nor the vtable instance
+# for derived-without-user-virtuals, and the assignment codegen path
+# (emit_c.c around line 5893) emits a direct call to the base op=.
+# Sizeable cross-cutting slice — deferred. Pattern: N4659 §15.8.2
+# [class.copy.assign]/12 (implicit declaration override of a virtual
+# base op=).
+g++.dg/inherit/virtual5.C
+
+# --- Multi-TU testsuite (runner limitation) ---------------------------
+# scripts/run_gpp_dg.sh compiles each .C standalone via sea-front-cc
+# and doesn't honour `dg-additional-sources`. Tests that depend on
+# a sibling .cc for symbol definitions fail to link in our runner
+# even though the C++ behaviour would pass with both TUs.
+g++.dg/abi/local1.C
+
+# --- typeid() runtime type comparison ---------------------------------
+# Sea-front's RTTI emits a __sf_type_info struct per class but does
+# not yet implement runtime type comparison via typeid() (the test
+# `typeid(aref) != typeid(b)` requires looking through references to
+# the dynamic type, then comparing the resolved type_info objects).
+# Deferred until the broader RTTI slice lands. N4659 §8.2.8 [expr.typeid].
+g++.dg/opt/rtti1.C
