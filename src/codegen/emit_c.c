@@ -8087,22 +8087,33 @@ static void emit_expr(Node *n) {
                          * struct value to pointer. */
                         bool saved_srd = g_suppress_ref_deref;
                         if (obj_is_ptr && obj && obj->kind == ND_IDENT &&
-                            is_ref_param(obj->ident.name))
+                            (is_ref_param(obj->ident.name) ||
+                             (obj->ident.resolved_decl &&
+                              obj->ident.resolved_decl->type &&
+                              ty_is_ref(obj->ident.resolved_decl->type))))
                             g_suppress_ref_deref = true;
                         emit_expr(obj);
                         g_suppress_ref_deref = saved_srd;
                         fputs("))->__sf_vptr->", stdout);
                     } else if (obj_is_ptr) {
-                        /* Ref-param idents would normally auto-deref
+                        /* Ref-param/local idents would normally auto-deref
                          * to '(*x)' — but we want the pointer here so
                          * '->' can chase the vtable. Suppress the deref
                          * for the same reason the need_cast branch
-                         * above does.
+                         * above does. Local ref vars use the same lowering
+                         * (T* storage with auto-deref at use); the param-
+                         * only check missed them and the resulting
+                         * '(*aa)->__sf_vptr->...' tries to '->' through a
+                         * struct value.
                          * Pattern: g++.dg/torture/pr48661.C E::n calls
-                         * 'x.m()' on a const B& parameter. */
+                         * 'x.m()' on a const B& parameter; same shape
+                         * with a local ref `A &aa = b; aa.f();`. */
                         bool saved_srd = g_suppress_ref_deref;
                         if (obj && obj->kind == ND_IDENT &&
-                            is_ref_param(obj->ident.name))
+                            (is_ref_param(obj->ident.name) ||
+                             (obj->ident.resolved_decl &&
+                              obj->ident.resolved_decl->type &&
+                              ty_is_ref(obj->ident.resolved_decl->type))))
                             g_suppress_ref_deref = true;
                         fputc('(', stdout);
                         emit_expr(obj);
