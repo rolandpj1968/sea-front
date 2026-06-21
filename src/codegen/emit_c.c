@@ -13862,10 +13862,23 @@ static void emit_stmt(Node *n) {
          * class's user-declared default ctor when one exists.
          * Without a default ctor we leave the storage uninitialized
          * — same as C semantics, and matching what C++ does for
-         * trivially-default-constructible types. */
+         * trivially-default-constructible types.
+         *
+         * Read has_default_ctor through the canonical class-def Type
+         * (var_decl.ty may be a Type copy that wasn't updated when
+         * the post-instantiation refresh propagated base-inheritance
+         * flags onto the class definition's Type). Without this
+         * canonical-deref, a polymorphic-via-inheritance class
+         * still emits as a bare struct decl and the synth ctor
+         * (which installs the vptr) is skipped. */
         else if (!n->var_decl.init && !n->var_decl.has_ctor_init &&
                  n->var_decl.ty && n->var_decl.ty->kind == TY_STRUCT &&
-                 n->var_decl.ty->has_default_ctor && n->var_decl.name) {
+                 n->var_decl.name &&
+                 ((n->var_decl.ty->has_default_ctor) ||
+                  (n->var_decl.ty->class_def &&
+                   n->var_decl.ty->class_def->kind == ND_CLASS_DEF &&
+                   n->var_decl.ty->class_def->class_def.ty &&
+                   n->var_decl.ty->class_def->class_def.ty->has_default_ctor))) {
             emit_indent();
             /* Default ctor — 0 params. */
             mangle_class_ctor(n->var_decl.ty, NULL, 0);

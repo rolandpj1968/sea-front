@@ -2885,6 +2885,156 @@ Node *registry_lookup_class_template(TmplRegistry *reg,
     return registry_find(reg, name, name_len);
 }
 
+/* Walk every ND_CLASS_DEF in a Node subtree, calling visit on each. */
+static void walk_class_defs(Node *n, void (*visit)(Node *cd)) {
+    if (!n) return;
+    if (n->kind == ND_CLASS_DEF) {
+        visit(n);
+        for (int i = 0; i < n->class_def.nmembers; i++)
+            walk_class_defs(n->class_def.members[i], visit);
+        return;
+    }
+    if (n->kind == ND_TEMPLATE_DECL) {
+        walk_class_defs(n->template_decl.decl, visit);
+        return;
+    }
+    if (n->kind == ND_TRANSLATION_UNIT) {
+        for (int i = 0; i < n->tu.ndecls; i++)
+            walk_class_defs(n->tu.decls[i], visit);
+        return;
+    }
+    if (n->kind == ND_BLOCK) {
+        for (int i = 0; i < n->block.nstmts; i++)
+            walk_class_defs(n->block.stmts[i], visit);
+        return;
+    }
+}
+
+/* Propagate has_dtor / has_default_ctor / has_virtual_methods from
+ * bases onto a derived class — same logic parse/type.c runs at end
+ * of class parsing, but re-run after the bases (which may have been
+ * template-id instantiations) are fully flagged. Mirrors §11 / §13.3
+ * / §15.1 / §15.4 inheritance rules. */
+static void refresh_one_class(Node *cd) {
+    if (!cd || cd->kind != ND_CLASS_DEF) return;
+    Type *ty = cd->class_def.ty;
+    if (!ty || !ty->class_region) return;
+    bool any_user_ctor = false;
+    for (int i = 0; i < cd->class_def.nmembers; i++) {
+        Node *m = cd->class_def.members[i];
+        if (!m) continue;
+        if ((m->kind == ND_FUNC_DEF && m->func.is_constructor) ||
+            (m->kind == ND_VAR_DECL && m->var_decl.is_constructor)) {
+            any_user_ctor = true;
+            break;
+        }
+    }
+    for (int bi = 0; bi < ty->class_region->nbases; bi++) {
+        Type *bt = ty->class_region->bases[bi]
+                    ? ty->class_region->bases[bi]->owner_type
+                    : NULL;
+        if (!bt) continue;
+        if (bt->has_dtor) ty->has_dtor = true;
+        if (bt->has_virtual_methods) ty->has_virtual_methods = true;
+        if (!any_user_ctor && bt->has_default_ctor)
+            ty->has_default_ctor = true;
+    }
+    if (!any_user_ctor && ty->has_virtual_methods)
+        ty->has_default_ctor = true;
+}
+
+/* Mark implicit-virtual overrides on a class that became polymorphic
+ * via inheritance — same N4659 §13.3/2 logic as parse/type.c's late-
+ * stage block. A derived member with matching name + nparams to a
+ * base virtual IS virtual even without the keyword; the vtable slot
+ * must dispatch to it. Without this re-run, an inherited polymorphic
+ * base's `kind()` override on a derived class isn't marked virtual,
+ * the vtable instance synthesis is skipped, and dispatch wrong-
+ * targets the base. Pattern (template-base form): g++.dg/torture/
+ * pr44535.C `D : public C, public FOO::A<char>` — A<char>::OnProv
+ * is virtual, D::OnProv overrides without the keyword. */
+static void mark_implicit_virtuals_one(Node *cd) {
+    if (!cd || cd->kind != ND_CLASS_DEF) return;
+    Type *ty = cd->class_def.ty;
+    if (!ty || !ty->class_region) return;
+    if (!ty->has_virtual_methods) return;
+    for (int mi = 0; mi < cd->class_def.nmembers; mi++) {
+        Node *m = cd->class_def.members[mi];
+        if (!m) continue;
+        bool m_funcdef = (m->kind == ND_FUNC_DEF);
+        bool m_decl    = (m->kind == ND_VAR_DECL &&
+                           m->var_decl.ty &&
+                           m->var_decl.ty->kind == TY_FUNC);
+        if (!m_funcdef && !m_decl) continue;
+        if (m_funcdef && (m->func.is_constructor ||
+                           m->func.is_destructor)) continue;
+        bool already_virt = m_funcdef ? m->func.is_virtual
+                                       : m->var_decl.is_virtual;
+        if (already_virt) continue;
+        Token *mname = m_funcdef ? m->func.name : m->var_decl.name;
+        int m_np = m_funcdef ? m->func.nparams : m->var_decl.ty->nparams;
+        if (!mname) continue;
+        /* Same depth-first walk over the inheritance graph (cap 32)
+         * as parse/type.c. */
+        Type *worklist[32];
+        int wl_n = 0;
+        for (int bi = 0;
+             bi < ty->class_region->nbases && wl_n < 32; bi++) {
+            Type *bt = ty->class_region->bases[bi]->owner_type;
+            if (bt) worklist[wl_n++] = bt;
+        }
+        bool found_match = false;
+        int wi = 0;
+        while (wi < wl_n && !found_match) {
+            Type *bt = worklist[wi++];
+            if (!bt || !bt->class_def) continue;
+            Node *bd = bt->class_def;
+            for (int bj = 0; bj < bd->class_def.nmembers; bj++) {
+                Node *bm = bd->class_def.members[bj];
+                if (!bm) continue;
+                bool bm_funcdef = (bm->kind == ND_FUNC_DEF &&
+                                    bm->func.is_virtual);
+                bool bm_decl    = (bm->kind == ND_VAR_DECL &&
+                                    bm->var_decl.is_virtual &&
+                                    bm->var_decl.ty &&
+                                    bm->var_decl.ty->kind == TY_FUNC);
+                if (!bm_funcdef && !bm_decl) continue;
+                Token *bn = bm_funcdef ? bm->func.name : bm->var_decl.name;
+                int b_np = bm_funcdef ? bm->func.nparams
+                                       : bm->var_decl.ty->nparams;
+                if (!bn) continue;
+                if (bn->len != mname->len) continue;
+                if (memcmp(bn->loc, mname->loc, mname->len) != 0) continue;
+                if (b_np != m_np) continue;
+                found_match = true;
+                break;
+            }
+            if (!found_match && bt->class_region) {
+                for (int bi = 0;
+                     bi < bt->class_region->nbases && wl_n < 32; bi++) {
+                    Type *bt2 = bt->class_region->bases[bi]->owner_type;
+                    if (!bt2) continue;
+                    bool dup = false;
+                    for (int wj = 0; wj < wl_n; wj++)
+                        if (worklist[wj] == bt2) { dup = true; break; }
+                    if (!dup) worklist[wl_n++] = bt2;
+                }
+            }
+        }
+        if (found_match) {
+            if (m_funcdef) m->func.is_virtual = true;
+            else           m->var_decl.is_virtual = true;
+        }
+    }
+}
+
+/* Driver: run flag refresh then implicit-virtual mark on every class
+ * in the TU. Both passes are idempotent; running twice is harmless. */
+static void refresh_inherited_class_flags(Node *tu) {
+    walk_class_defs(tu, refresh_one_class);
+    walk_class_defs(tu, mark_implicit_virtuals_one);
+}
+
 void template_instantiate(Node *tu, Arena *arena) {
     if (!tu || tu->kind != ND_TRANSLATION_UNIT) return;
 
@@ -4377,6 +4527,20 @@ void template_instantiate(Node *tu, Arena *arena) {
      * the exact pointer collected in Phase 2 (e.g. Declarations
      * store a copy of the Type from parse_type_specifiers). */
     patch_all_types(tu, &ds, arena);
+
+    /* Refresh inherited class flags now that template-id bases are
+     * fully instantiated. parse/type.c computes has_dtor /
+     * has_default_ctor / has_virtual_methods at the end of parsing
+     * a class, but for `class Derived : Base<int>` the base
+     * Base<int> wasn't yet populated. Walk all TU-level classes
+     * after instantiation and re-propagate; also re-run the
+     * implicit-virtual-override mark when a class becomes
+     * polymorphic via an inherited vtable (N4659 §13.3/2). Without
+     * this, `new Derived` skips ctor synthesis (no vptr install)
+     * and dispatched virtual calls reach the base override.
+     * Pattern: g++.dg/torture/pr44535.C
+     * `Derived : FOO::A<char>` with template base. */
+    refresh_inherited_class_flags(tu);
 }
 
 /*
