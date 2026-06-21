@@ -2554,7 +2554,17 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
                     bool empty = m->func.body &&
                         m->func.body->kind == ND_BLOCK &&
                         m->func.body->block.nstmts == 0;
-                    if (!empty) inst_ty->has_dtor = true;
+                    /* Virtual dtors always need a wrapper — the vtable
+                     * slot points at it (and at __del_dtor), and dispatch
+                     * must reach SOME callable even when the user body is
+                     * empty. N4659 §15.4 [class.dtor]/12. Mirrors the
+                     * same condition in parse/type.c — without this
+                     * clause the template-instantiated class skips dtor
+                     * synthesis even though its vtable forward-declares
+                     * __del_dtor, so the linker errors with undefined
+                     * reference. Pattern: g++.dg/torture/pr44535.C
+                     * `template<T> class A { virtual ~A() { } ... };`. */
+                    if (!empty || m->func.is_virtual) inst_ty->has_dtor = true;
                 }
                 if (m->func.is_constructor) {
                     any_user_ctor = true;
