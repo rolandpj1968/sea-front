@@ -637,6 +637,8 @@ void itan_mangle_class_method(Type *class_type, Token *method_name,
  * method source-name and the parameter-list-close. When the call
  * has no method template args, the emitted form is identical to
  * the non-template path. */
+static const char *itan_op_id(OperatorKind op, int nparams);  /* fwd */
+
 void itan_mangle_class_method_tid(Type *class_type, Token *method_name,
                                    Type **method_targs, int n_method_targs,
                                    Type **param_types, int nparams,
@@ -644,7 +646,22 @@ void itan_mangle_class_method_tid(Type *class_type, Token *method_name,
     ItanCtx ctx;
     ctx_reset(&ctx);
     emit_prefix_open(&ctx, class_type, is_const);
-    emit_source_name(method_name);
+    /* Operator-id method name (`operator==` and friends): the parser
+     * stores the name as just "operator" (8 chars) with the operator
+     * symbol preserved as the chars after token->loc+len.
+     * operator_kind_from_method_name reads from that location. Route
+     * through the Itanium op-id (`eq`, `lt`, etc.) instead of emitting
+     * `8operator` as a source-name — gcc-compiled callers won't link
+     * against a bare-`operator` symbol. */
+    OperatorKind opk = OP_UNKNOWN;
+    if (method_name && method_name->len == 8 &&
+        memcmp(method_name->loc, "operator", 8) == 0)
+        opk = operator_kind_from_method_name(method_name);
+    const char *op_id = (opk != OP_UNKNOWN) ? itan_op_id(opk, nparams) : NULL;
+    if (op_id)
+        fputs(op_id, stdout);
+    else
+        emit_source_name(method_name);
     if (n_method_targs > 0 && method_targs) {
         fputc('I', stdout);
         for (int i = 0; i < n_method_targs; i++)

@@ -7513,16 +7513,41 @@ static void emit_expr(Node *n) {
          * an ND_IDENT marked implicit_this, and we recover the class
          * via the resolved declaration's home region. */
         Node *callee = n->call.callee;
+        /* Bare `operator==(arg)` inside another method body — the
+         * parser stores the callee as ND_IDENT named just "operator"
+         * (the operator-symbol survives via the chars after
+         * token->loc+len). Sema doesn't recognise it as implicit-this,
+         * leaving resolved_decl=NULL and implicit_this=false. Promote
+         * here when we're in a class method: treat as an implicit-this
+         * dispatch to the current class's matching operator method.
+         * Pattern: libstdc++ <typeinfo>'s `operator!=` body:
+         *   { return !operator==(__arg); } */
+        if (callee && callee->kind == ND_IDENT &&
+            !callee->ident.implicit_this &&
+            !callee->ident.resolved_decl &&
+            g_current_method_class && callee->ident.name &&
+            callee->ident.name->len == 8 &&
+            memcmp(callee->ident.name->loc, "operator", 8) == 0 &&
+            operator_kind_from_method_name(callee->ident.name) != OP_UNKNOWN) {
+            callee->ident.implicit_this = true;
+        }
         /* Don't require rd->type to be TY_FUNC — for member-template
          * decls, the lookup may find the ENTITY_TEMPLATE entry whose
          * type is NULL. The class_type + mname pair is enough for
          * resolve_overload to find the right candidate. */
         if (callee && callee->kind == ND_IDENT &&
             callee->ident.implicit_this &&
-            callee->ident.resolved_decl &&
-            callee->ident.resolved_decl->home &&
-            callee->ident.resolved_decl->home->owner_type &&
-            callee->ident.resolved_decl->home->owner_type->tag) {
+            ((callee->ident.resolved_decl &&
+              callee->ident.resolved_decl->home &&
+              callee->ident.resolved_decl->home->owner_type &&
+              callee->ident.resolved_decl->home->owner_type->tag) ||
+             /* Operator-id implicit-this dispatch path above:
+              * resolved_decl is NULL but we know the receiver is
+              * g_current_method_class. Fall through to the class-based
+              * lookup, using the current method class directly. */
+             (g_current_method_class && g_current_method_class->tag &&
+              callee->ident.name && callee->ident.name->len == 8 &&
+              memcmp(callee->ident.name->loc, "operator", 8) == 0))) {
             /* Function-pointer data member called from inside a method
              * body: 'fn(arg)' where fn is 'void(*)(void*)'. Sema
              * resolves the unqualified name to the member Declaration
@@ -7533,7 +7558,8 @@ static void emit_expr(Node *n) {
              * (or bare TY_FUNC) and re-route as a member access call.
              * Pattern: glibc's __pthread_cleanup_class::~dtor doing
              * '__cancel_routine(__cancel_arg)'. */
-            Type *rdty = callee->ident.resolved_decl->type;
+            Type *rdty = callee->ident.resolved_decl
+                ? callee->ident.resolved_decl->type : NULL;
             bool rd_is_fnptr_member =
                 rdty && rdty->kind == TY_PTR && rdty->base &&
                 rdty->base->kind == TY_FUNC;
@@ -7548,7 +7574,11 @@ static void emit_expr(Node *n) {
                 fputc(')', stdout);
                 return;
             }
-            Type *class_type = callee->ident.resolved_decl->home->owner_type;
+            /* Operator-id fallback (resolved_decl NULL) uses the
+             * currently-emitting method's class as the receiver type. */
+            Type *class_type = callee->ident.resolved_decl
+                ? callee->ident.resolved_decl->home->owner_type
+                : g_current_method_class;
             /* The resolved decl's home is the SOURCE template class
              * (no template args). When emitting inside a class-template
              * member's body — instantiated for some <args> — prefer
