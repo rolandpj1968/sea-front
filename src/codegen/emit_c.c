@@ -13280,7 +13280,41 @@ static void emit_stmt(Node *n) {
                  init->kind == ND_CALL  || init->kind == ND_SUBSCRIPT);
             if (is_static && is_const_ty && init_nonconst)
                 sf &= ~DECL_STATIC;
+            /* Block-scope `static T values = T();` (function-local
+             * static initialised by a value-init class temp). The
+             * temp's hoist emits `T __SF_temp_N = {0};` before the
+             * decl, then the suffix would be `= __SF_temp_N` — but
+             * C11 §6.7.9/4 requires constant initialisers for
+             * static-storage objects. C's static-storage zero-init
+             * already produces an all-zero `values`, which matches
+             * `T()` for any class with no user ctor (or value-init).
+             * Drop the init so cc accepts the decl. Pattern: gcc
+             * 4.8 ipa-cp.c `static vec<...> values = vec<...>();`
+             * inside a loop body. N4659 §11.6/8 [dcl.init]. */
+            bool drop_static_class_temp_init = false;
+            /* Match any class-typed ND_CALL init for a static local —
+             * with or without is_type_call set. The hoist will have
+             * spilled the call into a `T __SF_temp = {0};` local;
+             * `static T values = __SF_temp;` is then not a constant
+             * initialiser and cc rejects. Letting C's static-storage
+             * zero-init produce the same all-zero `values` is
+             * observably equivalent for any class with no user ctor
+             * or value-init temp. */
+            if (is_static && init && init->kind == ND_CALL &&
+                n->var_decl.ty &&
+                (n->var_decl.ty->kind == TY_STRUCT ||
+                 n->var_decl.ty->kind == TY_UNION)) {
+                drop_static_class_temp_init = true;
+            }
             emit_var_storage_flags_for_type(sf, n->var_decl.ty);
+            if (drop_static_class_temp_init) {
+                Node *saved_init = n->var_decl.init;
+                n->var_decl.init = NULL;
+                emit_var_decl_inner(n);
+                n->var_decl.init = saved_init;
+                fputs(";\n", stdout);
+                return;
+            }
         }
         emit_var_decl_inner(n);
         /* Value-init 'T x{}' — empty brace-init — N4659 §11.6.1/8
@@ -20540,12 +20574,39 @@ static int order_find_class_def(EmitOrder *o, Node *cdef) {
     return -1;
 }
 
+/* Find the EmitOrder node that emits an enum definition with the
+ * given tag. Enums at TU scope parse as ND_VAR_DECL with TY_ENUM
+ * and no var name; the var-decl emit puts the enum body in. */
+static int order_find_enum_def(EmitOrder *o, Token *tag) {
+    if (!tag) return -1;
+    for (int i = 0; i < o->n; i++) {
+        Node *n = o->items[i].node;
+        if (!n || n->kind != ND_VAR_DECL) continue;
+        Type *t = n->var_decl.ty;
+        if (!t || t->kind != TY_ENUM || !t->tag) continue;
+        if (t->tag->len == tag->len &&
+            memcmp(t->tag->loc, tag->loc, tag->len) == 0)
+            return i;
+    }
+    return -1;
+}
+
 /* Add a struct→struct dep: class with index `class_idx` depends on
  * the class definition reached through `ty` (a by-value member /
- * base class type). Walks through arrays to the element. */
+ * base class type). Walks through arrays to the element. Also adds
+ * a struct→enum dep when ty is TY_ENUM — C can't forward-declare
+ * enums, so the enum body must precede any struct that has an
+ * enum-typed field. */
 static void order_add_struct_dep(EmitOrder *o, int class_idx, Type *ty) {
     while (ty && ty->kind == TY_ARRAY && ty->base) ty = ty->base;
-    if (!ty || (ty->kind != TY_STRUCT && ty->kind != TY_UNION)) return;
+    if (!ty) return;
+    if (ty->kind == TY_ENUM && ty->tag) {
+        int dep_idx = order_find_enum_def(o, ty->tag);
+        if (dep_idx >= 0 && dep_idx != class_idx)
+            order_add_dep(o, class_idx, dep_idx);
+        return;
+    }
+    if (ty->kind != TY_STRUCT && ty->kind != TY_UNION) return;
     if (!ty->class_def) return;
     int dep_idx = order_find_class_def(o, ty->class_def);
     if (dep_idx >= 0 && dep_idx != class_idx)
