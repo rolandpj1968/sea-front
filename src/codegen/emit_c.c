@@ -14706,19 +14706,104 @@ static void emit_stmt(Node *n) {
                 static Token tok_end = {
                     .kind = TK_IDENT, .loc = tok_end_text, .len = 3
                 };
+                /* When begin/end are virtual, dispatch through the
+                 * vtable rather than calling the static symbol. The
+                 * range expression's dynamic type determines which
+                 * begin/end body runs — N4659 §13.3 [class.virtual].
+                 * Without this, `A &aa = b; for (int x : aa)` always
+                 * calls A::begin even when b's dynamic type overrides
+                 * it. Pattern: g++.dg/cpp0x/range-for15.C. */
+                bool begin_virt = method_is_virtual(range_ty, &tok_begin);
+                bool end_virt   = method_is_virtual(range_ty, &tok_end);
+                /* When a virtual begin/end is dispatched, the vptr
+                 * lives on the polymorphic-root subobject — not on
+                 * the derived struct directly. Cast the receiver
+                 * pointer to the vptr-owner type before `->__sf_vptr`
+                 * access. Mirrors the need_cast pattern in the main
+                 * ND_MEMBER virtual-call codegen. */
+                Type *vowner = (begin_virt || end_virt)
+                    ? vptr_owner_class(range_ty) : NULL;
+                /* Resolve whether the range expression is itself a
+                 * pointer-typed lvalue (ref-local/ref-param lowering),
+                 * so we can suppress the auto-deref that ND_IDENT
+                 * emission would otherwise apply — vtable dispatch
+                 * needs the bare pointer for the `->__sf_vptr->`
+                 * access. The non-virtual paths emit `&(range)` which
+                 * tolerates the deref because the leading `&` cancels
+                 * it; the vtable path doesn't, so wire the suppression
+                 * gate here. */
+                bool range_is_refish_ident =
+                    range && range->kind == ND_IDENT && range->ident.name &&
+                    (is_ref_param(range->ident.name) ||
+                     (range->ident.resolved_decl &&
+                      range->ident.resolved_decl->type &&
+                      ty_is_ref(range->ident.resolved_decl->type)));
                 fputs("{\n", stdout); g_indent++;
                 emit_indent(); emit_type(iter_ty); fputs(" __sf_end = ", stdout);
-                mangle_class_method(range_ty, &tok_end, NULL, 0,
-                                        /*is_const=*/false);
-                fputs("(&(", stdout);
-                emit_expr(range); fputs("));\n", stdout);
+                if (end_virt) {
+                    /* `((vowner *)recv)->__sf_vptr->end(recv)` */
+                    fputs("((struct ", stdout);
+                    mangle_class_tag(vowner);
+                    fputs(" *)", stdout);
+                    if (range_is_refish_ident) {
+                        bool saved = g_suppress_ref_deref;
+                        g_suppress_ref_deref = true;
+                        emit_expr(range);
+                        g_suppress_ref_deref = saved;
+                    } else {
+                        fputs("&(", stdout); emit_expr(range); fputc(')', stdout);
+                    }
+                    fputs(")->__sf_vptr->end((struct ", stdout);
+                    mangle_class_tag(vowner);
+                    fputs(" *)", stdout);
+                    if (range_is_refish_ident) {
+                        bool saved = g_suppress_ref_deref;
+                        g_suppress_ref_deref = true;
+                        emit_expr(range);
+                        g_suppress_ref_deref = saved;
+                    } else {
+                        fputs("&(", stdout); emit_expr(range); fputc(')', stdout);
+                    }
+                    fputs(");\n", stdout);
+                } else {
+                    mangle_class_method(range_ty, &tok_end, NULL, 0,
+                                            /*is_const=*/false);
+                    fputs("(&(", stdout);
+                    emit_expr(range); fputs("));\n", stdout);
+                }
                 emit_indent(); fputs("for (", stdout); emit_type(iter_ty);
                 fputs(" __sf_it = ", stdout);
-                mangle_class_method(range_ty, &tok_begin, NULL, 0,
-                                        /*is_const=*/false);
-                fputs("(&(", stdout);
-                emit_expr(range); fputs(")); __sf_it != __sf_end; ++__sf_it) {\n",
-                                          stdout);
+                if (begin_virt) {
+                    fputs("((struct ", stdout);
+                    mangle_class_tag(vowner);
+                    fputs(" *)", stdout);
+                    if (range_is_refish_ident) {
+                        bool saved = g_suppress_ref_deref;
+                        g_suppress_ref_deref = true;
+                        emit_expr(range);
+                        g_suppress_ref_deref = saved;
+                    } else {
+                        fputs("&(", stdout); emit_expr(range); fputc(')', stdout);
+                    }
+                    fputs(")->__sf_vptr->begin((struct ", stdout);
+                    mangle_class_tag(vowner);
+                    fputs(" *)", stdout);
+                    if (range_is_refish_ident) {
+                        bool saved = g_suppress_ref_deref;
+                        g_suppress_ref_deref = true;
+                        emit_expr(range);
+                        g_suppress_ref_deref = saved;
+                    } else {
+                        fputs("&(", stdout); emit_expr(range); fputc(')', stdout);
+                    }
+                    fputs("); __sf_it != __sf_end; ++__sf_it) {\n", stdout);
+                } else {
+                    mangle_class_method(range_ty, &tok_begin, NULL, 0,
+                                            /*is_const=*/false);
+                    fputs("(&(", stdout);
+                    emit_expr(range); fputs(")); __sf_it != __sf_end; ++__sf_it) {\n",
+                                              stdout);
+                }
                 g_indent++; emit_indent(); emit_type(decl_ty);
                 fprintf(stdout, " %.*s = *__sf_it;\n",
                         decl_name->len, decl_name->loc);
