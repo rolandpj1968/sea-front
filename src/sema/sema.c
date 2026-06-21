@@ -2300,12 +2300,39 @@ static void visit_call(Sema *s, Node *n) {
         Node *cdef = find_class_def_in_tu(s->tu, &probe);
         if (cdef && cdef->class_def.ty) {
             tc_type = cdef->class_def.ty;                        /* (d) */
+        } else {
+            /* No cdef in TU — the class template hasn't been
+             * instantiated yet (the class lives only as
+             * ND_TEMPLATE_DECL at TU level). Check if the name
+             * resolves to a class template via lookup; if so,
+             * synthesise a TY_STRUCT carrying the tag so the
+             * is_type_call branch below builds a per-instantiation
+             * Type with the template-id's args. Without this, sema
+             * couldn't see `const_ref<int>(arr)`'s type and
+             * downstream deduction of a containing `sum(arg)`
+             * call failed. Pattern: g++.dg/torture/pr30567.C. */
+            if (s->cur_scope) {
+                Declaration *cd = lookup_unqualified_from(s->cur_scope,
+                    tid->template_id.name->loc,
+                    tid->template_id.name->len);
+                if (cd && cd->entity == ENTITY_TEMPLATE && cd->tmpl_node &&
+                    cd->tmpl_node->kind == ND_TEMPLATE_DECL) {
+                    Node *inner = cd->tmpl_node->template_decl.decl;
+                    if (inner && inner->kind == ND_CLASS_DEF &&
+                        inner->class_def.ty) {
+                        tc_type = inner->class_def.ty;
+                    }
+                }
+            }
+        }
+        if (tc_type) {
             /* Synthesise a per-instantiation Type carrying the
              * template-id's args so downstream deduction can see
-             * them (`Foo<I>(A<I> a)` against an A<2>() temp).
+             * them (`Foo<I>(A<I> a)` against an A<2>() temp; also
+             * `sum(const_ref<int>(arr))` for arg-type deduction).
              * Without this the bare primary-template Type leaked
-             * through and the call mangle / deduction collapsed
-             * all instantiations of A. */
+             * through and call mangle / deduction collapsed all
+             * instantiations to one. */
             int n_args = tid->template_id.nargs;
             if (n_args > 0) {
                 Type *inst_ty = arena_alloc(s->arena, sizeof(Type));

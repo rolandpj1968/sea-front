@@ -1556,15 +1556,17 @@ static bool deduce_from_pair(Type *P, Type *A, SubstMap *map) {
              * literal and silently no-op'd. */
             if (!at && A->template_args && i < A->n_template_args)
                 at = A->template_args[i];
-            /* NTTP-arg pattern: `A<I>` where I is a non-type
-             * template parameter — the parser stored it as an
-             * ND_IDENT, so the ND_VAR_DECL extraction above gave
-             * NULL and the deduce_from_pair call became a no-op.
-             * Bind the param-name to A's NTTP value directly so
-             * downstream argument-type deduction (`A<I>` vs `A<5>`
-             * binds I=5) succeeds. N4659 §17.8.2.5 [temp.deduct.type]. */
-            if (!pt && pa && pa->kind == ND_IDENT && pa->ident.name &&
-                at && at->kind == TY_NTTP_VALUE) {
+            /* ND_IDENT pattern arg names a template parameter
+             * — either an NTTP (`A<I>`, I = int with value) or a
+             * type-param reference (`const_ref<T>`, T = typename).
+             * The ND_VAR_DECL extraction above gives NULL for both,
+             * so deduce_from_pair would silently no-op. Bind the
+             * param-name to the corresponding arg-side type
+             * directly. For NTTPs the arg is TY_NTTP_VALUE
+             * (subst_map_add_tt for ident-morph too); for
+             * type-params the arg is the actual concrete type.
+             * N4659 §17.8.2.5 [temp.deduct.type]. */
+            if (!pt && pa && pa->kind == ND_IDENT && pa->ident.name && at) {
                 bool bound = false;
                 for (int z = 0; z < map->nentries; z++) {
                     Token *pn = map->entries[z].param_name;
@@ -1574,7 +1576,7 @@ static bool deduce_from_pair(Type *P, Type *A, SubstMap *map) {
                 }
                 if (!bound) {
                     subst_map_add(map, pa->ident.name, at);
-                    if (at->tag)
+                    if (at->kind == TY_NTTP_VALUE && at->tag)
                         subst_map_add_tt(map, pa->ident.name, at->tag);
                 }
                 continue;
