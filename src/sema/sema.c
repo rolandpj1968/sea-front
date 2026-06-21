@@ -657,7 +657,18 @@ static void visit_var_decl(Sema *s, Node *n) {
      * Find the 'is_auto' leaf inside any TY_PTR / TY_REF / TY_RVALREF
      * wrappers and replace it with the deduced base. The outer
      * wrappers (and their cv-qualifiers) survive unchanged. */
-    if (n->var_decl.ty && n->var_decl.init) {
+    /* Pick the auto-init expression from either copy-init
+     * (var_decl.init) or direct-init form (var_decl.ctor_args[0])
+     * — `auto x = e;` vs `auto x(e);`. N4659 §10.1.7.4.1
+     * [dcl.spec.auto.deduce] applies to BOTH forms. Without the
+     * ctor_args fallback, `auto tmp(*this);` left auto unresolved
+     * and downstream init-type-checks compared int (the auto
+     * placeholder's emit-as kind) against the actual init type.
+     * Pattern: g++.dg/cpp0x/auto14.C. */
+    Node *auto_init_expr = n->var_decl.init;
+    if (!auto_init_expr && n->var_decl.ctor_nargs == 1)
+        auto_init_expr = n->var_decl.ctor_args[0];
+    if (n->var_decl.ty && auto_init_expr) {
         Type *outer = n->var_decl.ty;
         Type *leaf = outer;
         while (leaf && !leaf->is_auto &&
@@ -665,7 +676,7 @@ static void visit_var_decl(Sema *s, Node *n) {
                 leaf->kind == TY_RVALREF))
             leaf = leaf->base;
         if (leaf && leaf->is_auto) {
-            Type *init_ty = n->var_decl.init->resolved_type;
+            Type *init_ty = auto_init_expr->resolved_type;
             Type *deduced = init_ty;
             /* Strip initializer's outermost ref — auto sees the
              * referent type, not the reference. §10.1.7.4.1/3 */
