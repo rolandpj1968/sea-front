@@ -4004,6 +4004,70 @@ static bool same_template_instantiation(Type *a, Type *b) {
     return true;
 }
 
+/* True when the type's enclosing chain contains a namespace or class —
+ * either gives the human mangler a name prefix that distinguishes
+ * `a::Thing` from `b::Thing` (or `Outer1::Inner` from `Outer2::Inner`).
+ * Function/block-local types lack any such qualifier so two with the
+ * same source tag collapse to the same mangled name. */
+static bool has_qualifying_scope(Type *t) {
+    if (!t || !t->class_region) return false;
+    DeclarativeRegion *r = t->class_region->enclosing;
+    while (r) {
+        if (r->kind == REGION_NAMESPACE && r->name) return true;
+        if (r->kind == REGION_CLASS) return true;
+        r = r->enclosing;
+    }
+    return false;
+}
+
+/* Two function-local struct definitions with the same source tag and
+ * structurally identical bodies (same field count, names, and types).
+ * In C++ they're distinct types (each function-body has its own scope
+ * per N4659 §9.8 [basic.scope]); in C they would collide at file
+ * scope because sea-front hoists local classes to the TU. Real-world
+ * hit: gcc 4.8 config/i386/i386.c has both
+ *   feature_compare() { typedef struct _function_version_info { ... };
+ *                       ... } and
+ *   dispatch_function_versions() { struct _function_version_info {
+ *                                      ... } *function_version_info;
+ *                                  ... }
+ * with byte-identical field lists — one C definition serves both.
+ * Skip the dedup when either side has a namespace/class qualifier —
+ * those produce distinct mangled names and intentionally coexist. */
+static bool same_struct_body(Type *a, Type *b) {
+    if (!a || !b) return false;
+    if (a->kind != b->kind) return false;
+    if (a->kind != TY_STRUCT && a->kind != TY_UNION) return false;
+    if (!a->tag || !b->tag) return false;
+    if (a->tag->len != b->tag->len) return false;
+    if (memcmp(a->tag->loc, b->tag->loc, a->tag->len) != 0) return false;
+    /* Reject if either side carries template-args — those are the
+     * template-instantiation path handled by same_template_instantiation. */
+    if (a->n_template_args > 0 || b->n_template_args > 0) return false;
+    /* Reject if either side is namespace- or class-qualified — those
+     * produce distinct mangled names (`sf__a_Thing` vs `sf__b_Thing`)
+     * and intentionally coexist. */
+    if (has_qualifying_scope(a) || has_qualifying_scope(b)) return false;
+    Node *ca = a->class_def, *cb = b->class_def;
+    if (!ca || !cb) return false;
+    if (ca->class_def.nmembers != cb->class_def.nmembers) return false;
+    for (int i = 0; i < ca->class_def.nmembers; i++) {
+        Node *ma = ca->class_def.members[i];
+        Node *mb = cb->class_def.members[i];
+        if (!ma || !mb) return false;
+        if (ma->kind != mb->kind) return false;
+        if (ma->kind != ND_VAR_DECL) continue;
+        if (!ma->var_decl.name || !mb->var_decl.name) return false;
+        if (ma->var_decl.name->len != mb->var_decl.name->len) return false;
+        if (memcmp(ma->var_decl.name->loc, mb->var_decl.name->loc,
+                   ma->var_decl.name->len) != 0)
+            return false;
+        if (!types_equivalent(ma->var_decl.ty, mb->var_decl.ty))
+            return false;
+    }
+    return true;
+}
+
 /* Collect same-named candidate methods from a class AND all its
  * base classes (recursive). Inherited methods need to be reachable
  * through the same-name lookup. Caller's 'found' vector accumulates. */
@@ -4452,6 +4516,58 @@ static bool find_enum_tag_in_tu_walk(Node *n, Token *name) {
 }
 static bool find_enum_tag_in_tu(Node *tu, Token *name) {
     return find_enum_tag_in_tu_walk(tu, name);
+}
+
+/* Recursive walk variant that returns the enum Type-with-body for a
+ * matching tag. Used when a struct field references an enum tag whose
+ * body is declared in a function body (function-local enum used by a
+ * function-local struct hoisted to TU scope). Real-world hit: gcc
+ * 4.8 config/i386/i386.c ix86_valid_target_attribute_inner_p()
+ * declares `enum ix86_opt_type { ... };` then a struct that has an
+ * `enum ix86_opt_type type;` field — sea-front hoists the struct but
+ * the enum body stays at function scope. */
+static Type *find_enum_def_type_walk(Node *n, Token *name) {
+    if (!n || !name) return NULL;
+    switch (n->kind) {
+    case ND_VAR_DECL: {
+        Type *ty = n->var_decl.ty;
+        if (ty && ty->kind == TY_ENUM && ty->tag &&
+            ty->enum_tokens && ty->enum_ntokens > 0 &&
+            ty->tag->len == name->len &&
+            memcmp(ty->tag->loc, name->loc, name->len) == 0)
+            return ty;
+        return NULL;
+    }
+    case ND_TRANSLATION_UNIT:
+        for (int i = 0; i < n->tu.ndecls; i++) {
+            Type *t = find_enum_def_type_walk(n->tu.decls[i], name);
+            if (t) return t;
+        }
+        return NULL;
+    case ND_BLOCK:
+        for (int i = 0; i < n->block.nstmts; i++) {
+            Type *t = find_enum_def_type_walk(n->block.stmts[i], name);
+            if (t) return t;
+        }
+        return NULL;
+    case ND_CLASS_DEF:
+        for (int i = 0; i < n->class_def.nmembers; i++) {
+            Type *t = find_enum_def_type_walk(n->class_def.members[i], name);
+            if (t) return t;
+        }
+        return NULL;
+    case ND_FUNC_DEF:
+        if (n->func.body)
+            return find_enum_def_type_walk(n->func.body, name);
+        return NULL;
+    case ND_TEMPLATE_DECL:
+        return find_enum_def_type_walk(n->template_decl.decl, name);
+    default:
+        return NULL;
+    }
+}
+static Type *find_enum_def_type_by_tag(Token *name) {
+    return find_enum_def_type_walk(g_tu, name);
 }
 
 /* For plain (non-template) classes: walk the TU looking for the
@@ -17033,8 +17149,13 @@ static void emit_class_def(Node *n) {
         enum { CLS_DEDUP_CAP = 4096 };
         static Type *seen[CLS_DEDUP_CAP];
         static int nseen = 0;
-        for (int i = 0; i < nseen; i++)
+        for (int i = 0; i < nseen; i++) {
             if (same_template_instantiation(seen[i], class_type)) return;
+            /* Function-local struct hoisted to TU scope: a different
+             * Type pointer carries the same source tag and a
+             * byte-identical body. See same_struct_body comment. */
+            if (same_struct_body(seen[i], class_type)) return;
+        }
         if (nseen < CLS_DEDUP_CAP)
             seen[nseen++] = class_type;
     }
@@ -17153,6 +17274,45 @@ static void emit_class_def(Node *n) {
         mty->codegen_emitted = true;
         fputs("enum { ", stdout);
         emit_enum_body(mty);
+        fputs(" };\n", stdout);
+    }
+
+    /* Named enum field whose body hasn't been emitted yet — hoist
+     * the body to TU scope before this struct so the field type is
+     * complete. Real-world hit: gcc 4.8 config/i386/i386.c declares
+     *   enum ix86_opt_type { ix86_opt_unknown, ... };
+     *   static const struct { ...; enum ix86_opt_type type; ... } attrs[]
+     * INSIDE a function body. Sea-front hoists the struct to TU scope
+     * (it's referenced by a static initializer) but the enum body
+     * remains at function scope — too late for the struct field's
+     * type to resolve. C disallows enum forward decls (§6.7.2.3), so
+     * the body must be emitted; the dedup map (enum_tokens) keeps
+     * the later function-body emission from duplicating it.
+     * Named class-scope anonymous-decl enums and 'enum class' don't
+     * take this path — those still flow through the comment block
+     * above (anonymous hoist) or the ND_QUALIFIED enum-class rewrite. */
+    for (int i = 0; i < n->class_def.nmembers; i++) {
+        Node *m = n->class_def.members[i];
+        if (!m || m->kind != ND_VAR_DECL) continue;
+        Type *mty = m->var_decl.ty;
+        while (mty && mty->kind == TY_ARRAY && mty->base) mty = mty->base;
+        if (!mty || mty->kind != TY_ENUM) continue;
+        if (!mty->tag) continue;                    /* anonymous — handled above */
+        /* The field's Type may carry only the tag (enum body declared
+         * elsewhere) — look up the body by tag through the TU walker
+         * before bailing. */
+        Type *body_ty = mty;
+        if (!body_ty->enum_tokens || body_ty->enum_ntokens <= 0)
+            body_ty = find_enum_def_type_by_tag(mty->tag);
+        if (!body_ty || !body_ty->enum_tokens ||
+            body_ty->enum_ntokens <= 0) continue;
+        if (enum_body_already_emitted(body_ty->enum_tokens)) continue;
+        mark_enum_body_emitted(body_ty->enum_tokens);
+        body_ty->codegen_emitted = true;
+        fputs("enum ", stdout);
+        fprintf(stdout, "%.*s ", body_ty->tag->len, body_ty->tag->loc);
+        fputs("{ ", stdout);
+        emit_enum_body(body_ty);
         fputs(" };\n", stdout);
     }
 
