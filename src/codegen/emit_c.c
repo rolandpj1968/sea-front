@@ -2838,6 +2838,16 @@ static bool subtree_has_cleanups(Node *n) {
     case ND_SWITCH:
         return subtree_has_cleanups(n->switch_.expr) ||
                subtree_has_cleanups(n->switch_.body);
+    /* GCC statement-expression `({ ... })` — class temporaries inside
+     * still need the enclosing function's __SF_unwind / __SF_epilogue
+     * scaffolding because the dtor chain at the end of the block
+     * emits __SF_CHAIN_ANY(__SF_epilogue). Without descending, a main
+     * containing only `({ A(10) + A(11); })` reaches emit_func with
+     * func_has_cleanups=false → no prologue, then the stmt-expr
+     * dtor lowering goto's __SF_epilogue that was never declared.
+     * Pattern: g++.dg/ext/stmtexpr2.C. */
+    case ND_STMT_EXPR:
+        return subtree_has_cleanups(n->stmt_expr.block);
     default:
         return false;
     }
