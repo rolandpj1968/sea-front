@@ -4648,68 +4648,97 @@ static Node *find_class_def_by_tag_only(Type *class_type) {
  * sets DECL_INLINE on the OOL ND_FUNC_DEF but not on the in-class
  * ND_VAR_DECL declaration), so we look it up here to make the
  * forward decl's linkage match the body's. C99 §6.2.2/4. */
+/* True when ND_FUNC_DEF `d` is an OOL definition of method `name` on
+ * `class_type` with the requested signature. Used by both the flat
+ * walk and the namespace-recursion walk below. */
+static bool ool_method_matches(Node *d, Type *class_type, Token *name,
+                                Type **wanted_params, int wanted_nparams,
+                                bool wanted_is_const, Token *wanted_op_after) {
+    if (!d || d->kind != ND_FUNC_DEF) return false;
+    if (d->func.class_type != class_type) {
+        if (!d->func.class_type || !d->func.class_type->tag) return false;
+        if (d->func.class_type->tag->len != class_type->tag->len) return false;
+        if (memcmp(d->func.class_type->tag->loc, class_type->tag->loc,
+                   class_type->tag->len) != 0) return false;
+    }
+    if (!d->func.name) return false;
+    if (d->func.name->len != name->len) return false;
+    if (memcmp(d->func.name->loc, name->loc, name->len) != 0) return false;
+    if (d->func.nparams != wanted_nparams) return false;
+    for (int k = 0; k < wanted_nparams; k++) {
+        Type *dp = (d->func.params[k] &&
+                    d->func.params[k]->kind == ND_PARAM)
+                      ? d->func.params[k]->param.ty : NULL;
+        Type *wp = wanted_params ? wanted_params[k] : NULL;
+        if (!dp || !wp) { if (dp != wp) return false; continue; }
+        if (dp->kind != wp->kind) return false;
+    }
+    if (d->func.is_const_method != wanted_is_const) return false;
+    if (wanted_op_after &&
+        name->len == 8 && memcmp(name->loc, "operator", 8) == 0) {
+        const char *wa = wanted_op_after->loc + wanted_op_after->len;
+        const char *da = d->func.name->loc + d->func.name->len;
+        while (*wa == ' ' || *wa == '\t') wa++;
+        while (*da == ' ' || *da == '\t') da++;
+        int wlen = 0, dlen = 0;
+        while (wa[wlen] && wa[wlen] != ' ' && wa[wlen] != '\t' &&
+               wa[wlen] != '(' && wa[wlen] != '[' && wa[wlen] != '\n')
+            wlen++;
+        while (da[dlen] && da[dlen] != ' ' && da[dlen] != '\t' &&
+               da[dlen] != '(' && da[dlen] != '[' && da[dlen] != '\n')
+            dlen++;
+        if (wlen != dlen || memcmp(wa, da, wlen) != 0) return false;
+    }
+    return true;
+}
+
+/* Recursive walker so a namespace-scoped OOL def
+ * (`namespace std { inline bool type_info::before(...){...} }`) is
+ * visible when its in-class decl asks for the linkage match. The
+ * parser packs namespace contents into ND_BLOCK at TU scope; the
+ * earlier flat walk over g_tu->tu.decls saw the ND_BLOCK as a
+ * non-FUNC_DEF and skipped, so the in-class forward decl emitted
+ * as non-static while the OOL def emitted as `static inline` —
+ * `static declaration follows non-static`. Walking blocks (and
+ * template-decl wrappers) makes the lookup symmetric with how
+ * codegen actually finds the function for emission. */
+static int find_ool_storage_walk(Node *n, Type *class_type, Token *name,
+                                   Type **wanted_params, int wanted_nparams,
+                                   bool wanted_is_const,
+                                   Token *wanted_op_after) {
+    if (!n) return 0;
+    if (n->kind == ND_TEMPLATE_DECL && n->template_decl.decl)
+        n = n->template_decl.decl;
+    if (n->kind == ND_FUNC_DEF) {
+        if (ool_method_matches(n, class_type, name, wanted_params,
+                                wanted_nparams, wanted_is_const,
+                                wanted_op_after))
+            return n->func.storage_flags;
+        return 0;
+    }
+    if (n->kind == ND_BLOCK) {
+        for (int i = 0; i < n->block.nstmts; i++) {
+            int r = find_ool_storage_walk(n->block.stmts[i], class_type,
+                                            name, wanted_params,
+                                            wanted_nparams, wanted_is_const,
+                                            wanted_op_after);
+            if (r) return r;
+        }
+        return 0;
+    }
+    return 0;
+}
+
 static int find_ool_method_storage(Type *class_type, Token *name,
                                      Type **wanted_params, int wanted_nparams,
                                      bool wanted_is_const,
                                      Token *wanted_op_after) {
     if (!g_tu || !class_type || !class_type->tag || !name) return 0;
     for (int i = 0; i < g_tu->tu.ndecls; i++) {
-        Node *d = g_tu->tu.decls[i];
-        if (!d) continue;
-        if (d->kind == ND_TEMPLATE_DECL && d->template_decl.decl)
-            d = d->template_decl.decl;
-        if (d->kind != ND_FUNC_DEF) continue;
-        if (d->func.class_type != class_type) {
-            /* Tag-based fallback: instantiation pass can produce
-             * distinct Type* for the same concrete class. */
-            if (!d->func.class_type || !d->func.class_type->tag) continue;
-            if (d->func.class_type->tag->len != class_type->tag->len) continue;
-            if (memcmp(d->func.class_type->tag->loc, class_type->tag->loc,
-                       class_type->tag->len) != 0) continue;
-        }
-        if (!d->func.name) continue;
-        if (d->func.name->len != name->len) continue;
-        if (memcmp(d->func.name->loc, name->loc, name->len) != 0) continue;
-        /* Disambiguate by full signature (arity + param kinds + const)
-         * AND, for operators, by the operator-symbol token text. The
-         * name is just "operator" for ALL of class C's operator
-         * methods; without the disambiguation, the FIRST OOL with
-         * matching arity wins — e.g. inline 'double_int& operator *=
-         * (double_int)' in the header propagates its DECL_INLINE to
-         * the queries for 'operator +', 'operator -', etc. */
-        if (d->func.nparams != wanted_nparams) continue;
-        bool params_match = true;
-        for (int k = 0; k < wanted_nparams && params_match; k++) {
-            Type *dp = (d->func.params[k] &&
-                        d->func.params[k]->kind == ND_PARAM)
-                          ? d->func.params[k]->param.ty : NULL;
-            Type *wp = wanted_params ? wanted_params[k] : NULL;
-            if (!dp || !wp) { params_match = (dp == wp); continue; }
-            if (dp->kind != wp->kind) params_match = false;
-        }
-        if (!params_match) continue;
-        if (d->func.is_const_method != wanted_is_const) continue;
-        /* For operators, compare the operator-symbol text that
-         * follows the 'operator' keyword. E.g. for 'operator + ',
-         * the chars after the keyword are " + (...)". Matching the
-         * non-whitespace prefix is enough to distinguish + / - / *=
-         * / >>=  / etc. */
-        if (wanted_op_after &&
-            name->len == 8 && memcmp(name->loc, "operator", 8) == 0) {
-            const char *wa = wanted_op_after->loc + wanted_op_after->len;
-            const char *da = d->func.name->loc + d->func.name->len;
-            while (*wa == ' ' || *wa == '\t') wa++;
-            while (*da == ' ' || *da == '\t') da++;
-            int wlen = 0, dlen = 0;
-            while (wa[wlen] && wa[wlen] != ' ' && wa[wlen] != '\t' &&
-                   wa[wlen] != '(' && wa[wlen] != '[' && wa[wlen] != '\n')
-                wlen++;
-            while (da[dlen] && da[dlen] != ' ' && da[dlen] != '\t' &&
-                   da[dlen] != '(' && da[dlen] != '[' && da[dlen] != '\n')
-                dlen++;
-            if (wlen != dlen || memcmp(wa, da, wlen) != 0) continue;
-        }
-        return d->func.storage_flags;
+        int r = find_ool_storage_walk(g_tu->tu.decls[i], class_type, name,
+                                        wanted_params, wanted_nparams,
+                                        wanted_is_const, wanted_op_after);
+        if (r) return r;
     }
     return 0;
 }
