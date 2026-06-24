@@ -1673,17 +1673,32 @@ static void hoist_emit_decl(Node *call, bool in_shortcircuit) {
     }
 
     if (is_ctor_call) {
-        Node *resolved_ctor = NULL;
+        /* Sema stamps the resolved ctor on n->call.resolved_ctor for
+         * class-typed type-calls (visit_call's tc_type branch). Read
+         * it here instead of re-running overload resolution. The
+         * fallback `resolve_overload` call covers shapes where the
+         * call node wasn't a direct type-call (legacy entry, kept
+         * for transition); it'll fall away once every type-call
+         * path reaches this code via sema's resolved_ctor stamp. */
+        Node *resolved_ctor = call->call.resolved_ctor;
         int np = 0;
         Type **pty = NULL;
         Type **at = NULL;
         int na = collect_call_arg_types(call->call.args,
                                          call->call.nargs, &at);
-        np = resolve_overload(ctor_class_type, /*name=*/NULL,
-                               /*is_ctor=*/true,
-                               at, na,
-                               /*receiver_is_const=*/false,
-                               &pty, /*out_best=*/&resolved_ctor);
+        if (resolved_ctor) {
+            /* Read the winner's param types directly from the
+             * candidate node — no need to re-score. */
+            static Type *_pty_pool[64];
+            np = copy_member_param_types(resolved_ctor, _pty_pool);
+            pty = _pty_pool;
+        } else {
+            np = resolve_overload(ctor_class_type, /*name=*/NULL,
+                                   /*is_ctor=*/true,
+                                   at, na,
+                                   /*receiver_is_const=*/false,
+                                   &pty, /*out_best=*/&resolved_ctor);
+        }
         emit_indent();
         emit_type(ctor_class_type);
         if (np < 0) {

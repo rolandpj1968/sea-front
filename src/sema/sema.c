@@ -2372,6 +2372,28 @@ static void visit_call(Sema *s, Node *n) {
     if (tc_type) {
         n->call.is_type_call = true;
         n->resolved_type = tc_type;
+        /* Pre-emit ctor resolution: pick the matching ctor up-front
+         * and stash it on the call node so codegen needn't re-run
+         * overload resolution. First step of the resolve-everything-
+         * before-emit slice — emit_c.c sites that previously called
+         * resolve_overload at this shape will read n->call.resolved_ctor
+         * instead. N4659 §16.3 [over.match] / §15.6.2 [class.base.init].
+         * Only fires for class targets; non-class type-calls (scalar
+         * conversion shapes) leave resolved_ctor NULL. */
+        if (tc_type->kind == TY_STRUCT || tc_type->kind == TY_UNION) {
+            int na = n->call.nargs;
+            Type **at = na > 0
+                ? arena_alloc(s->arena, na * sizeof(Type *)) : NULL;
+            for (int i = 0; i < na; i++)
+                at[i] = n->call.args[i] ? n->call.args[i]->resolved_type : NULL;
+            Type **pty = NULL;
+            Node *winner = NULL;
+            (void)resolve_overload(tc_type, /*name=*/NULL, /*is_ctor=*/true,
+                                    at, na,
+                                    /*receiver_is_const=*/false,
+                                    &pty, &winner);
+            n->call.resolved_ctor = winner;  /* may be NULL on no match */
+        }
         return;
     }
     /* Result type comes from the callee's TY_FUNC.ret. The callee may
