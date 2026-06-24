@@ -59,6 +59,7 @@ bool g_emit_line_directives = true;
  * emit_expr's ND_TYPEID case which lives ahead of the definitions. */
 static const char *typeid_sym_for_type(Type *ty);
 static Type       *typeid_resolved_type(Node *n);
+static void        typeid_set_add(const char *sym);
 
 /* Two-phase emit: structs first, then method bodies. */
 static int g_emit_phase = 0;
@@ -10308,11 +10309,65 @@ static void emit_expr(Node *n) {
         return;
     }
     case ND_TYPEID: {
-        /* typeid — N4659 §8.2.7 [expr.typeid]. Lower to the sentinel
-         * address pre-collected by typeid_collect_walk; comparisons
-         * (==/!=) then reduce to pointer equality, correct for static
-         * types. See the docstring on typeid_collect_walk for the
-         * polymorphic-glvalue caveat. */
+        /* typeid — N4659 §8.2.7 [expr.typeid].
+         *
+         * Polymorphic glvalue (operand is a glvalue whose static type
+         * is a polymorphic class): per §8.2.7/3, the result refers to
+         * the DYNAMIC type. Lower to a runtime lookup through the
+         * vptr at the __sf_typeid slot — each vtable instance holds a
+         * pointer to its own class's sentinel, so this yields
+         * typeid(<dynamic-type>). Without this, typeid(aref) where
+         * aref is `A&` bound to a `B` would return typeid(A), making
+         * `typeid(aref) == typeid(b)` false even though they should
+         * be equal. Pattern: g++.dg/opt/rtti1.C.
+         *
+         * Non-polymorphic operand (or typeid-of-type-id): the static
+         * sentinel address suffices — comparisons reduce to pointer
+         * equality on the same address. */
+        Node *op = n->typeid_.operand;
+        Type *opt = op ? op->resolved_type : NULL;
+        Type *peel = opt;
+        if (peel && (peel->kind == TY_REF || peel->kind == TY_RVALREF))
+            peel = peel->base;
+        bool poly = op && peel &&
+            (peel->kind == TY_STRUCT || peel->kind == TY_UNION) &&
+            peel->has_virtual_methods;
+        if (poly) {
+            Type *vowner = vptr_owner_class(peel);
+            if (!vowner) vowner = peel;
+            /* `((const struct <vowner-vtable> *)((vowner *)&op)->
+             *    __sf_vptr)->__sf_typeid` — peel ref-ness so &op
+             * targets the underlying struct. Address-taking the
+             * operand handles both lvalues and ref-typed glvalues
+             * (the ref-to-pointer lowering already turned aref into
+             * an A* internally). */
+            fputs("((", stdout);
+            fputs("(struct ", stdout);
+            mangle_class_tag(vowner);
+            fputs(" *)", stdout);
+            if (opt && (opt->kind == TY_REF || opt->kind == TY_RVALREF)) {
+                /* ref-typed lvalue: emit_expr inserts auto-deref, but
+                 * we want the underlying pointer — same suppression
+                 * pattern as the virtual-call codegen. */
+                bool saved_srd = g_suppress_ref_deref;
+                if (op->kind == ND_IDENT && op->ident.name &&
+                    (is_ref_param(op->ident.name) ||
+                     (op->ident.resolved_decl &&
+                      op->ident.resolved_decl->type &&
+                      ty_is_ref(op->ident.resolved_decl->type))))
+                    g_suppress_ref_deref = true;
+                emit_expr(op);
+                g_suppress_ref_deref = saved_srd;
+            } else {
+                fputc('&', stdout);
+                fputc('(', stdout);
+                emit_expr(op);
+                fputc(')', stdout);
+            }
+            fputs(")->__sf_vptr->__sf_typeid)", stdout);
+            return;
+        }
+        /* Non-polymorphic / type-id form: static sentinel. */
         fprintf(stdout, "((const void *)&%s)",
                 typeid_sym_for_type(typeid_resolved_type(n)));
         return;
@@ -18327,6 +18382,16 @@ methods_phase:;
         mangle_class_vtable_type(class_type);
         fputs(" {\n", stdout);
         g_indent++;
+        /* __sf_typeid: dynamic-type sentinel pointer. Always emit
+         * first so derived classes' vtable structs have a stable
+         * offset for the typeid lookup. ND_TYPEID for a polymorphic-
+         * glvalue operand routes through `((vowner *)obj)->__sf_vptr
+         * ->__sf_typeid` to recover the dynamic type's sentinel,
+         * which == typeid(b) for any b whose dynamic type is the
+         * class that constructed the vtable instance. N4659 §8.2.7
+         * [expr.typeid] / Itanium ABI §2.9.5 [vtable-components]. */
+        emit_indent();
+        fputs("const void *__sf_typeid;\n", stdout);
         if (need_dtor_slot) {
             /* __dtor slot returns void* so the delete-via-vtable
              * path can free the adjusted pointer. For MI, the
@@ -18411,6 +18476,18 @@ methods_phase:;
         mangle_class_vtable_instance(class_type);
         fputs(" = {\n", stdout);
         g_indent++;
+        /* __sf_typeid slot — first in the vtable, matches the struct
+         * layout above. Points at the THIS class's typeid sentinel so
+         * a dynamic-type lookup via vptr yields the correct sentinel
+         * regardless of the static type the lvalue was viewed through.
+         * Also seeds the typeid set so the sentinel symbol is forward-
+         * declared at the top of the C output. */
+        {
+            const char *sym = typeid_sym_for_type(class_type);
+            typeid_set_add(sym);
+            emit_indent();
+            fprintf(stdout, "&%s,\n", sym);
+        }
         if (need_dtor_slot) {
             emit_indent();
             /* `__del_dtor` runs the chain + returns `this` so the
@@ -18857,8 +18934,18 @@ methods_phase:;
             mangle_class_tag(base);
             fputs("_instance = {\n", stdout);
             g_indent++;
-            /* Slot 0 of B's vtable struct is __dtor when B has a
-             * virtual dtor — match that layout. */
+            /* __sf_typeid slot — first in B's vtable struct (per
+             * emit-vtable-struct change). Point it at class_type's
+             * sentinel so a typeid lookup through a B*-view of a
+             * Derived yields the Derived's dynamic type. */
+            {
+                const char *tid_sym = typeid_sym_for_type(class_type);
+                typeid_set_add(tid_sym);
+                emit_indent();
+                fprintf(stdout, "&%s,\n", tid_sym);
+            }
+            /* Slot 1 (after __sf_typeid) of B's vtable struct is
+             * __dtor when B has a virtual dtor — match that layout. */
             if (base_virt_dtor) {
                 emit_indent();
                 if (class_type->has_dtor) {
@@ -20015,6 +20102,15 @@ static void typeid_collect_walk(Node *n) {
     if (!n) return;
     if (n->kind == ND_TYPEID) {
         typeid_set_add(typeid_sym_for_type(typeid_resolved_type(n)));
+    }
+    /* Polymorphic class — its vtable instance fills the __sf_typeid
+     * slot with `&__sf_typeid_<sym>`, so the sentinel symbol must be
+     * pre-declared even when no source-level `typeid(...)` mentions
+     * the class. Without this seed the vtable references an
+     * undeclared symbol. N4659 §8.2.7 / Itanium ABI §2.9.5. */
+    if (n->kind == ND_CLASS_DEF && n->class_def.ty &&
+        n->class_def.ty->has_virtual_methods) {
+        typeid_set_add(typeid_sym_for_type(n->class_def.ty));
     }
     switch (n->kind) {
     case ND_BINARY:
