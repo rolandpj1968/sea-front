@@ -57,15 +57,6 @@ g++.dg/abi/structret1.C
 # the test checks just doesn't match.
 g++.dg/abi/offsetof.C
 
-# Function-local static-function-scoped struct RTTI distinctness across
-# TUs — Itanium ABI mangles TU-local-static helper's local class types
-# into the function's mangled name, giving each TU its own typeinfo
-# even when the source text matches. Sea-front's typeinfo doesn't
-# encode the TU-local-static distinction. (Test also uses dg-additional-
-# sources, which our runner doesn't drive, but even with both TUs
-# linked the RTTI semantics wouldn't match.)
-g++.dg/abi/local1.C
-
 # --- Universally xfail in gcc itself ------------------------------------
 # These tests are marked `dg-do run { xfail *-*-* }` in the source — gcc
 # itself expects them to FAIL on every target. Listing here surfaces
