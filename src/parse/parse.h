@@ -778,6 +778,13 @@ struct Node {
             Node **ctor_args;
             int    ctor_nargs;
             bool   has_ctor_init;
+            /* Sema-stamped winner of ctor overload resolution for
+             * the direct-init form. Codegen reads it instead of
+             * re-running resolve_overload. NULL when the class has
+             * no matching ctor (codegen falls back to value-init /
+             * synth default ctor / aggregate init). Part of the
+             * resolve-everything-before-emit slice. */
+            Node  *resolved_ctor;
             /* Function-shape declarator staging (prototype OR
              * function-pointer OR a function declarator that's about
              * to be promoted to ND_FUNC_DEF when '{' / ':' follows).

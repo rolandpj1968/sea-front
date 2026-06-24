@@ -13503,12 +13503,19 @@ static void emit_stmt(Node *n) {
                     int na = collect_call_arg_types(n->var_decl.ctor_args,
                                                      n->var_decl.ctor_nargs, &at);
                     Type **pty = NULL;
-                    Node *resolved_ctor = NULL;
-                    int np = resolve_overload(n->var_decl.ty, /*name=*/NULL,
+                    Node *resolved_ctor = n->var_decl.resolved_ctor;
+                    int np;
+                    if (resolved_ctor) {
+                        static Type *_pty_pool[64];
+                        np = copy_member_param_types(resolved_ctor, _pty_pool);
+                        pty = _pty_pool;
+                    } else {
+                        np = resolve_overload(n->var_decl.ty, /*name=*/NULL,
                                                /*is_ctor=*/true,
                                                at, na,
                                                /*receiver_is_const=*/false,
                                                &pty, &resolved_ctor);
+                    }
                     if (np < 0) {
                         /* Inheriting constructor `using Base::Base`:
                          * when the derived class has no matching ctor

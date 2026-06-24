@@ -715,6 +715,38 @@ static void visit_var_decl(Sema *s, Node *n) {
         }
     }
     n->resolved_type = n->var_decl.ty;
+    /* Stamp the ctor overload winner for the direct-init shape
+     * `T x(args)` so emit_c needn't re-run resolve_overload. Only
+     * meaningful for class targets with at least one arg — 0-arg
+     * direct-init dispatches through the synthesized default-ctor
+     * path which has no overload set to pick from. Part of the
+     * resolve-everything-before-emit slice; emit_c falls back to
+     * its own resolve_overload when resolved_ctor stays NULL (e.g.
+     * sema saw no viable candidate yet because of inheriting-ctor
+     * forwarding). N4659 §16.3 [over.match]. */
+    if (n->var_decl.has_ctor_init && n->var_decl.ty &&
+        n->var_decl.ctor_nargs > 0 &&
+        (n->var_decl.ty->kind == TY_STRUCT ||
+         n->var_decl.ty->kind == TY_UNION)) {
+        int na = n->var_decl.ctor_nargs;
+        bool any_unresolved = false;
+        Type **at = arena_alloc(s->arena, na * sizeof(Type *));
+        for (int i = 0; i < na; i++) {
+            Node *a = n->var_decl.ctor_args[i];
+            at[i] = a ? a->resolved_type : NULL;
+            if (!at[i]) any_unresolved = true;
+        }
+        if (!any_unresolved) {
+            Type **pty = NULL;
+            Node *winner = NULL;
+            (void)resolve_overload(n->var_decl.ty, /*name=*/NULL,
+                                    /*is_ctor=*/true,
+                                    at, na,
+                                    /*receiver_is_const=*/false,
+                                    &pty, &winner);
+            n->var_decl.resolved_ctor = winner;
+        }
+    }
 }
 
 /* Compound statement — N4659 §9.3 [stmt.block]. Pushes the block's
