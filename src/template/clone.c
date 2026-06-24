@@ -975,6 +975,13 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
         c->call.args = clone_node_array_pack(n->call.args, n->call.nargs,
                                               map, arena, &new_nargs);
         c->call.nargs = new_nargs;
+        /* Drop the template's overload stamps — they were resolved
+         * against the un-substituted (dependent) candidate types and
+         * may name the wrong overload after substitution. Sema's
+         * second pass over the instantiated body re-stamps under the
+         * concrete types. N4659 §17.7.3 [temp.nondep]. */
+        c->call.resolved_ctor = NULL;
+        c->call.resolved_method = NULL;
         break;
     }
 
@@ -1021,6 +1028,9 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
                 map, arena, &new_n);
             c->cast.new_placement_nargs = new_n;
         }
+        /* See ND_CALL — drop the template's ctor stamp; sema's second
+         * pass re-stamps under concrete types. */
+        c->cast.resolved_ctor = NULL;
         break;
 
     case ND_SIZEOF:
@@ -1194,6 +1204,9 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
         } else {
             c->var_decl.ctor_args = NULL;
         }
+        /* See ND_CALL — drop the template's ctor stamp; sema's second
+         * pass re-stamps under concrete types. */
+        c->var_decl.resolved_ctor = NULL;
         /* If the init was an ND_LAMBDA (capturing), the var's type
          * was set at parse time to the original (template-context)
          * closure TY_STRUCT. Cloning the lambda produced a fresh
