@@ -40,4 +40,17 @@ extern bool g_emit_line_directives;
 
 void emit_c(Node *tu);
 
+/* Current translation-unit root, set by emit_c at entry. Exposed
+ * temporarily so the overload-resolution helpers (now living in
+ * sema.c) can walk the TU. Will move to a shared sema-owned slot
+ * when the resolve-everything-before-emit slice completes. */
+extern Node *g_tu;
+
+/* Walk the TU looking up a class by tag (plus template args, in the
+ * _by_tag_args variant). Used by sema's overload-resolution to
+ * recover a class definition from a Type copy that lost its
+ * class_def/class_region. Lives in emit_c.c. */
+Node *find_class_def_by_tag_args(Type *class_type);
+Node *find_class_def_by_tag_only(Type *class_type);
+
 #endif

@@ -27,6 +27,13 @@
 #include "sema.h"
 #include "../sea-front.h"
 #include "../template/clone.h"
+#include "../codegen/emit_c.h"   /* g_tu, find_class_def_by_tag_args —
+                                  * transitionally used by the overload-
+                                  * resolution helpers at the bottom of
+                                  * this file (resolve-everything-before-
+                                  * emit slice; ownership of g_tu /
+                                  * find_class_def will move to sema in
+                                  * a follow-up). */
 
 typedef struct {
     Arena *arena;
@@ -3010,4 +3017,371 @@ void sema_visit_node(Node *n, Arena *arena) {
      * scopes as it descends. */
     Sema s = { .arena = arena, .tu = NULL, .cur_scope = NULL };
     visit(&s, n);
+}
+
+/* ====================================================================
+ * Overload resolution — N4659 §16.3 [over.match]
+ * --------------------------------------------------------------------
+ * Moved here from src/codegen/emit_c.c as the first step of the
+ * resolve-everything-before-emit slice. The functions are still
+ * called from emit_c.c during the transitional period (sema doesn't
+ * yet stamp the winner on call nodes), so they're public in sema.h.
+ * Behavior is byte-identical to the emit-side originals.
+ * ==================================================================== */
+
+int score_type_pair(Type *pt, Type *at) {
+    if (!pt || !at) return 0;
+    if (pt->kind == at->kind) {
+        int s = 2;
+        /* Recurse into indirection bases so deeper structural agreement
+         * outranks shallow kind agreement. */
+        if ((pt->kind == TY_PTR || pt->kind == TY_REF ||
+             pt->kind == TY_RVALREF || pt->kind == TY_ARRAY) &&
+            pt->base && at->base) {
+            s += score_type_pair(pt->base, at->base);
+        }
+        if ((pt->kind == TY_STRUCT || pt->kind == TY_UNION) &&
+            pt->tag && at->tag && tokens_equal(pt->tag, at->tag))
+            s++;
+        return s;
+    }
+    /* Reference parameter (lowered to T* in C) accepting an arg of
+     * the underlying type: copy/move-ctor pattern.
+     * N4659 §16.3.3.2.1 [over.ics.rank]. */
+    if (ty_is_ref(pt) && pt->base && pt->base->kind == at->kind) {
+        int s = 2;
+        if ((at->kind == TY_STRUCT || at->kind == TY_UNION) &&
+            pt->base->tag && at->tag &&
+            tokens_equal(pt->base->tag, at->tag))
+            s++;
+        return s;
+    }
+    /* Same arithmetic family (integer↔integer or floating↔floating
+     * differing only in width / signedness) is a promotion or
+     * standard conversion — ranks BELOW exact kind match but ABOVE
+     * a cross-family conversion. Without this score, picking
+     * between `f(float)` and `f(int)` for a `double` arg ties at
+     * zero and falls to first-found. N4659 §16.3.3.2.1
+     * [over.ics.rank] groups promotions/conversions into ranks. */
+    if (kind_is_floating(pt->kind) && kind_is_floating(at->kind)) return 1;
+    if (kind_is_integer(pt->kind)  && kind_is_integer(at->kind))  return 1;
+    return 0;
+}
+
+Node *func_param_node(Node *m, int k) {
+    if (!m) return NULL;
+    if (m->kind == ND_FUNC_DEF) {
+        if (k < 0 || k >= m->func.nparams) return NULL;
+        return m->func.params[k];
+    }
+    if (m->kind == ND_VAR_DECL) {
+        if (k < 0 || k >= m->var_decl.fn_nparams) return NULL;
+        return m->var_decl.fn_params ? m->var_decl.fn_params[k] : NULL;
+    }
+    return NULL;
+}
+
+int overload_match_score(Node *m, Type **arg_types, int nargs) {
+    bool is_def = m->kind == ND_FUNC_DEF;
+    int nparams = is_def ? m->func.nparams : m->var_decl.ty->nparams;
+    /* N4659 §16.3.1.4 [over.match.viable]/2: a candidate is viable
+     * when the number of arguments equals the number of params, OR
+     * when nargs < nparams and every excess param has a default
+     * argument. Excess args (nargs > nparams) are non-viable. */
+    if (nparams < nargs) return -1;
+    if (nparams > nargs) {
+        for (int k = nargs; k < nparams; k++) {
+            Node *p = func_param_node(m, k);
+            if (!p || !p->param.default_value) return -1;
+        }
+    }
+    /* Score over the user-supplied args only — extras are matched
+     * by "default exists" above and contribute nothing to the score
+     * (so a function exact-matched on N args wins over one matched
+     * on N args + M defaulted, all else equal). */
+    int score = 0;
+    for (int k = 0; k < nargs && k < 64; k++) {
+        Type *pt = is_def ? m->func.params[k]->param.ty
+                          : m->var_decl.ty->params[k];
+        Type *at = arg_types ? arg_types[k] : NULL;
+        score += score_type_pair(pt, at);
+    }
+    return score;
+}
+
+int copy_member_param_types(Node *m, Type **pool) {
+    if (m->kind == ND_FUNC_DEF) {
+        int n = m->func.nparams;
+        if (n > 64) n = 64;
+        for (int i = 0; i < n; i++)
+            pool[i] = m->func.params[i]->param.ty;
+        return n;
+    }
+    int n = m->var_decl.ty->nparams;
+    if (n > 64) n = 64;
+    for (int i = 0; i < n; i++)
+        pool[i] = m->var_decl.ty->params[i];
+    return n;
+}
+
+void collect_overload_candidates(Type *class_type, Token *name,
+                                  bool is_ctor,
+                                  Node **found, int *nfound, int cap) {
+    collect_overload_candidates_with_origin(class_type, name, is_ctor,
+                                             found, NULL, nfound, cap);
+}
+
+void collect_overload_candidates_with_origin(
+        Type *class_type, Token *name, bool is_ctor,
+        Node **found, Type **origin, int *nfound, int cap) {
+    if (!class_type) return;
+    /* class_def may be unset on a Type obtained via a method return
+     * type or function param, even when class_region IS set. Fall
+     * back through class_region->owner_type which is the canonical
+     * Type (the one used when parsing the class body). */
+    Node *cd = class_type->class_def;
+    if (!cd && class_type->class_region &&
+        class_type->class_region->owner_type &&
+        class_type->class_region->owner_type->class_def)
+        cd = class_type->class_region->owner_type->class_def;
+    /* Template-instantiated Type copies carry neither class_def nor
+     * class_region — look the instantiated class up in the TU by
+     * (tag, template_args). Without this, calls inside instantiated
+     * method bodies miss the _const mangling suffix because overload
+     * resolution can't see the candidates. */
+    if (!cd) {
+        Node *d = find_class_def_by_tag_args(class_type);
+        if (d) cd = d;
+    }
+    if (!cd) return;
+    for (int i = 0; i < cd->class_def.nmembers; i++) {
+        Node *m = cd->class_def.members[i];
+        if (!m) continue;
+        /* Member templates: peel ND_TEMPLATE_DECL to its inner func/
+         * var-decl. The inner candidate is what we score against arg
+         * types — its params have TY_DEPENDENT for the template-
+         * parameter positions, which the existing match scorer treats
+         * as wildcards. Real-world shape: va_heap::release<T>
+         * called as bare release(v) inside va_heap::reserve<T>. */
+        if (m->kind == ND_TEMPLATE_DECL && m->template_decl.decl)
+            m = m->template_decl.decl;
+        bool is_def   = m->kind == ND_FUNC_DEF;
+        bool is_decl  = m->kind == ND_VAR_DECL && m->var_decl.ty &&
+                        m->var_decl.ty->kind == TY_FUNC;
+        if (!is_def && !is_decl) continue;
+        bool m_is_ctor = is_def ? m->func.is_constructor
+                                : m->var_decl.is_constructor;
+        if (is_ctor != m_is_ctor) continue;
+        Token *mn = is_def ? m->func.name : m->var_decl.name;
+        if (!is_ctor) {
+            if (!name || !mn) continue;
+            if (mn->len != name->len) continue;
+            if (memcmp(mn->loc, name->loc, name->len) != 0) continue;
+        }
+        if (*nfound < cap) {
+            found[*nfound] = m;
+            if (origin) origin[*nfound] = class_type;
+            (*nfound)++;
+        }
+    }
+    /* Inherited methods — N4659 §13.5.2 [class.member.lookup].
+     * Ctors are not inherited (§15.1 [class.ctor]). */
+    if (!is_ctor && class_type->class_region) {
+        for (int i = 0; i < class_type->class_region->nbases; i++) {
+            DeclarativeRegion *br = class_type->class_region->bases[i];
+            if (br && br->owner_type)
+                collect_overload_candidates_with_origin(br->owner_type, name,
+                                                         is_ctor,
+                                                         found, origin,
+                                                         nfound, cap);
+        }
+    }
+}
+
+bool receiver_type_is_const(Type *t) {
+    while (t) {
+        if (t->is_const) return true;
+        if (!ty_is_indirect(t)) break;
+        t = t->base;
+    }
+    return false;
+}
+
+bool candidate_is_const(Node *m) {
+    if (!m) return false;
+    if (m->kind == ND_FUNC_DEF) return m->func.is_const_method;
+    if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
+        m->var_decl.ty->kind == TY_FUNC)
+        return m->var_decl.ty->is_const;
+    return false;
+}
+
+bool candidate_is_static(Node *m) {
+    if (!m) return false;
+    /* Member templates: the candidate may be the wrapping
+     * ND_TEMPLATE_DECL (returned by resolve_overload's class-region
+     * lookup). Static-ness lives on the inner var-decl/func-def, so
+     * peel one layer. */
+    if (m->kind == ND_TEMPLATE_DECL && m->template_decl.decl)
+        m = m->template_decl.decl;
+    if (m->kind == ND_FUNC_DEF) return (m->func.storage_flags & DECL_STATIC) != 0;
+    if (m->kind == ND_VAR_DECL)  return (m->var_decl.storage_flags & DECL_STATIC) != 0;
+    return false;
+}
+
+int resolve_overload(Type *class_type, Token *name, bool is_ctor,
+                     Type **arg_types, int nargs,
+                     bool receiver_is_const,
+                     Type ***out_param_types,
+                     Node **out_best) {
+    return resolve_overload_with_origin(class_type, name, is_ctor,
+                                         arg_types, nargs, receiver_is_const,
+                                         out_param_types, out_best, NULL);
+}
+
+int resolve_overload_with_origin(
+        Type *class_type, Token *name, bool is_ctor,
+        Type **arg_types, int nargs,
+        bool receiver_is_const,
+        Type ***out_param_types,
+        Node **out_best,
+        Type **out_origin) {
+    static Type *pool[64];
+    *out_param_types = NULL;
+    if (out_best) *out_best = NULL;
+    if (out_origin) *out_origin = NULL;
+    enum { MAX_CAND = 32 };
+    Node *cands[MAX_CAND];
+    Type *origins[MAX_CAND];
+    int ncands = 0;
+    collect_overload_candidates_with_origin(class_type, name, is_ctor,
+                                             cands, origins, &ncands, MAX_CAND);
+    if (ncands == 0) return -1;  /* caller may still error — see above */
+    if (ncands == 1) {
+        *out_param_types = pool;
+        if (out_best) *out_best = cands[0];
+        if (out_origin) *out_origin = origins[0];
+        return copy_member_param_types(cands[0], pool);
+    }
+    /* Pick by kind-match score, then break ties by const-qualification
+     * of the implicit 'this' parameter. N4659 §16.3.1.4
+     * [over.match.funcs]/4: the implicit object parameter is 'cv C&'
+     * whose cv-qualifiers match the function's. A const method is
+     * viable for both const and non-const receivers; a non-const
+     * method is viable only for non-const receivers. */
+    Node *best = NULL;
+    Type *best_origin = NULL;
+    int best_score = -1;
+    for (int i = 0; i < ncands; i++) {
+        Node *c = cands[i];
+        /* Viability filter: non-const method is not viable for const
+         * receiver. For ctors, no implicit-this constraint. */
+        if (!is_ctor && receiver_is_const && !candidate_is_const(c))
+            continue;
+        int s = overload_match_score(c, arg_types, nargs);
+        /* Tie-break: prefer the candidate whose const matches the
+         * receiver exactly (const method for const receiver, non-const
+         * for non-const receiver). */
+        if (s > best_score ||
+            (s == best_score && best &&
+             candidate_is_const(c) == receiver_is_const &&
+             candidate_is_const(best) != receiver_is_const)) {
+            best = c;
+            best_origin = origins[i];
+            best_score = s;
+        }
+    }
+    if (!best) return -1;
+    *out_param_types = pool;
+    if (out_best) *out_best = best;
+    if (out_origin) *out_origin = best_origin;
+    return copy_member_param_types(best, pool);
+}
+
+void collect_operator_candidates(Type *class_type, OperatorKind op,
+                                  Node **found, int *nfound, int cap) {
+    if (!class_type) return;
+    Node *cd = class_type->class_def;
+    /* class_def may be unset on a Type obtained via a method return
+     * type. Fall back through class_region->owner_type (the canonical
+     * Type used when parsing the class body). Same fallback chain as
+     * collect_overload_candidates — without it, the lhs of a binary
+     * op that came from a hoisted struct-returning call can miss its
+     * class def and resolve_operator_overload returns -1, emitting an
+     * unmangled 'sf__T__bitor(...)' that doesn't match any definition.
+     * Real-world shape: 'o = o.and_not(m) | i' — the hoist
+     * materializes o.and_not(m) as __SF_temp_0, whose Type's class_def
+     * is unhooked. */
+    if (!cd && class_type->class_region &&
+        class_type->class_region->owner_type &&
+        class_type->class_region->owner_type->class_def)
+        cd = class_type->class_region->owner_type->class_def;
+    if (!cd) {
+        Node *d = find_class_def_by_tag_args(class_type);
+        if (d) cd = d;
+    }
+    if (!cd) return;
+    for (int i = 0; i < cd->class_def.nmembers; i++) {
+        Node *m = cd->class_def.members[i];
+        if (!m) continue;
+        bool is_def  = m->kind == ND_FUNC_DEF;
+        bool is_decl = m->kind == ND_VAR_DECL && m->var_decl.ty &&
+                        m->var_decl.ty->kind == TY_FUNC;
+        if (!is_def && !is_decl) continue;
+        Token *mn = is_def ? m->func.name : m->var_decl.name;
+        if (!mn || mn->kind != TK_KW_OPERATOR) continue;
+        if (operator_kind_from_method_name(mn) != op) continue;
+        if (*nfound < cap) found[(*nfound)++] = m;
+    }
+    if (class_type->class_region) {
+        for (int i = 0; i < class_type->class_region->nbases; i++) {
+            DeclarativeRegion *br = class_type->class_region->bases[i];
+            if (br && br->owner_type)
+                collect_operator_candidates(br->owner_type, op,
+                                             found, nfound, cap);
+        }
+    }
+}
+
+int resolve_operator_overload(Type *class_type,
+                               OperatorKind op,
+                               Type **arg_types, int nargs,
+                               bool receiver_is_const,
+                               Type ***out_param_types,
+                               Node **out_best) {
+    static Type *pool[64];
+    *out_param_types = NULL;
+    if (out_best) *out_best = NULL;
+    enum { MAX_CAND = 32 };
+    Node *cands[MAX_CAND];
+    int ncands = 0;
+    collect_operator_candidates(class_type, op,
+                                 cands, &ncands, MAX_CAND);
+    if (ncands == 0) return -1;
+    if (ncands == 1) {
+        *out_param_types = pool;
+        if (out_best) *out_best = cands[0];
+        return copy_member_param_types(cands[0], pool);
+    }
+    /* Same const-aware selection as resolve_overload; see comment there.
+     * N4659 §16.3.1.4 [over.match.funcs]/4. */
+    Node *best = NULL;
+    int best_score = -1;
+    for (int i = 0; i < ncands; i++) {
+        Node *c = cands[i];
+        if (receiver_is_const && !candidate_is_const(c))
+            continue;
+        int s = overload_match_score(c, arg_types, nargs);
+        if (s > best_score ||
+            (s == best_score && best &&
+             candidate_is_const(c) == receiver_is_const &&
+             candidate_is_const(best) != receiver_is_const)) {
+            best = c;
+            best_score = s;
+        }
+    }
+    if (!best) return -1;
+    *out_param_types = pool;
+    if (out_best) *out_best = best;
+    return copy_member_param_types(best, pool);
 }

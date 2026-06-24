@@ -52,6 +52,9 @@
 #include "emit_c.h"
 #include "mangle.h"
 #include "../sea-front.h"
+#include "../sema/sema.h"  /* overload resolution helpers — moved out
+                            * of emit_c.c as the first step of the
+                            * resolve-everything-before-emit slice. */
 
 bool g_emit_line_directives = true;
 
@@ -142,7 +145,7 @@ static bool g_current_method_is_static = false;
  * (template-instantiated method bodies sometimes carry Type copies
  * with class_def=NULL and we need the real body for overload
  * resolution / const-qualification). */
-static Node *g_tu = NULL;
+Node *g_tu = NULL;  /* declared extern in emit_c.h for sema's overload-res */
 
 /* Active lambda function — N4659 §8.1.5 [expr.prim.lambda]. Set by
  * emit_func_def for capturing-lambda function bodies (func.is_lambda_fn).
@@ -445,7 +448,8 @@ static bool emit_pointer_to_array_declarator(Type *ty, Token *name);
 static void emit_mangled_class_tag(Type *class_type);
 static void emit_stmt(Node *n);
 static int collect_call_arg_types(Node **args, int nargs, Type ***out_types);
-static Node *func_param_node(Node *m, int k);
+/* func_param_node / resolve_overload / resolve_operator_overload
+ * declared in sema/sema.h (which is included above). */
 /* After a call site has emitted nargs user-supplied arguments,
  * fill any trailing param slots [nargs, np) from the resolved
  * callee's param.default_value expressions. N4659 §11.3.6
@@ -456,17 +460,6 @@ static Node *func_param_node(Node *m, int k);
  * usually simple values (NULL, 0, false) that need no adaptation. */
 static void emit_default_args_tail(Node *resolved_callee, int nargs, int np,
                                     Type **pty);
-static int resolve_overload(Type *class_type, Token *name, bool is_ctor,
-                             Type **arg_types, int nargs,
-                             bool receiver_is_const,
-                             Type ***out_param_types,
-                             Node **out_best);
-static int resolve_operator_overload(Type *class_type,
-                                      OperatorKind op,
-                                      Type **arg_types, int nargs,
-                                      bool receiver_is_const,
-                                      Type ***out_param_types,
-                                      Node **out_best);
 
 /* Emit a C function-prototype parameter-type list (the contents
  * between the parens — caller emits the '(' and ')'). Handles the
@@ -693,8 +686,8 @@ static bool is_addressable_lvalue(Node *n) {
 static int find_base_path(Type *current, Type *target,
                           int *path, int max_depth);
 static void emit_base_chain(int *path, int len);
-static Node *find_class_def_by_tag_only(Type *class_type);
-static Node *find_class_def_by_tag_args(Type *class_type);
+Node *find_class_def_by_tag_only(Type *class_type);
+Node *find_class_def_by_tag_args(Type *class_type);
 static int class_nbases(Type *class_type);
 static Type *class_base(Type *class_type, int i);
 
@@ -1856,8 +1849,8 @@ static bool class_has_user_op_delete(Type *cls) {
     return false;
 }
 static bool class_is_observably_empty(Type *cls);
-static Node *find_class_def_by_tag_args(Type *probe);
-static Node *find_class_def_by_tag_only(Type *probe);
+Node *find_class_def_by_tag_args(Type *probe);
+Node *find_class_def_by_tag_only(Type *probe);
 static int collect_call_arg_types(Node **args, int nargs, Type ***out_types);
 
 static void hoist_new_expr(Node *cast, bool in_shortcircuit) {
@@ -3836,44 +3829,7 @@ static int collect_call_arg_types(Node **args, int nargs, Type ***out_types) {
 /* kind_is_integer / kind_is_floating moved to parse/parse.h (shared
  * with sema's overload-resolution scoring). */
 
-static int score_type_pair(Type *pt, Type *at) {
-    if (!pt || !at) return 0;
-    if (pt->kind == at->kind) {
-        int s = 2;
-        /* Recurse into indirection bases so deeper structural agreement
-         * outranks shallow kind agreement. */
-        if ((pt->kind == TY_PTR || pt->kind == TY_REF ||
-             pt->kind == TY_RVALREF || pt->kind == TY_ARRAY) &&
-            pt->base && at->base) {
-            s += score_type_pair(pt->base, at->base);
-        }
-        if ((pt->kind == TY_STRUCT || pt->kind == TY_UNION) &&
-            pt->tag && at->tag && tokens_equal(pt->tag, at->tag))
-            s++;
-        return s;
-    }
-    /* Reference parameter (lowered to T* in C) accepting an arg of
-     * the underlying type: copy/move-ctor pattern.
-     * N4659 §16.3.3.2.1 [over.ics.rank]. */
-    if (ty_is_ref(pt) && pt->base && pt->base->kind == at->kind) {
-        int s = 2;
-        if ((at->kind == TY_STRUCT || at->kind == TY_UNION) &&
-            pt->base->tag && at->tag &&
-            tokens_equal(pt->base->tag, at->tag))
-            s++;
-        return s;
-    }
-    /* Same arithmetic family (integer↔integer or floating↔floating
-     * differing only in width / signedness) is a promotion or
-     * standard conversion — ranks BELOW exact kind match but ABOVE
-     * a cross-family conversion. Without this score, picking
-     * between `f(float)` and `f(int)` for a `double` arg ties at
-     * zero and falls to first-found. N4659 §16.3.3.2.1
-     * [over.ics.rank] groups promotions/conversions into ranks. */
-    if (kind_is_floating(pt->kind) && kind_is_floating(at->kind)) return 1;
-    if (kind_is_integer(pt->kind)  && kind_is_integer(at->kind))  return 1;
-    return 0;
-}
+/* score_type_pair moved to sema.c (sema/sema.h declares it). */
 
 static void emit_default_args_tail(Node *resolved_callee, int nargs, int np,
                                     Type **pty) {
@@ -3902,77 +3858,10 @@ static void emit_default_args_tail(Node *resolved_callee, int nargs, int np,
     }
 }
 
-/* Return the kth param Node of a function-shaped declaration,
- * or NULL if unavailable. ND_FUNC_DEF stores params on func.params;
- * ND_VAR_DECL with TY_FUNC stores them on var_decl.fn_params (with
- * the typedef-decay form var_decl.ty->params being Type-only).
- * Used by overload-resolution viability and by call-site emit to
- * read out param.default_value for default-arg expansion (N4659
- * §11.3.6 [dcl.fct.default]). */
-static Node *func_param_node(Node *m, int k) {
-    if (!m) return NULL;
-    if (m->kind == ND_FUNC_DEF) {
-        if (k < 0 || k >= m->func.nparams) return NULL;
-        return m->func.params[k];
-    }
-    if (m->kind == ND_VAR_DECL) {
-        if (k < 0 || k >= m->var_decl.fn_nparams) return NULL;
-        return m->var_decl.fn_params ? m->var_decl.fn_params[k] : NULL;
-    }
-    return NULL;
-}
+/* func_param_node / overload_match_score / copy_member_param_types
+ * moved to sema.c — declared in sema/sema.h. */
 
-/* Match a single candidate member against a call's arg types.
- * Returns -1 if the candidate is non-viable, else a positive score
- * where higher = better fit. Viability per N4659 §16.3.1.4
- * [over.match.viable]/2: nparams equals nargs, OR nparams > nargs
- * and every excess param has a default. Score is over the user-
- * supplied args only — defaults contribute nothing, so an exact
- * match wins over a defaults-padded match all else equal. */
-static int overload_match_score(Node *m, Type **arg_types, int nargs) {
-    bool is_def = m->kind == ND_FUNC_DEF;
-    int nparams = is_def ? m->func.nparams : m->var_decl.ty->nparams;
-    /* N4659 §16.3.1.4 [over.match.viable]/2: a candidate is viable
-     * when the number of arguments equals the number of params, OR
-     * when nargs < nparams and every excess param has a default
-     * argument. Excess args (nargs > nparams) are non-viable. */
-    if (nparams < nargs) return -1;
-    if (nparams > nargs) {
-        for (int k = nargs; k < nparams; k++) {
-            Node *p = func_param_node(m, k);
-            if (!p || !p->param.default_value) return -1;
-        }
-    }
-    /* Score over the user-supplied args only — extras are matched
-     * by "default exists" above and contribute nothing to the score
-     * (so a function exact-matched on N args wins over one matched
-     * on N args + M defaulted, all else equal). */
-    int score = 0;
-    for (int k = 0; k < nargs && k < 64; k++) {
-        Type *pt = is_def ? m->func.params[k]->param.ty
-                          : m->var_decl.ty->params[k];
-        Type *at = arg_types ? arg_types[k] : NULL;
-        score += score_type_pair(pt, at);
-    }
-    return score;
-}
-
-static int copy_member_param_types(Node *m, Type **pool) {
-    if (m->kind == ND_FUNC_DEF) {
-        int n = m->func.nparams;
-        if (n > 64) n = 64;
-        for (int i = 0; i < n; i++)
-            pool[i] = m->func.params[i]->param.ty;
-        return n;
-    }
-    int n = m->var_decl.ty->nparams;
-    if (n > 64) n = 64;
-    for (int i = 0; i < n; i++)
-        pool[i] = m->var_decl.ty->params[i];
-    return n;
-}
-
-static Node *find_class_def_by_tag_args(Type *class_type);
+Node *find_class_def_by_tag_args(Type *class_type);
 
 /* Two template-instantiated class types name the SAME instantiation
  * when they're both class types (struct or union — catches both
@@ -4066,86 +3955,8 @@ static bool same_struct_body(Type *a, Type *b) {
     return true;
 }
 
-/* Collect same-named candidate methods from a class AND all its
- * base classes (recursive). Inherited methods need to be reachable
- * through the same-name lookup. Caller's 'found' vector accumulates. */
-static void collect_overload_candidates_with_origin(
-        Type *class_type, Token *name, bool is_ctor,
-        Node **found, Type **origin, int *nfound, int cap);
-
-static void collect_overload_candidates(Type *class_type, Token *name,
-                                         bool is_ctor,
-                                         Node **found, int *nfound, int cap) {
-    collect_overload_candidates_with_origin(class_type, name, is_ctor,
-                                             found, NULL, nfound, cap);
-}
-
-static void collect_overload_candidates_with_origin(
-        Type *class_type, Token *name, bool is_ctor,
-        Node **found, Type **origin, int *nfound, int cap) {
-    if (!class_type) return;
-    /* class_def may be unset on a Type obtained via a method return
-     * type or function param, even when class_region IS set. Fall
-     * back through class_region->owner_type which is the canonical
-     * Type (the one used when parsing the class body). */
-    Node *cd = class_type->class_def;
-    if (!cd && class_type->class_region &&
-        class_type->class_region->owner_type &&
-        class_type->class_region->owner_type->class_def)
-        cd = class_type->class_region->owner_type->class_def;
-    /* Template-instantiated Type copies carry neither class_def nor
-     * class_region — look the instantiated class up in the TU by
-     * (tag, template_args). Without this, calls inside instantiated
-     * method bodies miss the _const mangling suffix because overload
-     * resolution can't see the candidates. */
-    if (!cd) {
-        Node *d = find_class_def_by_tag_args(class_type);
-        if (d) cd = d;
-    }
-    if (!cd) return;
-    for (int i = 0; i < cd->class_def.nmembers; i++) {
-        Node *m = cd->class_def.members[i];
-        if (!m) continue;
-        /* Member templates: peel ND_TEMPLATE_DECL to its inner func/
-         * var-decl. The inner candidate is what we score against arg
-         * types — its params have TY_DEPENDENT for the template-
-         * parameter positions, which the existing match scorer treats
-         * as wildcards. Real-world shape: va_heap::release<T>
-         * called as bare release(v) inside va_heap::reserve<T>. */
-        if (m->kind == ND_TEMPLATE_DECL && m->template_decl.decl)
-            m = m->template_decl.decl;
-        bool is_def   = m->kind == ND_FUNC_DEF;
-        bool is_decl  = m->kind == ND_VAR_DECL && m->var_decl.ty &&
-                        m->var_decl.ty->kind == TY_FUNC;
-        if (!is_def && !is_decl) continue;
-        bool m_is_ctor = is_def ? m->func.is_constructor
-                                : m->var_decl.is_constructor;
-        if (is_ctor != m_is_ctor) continue;
-        Token *mn = is_def ? m->func.name : m->var_decl.name;
-        if (!is_ctor) {
-            if (!name || !mn) continue;
-            if (mn->len != name->len) continue;
-            if (memcmp(mn->loc, name->loc, name->len) != 0) continue;
-        }
-        if (*nfound < cap) {
-            found[*nfound] = m;
-            if (origin) origin[*nfound] = class_type;
-            (*nfound)++;
-        }
-    }
-    /* Inherited methods — N4659 §13.5.2 [class.member.lookup].
-     * Ctors are not inherited (§15.1 [class.ctor]). */
-    if (!is_ctor && class_type->class_region) {
-        for (int i = 0; i < class_type->class_region->nbases; i++) {
-            DeclarativeRegion *br = class_type->class_region->bases[i];
-            if (br && br->owner_type)
-                collect_overload_candidates_with_origin(br->owner_type, name,
-                                                         is_ctor,
-                                                         found, origin,
-                                                         nfound, cap);
-        }
-    }
-}
+/* collect_overload_candidates / _with_origin moved to sema.c
+ * (sema/sema.h declares them). */
 
 /* Find the ctor/method declaration in a class (or its bases) that
  * best matches the given call-argument types, and return ITS param
@@ -4161,122 +3972,9 @@ static void collect_overload_candidates_with_origin(
  *     method call is either a bug in the input or a sea-front
  *     instantiation miss. Silent fallback was the wrong move last
  *     time; surfacing it loudly is the fix. */
-/* Walk a receiver's Type chain looking for const-ness. Handles
- * 'const X', 'X const', 'const X*', 'const X&' — any const on the
- * class itself (or on a ref/ptr's pointee) means the implicit
- * 'this' is 'const C*'. N4659 §16.3.1.4 [over.match.funcs]/4. */
-static bool receiver_type_is_const(Type *t) {
-    while (t) {
-        if (t->is_const) return true;
-        if (!ty_is_indirect(t)) break;
-        t = t->base;
-    }
-    return false;
-}
-
-/* Retrieve the const-ness of a candidate declaration (ND_FUNC_DEF or
- * ND_VAR_DECL with TY_FUNC). Used for const-aware overload selection. */
-static bool candidate_is_const(Node *m) {
-    if (!m) return false;
-    if (m->kind == ND_FUNC_DEF) return m->func.is_const_method;
-    if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
-        m->var_decl.ty->kind == TY_FUNC)
-        return m->var_decl.ty->is_const;
-    return false;
-}
-
-/* N4659 §11.4.9 [class.static] — static member functions take no
- * implicit 'this'. The unqualified-call lowering at the implicit-this
- * site must skip 'this' when the resolved candidate is static. */
-static bool candidate_is_static(Node *m) {
-    if (!m) return false;
-    /* Member templates: the candidate may be the wrapping
-     * ND_TEMPLATE_DECL (returned by resolve_overload's class-region
-     * lookup). Static-ness lives on the inner var-decl/func-def, so
-     * peel one layer. */
-    if (m->kind == ND_TEMPLATE_DECL && m->template_decl.decl)
-        m = m->template_decl.decl;
-    if (m->kind == ND_FUNC_DEF) return (m->func.storage_flags & DECL_STATIC) != 0;
-    if (m->kind == ND_VAR_DECL)  return (m->var_decl.storage_flags & DECL_STATIC) != 0;
-    return false;
-}
-
-static int resolve_overload_with_origin(
-        Type *class_type, Token *name, bool is_ctor,
-        Type **arg_types, int nargs,
-        bool receiver_is_const,
-        Type ***out_param_types,
-        Node **out_best,
-        Type **out_origin);
-
-static int resolve_overload(Type *class_type, Token *name, bool is_ctor,
-                             Type **arg_types, int nargs,
-                             bool receiver_is_const,
-                             Type ***out_param_types,
-                             Node **out_best) {
-    return resolve_overload_with_origin(class_type, name, is_ctor,
-                                         arg_types, nargs, receiver_is_const,
-                                         out_param_types, out_best, NULL);
-}
-
-static int resolve_overload_with_origin(
-        Type *class_type, Token *name, bool is_ctor,
-        Type **arg_types, int nargs,
-        bool receiver_is_const,
-        Type ***out_param_types,
-        Node **out_best,
-        Type **out_origin) {
-    static Type *pool[64];
-    *out_param_types = NULL;
-    if (out_best) *out_best = NULL;
-    if (out_origin) *out_origin = NULL;
-    enum { MAX_CAND = 32 };
-    Node *cands[MAX_CAND];
-    Type *origins[MAX_CAND];
-    int ncands = 0;
-    collect_overload_candidates_with_origin(class_type, name, is_ctor,
-                                             cands, origins, &ncands, MAX_CAND);
-    if (ncands == 0) return -1;  /* caller may still error — see above */
-    if (ncands == 1) {
-        *out_param_types = pool;
-        if (out_best) *out_best = cands[0];
-        if (out_origin) *out_origin = origins[0];
-        return copy_member_param_types(cands[0], pool);
-    }
-    /* Pick by kind-match score, then break ties by const-qualification
-     * of the implicit 'this' parameter. N4659 §16.3.1.4
-     * [over.match.funcs]/4: the implicit object parameter is 'cv C&'
-     * whose cv-qualifiers match the function's. A const method is
-     * viable for both const and non-const receivers; a non-const
-     * method is viable only for non-const receivers. */
-    Node *best = NULL;
-    Type *best_origin = NULL;
-    int best_score = -1;
-    for (int i = 0; i < ncands; i++) {
-        Node *c = cands[i];
-        /* Viability filter: non-const method is not viable for const
-         * receiver. For ctors, no implicit-this constraint. */
-        if (!is_ctor && receiver_is_const && !candidate_is_const(c))
-            continue;
-        int s = overload_match_score(c, arg_types, nargs);
-        /* Tie-break: prefer the candidate whose const matches the
-         * receiver exactly (const method for const receiver, non-const
-         * for non-const receiver). */
-        if (s > best_score ||
-            (s == best_score && best &&
-             candidate_is_const(c) == receiver_is_const &&
-             candidate_is_const(best) != receiver_is_const)) {
-            best = c;
-            best_origin = origins[i];
-            best_score = s;
-        }
-    }
-    if (!best) return -1;
-    *out_param_types = pool;
-    if (out_best) *out_best = best;
-    if (out_origin) *out_origin = best_origin;
-    return copy_member_param_types(best, pool);
-}
+/* receiver_type_is_const / candidate_is_const / candidate_is_static /
+ * resolve_overload / resolve_overload_with_origin moved to sema.c
+ * (sema/sema.h declares them). */
 
 /* Check if a method on class_type returns a reference (TY_REF / TY_RVALREF).
  * Used to decide whether to wrap method calls in (*...) for ref-return deref. */
@@ -4605,7 +4303,7 @@ static bool method_returns_ref(Type *class_type, Token *name) {
  * accidental misuse with a plain class falls through to the caller's
  * non-template fallback (find_class_def_by_tag_only). Shared lookup
  * machinery lives on the parse-side find_class_def_in_tu. */
-static Node *find_class_def_by_tag_args(Type *class_type) {
+Node *find_class_def_by_tag_args(Type *class_type) {
     if (!class_type || class_type->n_template_args <= 0) return NULL;
     return find_class_def_in_tu(g_tu, class_type);
 }
@@ -4702,7 +4400,7 @@ static Type *find_enum_def_type_by_tag(Token *name) {
  * ND_CLASS_DEF whose tag matches. Used as a fallback when a Type
  * copy lacks class_region/class_def (field-decl / typedef paths).
  * Returns NULL if there's no match or multiple ambiguous matches. */
-static Node *find_class_def_by_tag_only(Type *class_type) {
+Node *find_class_def_by_tag_only(Type *class_type) {
     if (!g_tu || !class_type || !class_type->tag) return NULL;
     Node *found = NULL;
     bool found_via_class_def = false;
@@ -4897,100 +4595,8 @@ static bool method_is_const(Type *class_type, Token *name) {
  * suffix matches op_suffix ("__plus", "__subscript", etc.). Separate
  * from collect_overload_candidates because operator methods are all
  * named 'operator' — the suffix is what distinguishes them. */
-static void collect_operator_candidates(Type *class_type,
-                                         OperatorKind op,
-                                         Node **found, int *nfound, int cap) {
-    if (!class_type) return;
-    Node *cd = class_type->class_def;
-    /* class_def may be unset on a Type obtained via a method return
-     * type. Fall back through class_region->owner_type (the canonical
-     * Type used when parsing the class body). Same fallback chain as
-     * collect_overload_candidates — without it, the lhs of a binary
-     * op that came from a hoisted struct-returning call can miss its
-     * class def and resolve_operator_overload returns -1, emitting an
-     * unmangled 'sf__T__bitor(...)' that doesn't match any definition.
-     * Real-world shape: 'o = o.and_not(m) | i' — the hoist
-     * materializes o.and_not(m) as __SF_temp_0, whose Type's class_def
-     * is unhooked. */
-    if (!cd && class_type->class_region &&
-        class_type->class_region->owner_type &&
-        class_type->class_region->owner_type->class_def)
-        cd = class_type->class_region->owner_type->class_def;
-    if (!cd) {
-        Node *d = find_class_def_by_tag_args(class_type);
-        if (d) cd = d;
-    }
-    if (!cd) return;
-    for (int i = 0; i < cd->class_def.nmembers; i++) {
-        Node *m = cd->class_def.members[i];
-        if (!m) continue;
-        bool is_def  = m->kind == ND_FUNC_DEF;
-        bool is_decl = m->kind == ND_VAR_DECL && m->var_decl.ty &&
-                        m->var_decl.ty->kind == TY_FUNC;
-        if (!is_def && !is_decl) continue;
-        Token *mn = is_def ? m->func.name : m->var_decl.name;
-        if (!mn || mn->kind != TK_KW_OPERATOR) continue;
-        if (operator_kind_from_method_name(mn) != op) continue;
-        if (*nfound < cap) found[(*nfound)++] = m;
-    }
-    if (class_type->class_region) {
-        for (int i = 0; i < class_type->class_region->nbases; i++) {
-            DeclarativeRegion *br = class_type->class_region->bases[i];
-            if (br && br->owner_type)
-                collect_operator_candidates(br->owner_type, op,
-                                             found, nfound, cap);
-        }
-    }
-}
-
-/* Same selection rules as resolve_overload, keyed by operator suffix
- * rather than by name token. Returns the winning decl's param count,
- * and sets *out_param_types to the decl's param types (for mangling).
- * Also returns the winning Node* via *out_best (nullable) so callers
- * can read per-candidate flags like is_const_method for _const
- * suffix mangling. Returns -1 if no candidate exists. */
-static int resolve_operator_overload(Type *class_type,
-                                      OperatorKind op,
-                                      Type **arg_types, int nargs,
-                                      bool receiver_is_const,
-                                      Type ***out_param_types,
-                                      Node **out_best) {
-    static Type *pool[64];
-    *out_param_types = NULL;
-    if (out_best) *out_best = NULL;
-    enum { MAX_CAND = 32 };
-    Node *cands[MAX_CAND];
-    int ncands = 0;
-    collect_operator_candidates(class_type, op,
-                                 cands, &ncands, MAX_CAND);
-    if (ncands == 0) return -1;
-    if (ncands == 1) {
-        *out_param_types = pool;
-        if (out_best) *out_best = cands[0];
-        return copy_member_param_types(cands[0], pool);
-    }
-    /* Same const-aware selection as resolve_overload; see comment there.
-     * N4659 §16.3.1.4 [over.match.funcs]/4. */
-    Node *best = NULL;
-    int best_score = -1;
-    for (int i = 0; i < ncands; i++) {
-        Node *c = cands[i];
-        if (receiver_is_const && !candidate_is_const(c))
-            continue;
-        int s = overload_match_score(c, arg_types, nargs);
-        if (s > best_score ||
-            (s == best_score && best &&
-             candidate_is_const(c) == receiver_is_const &&
-             candidate_is_const(best) != receiver_is_const)) {
-            best = c;
-            best_score = s;
-        }
-    }
-    if (!best) return -1;
-    *out_param_types = pool;
-    if (out_best) *out_best = best;
-    return copy_member_param_types(best, pool);
-}
+/* collect_operator_candidates / resolve_operator_overload moved to
+ * sema.c (sema/sema.h declares them). */
 
 /* Resolve a class operator overload and emit its mangled name to
  * stdout. Returns the winning decl's param count and sets *out_pty
