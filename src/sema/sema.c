@@ -3051,7 +3051,7 @@ static void canonicalize_walk_node(Node *n, TmplIdx *idx, Arena *arena) {
         break;
     case ND_CLASS_DEF:
         for (int i = 0; i < n->class_def.nbase_types; i++)
-            canonicalize_walk_type(n->class_def.base_types[i], idx, arena);
+            canonicalize_walk_type(n->class_def.base_types[i].ty, idx, arena);
         for (int i = 0; i < n->class_def.nmembers; i++)
             canonicalize_walk_node(n->class_def.members[i], idx, arena);
         break;

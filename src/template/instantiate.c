@@ -889,7 +889,7 @@ static void collect_from_node(InstCollector *col, Node *n) {
         /* Collect from base types — a template base like Base<T>
          * (substituted to Base<int>) needs to be instantiated too. */
         for (int i = 0; i < n->class_def.nbase_types; i++)
-            collect_from_type(col, n->class_def.base_types[i]);
+            collect_from_type(col, n->class_def.base_types[i].ty);
         if (pushed_walking)
             col->walking_class_def_depth--;
         col->cur_class = saved_class;
@@ -2640,7 +2640,7 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
          * (this happens transitively in the fixpoint loop). For
          * concrete bases, just link the existing class_region. */
         for (int bi = 0; bi < cloned->class_def.nbase_types; bi++) {
-            Type *base_ty = cloned->class_def.base_types[bi];
+            Type *base_ty = cloned->class_def.base_types[bi].ty;
             if (!base_ty) continue;
             if (base_ty->class_region) {
                 /* Concrete base with known class_region */
@@ -4280,7 +4280,7 @@ void template_instantiate(Node *tu, Arena *arena) {
         Type *ity = inst->class_def.ty;
         if (!ity || !ity->class_region) continue;
         for (int bi = 0; bi < inst->class_def.nbase_types; bi++) {
-            Type *base_ty = inst->class_def.base_types[bi];
+            Type *base_ty = inst->class_def.base_types[bi].ty;
             if (!base_ty) continue;
             /* Already linked? */
             if (base_ty->class_region) {
@@ -4438,7 +4438,7 @@ void template_instantiate(Node *tu, Arena *arena) {
             /* Also check base types — base classes are embedded
              * as __sf_base members, so they must be defined first. */
             for (int bt = 0; bt < a->class_def.nbase_types && !a_needs_b; bt++) {
-                Type *base = a->class_def.base_types[bt];
+                Type *base = a->class_def.base_types[bt].ty;
                 if (!base || !base->tag) continue;
                 if (bty->tag && tokens_equal(base->tag, bty->tag))
                     a_needs_b = true;

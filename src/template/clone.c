@@ -1258,14 +1258,18 @@ Node *clone_node(Node *n, SubstMap *map, Arena *arena) {
         c->class_def = n->class_def;
         c->class_def.members = clone_node_array(
             n->class_def.members, n->class_def.nmembers, map, arena);
-        /* Substitute base types (for template inheritance) */
+        /* Substitute base types (for template inheritance), preserving
+         * the virtual-inheritance flag per-base. */
         if (n->class_def.nbase_types > 0) {
             c->class_def.base_types = arena_alloc(arena,
-                n->class_def.nbase_types * sizeof(Type *));
+                n->class_def.nbase_types * sizeof(BaseInfo));
             c->class_def.nbase_types = n->class_def.nbase_types;
-            for (int i = 0; i < n->class_def.nbase_types; i++)
-                c->class_def.base_types[i] =
-                    subst_type(n->class_def.base_types[i], map, arena);
+            for (int i = 0; i < n->class_def.nbase_types; i++) {
+                c->class_def.base_types[i].ty =
+                    subst_type(n->class_def.base_types[i].ty, map, arena);
+                c->class_def.base_types[i].is_virtual =
+                    n->class_def.base_types[i].is_virtual;
+            }
         }
         /* Type is created fresh by the instantiation driver */
         break;

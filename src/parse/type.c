@@ -724,15 +724,22 @@ DeclSpec parse_type_specifiers(Parser *p) {
                         fn->func.body_start_pos >= 0)
                         parse_deferred_func_body(p, fn);
                 }
-                /* Store base types for template instantiation. */
+                /* Store per-base entries (type + is_virtual) for
+                 * template instantiation, codegen layout, and lookup. */
                 if (bases.len > 0) {
                     result.class_def->class_def.base_types =
-                        arena_alloc(p->arena, bases.len * sizeof(Type *));
+                        arena_alloc(p->arena,
+                                    bases.len * sizeof(BaseInfo));
                     int n = 0;
                     for (int i = 0; i < bases.len; i++) {
                         BaseSpec *bs = bases.data[i];
-                        if (bs->ty)
-                            result.class_def->class_def.base_types[n++] = bs->ty;
+                        if (bs->ty) {
+                            result.class_def->class_def.base_types[n].ty
+                                = bs->ty;
+                            result.class_def->class_def.base_types[n].is_virtual
+                                = bs->is_virtual;
+                            n++;
+                        }
                     }
                     result.class_def->class_def.nbase_types = n;
                 }

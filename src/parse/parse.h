@@ -53,6 +53,15 @@ typedef struct Capture {
     struct Type  *resolved_type; /* sema-set: type of captured variable */
 } Capture;
 
+/* Per-base entry on a class definition — N4659 §13 [class.derived].
+ * Keeps each base's type and its inheritance-edge metadata together,
+ * so codegen and the template instantiation pass walk a single list
+ * to learn everything about a class's bases (no parallel arrays). */
+typedef struct BaseInfo {
+    struct Type *ty;
+    bool         is_virtual;   /* 'virtual' inheritance — §13.1 */
+} BaseInfo;
+
 typedef enum {
     /* -- Expressions --
      * N4659 §8 [expr]
@@ -1106,12 +1115,16 @@ struct Node {
             Type   *ty;         /* class type, with class_region; may be NULL */
             Node  **members;    /* member-specification as array of nodes */
             int     nmembers;
-            /* Base-class types from the base-clause. Stored here
-             * (in addition to class_region->bases) so the template
-             * instantiation pass can recover template base types
-             * (whose class_region is NULL at parse time). */
-            Type  **base_types;
-            int     nbase_types;
+            /* Per-base entries from the base-clause (type + is_virtual,
+             * source order). Codegen and the template instantiation
+             * pass walk this list to learn the inheritance shape —
+             * it's the authoritative store for both the base type
+             * (template base types whose class_region is NULL at
+             * parse time are reachable here) and the virtual-edge
+             * flag. The mirror on class_region->bases is going away;
+             * see [[implicit-this-stamp-trap]]. */
+            BaseInfo *base_types;
+            int       nbase_types;
             /* Storage-class flags from the decl-specifier seq when the
              * class-def appears as a bare declaration ('static union
              * { int i; };'). Used to emit C11/GCC anonymous-union form

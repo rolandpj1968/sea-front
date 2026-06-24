@@ -3073,12 +3073,13 @@ static Type *class_base(Type *class_type, int i) {
  * order. Layout-wise sea-front still emits virtual bases as direct
  * inline fields — the storage-sharing aspect of VI is a separate
  * (larger) slice; for now the rule applies only to ctor/dtor
- * sequencing. */
+ * sequencing. Reads from class_def.base_types[i].is_virtual — the
+ * inheritance-edge metadata belongs to the class, not its scope. */
 static bool class_base_is_virtual(Type *class_type, int i) {
-    if (!class_type || !class_type->class_region) return false;
-    if (i < 0 || i >= class_type->class_region->nbases) return false;
-    if (!class_type->class_region->bases_virtual) return false;
-    return class_type->class_region->bases_virtual[i];
+    if (!class_type || !class_type->class_def) return false;
+    Node *cd = class_type->class_def;
+    if (i < 0 || i >= cd->class_def.nbase_types) return false;
+    return cd->class_def.base_types[i].is_virtual;
 }
 
 /* Find the class that owns the __sf_vptr field for `t`. Sea-front
@@ -12057,7 +12058,7 @@ static bool class_has_mutable_field_transitive(Type *cls) {
             return true;
     }
     for (int i = 0; i < cd->class_def.nbase_types; i++) {
-        if (class_has_mutable_field_transitive(cd->class_def.base_types[i]))
+        if (class_has_mutable_field_transitive(cd->class_def.base_types[i].ty))
             return true;
     }
     return false;
@@ -12113,7 +12114,7 @@ static bool class_dtor_is_nontrivial(Type *cls) {
             return true;
     }
     for (int i = 0; i < cd->class_def.nbase_types; i++) {
-        Type *bt = cd->class_def.base_types[i];
+        Type *bt = cd->class_def.base_types[i].ty;
         if (bt && class_dtor_is_nontrivial(bt)) return true;
     }
     return false;
@@ -12141,7 +12142,7 @@ static bool class_is_observably_empty(Type *cls) {
     if (!cd) return false;
     /* Any non-empty / observable base → not empty. */
     for (int i = 0; i < cd->class_def.nbase_types; i++) {
-        if (!class_is_observably_empty(cd->class_def.base_types[i]))
+        if (!class_is_observably_empty(cd->class_def.base_types[i].ty))
             return false;
     }
     for (int i = 0; i < cd->class_def.nmembers; i++) {
@@ -21101,7 +21102,7 @@ static void order_wire_struct_deps(EmitOrder *o) {
         if (!cdef || cdef->kind != ND_CLASS_DEF) continue;
         /* Base classes. */
         for (int b = 0; b < cdef->class_def.nbase_types; b++)
-            order_add_struct_dep(o, i, cdef->class_def.base_types[b]);
+            order_add_struct_dep(o, i, cdef->class_def.base_types[b].ty);
         /* By-value data members. */
         for (int m = 0; m < cdef->class_def.nmembers; m++) {
             Node *mem = cdef->class_def.members[m];
