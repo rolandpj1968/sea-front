@@ -4356,6 +4356,136 @@ static bool class_has_user_op_assign(Type *class_type) {
     return false;
 }
 
+/* True when class_type has a USER op= whose sole param (after the
+ * implicit this) takes `const arg_class&` — used to detect whether
+ * the implicit memberwise op= would be displaced by a user copy
+ * assignment on the same target class. */
+static bool class_has_user_op_assign_taking(Type *class_type, Type *arg_class) {
+    if (!class_type || !class_type->class_def || !arg_class) return false;
+    Node *cd = class_type->class_def;
+    for (int i = 0; i < cd->class_def.nmembers; i++) {
+        Node *m = cd->class_def.members[i];
+        if (!m) continue;
+        Token *mn = NULL;
+        Type *fty = NULL;
+        if (m->kind == ND_FUNC_DEF) { mn = m->func.name; }
+        else if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
+                 m->var_decl.ty->kind == TY_FUNC) {
+            mn = m->var_decl.name; fty = m->var_decl.ty;
+        }
+        if (!mn) continue;
+        if (mn->len != 8 || memcmp(mn->loc, "operator", 8) != 0 ||
+            operator_kind_from_method_name(mn) != OP_ASSIGN)
+            continue;
+        int nparams = (m->kind == ND_FUNC_DEF) ? m->func.nparams
+                                                : (fty ? fty->nparams : 0);
+        if (nparams != 1) continue;
+        Type *pty = NULL;
+        if (m->kind == ND_FUNC_DEF) {
+            pty = m->func.params[0] ? m->func.params[0]->param.ty : NULL;
+        } else if (fty && fty->params) {
+            pty = fty->params[0];
+        }
+        if (!pty) continue;
+        Type *peel = pty;
+        if (peel->kind == TY_REF || peel->kind == TY_RVALREF || peel->kind == TY_PTR)
+            peel = peel->base;
+        if (!peel || (peel->kind != TY_STRUCT && peel->kind != TY_UNION))
+            continue;
+        if (peel->tag && arg_class->tag &&
+            peel->tag->len == arg_class->tag->len &&
+            memcmp(peel->tag->loc, arg_class->tag->loc, arg_class->tag->len) == 0)
+            return true;
+    }
+    return false;
+}
+
+/* True when a base class of `deriv` declares a virtual op= taking
+ * `const deriv&` — i.e. an implicitly-declared deriv::op= would
+ * silently override it (same signature). Returns the introducing
+ * base class via *out_intro when non-null. Walks bases recursively;
+ * the worklist bound matches the rest of sea-front's inheritance
+ * walks. N4659 §15.8.2 [class.copy.assign]/12.
+ *
+ * Pattern: g++.dg/inherit/virtual5.C
+ *   struct A { virtual B& operator=(const B&); };
+ *   struct B : A { ... };   // implicit B::op= overrides A's */
+static bool base_has_virtual_op_assign_taking(Type *deriv,
+                                                Type **out_intro) {
+    if (!deriv || !deriv->class_region) return false;
+    Type *worklist[32];
+    int wl_n = 0;
+    for (int i = 0; i < deriv->class_region->nbases && wl_n < 32; i++) {
+        Type *b = deriv->class_region->bases[i]
+                    ? deriv->class_region->bases[i]->owner_type : NULL;
+        if (b) worklist[wl_n++] = b;
+    }
+    int wi = 0;
+    while (wi < wl_n) {
+        Type *bt = worklist[wi++];
+        if (!bt || !bt->class_def) continue;
+        Node *cd = bt->class_def;
+        for (int i = 0; i < cd->class_def.nmembers; i++) {
+            Node *m = cd->class_def.members[i];
+            if (!m) continue;
+            Token *mn = NULL;
+            Type *fty = NULL;
+            bool is_virt = false;
+            int nparams = 0;
+            Type *p0 = NULL;
+            if (m->kind == ND_FUNC_DEF) {
+                mn = m->func.name;
+                is_virt = m->func.is_virtual;
+                nparams = m->func.nparams;
+                if (nparams >= 1 && m->func.params[0])
+                    p0 = m->func.params[0]->param.ty;
+            } else if (m->kind == ND_VAR_DECL && m->var_decl.ty &&
+                       m->var_decl.ty->kind == TY_FUNC) {
+                mn = m->var_decl.name;
+                is_virt = m->var_decl.is_virtual;
+                fty = m->var_decl.ty;
+                nparams = fty->nparams;
+                if (nparams >= 1 && fty->params) p0 = fty->params[0];
+            }
+            if (!mn || !is_virt || nparams != 1 || !p0) continue;
+            if (mn->len != 8 || memcmp(mn->loc, "operator", 8) != 0) continue;
+            if (operator_kind_from_method_name(mn) != OP_ASSIGN) continue;
+            Type *peel = p0;
+            if (peel->kind == TY_REF || peel->kind == TY_RVALREF ||
+                peel->kind == TY_PTR)
+                peel = peel->base;
+            if (!peel || (peel->kind != TY_STRUCT && peel->kind != TY_UNION))
+                continue;
+            if (peel->tag && deriv->tag &&
+                peel->tag->len == deriv->tag->len &&
+                memcmp(peel->tag->loc, deriv->tag->loc, deriv->tag->len) == 0) {
+                if (out_intro) *out_intro = bt;
+                return true;
+            }
+        }
+        if (bt->class_region) {
+            for (int i = 0; i < bt->class_region->nbases && wl_n < 32; i++) {
+                Type *b2 = bt->class_region->bases[i]
+                            ? bt->class_region->bases[i]->owner_type : NULL;
+                if (!b2) continue;
+                bool dup = false;
+                for (int wj = 0; wj < wl_n; wj++)
+                    if (worklist[wj] == b2) { dup = true; break; }
+                if (!dup) worklist[wl_n++] = b2;
+            }
+        }
+    }
+    return false;
+}
+
+/* `deriv` has no user op= matching `deriv::operator=(const deriv&)`
+ * and a base virtual op= takes `const deriv&` — synthesize one. */
+static bool class_needs_synth_op_assign_override(Type *deriv) {
+    if (!deriv || !deriv->class_def || !deriv->tag) return false;
+    if (class_has_user_op_assign_taking(deriv, deriv)) return false;
+    return base_has_virtual_op_assign_taking(deriv, /*out_intro=*/NULL);
+}
+
 /* True if CLASS_TYPE has any member that is an array (possibly
  * multi-dimensional) of a class-type which carries a user op=.
  * Triggers synthesis of a memberwise op= so `b = b` calls A::op=
@@ -5897,11 +6027,49 @@ static void emit_expr(Node *n) {
             Type *rhs_ty = n->binary.rhs->resolved_type;
             Type *args[1] = { rhs_ty };
             Type **pty = NULL;
+            Node *winner = NULL;
             bool lhs_const = receiver_type_is_const(
                 n->binary.lhs->resolved_type);
-            int np = emit_class_op_mangled_name(lhs_ty_assign, OP_ASSIGN,
-                                                 args, 1, lhs_const,
-                                                 &pty, NULL);
+            int np = resolve_operator_overload(lhs_ty_assign, OP_ASSIGN,
+                                                args, 1, lhs_const,
+                                                &pty, &winner);
+            /* Virtual op=: dispatch through the vtable so a derived
+             * override (user or synthesized) reaches its body even
+             * when the static LHS type is the base. N4659 §13.3
+             * [class.virtual] — assignment ops are subject to the
+             * usual virtual dispatch rules. Without this, sea-front
+             * would emit a direct call to the static type's op= and
+             * miss overrides on the dynamic type. Pattern:
+             * g++.dg/inherit/virtual5.C (synth override case),
+             * any class with `virtual T& operator=(const U&)`. */
+            bool winner_is_virtual = winner &&
+                ((winner->kind == ND_FUNC_DEF && winner->func.is_virtual) ||
+                 (winner->kind == ND_VAR_DECL && winner->var_decl.is_virtual));
+            if (winner_is_virtual) {
+                Type *vowner = vptr_owner_class(lhs_ty_assign);
+                if (!vowner) vowner = lhs_ty_assign;
+                /* `((vowner *)&lhs)->__sf_vptr->operator(&lhs, rhs)`
+                 * — the vtable field is named with the source-name
+                 * token "operator" (the operator-symbol survives via
+                 * chars after token->loc+len; for a class with one
+                 * virtual op the field-name "operator" is unique). */
+                fputs("((struct ", stdout);
+                mangle_class_tag(vowner);
+                fputs(" *)", stdout);
+                emit_addrof_for_this(n->binary.lhs);
+                fputs(")->__sf_vptr->operator(", stdout);
+                emit_addrof_for_this(n->binary.lhs);
+                fputs(", ", stdout);
+                emit_arg_for_param(n->binary.rhs,
+                                    (pty && np > 0) ? pty[0] : NULL);
+                fputc(')', stdout);
+                return;
+            }
+            /* Non-virtual: direct call to the mangled op=. */
+            bool mc = candidate_is_const(winner);
+            mangle_class_operator(lhs_ty_assign, OP_ASSIGN,
+                                   np >= 0 ? pty : args,
+                                   np >= 0 ? np : 1, mc);
             fputc('(', stdout);
             emit_addrof_for_this(n->binary.lhs);
             fputs(", ", stdout);
@@ -15677,6 +15845,14 @@ static void emit_ctor_member_inits(Node *func) {
                 }
             }
         }
+        /* Synth-op= override path: this class synthesizes an implicit
+         * op= that overrides an inherited virtual op= — that synth
+         * body is an in-TU virtual body, so the user ctor still needs
+         * to install THIS class's vptr (which routes through the
+         * synth) rather than leaving the base's vptr in place. */
+        if (!any_body && cdef->class_def.ty &&
+            class_needs_synth_op_assign_override(cdef->class_def.ty))
+            any_body = true;
         if (!any_body && g_tu) {
             Type *cty = cdef->class_def.ty;
             for (int i = 0; i < cdef->class_def.nmembers && !any_body; i++) {
@@ -17346,6 +17522,16 @@ static void emit_class_def(Node *n) {
                 }
             }
         }
+        /* Implicit op= override of an inherited virtual op= — the
+         * synth body emitted below counts as an in-TU virtual body
+         * for this class. Without flipping the flag, the vtable
+         * INSTANCE wouldn't be emitted (only the struct), B's ctor
+         * wouldn't install B's vptr, and dispatch would route
+         * through A's slot to A's op=. Pattern: g++.dg/inherit/
+         * virtual5.C. */
+        if (!any_virtual_has_body &&
+            class_needs_synth_op_assign_override(class_type))
+            any_virtual_has_body = true;
     }
 
     if (g_emit_phase == PHASE_METHODS) goto methods_phase;
@@ -17991,6 +18177,31 @@ static void emit_class_def(Node *n) {
         fputs(" *this);\n", stdout);
     }
 
+    /* Forward-decl for the synth implicit op=-as-virtual-override —
+     * the vtable instance emit (further down in this function) needs
+     * the symbol name visible before the actual body emits in the
+     * synth-op= block below. The synth-op= block also re-emits the
+     * forward decl (idempotent under C). */
+    if (class_type && class_needs_synth_op_assign_override(class_type)) {
+        Type ref_arg = {0};
+        ref_arg.kind = TY_REF;
+        Type pointee = {0};
+        pointee.kind = class_type->kind;
+        pointee.tag = class_type->tag;
+        pointee.is_const = true;
+        ref_arg.base = &pointee;
+        Type *params[1] = { &ref_arg };
+        fputs("__SF_INLINE struct ", stdout);
+        mangle_class_tag(class_type);
+        fputs(" *", stdout);
+        mangle_class_operator(class_type, OP_ASSIGN, params, 1, false);
+        fputs("(struct ", stdout);
+        mangle_class_tag(class_type);
+        fputs(" *this, const struct ", stdout);
+        mangle_class_tag(class_type);
+        fputs(" *that);\n", stdout);
+    }
+
     if (g_emit_phase == PHASE_STRUCTS) return;
 methods_phase:;
     /* Dedup methods phase: template instantiation can leave multiple
@@ -18257,9 +18468,68 @@ methods_phase:;
                     }
                 }
 
+                /* Override hook: when this class needs a synthesized
+                 * implicit op= override (class_needs_synth_op_assign_
+                 * override) AND the slot we're filling IS that op=
+                 * (introducer is operator= taking const class_type&),
+                 * point the slot at the synth instead of the base
+                 * implementor. The synth body was emitted in the
+                 * synth-op= block earlier in this function. */
+                bool synth_op_override = false;
+                if (mname && mname->len == 8 &&
+                    memcmp(mname->loc, "operator", 8) == 0 &&
+                    operator_kind_from_method_name(mname) == OP_ASSIGN &&
+                    np_intro == 1 &&
+                    class_needs_synth_op_assign_override(class_type)) {
+                    /* Verify the slot's arg type matches `const class_type&`
+                     * (otherwise it's some other operator= overload). */
+                    Type *p0 = is_virt_funcdef
+                        ? (m->func.params[0] ? m->func.params[0]->param.ty : NULL)
+                        : (m->var_decl.ty && m->var_decl.ty->params
+                             ? m->var_decl.ty->params[0] : NULL);
+                    Type *peel = p0;
+                    if (peel && (peel->kind == TY_REF ||
+                                  peel->kind == TY_RVALREF ||
+                                  peel->kind == TY_PTR))
+                        peel = peel->base;
+                    if (peel && peel->tag && class_type->tag &&
+                        peel->tag->len == class_type->tag->len &&
+                        memcmp(peel->tag->loc, class_type->tag->loc,
+                                class_type->tag->len) == 0)
+                        synth_op_override = true;
+                }
                 emit_indent();
                 bool has_body = impl_node && (impl_is_funcdef || ool_def);
-                if (has_body) {
+                if (synth_op_override) {
+                    /* Slot signature uses the introducer's class as the
+                     * receiver type — synth's signature uses class_type.
+                     * Cast through. */
+                    fputc('(', stdout);
+                    emit_type(intro_ret);
+                    fputs(" (*)(", stdout);
+                    if (intro_const) fputs("const ", stdout);
+                    fputs("struct ", stdout);
+                    mangle_class_tag(vchain[ci]);
+                    fputs(" *", stdout);
+                    for (int k = 0; k < np_intro; k++) {
+                        fputs(", ", stdout);
+                        if (is_virt_funcdef)
+                            emit_type(m->func.params[k]->param.ty);
+                        else
+                            emit_type(m->var_decl.ty->params[k]);
+                    }
+                    fputs("))", stdout);
+                    /* The synth's mangled symbol. */
+                    Type ref_arg = {0};
+                    ref_arg.kind = TY_REF;
+                    Type pointee = {0};
+                    pointee.kind = class_type->kind;
+                    pointee.tag = class_type->tag;
+                    pointee.is_const = true;
+                    ref_arg.base = &pointee;
+                    Type *params[1] = { &ref_arg };
+                    mangle_class_operator(class_type, OP_ASSIGN, params, 1, false);
+                } else if (has_body) {
                     bool need_cast = (impl_class != vchain[ci]);
                     if (need_cast) {
                         /* '(<ret> (*)(struct sf__<intro> *, <params...>))' */
@@ -19098,6 +19368,118 @@ methods_phase:;
         g_indent--;
         fputs("}\n", stdout);
         g_current_class_def = saved_cdef_synth;
+    }
+
+    /* Synthesize C::operator=(const C&) when:
+     *   - C has no user op= matching that signature, AND
+     *   - a base class has a virtual op= taking `const C&`
+     * The implicitly-declared op= is `C& C::operator=(const C&)`,
+     * which has the same signature as the base virtual and therefore
+     * OVERRIDES it (N4659 §15.8.2/12 [class.copy.assign] +
+     * §13.3 [class.virtual]).
+     *
+     * Without this synthesis, dispatch through a base reference would
+     * land on the base's virtual op= body — which typically does
+     * nothing useful (the test pattern is a base with a stub op= and
+     * a derived expected to provide the real implementation
+     * implicitly). Pattern: g++.dg/inherit/virtual5.C.
+     *
+     * Body: chain to each base's op= passing the SAME `that` (which
+     * IS-A base), then memberwise-copy own non-static data members,
+     * then return `this`.
+     *
+     * Mangling: `mangle_class_operator(class_type, OP_ASSIGN,
+     * [const C&], 1, false)` — the symbol the vtable instance fill
+     * overrides with below. */
+    if (class_type && class_needs_synth_op_assign_override(class_type)) {
+        Type ref_arg = {0};
+        ref_arg.kind = TY_REF;
+        ref_arg.is_const = false;
+        Type pointee = {0};
+        pointee.kind = class_type->kind;
+        pointee.tag = class_type->tag;
+        pointee.class_def = n;
+        pointee.class_region = class_type->class_region;
+        pointee.is_const = true;
+        ref_arg.base = &pointee;
+        Type *params[1] = { &ref_arg };
+
+        /* Forward decl. */
+        fputs("__SF_INLINE struct ", stdout);
+        mangle_class_tag(class_type);
+        fputs(" *", stdout);
+        mangle_class_operator(class_type, OP_ASSIGN, params, 1, false);
+        fputs("(struct ", stdout);
+        mangle_class_tag(class_type);
+        fputs(" *this, const struct ", stdout);
+        mangle_class_tag(class_type);
+        fputs(" *that);\n", stdout);
+
+        /* Definition. */
+        fputs("__SF_INLINE struct ", stdout);
+        mangle_class_tag(class_type);
+        fputs(" *", stdout);
+        mangle_class_operator(class_type, OP_ASSIGN, params, 1, false);
+        fputs("(struct ", stdout);
+        mangle_class_tag(class_type);
+        fputs(" *this, const struct ", stdout);
+        mangle_class_tag(class_type);
+        fputs(" *that) {\n", stdout);
+        g_indent++;
+
+        /* Chain to each direct base's op= passing the same `that`
+         * (which derives-from each base). If the base has its own
+         * virtual op= taking `const C&` the call resolves there;
+         * if not, fall back to bitwise base-subobject copy. The
+         * test pattern (virtual5) intentionally has A::op= take
+         * const B& as a stub — the chain reaches it. */
+        int nb_ai = class_nbases(class_type);
+        for (int b = 0; b < nb_ai; b++) {
+            Type *base = class_base(class_type, b);
+            if (!base || !base->tag) continue;
+            if (!class_has_user_op_assign_taking(base, class_type)) {
+                /* Bitwise copy of base subobject. */
+                emit_indent();
+                fprintf(stdout, "*(struct ");
+                mangle_class_tag(base);
+                fputs(" *)&this->", stdout);
+                if (b == 0) fputs("__sf_base", stdout);
+                else        fprintf(stdout, "__sf_base%d", b);
+                fputs(" = *(const struct ", stdout);
+                mangle_class_tag(base);
+                fputs(" *)&that->", stdout);
+                if (b == 0) fputs("__sf_base", stdout);
+                else        fprintf(stdout, "__sf_base%d", b);
+                fputs(";\n", stdout);
+                continue;
+            }
+            emit_indent();
+            mangle_class_operator(base, OP_ASSIGN, params, 1, false);
+            fputs("(&this->", stdout);
+            if (b == 0) fputs("__sf_base", stdout);
+            else        fprintf(stdout, "__sf_base%d", b);
+            fputs(", that);\n", stdout);
+        }
+
+        /* Memberwise copy of own non-static, non-function data
+         * members. Mirrors the bitwise-copy semantics C struct
+         * assignment would produce for trivially-copyable members. */
+        for (int i = 0; i < n->class_def.nmembers; i++) {
+            Node *m = n->class_def.members[i];
+            if (!m || m->kind != ND_VAR_DECL || !m->var_decl.ty ||
+                !m->var_decl.name) continue;
+            if (m->var_decl.ty->kind == TY_FUNC) continue;
+            if (m->var_decl.storage_flags & DECL_STATIC) continue;
+            emit_indent();
+            fprintf(stdout, "this->%.*s = that->%.*s;\n",
+                    m->var_decl.name->len, m->var_decl.name->loc,
+                    m->var_decl.name->len, m->var_decl.name->loc);
+        }
+
+        emit_indent();
+        fputs("return this;\n", stdout);
+        g_indent--;
+        fputs("}\n", stdout);
     }
 
     /* Defaulted copy ctor: `T(const T&) = default;`. The body is
