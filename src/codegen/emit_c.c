@@ -497,12 +497,7 @@ static void emit_func_param_types(Type *fty) {
  * open-coded patterns. References lower to pointers in C, so these
  * three kinds are treated as a single 'indirection' concept.
  * N4659 §11.3.1-§11.3.2 [dcl.ptr][dcl.ref]. */
-static inline bool ty_is_ref(Type *t) {
-    return t && (t->kind == TY_REF || t->kind == TY_RVALREF);
-}
-static inline bool ty_is_indirect(Type *t) {
-    return t && (t->kind == TY_PTR || t->kind == TY_REF || t->kind == TY_RVALREF);
-}
+/* ty_is_ref / ty_is_indirect moved to parse/parse.h (shared with sema). */
 static void emit_arg_for_param(Node *arg, Type *param_ty);  /* fwd */
 static bool try_emit_conversion_op_init(Type *target_ty, Node *init);  /* fwd */
 static bool find_conversion_op(Type *class_ty, Type *target_ty,
@@ -3838,16 +3833,8 @@ static int collect_call_arg_types(Node **args, int nargs, Type ***out_types) {
  * regardless of the actual third-argument's pointer depth. */
 /* True for any scalar kind on the "integer-rank" side: any
  * integral type, bool, char family, enum. */
-static bool kind_is_integer(TypeKind k) {
-    return k == TY_BOOL || k == TY_CHAR || k == TY_CHAR16 ||
-           k == TY_CHAR32 || k == TY_WCHAR || k == TY_SHORT ||
-           k == TY_INT || k == TY_LONG || k == TY_LLONG || k == TY_ENUM;
-}
-
-/* True for any floating-point scalar kind. */
-static bool kind_is_floating(TypeKind k) {
-    return k == TY_FLOAT || k == TY_DOUBLE || k == TY_LDOUBLE;
-}
+/* kind_is_integer / kind_is_floating moved to parse/parse.h (shared
+ * with sema's overload-resolution scoring). */
 
 static int score_type_pair(Type *pt, Type *at) {
     if (!pt || !at) return 0;

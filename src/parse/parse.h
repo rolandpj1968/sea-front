@@ -1298,6 +1298,17 @@ typedef enum {
     TY_PMEM,
 } TypeKind;
 
+/* Type-shape predicates declared after TypeKind. Definitions land
+ * after `struct Type` is complete (below). */
+static inline bool kind_is_integer(TypeKind k) {
+    return k == TY_BOOL || k == TY_CHAR || k == TY_CHAR16 ||
+           k == TY_CHAR32 || k == TY_WCHAR || k == TY_SHORT ||
+           k == TY_INT || k == TY_LONG || k == TY_LLONG || k == TY_ENUM;
+}
+static inline bool kind_is_floating(TypeKind k) {
+    return k == TY_FLOAT || k == TY_DOUBLE || k == TY_LDOUBLE;
+}
+
 struct Type {
     TypeKind kind;
 
@@ -1490,6 +1501,17 @@ struct Type {
      * agree on the name. Zero means 'unassigned'. */
     int  anon_id;
 };
+
+/* References lower to pointers in C so sea-front treats TY_REF /
+ * TY_RVALREF uniformly. N4659 §11.3 [dcl.meaning] groups pointer /
+ * reference under compound types with indirection. */
+static inline bool ty_is_ref(struct Type *t) {
+    return t && (t->kind == TY_REF || t->kind == TY_RVALREF);
+}
+static inline bool ty_is_indirect(struct Type *t) {
+    return t && (t->kind == TY_PTR || t->kind == TY_REF ||
+                 t->kind == TY_RVALREF);
+}
 
 /* ================================================================== */
 /* Name Lookup — N4659 §6.3-§6.4 [basic.scope, basic.lookup]          */

@@ -276,6 +276,7 @@ static inline bool token_equals_str(struct Token *t,
     ((tok)->len == (int)(sizeof(lit) - 1) && \
      memcmp((tok)->loc, (lit), sizeof(lit) - 1) == 0)
 
+
 /* Contiguous array of tokens — the output of the lexer.
  * Replaces the linked-list approach: better cache locality,
  * index-based save/restore for tentative parsing.
