@@ -32,7 +32,10 @@
 #
 # Env:
 #   SEA_GCC_TESTSUITE  default: $HOME/src/sea-front-deps/gcc-4.8.5/gcc/testsuite
-#   SEA_DG_XFAIL_FILE  default: scripts/dg-xfail.txt — known-bad list
+#   SEA_DG_XFAIL_FILE  default: scripts/dg-xfail-<ver>.txt selected
+#                      from SEA_GCC_TESTSUITE; override to point at
+#                      any single file. Per-version split avoids
+#                      mixing 4.8-only and 14-only xfail rationale.
 #   SEA_DG_LIMIT       cap on number of tests (default: all)
 #   SEA_DG_FILTER      grep -E pattern on relative path (default: all)
 #   SEA_DG_TIMEOUT     per-test wall-clock seconds (default: 10)
@@ -54,7 +57,20 @@ SEA_DG_LIMIT="${SEA_DG_LIMIT:-0}"
 SEA_DG_FILTER="${SEA_DG_FILTER:-}"
 SEA_DG_TIMEOUT="${SEA_DG_TIMEOUT:-10}"
 SEA_DG_VERBOSE="${SEA_DG_VERBOSE:-0}"
-SEA_DG_XFAIL_FILE="${SEA_DG_XFAIL_FILE:-$SCRIPT_DIR/dg-xfail.txt}"
+# Pick a per-target-gcc-version xfail list. gcc 4.8 and gcc 14
+# testsuites overlap heavily but each also has tests the other
+# doesn't (gcc 14 added the empty12-26 / no_unique_address1 ABI
+# tests; gcc 4.8 has its own pre-c++11 set). The xfail rationale
+# (platform intrinsic, useless, scoped-out) is per-test-per-version,
+# so we maintain separate lists. Auto-detect from SEA_GCC_TESTSUITE
+# path; override via SEA_DG_XFAIL_FILE if needed.
+if [ -z "${SEA_DG_XFAIL_FILE:-}" ]; then
+    case "$SEA_GCC_TESTSUITE" in
+        *gcc-4.8*) SEA_DG_XFAIL_FILE="$SCRIPT_DIR/dg-xfail-4.8.txt" ;;
+        *gcc-14*)  SEA_DG_XFAIL_FILE="$SCRIPT_DIR/dg-xfail-14.txt" ;;
+        *)         SEA_DG_XFAIL_FILE="$SCRIPT_DIR/dg-xfail-4.8.txt" ;;
+    esac
+fi
 
 # Load xfail list (one rel-path per line, '#' comments). Two match
 # shapes:

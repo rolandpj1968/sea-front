@@ -1,0 +1,170 @@
+# Tests that sea-front is not expected to pass on the g++.dg suite.
+#
+# Format: one relative path per line (relative to SEA_GCC_TESTSUITE root).
+# Lines starting with '#' are comments. Trailing whitespace ignored.
+#
+# When a listed test is run:
+#   - non-PASS outcome → XFAIL (expected fail, doesn't pollute the FAIL/E_*
+#     buckets and signal real regressions)
+#   - PASS outcome      → XPASS (loud — likely the test deserves removal
+#     from this list because some other slice fixed it)
+#
+# Buckets recognised below:
+
+# --- Itanium C++ ABI conformance ----------------------------------------
+# Sea-front uses a deliberately-private object layout, vtable shape, and
+# EH model — see docs/mangling.md "System-class interop" and docs/rtti.md
+# for the rationale. These tests assert specific gcc-on-ilp32 layout
+# offsets that sea-front isn't aiming to match.
+
+g++.dg/abi/bitfield1.C
+g++.dg/abi/bitfield8.C
+g++.dg/abi/covariant3.C
+g++.dg/abi/empty7.C
+g++.dg/abi/empty9.C
+g++.dg/abi/empty10.C
+g++.dg/abi/empty11.C
+g++.dg/abi/layout2.C
+g++.dg/abi/layout3.C
+g++.dg/abi/vbase11.C
+g++.dg/abi/vbase13.C
+# Newer empty-base-class / no_unique_address Itanium ABI tests — same
+# "specific gcc-on-x86_64-LP64 layout" basis as the entries above.
+g++.dg/abi/bitfield6.C
+g++.dg/abi/empty12.C
+g++.dg/abi/empty13.C
+g++.dg/abi/empty14.C
+g++.dg/abi/empty15.C
+g++.dg/abi/empty16.C
+g++.dg/abi/empty17.C
+g++.dg/abi/empty18.C
+g++.dg/abi/empty19.C
+g++.dg/abi/empty22.C
+g++.dg/abi/empty25.C
+g++.dg/abi/empty26.C
+g++.dg/abi/no_unique_address1.C
+g++.dg/abi/pr39188-1a.C
+g++.dg/abi/pr39188-2a.C
+g++.dg/abi/pr60336-4.C
+g++.dg/abi/structret1.C
+# offsetof of an inherited int through a polymorphic base — gcc places
+# the vptr at offset 0 (Itanium ABI), so C.i lands at sizeof(void*).
+# sea-front places __sf_vptr AFTER the inherited base subobject (B's
+# layout is { A; vptr; }), so C.i is at offset 0. Same "layout differs"
+# bucket as the rest. Sea-front parses + emits correctly; the offset
+# the test checks just doesn't match.
+g++.dg/abi/offsetof.C
+
+# --- Universally xfail in gcc itself ------------------------------------
+# These tests are marked `dg-do run { xfail *-*-* }` in the source — gcc
+# itself expects them to FAIL on every target. Listing here surfaces
+# that signal in the runner's bucket counts. Only include tests where we
+# also fail; tests where we PASS something gcc-xfails are surprising
+# good news and stay in the PASS bucket.
+
+# --- AddressSanitizer test using dg-shouldfail --------------------------
+# The test deliberately triggers a memory error and expects ASan to
+# catch it; gcc honours `dg-shouldfail "asan"` and treats the non-zero
+# exit as PASS. Our runner only checks exit==0, so the test reports
+# FAIL even though sea-front does what it can (it doesn't have ASan).
+g++.dg/asan/function-argument-2.C
+
+# --- Wholesale out-of-scope directories ---------------------------------
+# Directory-prefix xfails (entries ending in '/' match every test under
+# that path). Avoids enumerating dozens of individual files when EVERY
+# test in the directory fails for the same out-of-scope reason. Don't
+# add a prefix entry unless at least the bulk pass-rate is zero — a
+# prefix that catches passing tests turns them into XPASS noise.
+#
+# coroutines/: C++20 coroutines. Sea-front parser doesn't know
+#   `co_await`, `co_yield`, `co_return`. 0 PASS, 127 fail in the
+#   gcc-14 sweep — clean bulk-xfail candidate.
+g++.dg/coroutines/
+
+# --- Sanitizer / coverage tests requiring runtime instrumentation -------
+# AddressSanitizer / UBSan / gcov tests that fail specifically because
+# sea-front doesn't generate the instrumentation those runtimes expect.
+# Listed individually (not directory-prefix) because the majority of
+# tests in these directories happen to compile and run fine without
+# the instrumentation — only the ones that actually rely on it fail.
+g++.dg/asan/asan_test.C
+g++.dg/asan/interception-malloc-test-1.C
+g++.dg/asan/interception-test-1.C
+g++.dg/asan/pr69276.C
+g++.dg/asan/pr81021.C
+g++.dg/asan/pr85774.C
+g++.dg/asan/pr90570.C
+g++.dg/asan/use-after-scope-types-1.C
+g++.dg/asan/use-after-scope-types-2.C
+g++.dg/asan/use-after-scope-types-3.C
+g++.dg/asan/use-after-scope-types-4.C
+g++.dg/asan/use-after-scope-types-5.C
+g++.dg/gcov/gcov-14.C
+g++.dg/gcov/gcov-17.C
+g++.dg/gcov/gcov-dump-1.C
+g++.dg/gcov/gcov-dump-2.C
+g++.dg/gcov/pr16855.C
+g++.dg/gcov/pr16855-priority.C
+g++.dg/gcov/pr88045.C
+g++.dg/gcov/pr88263-2.C
+g++.dg/gcov/pr88263.C
+g++.dg/ubsan/pr70147-1.C
+g++.dg/ubsan/vptr-1.C
+g++.dg/ubsan/vptr-2.C
+g++.dg/ubsan/vptr-3.C
+g++.dg/ubsan/vptr-11.C
+
+# --- Signal-driven / forced unwinding EH --------------------------------
+# Tests in this bucket install a signal handler that throws a C++
+# exception, or call _Unwind_RaiseException directly, or rely on
+# -fnon-call-exceptions to turn synchronous CPU traps into throws.
+# Sea-front's TLS-polling EH design (see docs/exceptions.md) is
+# fundamentally synchronous — exceptions can only originate from a
+# `throw` statement in code sea-front emitted. There is no mechanism
+# to convert a signal or a CPU trap into a polled exception state.
+# These tests cannot pass under the current EH design.
+
+g++.dg/eh/sighandle.C
+g++.dg/eh/forced1.C
+g++.dg/eh/forced2.C
+g++.dg/eh/forced3.C
+g++.dg/eh/forced4.C
+g++.dg/eh/unexpected1.C
+g++.dg/ext/sync-4.C
+g++.dg/torture/except-1.C
+g++.dg/torture/pr85334.C
+g++.dg/pr97627.C
+
+# --- gcc 4.8 testsuite expecting pre-modern C++ behaviors ----------------
+# These tests in the gcc 4.8 tree assert behaviors that the language
+# rules later changed; gcc 14 itself FAILs the same test programs.
+# Sea-front matches modern semantics, so the gcc-4.8 expectations no
+# longer hold.
+
+# `const int &r = A().i;` — gcc 4.8 expected the A() temp to be
+# destroyed at end of full-expression (so d==1 at the if-check); since
+# CWG 1299 / N3690 the rule extends the temp's lifetime through r's
+# scope. sea-front lifts the temp into the outer block per c1f376c,
+# matching gcc 14.
+g++.dg/init/ref19.C
+
+# `new A[5]` with `~A() = delete;` — gcc 4.8 allocated an array cookie
+# unconditionally (test asserts ap != p); gcc 14 omits the cookie when
+# the dtor is trivially-destructible (incl. deleted dtor) and the test
+# fails identically there. sea-front matches gcc 14's no-cookie
+# behavior (see class_dtor_is_nontrivial).
+g++.dg/cpp0x/defaulted19.C
+
+# `throw nullptr` matched against `catch (void*)` BEFORE
+# `catch (nullptr_t)` — N4659 §15.3/3 [except.handle] picks the
+# first matching handler, and `void*` is a valid match for nullptr
+# per the same paragraph's last bullet. The gcc 4.8 testsuite
+# version of nullptr21 lists void* first and expects the nullptr_t
+# catch to win — modern gcc dispatches void* (first match) and
+# gcc 14's own version of this test dropped the void* handlers.
+# Sea-front matches the modern (standard-correct) dispatch order.
+g++.dg/cpp0x/nullptr21.C
+
+
+
+
