@@ -8014,13 +8014,20 @@ static void emit_expr(Node *n) {
                                                          n->call.nargs, &at);
                         bool recv_const = receiver_type_is_const(
                             obj ? obj->resolved_type : NULL);
-                        Node *winner = NULL;
-                        int np = resolve_overload(method_class,
+                        Node *winner = n->call.resolved_method;
+                        int np;
+                        if (winner) {
+                            static Type *_pty_pool[64];
+                            np = copy_member_param_types(winner, _pty_pool);
+                            call_pty = _pty_pool;
+                        } else {
+                            np = resolve_overload(method_class,
                                                    callee->member.member,
                                                    /*is_ctor=*/false,
                                                    at, na,
                                                    recv_const,
                                                    &call_pty, &winner);
+                        }
                         winner_method = winner;
                         if (np < 0) {
                             /* Method not found in class_def. For

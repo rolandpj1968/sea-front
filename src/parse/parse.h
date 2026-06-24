@@ -485,6 +485,16 @@ struct Node {
              * path (no user ctor matches) and for non-class
              * targets. */
             Node *resolved_ctor;
+            /* Matched method for method calls (implicit-this or
+             * obj.method() / obj->method() forms). Sema picks the
+             * static winner via resolve_overload; codegen reads it
+             * to recover param types and to test the static-vs-
+             * virtual / origin-class properties without re-running
+             * overload resolution. NULL when sema couldn't pre-pick
+             * (dependent callee, template-bound this) — codegen
+             * falls back to its own resolve_overload. N4659 §16.3
+             * [over.match]. */
+            Node *resolved_method;
         } call;
 
         /* ND_MEMBER — N4659 §8.2.5 [expr.ref]

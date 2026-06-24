@@ -2428,6 +2428,69 @@ static void visit_call(Sema *s, Node *n) {
         }
         return;
     }
+    /* Method-call stamping for `obj.method(args)` / `obj->method(args)`.
+     * Sema runs the same overload resolution emit_c would, stashing
+     * the winner on call.resolved_method. Codegen reads the stamp to
+     * recover param types + origin-class / virtual flags without
+     * re-running resolve_overload. Bypassed for dependent callees,
+     * member-template explicit-args, and any unresolved arg type —
+     * codegen falls back in those shapes. N4659 §16.3 [over.match]. */
+    if (n->call.callee && n->call.callee->kind == ND_MEMBER &&
+        n->call.callee->member.member &&
+        n->call.callee->member.obj &&
+        !n->call.callee->is_type_dependent &&
+        !n->call.callee->member.template_id) {
+        Node *callee = n->call.callee;
+        Node *obj = callee->member.obj;
+        Type *ot = obj->resolved_type;
+        while (ot && (ot->kind == TY_REF || ot->kind == TY_RVALREF ||
+                       ot->kind == TY_PTR))
+            ot = ot->base;
+        if (ot && (ot->kind == TY_STRUCT || ot->kind == TY_UNION)) {
+            Type *method_class = ot;
+            if (!method_class->class_region && method_class->tag) {
+                Node *d = find_class_def_by_tag_args(method_class);
+                if (!d) d = find_class_def_by_tag_only(method_class);
+                if (d && d->class_def.ty) method_class = d->class_def.ty;
+            }
+            /* Restrict the stamp to the simple case where the method
+             * is directly declared in the receiver's own class — no
+             * using-decl rerouting, no base-walk. Inherited / using
+             * shapes need emit's method_class adjustment before
+             * resolve_overload runs, and stamping with the un-adjusted
+             * class would yield a different winner than emit picks.
+             * N4659 §10.3.3 [namespace.udecl] / §16.3 [over.match]. */
+            Token *mn = callee->member.member;
+            Declaration *own_d = method_class->class_region
+                ? region_lookup_own(method_class->class_region,
+                                     mn->loc, mn->len)
+                : NULL;
+            bool safe_to_stamp = own_d &&
+                !own_d->using_decl_source_class;
+            if (safe_to_stamp) {
+                int na = n->call.nargs;
+                bool any_unresolved = false;
+                Type **at = na > 0
+                    ? arena_alloc(s->arena, na * sizeof(Type *)) : NULL;
+                for (int i = 0; i < na; i++) {
+                    at[i] = n->call.args[i] ?
+                            n->call.args[i]->resolved_type : NULL;
+                    if (!at[i]) any_unresolved = true;
+                }
+                if (!any_unresolved) {
+                    bool recv_const = receiver_type_is_const(
+                        obj->resolved_type);
+                    Type **pty = NULL;
+                    Node *winner = NULL;
+                    (void)resolve_overload(method_class,
+                        callee->member.member,
+                        /*is_ctor=*/false, at, na,
+                        recv_const, &pty, &winner);
+                    n->call.resolved_method = winner;
+                }
+            }
+        }
+    }
     /* Result type comes from the callee's TY_FUNC.ret. The callee may
      * be a function pointer (TY_PTR → TY_FUNC); handle that too. */
     Type *ct = n->call.callee->resolved_type;
