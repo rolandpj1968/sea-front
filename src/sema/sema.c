@@ -2487,6 +2487,40 @@ static void visit(Sema *s, Node *n) {
                 visit(s, n->cast.new_ctor_args[i]);
             for (int i = 0; i < n->cast.new_placement_nargs; i++)
                 visit(s, n->cast.new_placement_args[i]);
+            /* Stamp the ctor overload winner for the `new T(args)` shape
+             * — codegen reads it instead of re-running resolve_overload.
+             * Mirrors the var-decl direct-init stamp. Only stamps for
+             * class targets with at least one arg (0-arg new defers to
+             * the synthesized default-ctor path emit_c handles via
+             * has_default_ctor without an overload set). */
+            if (n->cast.new_ctor_nargs > 0 && n->cast.ty &&
+                n->cast.ty->kind == TY_PTR && n->cast.ty->base &&
+                (n->cast.ty->base->kind == TY_STRUCT ||
+                 n->cast.ty->base->kind == TY_UNION)) {
+                Type *p_resolved = n->cast.ty->base;
+                if (!p_resolved->class_region && p_resolved->tag) {
+                    Node *d = find_class_def_by_tag_args(p_resolved);
+                    if (!d) d = find_class_def_by_tag_only(p_resolved);
+                    if (d && d->class_def.ty) p_resolved = d->class_def.ty;
+                }
+                int na = n->cast.new_ctor_nargs;
+                bool any_unresolved = false;
+                Type **at = arena_alloc(s->arena, na * sizeof(Type *));
+                for (int i = 0; i < na; i++) {
+                    Node *a = n->cast.new_ctor_args[i];
+                    at[i] = a ? a->resolved_type : NULL;
+                    if (!at[i]) any_unresolved = true;
+                }
+                if (!any_unresolved) {
+                    Type **pty = NULL;
+                    Node *winner = NULL;
+                    (void)resolve_overload(p_resolved, /*name=*/NULL,
+                                            /*is_ctor=*/true, at, na,
+                                            /*receiver_is_const=*/false,
+                                            &pty, &winner);
+                    n->cast.resolved_ctor = winner;
+                }
+            }
         }
         break;
     case ND_SIZEOF:

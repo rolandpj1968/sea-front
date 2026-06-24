@@ -8816,13 +8816,21 @@ static void emit_expr(Node *n) {
                 int   nat = collect_call_arg_types(
                     n->cast.new_ctor_args, na, &at);
                 Type **pty = NULL;
-                int np = resolve_overload(p_resolved, /*name=*/NULL,
+                int np;
+                if (n->cast.resolved_ctor) {
+                    static Type *_pty_pool[64];
+                    np = copy_member_param_types(n->cast.resolved_ctor,
+                                                  _pty_pool);
+                    pty = _pty_pool;
+                } else {
+                    np = resolve_overload(p_resolved, /*name=*/NULL,
                                            /*is_ctor=*/true, at, nat,
                                            /*receiver_is_const=*/false,
                                            &pty, /*out_best=*/NULL);
-                if (np < 0 && na == 0 && p_resolved->has_default_ctor) {
-                    np = 0;
-                    pty = NULL;
+                    if (np < 0 && na == 0 && p_resolved->has_default_ctor) {
+                        np = 0;
+                        pty = NULL;
+                    }
                 }
                 /* Implicit copy ctor: 'new T(arg)' where no user ctor
                  * matches but 'arg' is convertible to 'const T&'. The

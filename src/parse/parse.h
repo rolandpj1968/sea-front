@@ -562,6 +562,12 @@ struct Node {
             Node **new_placement_args;
             int    new_placement_nargs;
             bool   is_new_expr;
+            /* Sema-stamped winner of ctor overload resolution for the
+             * `new T(args)` shape. Codegen reads it instead of
+             * re-running resolve_overload. NULL when no resolution
+             * applies (plain cast, no ctor_args, dependent type) —
+             * codegen falls back to its own resolve_overload then. */
+            Node  *resolved_ctor;
         } cast;
 
         /* ND_SIZEOF — N4659 §8.3.3 [expr.sizeof]
