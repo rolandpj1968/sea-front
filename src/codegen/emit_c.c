@@ -12802,6 +12802,36 @@ static void emit_if_body_with_hoist(Node *body) {
     emit_close_brace();
 }
 
+/* Emit the ctor call for a control-flow condition's init-declaration
+ * (`if/while/for/switch (T x = expr)` or `if (T x(args))`). Shared by
+ * all four selection/iteration statements — they wrap the same shape
+ * around an ND_VAR_DECL. Reads vd->var_decl.resolved_ctor (stamped by
+ * sema) and falls back to resolve_overload only when sema couldn't
+ * pre-pick (e.g. 0-arg default-ctor cases the helper short-circuits to
+ * np=0). N4659 §9.4.1 [stmt.select] / §9.5 [stmt.iter]. */
+static void emit_decl_cond_ctor_init(Node *vd) {
+    Token *nm = vd->var_decl.name;
+    emit_indent();
+    Type **at = NULL;
+    int na = collect_call_arg_types(vd->var_decl.ctor_args,
+                                     vd->var_decl.ctor_nargs, &at);
+    Type **pty = NULL;
+    int np;
+    if (vd->var_decl.resolved_ctor) {
+        static Type *_pty_pool[64];
+        np = copy_member_param_types(vd->var_decl.resolved_ctor, _pty_pool);
+        pty = _pty_pool;
+    } else {
+        np = resolve_overload(vd->var_decl.ty, /*name=*/NULL,
+                               /*is_ctor=*/true, at, na,
+                               /*receiver_is_const=*/false, &pty, NULL);
+        if (np < 0 && vd->var_decl.ctor_nargs == 0)
+            np = 0;  /* default ctor */
+    }
+    mangle_class_ctor(vd->var_decl.ty, pty, np);
+    fprintf(stdout, "(&%.*s);\n", nm->len, nm->loc);
+}
+
 static void emit_stmt(Node *n) {
     if (!n) { fputs(";\n", stdout); return; }
     switch (n->kind) {
@@ -13949,19 +13979,8 @@ static void emit_stmt(Node *n) {
             emit_indent();
             emit_var_decl_inner(n->if_.cond);
             fputs(";\n", stdout);
-            if (n->if_.cond->var_decl.has_ctor_init) {
-                emit_indent();
-                Type **at = NULL;
-                int na = collect_call_arg_types(n->if_.cond->var_decl.ctor_args,
-                                                 n->if_.cond->var_decl.ctor_nargs, &at);
-                Type **pty = NULL;
-                int np = resolve_overload(n->if_.cond->var_decl.ty,
-                                           NULL, true, at, na, false,
-                                           &pty, NULL);
-                if (np < 0 && n->if_.cond->var_decl.ctor_nargs == 0) np = 0;
-                mangle_class_ctor(n->if_.cond->var_decl.ty, pty, np);
-                fprintf(stdout, "(&%.*s);\n", nm->len, nm->loc);
-            }
+            if (n->if_.cond->var_decl.has_ctor_init)
+                emit_decl_cond_ctor_init(n->if_.cond);
             emit_indent();
             /* Build a synthetic ND_IDENT so emit_bool_context_expr
              * can decide whether to invoke `operator bool` based on
@@ -14015,21 +14034,8 @@ static void emit_stmt(Node *n) {
             emit_var_decl_inner(n->while_.cond);
             fputs(";\n", stdout);
             /* If rewritten to has_ctor_init, emit the ctor call. */
-            if (n->while_.cond->var_decl.has_ctor_init) {
-                emit_indent();
-                Type **at = NULL;
-                int na = collect_call_arg_types(n->while_.cond->var_decl.ctor_args,
-                                                 n->while_.cond->var_decl.ctor_nargs, &at);
-                Type **pty = NULL;
-                int np = resolve_overload(n->while_.cond->var_decl.ty,
-                                           NULL, /*is_ctor=*/true, at, na,
-                                           /*receiver_is_const=*/false,
-                                           &pty, NULL);
-                if (np < 0 && n->while_.cond->var_decl.ctor_nargs == 0)
-                    np = 0;  /* default ctor */
-                mangle_class_ctor(n->while_.cond->var_decl.ty, pty, np);
-                fprintf(stdout, "(&%.*s);\n", nm->len, nm->loc);
-            }
+            if (n->while_.cond->var_decl.has_ctor_init)
+                emit_decl_cond_ctor_init(n->while_.cond);
             emit_indent();
             Node ident_stub = {0};
             ident_stub.kind = ND_IDENT;
@@ -14245,19 +14251,8 @@ static void emit_stmt(Node *n) {
             emit_indent();
             emit_var_decl_inner(n->for_.cond);
             fputs(";\n", stdout);
-            if (n->for_.cond->var_decl.has_ctor_init) {
-                emit_indent();
-                Type **at = NULL;
-                int na = collect_call_arg_types(n->for_.cond->var_decl.ctor_args,
-                                                 n->for_.cond->var_decl.ctor_nargs, &at);
-                Type **pty = NULL;
-                int np = resolve_overload(n->for_.cond->var_decl.ty,
-                                           NULL, true, at, na, false,
-                                           &pty, NULL);
-                if (np < 0 && n->for_.cond->var_decl.ctor_nargs == 0) np = 0;
-                mangle_class_ctor(n->for_.cond->var_decl.ty, pty, np);
-                fprintf(stdout, "(&%.*s);\n", nm->len, nm->loc);
-            }
+            if (n->for_.cond->var_decl.has_ctor_init)
+                emit_decl_cond_ctor_init(n->for_.cond);
             emit_indent();
             Node ident_stub = {0};
             ident_stub.kind = ND_IDENT;
@@ -14782,19 +14777,8 @@ static void emit_stmt(Node *n) {
             emit_indent();
             emit_var_decl_inner(n->switch_.expr);
             fputs(";\n", stdout);
-            if (n->switch_.expr->var_decl.has_ctor_init) {
-                emit_indent();
-                Type **at = NULL;
-                int na = collect_call_arg_types(n->switch_.expr->var_decl.ctor_args,
-                                                 n->switch_.expr->var_decl.ctor_nargs, &at);
-                Type **pty = NULL;
-                int np = resolve_overload(n->switch_.expr->var_decl.ty,
-                                           NULL, true, at, na, false,
-                                           &pty, NULL);
-                if (np < 0 && n->switch_.expr->var_decl.ctor_nargs == 0) np = 0;
-                mangle_class_ctor(n->switch_.expr->var_decl.ty, pty, np);
-                fprintf(stdout, "(&%.*s);\n", nm->len, nm->loc);
-            }
+            if (n->switch_.expr->var_decl.has_ctor_init)
+                emit_decl_cond_ctor_init(n->switch_.expr);
             emit_indent();
             Node ident_stub = {0};
             ident_stub.kind = ND_IDENT;
