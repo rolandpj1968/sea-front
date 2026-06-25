@@ -593,6 +593,36 @@ DeclSpec parse_type_specifiers(Parser *p) {
                         region_add_base_v(p, bs->region, bs->is_virtual);
                 }
 
+                /* Create the class_def Node early — before parsing the
+                 * body — so its base_types[] is available for member
+                 * lookup walks from inside the body. Members fill in
+                 * after the body closes. Earlier we deferred this until
+                 * post-body, which left lookup_in_region's base walk
+                 * unable to reach inherited typedefs / methods
+                 * mentioned inside a method body. */
+                result.class_def = new_class_def_node(p, ty->tag,
+                    /*members=*/NULL, /*nmembers=*/0,
+                    ty->tag ? ty->tag : parser_peek(p));
+                result.class_def->class_def.ty = ty;
+                ty->class_def = result.class_def;
+                if (bases.len > 0) {
+                    result.class_def->class_def.base_types =
+                        arena_alloc(p->arena,
+                                    bases.len * sizeof(BaseInfo));
+                    int n = 0;
+                    for (int i = 0; i < bases.len; i++) {
+                        BaseSpec *bs = bases.data[i];
+                        if (bs->ty) {
+                            result.class_def->class_def.base_types[n].ty
+                                = bs->ty;
+                            result.class_def->class_def.base_types[n].is_virtual
+                                = bs->is_virtual;
+                            n++;
+                        }
+                    }
+                    result.class_def->class_def.nbase_types = n;
+                }
+
                 /* N4659 §9.2/2 [class]: the class-name is also inserted
                  * into the scope of the class itself ("injected class
                  * name"). This makes the bare name usable inside the body
@@ -687,19 +717,12 @@ DeclSpec parse_type_specifiers(Parser *p) {
                         flat_members[n_flat_w++] = mm;
                     }
                 }
-                /* Record class definition on the result. Build it
-                 * BEFORE replaying deferred bodies so the class's Type
-                 * has its class_def back-pointer wired — overload
-                 * resolution inside an inline method body that
-                 * mentions the enclosing class (e.g. 'fpos __pos(*this)'
-                 * inside fpos::operator+) needs class_def to find the
-                 * candidate ctors. N4659 §6.4.7/1 [class.mem]/6 says
-                 * complete-class context applies to deferred bodies. */
-                result.class_def = new_class_def_node(p, ty->tag,
-                    flat_members, n_flat_w,
-                    ty->tag ? ty->tag : parser_peek(p));
-                result.class_def->class_def.ty = ty;
-                ty->class_def = result.class_def;
+                /* Populate the members on the class_def Node created
+                 * before the body parse (see the early-allocation
+                 * block above). class_def.ty and base_types are
+                 * already wired. */
+                result.class_def->class_def.members = flat_members;
+                result.class_def->class_def.nmembers = n_flat_w;
 
                 /* Replay deferred member function bodies — N4659
                  * §6.4.7/1 [class.mem]/6 (complete-class context).
@@ -724,26 +747,6 @@ DeclSpec parse_type_specifiers(Parser *p) {
                         fn->func.body_start_pos >= 0)
                         parse_deferred_func_body(p, fn);
                 }
-                /* Store per-base entries (type + is_virtual) for
-                 * template instantiation, codegen layout, and lookup. */
-                if (bases.len > 0) {
-                    result.class_def->class_def.base_types =
-                        arena_alloc(p->arena,
-                                    bases.len * sizeof(BaseInfo));
-                    int n = 0;
-                    for (int i = 0; i < bases.len; i++) {
-                        BaseSpec *bs = bases.data[i];
-                        if (bs->ty) {
-                            result.class_def->class_def.base_types[n].ty
-                                = bs->ty;
-                            result.class_def->class_def.base_types[n].is_virtual
-                                = bs->is_virtual;
-                            n++;
-                        }
-                    }
-                    result.class_def->class_def.nbase_types = n;
-                }
-
                 /* Trivially-destructible per N4659 §15.4 [class.dtor]/12:
                  *   trivial iff own user-declared dtor body is empty
                  *           AND every non-static member is itself

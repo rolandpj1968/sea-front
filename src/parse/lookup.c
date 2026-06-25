@@ -161,9 +161,19 @@ static Declaration *lookup_in_region(DeclarativeRegion *r,
         if (d->name_len == name_len && memcmp(d->name, name, name_len) == 0)
             return d;
     }
-    if (r->kind == REGION_CLASS) {
-        for (int i = 0; i < r->nbases; i++) {
-            Declaration *d = lookup_in_region(r->bases[i], name, name_len);
+    /* Class member lookup recurses into direct bases — N4659 §6.4.3
+     * [class.member.lookup]. Walk via class_def.base_types[] (the
+     * authoritative inheritance list, including dependent bases that
+     * the region's old bases[] mirror used to drop); each base's
+     * region is reached via Type→class_def→Type→class_region. */
+    if (r->kind == REGION_CLASS && r->owner_type &&
+        r->owner_type->class_def) {
+        Node *cd = r->owner_type->class_def;
+        for (int i = 0; i < cd->class_def.nbase_types; i++) {
+            Type *bt = cd->class_def.base_types[i].ty;
+            if (!bt || !bt->class_region) continue;
+            Declaration *d = lookup_in_region(bt->class_region,
+                                               name, name_len);
             if (d) return d;
         }
     }
@@ -311,9 +321,14 @@ static Declaration *lookup_kind_in_region(DeclarativeRegion *r,
             return d;
     }
     /* Walk base classes — see lookup_in_region. */
-    if (r->kind == REGION_CLASS) {
-        for (int i = 0; i < r->nbases; i++) {
-            Declaration *d = lookup_kind_in_region(r->bases[i], name, name_len, kind);
+    if (r->kind == REGION_CLASS && r->owner_type &&
+        r->owner_type->class_def) {
+        Node *cd = r->owner_type->class_def;
+        for (int i = 0; i < cd->class_def.nbase_types; i++) {
+            Type *bt = cd->class_def.base_types[i].ty;
+            if (!bt || !bt->class_region) continue;
+            Declaration *d = lookup_kind_in_region(bt->class_region,
+                                                    name, name_len, kind);
             if (d) return d;
         }
     }
