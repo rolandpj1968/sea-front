@@ -3053,17 +3053,18 @@ static void emit_mangled_class_tag(Type *class_type) {
  * region_add_base). For inheritance LAYOUT, codegen embeds each
  * base as a struct field and chains ctors/dtors through them. */
 static int class_nbases(Type *class_type) {
-    if (!class_type || !class_type->class_region) return 0;
-    return class_type->class_region->nbases;
+    if (!class_type || !class_type->class_def) return 0;
+    return class_type->class_def->class_def.nbase_types;
 }
 
-/* Get the i-th direct base's TYPE (not just its region). The base's
- * region carries owner_type back to the Type — that's what codegen
- * needs to mangle the base's tag, walk the base's class_def, etc. */
+/* Get the i-th direct base's TYPE. Reads from class_def.base_types[]
+ * — the authoritative per-base list, populated at parse time before
+ * the body opens and canonicalised post-instantiation. */
 static Type *class_base(Type *class_type, int i) {
-    if (!class_type || !class_type->class_region) return NULL;
-    if (i < 0 || i >= class_type->class_region->nbases) return NULL;
-    return class_type->class_region->bases[i]->owner_type;
+    if (!class_type || !class_type->class_def) return NULL;
+    Node *cd = class_type->class_def;
+    if (i < 0 || i >= cd->class_def.nbase_types) return NULL;
+    return cd->class_def.base_types[i].ty;
 }
 
 /* True if the i-th direct base was declared with `virtual` — N4659
@@ -4114,12 +4115,11 @@ static bool class_has_user_op_assign_taking(Type *class_type, Type *arg_class) {
  *   struct B : A { ... };   // implicit B::op= overrides A's */
 static bool base_has_virtual_op_assign_taking(Type *deriv,
                                                 Type **out_intro) {
-    if (!deriv || !deriv->class_region) return false;
+    if (!deriv) return false;
     Type *worklist[32];
     int wl_n = 0;
-    for (int i = 0; i < deriv->class_region->nbases && wl_n < 32; i++) {
-        Type *b = deriv->class_region->bases[i]
-                    ? deriv->class_region->bases[i]->owner_type : NULL;
+    for (int i = 0, n = class_nbases(deriv); i < n && wl_n < 32; i++) {
+        Type *b = class_base(deriv, i);
         if (b) worklist[wl_n++] = b;
     }
     int wi = 0;
@@ -4165,10 +4165,9 @@ static bool base_has_virtual_op_assign_taking(Type *deriv,
                 return true;
             }
         }
-        if (bt->class_region) {
-            for (int i = 0; i < bt->class_region->nbases && wl_n < 32; i++) {
-                Type *b2 = bt->class_region->bases[i]
-                            ? bt->class_region->bases[i]->owner_type : NULL;
+        {
+            for (int i = 0, n = class_nbases(bt); i < n && wl_n < 32; i++) {
+                Type *b2 = class_base(bt, i);
                 if (!b2) continue;
                 bool dup = false;
                 for (int wj = 0; wj < wl_n; wj++)
@@ -6863,13 +6862,15 @@ static void emit_expr(Node *n) {
                             Declaration *direct = region_lookup_own(cr,
                                 method_tok->loc, method_tok->len);
                             if (!direct) {
-                                for (int bi = 0; bi < cr->nbases; bi++) {
-                                    DeclarativeRegion *br = cr->bases[bi];
-                                    if (!br) continue;
-                                    Declaration *bd = region_lookup_own(br,
+                                for (int bi = 0, nb = class_nbases(probe_class);
+                                     bi < nb; bi++) {
+                                    Type *bt = class_base(probe_class, bi);
+                                    if (!bt || !bt->class_region) continue;
+                                    Declaration *bd = region_lookup_own(
+                                        bt->class_region,
                                         method_tok->loc, method_tok->len);
-                                    if (bd && br->owner_type) {
-                                        owner_class = br->owner_type;
+                                    if (bd) {
+                                        owner_class = bt;
                                         break;
                                     }
                                 }
@@ -7998,11 +7999,13 @@ static void emit_expr(Node *n) {
                              * Pattern: g++.dg/inherit/using2.C. */
                             method_class = own_d->using_decl_source_class;
                         } else if (!own_d) {
-                            for (int bi = 0; bi < ot->class_region->nbases; bi++) {
-                                DeclarativeRegion *br = ot->class_region->bases[bi];
-                                Declaration *bd = lookup_in_scope(br, mn->loc, mn->len);
-                                if (bd && br->owner_type) {
-                                    method_class = br->owner_type;
+                            for (int bi = 0, nb = class_nbases(ot); bi < nb; bi++) {
+                                Type *bt = class_base(ot, bi);
+                                if (!bt || !bt->class_region) continue;
+                                Declaration *bd = lookup_in_scope(bt->class_region,
+                                                                   mn->loc, mn->len);
+                                if (bd) {
+                                    method_class = bt;
 
                                     break;
                                 }
@@ -8175,16 +8178,15 @@ static void emit_expr(Node *n) {
                          * list by Type identity. Pattern:
                          * g++.dg/inherit/using2.C. */
                         Type *src = own_d->using_decl_source_class;
-                        for (int bi = 0; bi < ot->class_region->nbases; bi++) {
-                            DeclarativeRegion *br = ot->class_region->bases[bi];
-                            if (br && br->owner_type == src) {
+                        for (int bi = 0, nb = class_nbases(ot); bi < nb; bi++) {
+                            Type *bt = class_base(ot, bi);
+                            if (bt == src) {
                                 base_idx_for_this = bi; break;
                             }
                         }
                         if (base_idx_for_this < 0 && src->tag) {
-                            for (int bi = 0; bi < ot->class_region->nbases; bi++) {
-                                DeclarativeRegion *br = ot->class_region->bases[bi];
-                                Type *bt = br ? br->owner_type : NULL;
+                            for (int bi = 0, nb = class_nbases(ot); bi < nb; bi++) {
+                                Type *bt = class_base(ot, bi);
                                 if (bt && bt->tag &&
                                     bt->tag->len == src->tag->len &&
                                     memcmp(bt->tag->loc, src->tag->loc,
@@ -8194,9 +8196,11 @@ static void emit_expr(Node *n) {
                             }
                         }
                     } else if (!own_d) {
-                        for (int bi = 0; bi < ot->class_region->nbases; bi++) {
+                        for (int bi = 0, nb = class_nbases(ot); bi < nb; bi++) {
+                            Type *bt = class_base(ot, bi);
+                            if (!bt || !bt->class_region) continue;
                             Declaration *bd = lookup_in_scope(
-                                ot->class_region->bases[bi],
+                                bt->class_region,
                                 mn->loc, mn->len);
                             if (bd) { base_idx_for_this = bi; break; }
                         }
@@ -9530,16 +9534,18 @@ static void emit_expr(Node *n) {
                 bool found = false;
                 while (slen > 0 && !found) {
                     Type *cur = cls_stack[slen-1];
-                    if (!cur || !cur->class_region) { slen--; continue; }
-                    int nb = cur->class_region->nbases;
+                    if (!cur) { slen--; continue; }
+                    int nb = class_nbases(cur);
                     /* Pop-and-resume: when idx_stack[slen-1] is -1
                      * we're entering 'cur' for the first time. Each
                      * iteration advances the index. */
                     int next_i = idx_stack[slen-1] + 1;
                     bool descended = false;
                     while (next_i < nb) {
-                        DeclarativeRegion *br = cur->class_region->bases[next_i];
-                        Declaration *bd = br ? region_lookup_own(br, mem->loc, mem->len) : NULL;
+                        Type *bt_w = class_base(cur, next_i);
+                        Declaration *bd = (bt_w && bt_w->class_region) ?
+                            region_lookup_own(bt_w->class_region,
+                                              mem->loc, mem->len) : NULL;
                         if (bd) {
                             /* Path = each ancestor's chosen index
                              * (idx_stack[0..slen-2]) followed by the
@@ -9552,9 +9558,9 @@ static void emit_expr(Node *n) {
                             break;
                         }
                         /* Descend into this base. */
-                        if (br && br->owner_type && slen < 8) {
+                        if (bt_w && slen < 8) {
                             idx_stack[slen-1] = next_i;
-                            cls_stack[slen] = br->owner_type;
+                            cls_stack[slen] = bt_w;
                             idx_stack[slen] = -1;
                             slen++;
                             descended = true;
@@ -12028,12 +12034,9 @@ static bool class_has_mutable_field_transitive(Type *cls) {
                     return true;
             }
         }
-        if (cls->class_region->bases) {
-            for (int i = 0; i < cls->class_region->nbases; i++) {
-                Type *bt = cls->class_region->bases[i] ?
-                    cls->class_region->bases[i]->owner_type : NULL;
-                if (class_has_mutable_field_transitive(bt)) return true;
-            }
+        for (int i = 0, n = class_nbases(cls); i < n; i++) {
+            Type *bt = class_base(cls, i);
+            if (class_has_mutable_field_transitive(bt)) return true;
         }
         return false;
     }
@@ -12230,9 +12233,9 @@ static bool class_transitively_needs_copy_call(Type *cls) {
     if (!cls || !cls->class_def) return false;
     if (class_has_user_copy_ctor(cls)) return true;
     Node *cdef = cls->class_def;
-    if (cls->class_region) {
-        for (int bi = 0; bi < cls->class_region->nbases; bi++) {
-            Type *bt = cls->class_region->bases[bi]->owner_type;
+    {
+        for (int bi = 0, nb = class_nbases(cls); bi < nb; bi++) {
+            Type *bt = class_base(cls, bi);
             if (bt && class_transitively_needs_copy_call(bt)) return true;
         }
     }
@@ -12306,9 +12309,9 @@ static void emit_inline_copy_chain(const char *dst_path,
     Node *cdef = cls->class_def;
     /* Bases first (sea-front lays them out at __sf_base /
      * __sf_baseN, in declaration order). */
-    if (cls->class_region) {
-        for (int bi = 0; bi < cls->class_region->nbases; bi++) {
-            Type *bt = cls->class_region->bases[bi]->owner_type;
+    {
+        for (int bi = 0, nb = class_nbases(cls); bi < nb; bi++) {
+            Type *bt = class_base(cls, bi);
             if (!bt) continue;
             char dpath[256], spath[256];
             const char *fld = (bi == 0) ? "__sf_base" : NULL;
@@ -14947,12 +14950,10 @@ static void emit_stmt(Node *n) {
          * wrapper (D1) skips its base-dtor calls when the user dtor
          * body is a function-try-block, so D2 takes responsibility
          * for both paths. */
-        if (saved_dtor_ftb_for_try && saved_dtor_ftb_for_try->class_region) {
-            int nb = saved_dtor_ftb_for_try->class_region->nbases;
+        if (saved_dtor_ftb_for_try) {
+            int nb = class_nbases(saved_dtor_ftb_for_try);
             for (int b = nb - 1; b >= 0; b--) {
-                Type *base = saved_dtor_ftb_for_try->class_region->bases[b]
-                               ? saved_dtor_ftb_for_try->class_region->bases[b]->owner_type
-                               : NULL;
+                Type *base = class_base(saved_dtor_ftb_for_try, b);
                 if (!base || !base->has_dtor) continue;
                 emit_indent();
                 mangle_class_dtor(base);
@@ -15070,12 +15071,10 @@ static void emit_stmt(Node *n) {
              * g_dtor_ftb_class in emit_func_def, saved locally
              * before the body-emit clears it). Nested try-blocks
              * are unaffected. */
-            if (saved_dtor_ftb_for_try && saved_dtor_ftb_for_try->class_region) {
-                int nb = saved_dtor_ftb_for_try->class_region->nbases;
+            if (saved_dtor_ftb_for_try) {
+                int nb = class_nbases(saved_dtor_ftb_for_try);
                 for (int b = 0; b < nb; b++) {
-                    Type *base = saved_dtor_ftb_for_try->class_region->bases[b]
-                                   ? saved_dtor_ftb_for_try->class_region->bases[b]->owner_type
-                                   : NULL;
+                    Type *base = class_base(saved_dtor_ftb_for_try, b);
                     if (!base || !base->has_dtor) continue;
                     emit_indent();
                     mangle_class_dtor(base);

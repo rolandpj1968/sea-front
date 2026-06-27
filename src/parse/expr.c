@@ -571,11 +571,11 @@ int eval_type_trait(Token *name, Type *a, Type *b) {
         if (a->tag && b->tag && a->tag->len == b->tag->len &&
             memcmp(a->tag->loc, b->tag->loc, a->tag->len) == 0)
             return 1;
-        if (!b->class_region) return 0;
-        for (int i = 0; i < b->class_region->nbases; i++) {
-            DeclarativeRegion *br = b->class_region->bases[i];
-            if (!br || !br->owner_type) continue;
-            Type *base = br->owner_type;
+        if (!b->class_def) return 0;
+        Node *bcd = b->class_def;
+        for (int i = 0; i < bcd->class_def.nbase_types; i++) {
+            Type *base = bcd->class_def.base_types[i].ty;
+            if (!base) continue;
             if (base->tag && a->tag && base->tag->len == a->tag->len &&
                 memcmp(base->tag->loc, a->tag->loc, a->tag->len) == 0)
                 return 1;

@@ -2619,9 +2619,9 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
          * has_default_ctor through bases) also needs synthesised
          * ones — mirror type.c's same rule for templates that
          * inherit from such bases. */
-        if (cr) {
-            for (int bi = 0; bi < cr->nbases; bi++) {
-                Type *bt = cr->bases[bi] ? cr->bases[bi]->owner_type : NULL;
+        {
+            for (int bi = 0; bi < cloned->class_def.nbase_types; bi++) {
+                Type *bt = cloned->class_def.base_types[bi].ty;
                 if (!bt) continue;
                 if (bt->has_dtor) inst_ty->has_dtor = true;
                 if (bt->has_default_ctor && !any_user_ctor)
@@ -2929,15 +2929,16 @@ static void refresh_one_class(Node *cd) {
             break;
         }
     }
-    for (int bi = 0; bi < ty->class_region->nbases; bi++) {
-        Type *bt = ty->class_region->bases[bi]
-                    ? ty->class_region->bases[bi]->owner_type
-                    : NULL;
-        if (!bt) continue;
-        if (bt->has_dtor) ty->has_dtor = true;
-        if (bt->has_virtual_methods) ty->has_virtual_methods = true;
-        if (!any_user_ctor && bt->has_default_ctor)
-            ty->has_default_ctor = true;
+    if (ty->class_def) {
+        Node *tycd = ty->class_def;
+        for (int bi = 0; bi < tycd->class_def.nbase_types; bi++) {
+            Type *bt = tycd->class_def.base_types[bi].ty;
+            if (!bt) continue;
+            if (bt->has_dtor) ty->has_dtor = true;
+            if (bt->has_virtual_methods) ty->has_virtual_methods = true;
+            if (!any_user_ctor && bt->has_default_ctor)
+                ty->has_default_ctor = true;
+        }
     }
     if (!any_user_ctor && ty->has_virtual_methods)
         ty->has_default_ctor = true;
@@ -2979,8 +2980,8 @@ static void mark_implicit_virtuals_one(Node *cd) {
         Type *worklist[32];
         int wl_n = 0;
         for (int bi = 0;
-             bi < ty->class_region->nbases && wl_n < 32; bi++) {
-            Type *bt = ty->class_region->bases[bi]->owner_type;
+             bi < cd->class_def.nbase_types && wl_n < 32; bi++) {
+            Type *bt = cd->class_def.base_types[bi].ty;
             if (bt) worklist[wl_n++] = bt;
         }
         bool found_match = false;
@@ -3009,10 +3010,11 @@ static void mark_implicit_virtuals_one(Node *cd) {
                 found_match = true;
                 break;
             }
-            if (!found_match && bt->class_region) {
+            if (!found_match && bt->class_def) {
+                Node *btcd = bt->class_def;
                 for (int bi = 0;
-                     bi < bt->class_region->nbases && wl_n < 32; bi++) {
-                    Type *bt2 = bt->class_region->bases[bi]->owner_type;
+                     bi < btcd->class_def.nbase_types && wl_n < 32; bi++) {
+                    Type *bt2 = btcd->class_def.base_types[bi].ty;
                     if (!bt2) continue;
                     bool dup = false;
                     for (int wj = 0; wj < wl_n; wj++)

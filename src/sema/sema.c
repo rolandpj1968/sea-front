@@ -3337,11 +3337,12 @@ void collect_overload_candidates_with_origin(
     }
     /* Inherited methods — N4659 §13.5.2 [class.member.lookup].
      * Ctors are not inherited (§15.1 [class.ctor]). */
-    if (!is_ctor && class_type->class_region) {
-        for (int i = 0; i < class_type->class_region->nbases; i++) {
-            DeclarativeRegion *br = class_type->class_region->bases[i];
-            if (br && br->owner_type)
-                collect_overload_candidates_with_origin(br->owner_type, name,
+    if (!is_ctor && class_type->class_def) {
+        Node *cd = class_type->class_def;
+        for (int i = 0; i < cd->class_def.nbase_types; i++) {
+            Type *bt = cd->class_def.base_types[i].ty;
+            if (bt)
+                collect_overload_candidates_with_origin(bt, name,
                                                          is_ctor,
                                                          found, origin,
                                                          nfound, cap);
@@ -3484,11 +3485,12 @@ void collect_operator_candidates(Type *class_type, OperatorKind op,
         if (operator_kind_from_method_name(mn) != op) continue;
         if (*nfound < cap) found[(*nfound)++] = m;
     }
-    if (class_type->class_region) {
-        for (int i = 0; i < class_type->class_region->nbases; i++) {
-            DeclarativeRegion *br = class_type->class_region->bases[i];
-            if (br && br->owner_type)
-                collect_operator_candidates(br->owner_type, op,
+    if (class_type->class_def) {
+        Node *cd = class_type->class_def;
+        for (int i = 0; i < cd->class_def.nbase_types; i++) {
+            Type *bt = cd->class_def.base_types[i].ty;
+            if (bt)
+                collect_operator_candidates(bt, op,
                                              found, nfound, cap);
         }
     }

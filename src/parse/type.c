@@ -886,9 +886,10 @@ DeclSpec parse_type_specifiers(Parser *p) {
                  * chain into the base. Same for has_default_ctor —
                  * the synthesized derived ctor must chain to the
                  * base ctor. */
-                if (ty->class_region) {
-                    for (int bi = 0; bi < ty->class_region->nbases; bi++) {
-                        Type *bt = ty->class_region->bases[bi]->owner_type;
+                if (ty->class_def) {
+                    Node *tycd = ty->class_def;
+                    for (int bi = 0; bi < tycd->class_def.nbase_types; bi++) {
+                        Type *bt = tycd->class_def.base_types[bi].ty;
                         if (!bt) continue;
                         if (bt->has_dtor) ty->has_dtor = true;
                         if (bt->has_default_ctor) ty->has_default_ctor = true;
@@ -914,7 +915,7 @@ DeclSpec parse_type_specifiers(Parser *p) {
                  * up the chain), and set is_virtual on the override.
                  * Pattern: g++.dg/inherit/thunk10.C — D::foo1 and
                  * D::foo2 declared without `virtual`. */
-                if (ty->class_region && ty->has_virtual_methods) {
+                if (ty->class_def && ty->has_virtual_methods) {
                     for (int mi = 0; mi < members.len; mi++) {
                         Node *m = ((Node **)members.data)[mi];
                         if (!m) continue;
@@ -949,10 +950,13 @@ DeclSpec parse_type_specifiers(Parser *p) {
                         {
                             Type *worklist[32];
                             int  wl_n = 0;
+                            Node *tycd2 = ty->class_def;
                             for (int bi = 0;
-                                 bi < ty->class_region->nbases && wl_n < 32;
+                                 tycd2 &&
+                                 bi < tycd2->class_def.nbase_types &&
+                                 wl_n < 32;
                                  bi++) {
-                                Type *bt = ty->class_region->bases[bi]->owner_type;
+                                Type *bt = tycd2->class_def.base_types[bi].ty;
                                 if (bt) worklist[wl_n++] = bt;
                             }
                             int wi = 0;
@@ -987,11 +991,12 @@ DeclSpec parse_type_specifiers(Parser *p) {
                                  * — sea-front hasn't seen wider
                                  * inheritance graphs in practice; if
                                  * it does, bump the cap. */
-                                if (!found_match && bt->class_region) {
+                                if (!found_match && bt->class_def) {
+                                    Node *btcd = bt->class_def;
                                     for (int bi = 0;
-                                         bi < bt->class_region->nbases && wl_n < 32;
+                                         bi < btcd->class_def.nbase_types && wl_n < 32;
                                          bi++) {
-                                        Type *bt2 = bt->class_region->bases[bi]->owner_type;
+                                        Type *bt2 = btcd->class_def.base_types[bi].ty;
                                         if (!bt2) continue;
                                         /* Skip duplicates (vbase
                                          * reachable via multiple
