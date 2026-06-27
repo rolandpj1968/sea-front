@@ -4282,6 +4282,26 @@ void template_instantiate(Node *tu, Arena *arena) {
         for (int bi = 0; bi < inst->class_def.nbase_types; bi++) {
             Type *base_ty = inst->class_def.base_types[bi].ty;
             if (!base_ty) continue;
+            /* Canonicalise the base-list slot to the authoritative
+             * Type for this template-id specialisation BEFORE any
+             * other patching. base_ty may be the parse-time stub
+             * (template_id_node set, class_region maybe NULL maybe
+             * patched-but-stale on its other flags). The canonical
+             * Type lives at `base_ty->class_def->class_def.ty` once
+             * class_def is wired, OR can be recovered from the
+             * dedup set keyed on (template name, arg types).
+             * Pointer-replacing the slot here means downstream
+             * readers (refresh_inherited_class_flags,
+             * mark_implicit_virtuals_one, MI vtable wiring, the
+             * lookup base walk after step 3 lands) see fresh
+             * has_virtual_methods / has_dtor / has_default_ctor
+             * flags — the slow drift away from `region->bases`
+             * that step 3 ran into is rooted here. */
+            if (base_ty->class_def && base_ty->class_def->class_def.ty &&
+                base_ty->class_def->class_def.ty != base_ty) {
+                base_ty = base_ty->class_def->class_def.ty;
+                inst->class_def.base_types[bi].ty = base_ty;
+            }
             /* Already linked? */
             if (base_ty->class_region) {
                 /* Check if already in bases list */
@@ -4317,8 +4337,7 @@ void template_instantiate(Node *tu, Arena *arena) {
                 }
                 Type *resolved = dedup_find(&ds, key, pos);
                 if (resolved && resolved->class_region) {
-                    base_ty->class_region = resolved->class_region;
-                    base_ty->class_def = resolved->class_def;
+                    inst->class_def.base_types[bi].ty = resolved;
                     region_add_base_raw(ity->class_region,
                                          resolved->class_region, arena);
                 }
