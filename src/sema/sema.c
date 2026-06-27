@@ -54,6 +54,16 @@ typedef struct {
      * method body. Used to give 'this' a resolved_type so overload
      * resolution can match copy ctors against '*this'. */
     Type *cur_class_type;
+    /* Whether the current method body is const-qualified. Affects
+     * const-aware overload selection for implicit-this calls inside
+     * the body — N4659 §16.3.1.4 [over.match.funcs]. */
+    bool  cur_method_is_const;
+    /* True when this Sema invocation is the post-instantiation pass
+     * (sema_visit_node entry). Sema #1 walks template bodies whose
+     * class state can be incomplete; the implicit-this method stamp
+     * gates on this to avoid stamping winners against dependent
+     * candidate sets. */
+    bool  pass_2;
 } Sema;
 
 /* ------------------------------------------------------------------ */
@@ -803,9 +813,11 @@ static void visit_block(Sema *s, Node *n) {
 static void visit_func_def(Sema *s, Node *n) {
     DeclarativeRegion *saved = s->cur_scope;
     Type *saved_class = s->cur_class_type;
+    bool saved_const = s->cur_method_is_const;
     /* Enter the function's prototype scope so parameter names resolve. */
     if (n->func.param_scope) s->cur_scope = n->func.param_scope;
     if (n->func.class_type) s->cur_class_type = n->func.class_type;
+    s->cur_method_is_const = n->func.is_const_method;
     /* Parameter default values (N4659 §11.3.6 [dcl.fct.default]) —
      * the default expression is substituted at each call site that
      * omits the trailing arg, so it must be sema-classified once
@@ -829,6 +841,7 @@ static void visit_func_def(Sema *s, Node *n) {
     visit(s, n->func.body);
     s->cur_scope = saved;
     s->cur_class_type = saved_class;
+    s->cur_method_is_const = saved_const;
 }
 
 /* Class definition — N4659 §12 [class]. Visits class members so
@@ -2428,6 +2441,73 @@ static void visit_call(Sema *s, Node *n) {
         }
         return;
     }
+    /* Implicit-this method-call stamping for bare `method(args)` from
+     * inside a class method body. Only runs on the post-instantiation
+     * pass (sema #2 via sema_visit_node) — sema #1 walks template
+     * bodies whose cur_class_type state is still being filled in.
+     * Conservative gate: own_d directly declared (no using-decl
+     * rerouting). Base-shadow precedence is handled by emit's
+     * resolve_overload_with_origin fallback; we just skip stamping
+     * when any base has a same-named method so emit's origin walk
+     * stays authoritative. After the drop-region->bases refactor,
+     * the base check reads fresh data via class_def.base_types[].
+     * N4659 §16.3 [over.match]. */
+    if (s->pass_2 &&
+        n->call.callee && n->call.callee->kind == ND_IDENT &&
+        n->call.callee->ident.implicit_this &&
+        n->call.callee->ident.name &&
+        !n->call.callee->is_type_dependent &&
+        s->cur_class_type && s->cur_class_type->class_region) {
+        Token *mn = n->call.callee->ident.name;
+        Declaration *own_d = region_lookup_own(
+            s->cur_class_type->class_region, mn->loc, mn->len);
+        bool base_has_same_name = false;
+        bool base_unverifiable = false;
+        if (s->cur_class_type->class_def) {
+            Node *cd = s->cur_class_type->class_def;
+            for (int bi = 0; bi < cd->class_def.nbase_types; bi++) {
+                Type *bt = cd->class_def.base_types[bi].ty;
+                if (bt && bt->class_def && bt->class_def->class_def.ty)
+                    bt = bt->class_def->class_def.ty;
+                if (!bt || !bt->class_region) {
+                    /* Sema #2 runs DURING template_instantiate's
+                     * per-cloned-body visit, before the late-base-
+                     * wiring pass canonicalises base-list stubs.
+                     * A base whose region we can't reach here might
+                     * still shadow the name once instantiation
+                     * finishes — refuse to stamp so emit's
+                     * resolve_overload_with_origin fallback runs. */
+                    base_unverifiable = true;
+                    break;
+                }
+                if (region_lookup_own(bt->class_region, mn->loc, mn->len)) {
+                    base_has_same_name = true;
+                    break;
+                }
+            }
+        }
+        if (own_d && !own_d->using_decl_source_class &&
+            !base_has_same_name && !base_unverifiable) {
+            int na = n->call.nargs;
+            bool any_unresolved = false;
+            Type **at = na > 0
+                ? arena_alloc(s->arena, na * sizeof(Type *)) : NULL;
+            for (int i = 0; i < na; i++) {
+                at[i] = n->call.args[i] ?
+                        n->call.args[i]->resolved_type : NULL;
+                if (!at[i]) any_unresolved = true;
+            }
+            if (!any_unresolved) {
+                Type **pty = NULL;
+                Node *winner = NULL;
+                (void)resolve_overload(s->cur_class_type, mn,
+                    /*is_ctor=*/false, at, na,
+                    s->cur_method_is_const,
+                    &pty, &winner);
+                n->call.resolved_method = winner;
+            }
+        }
+    }
     /* Method-call stamping for `obj.method(args)` / `obj->method(args)`.
      * Sema runs the same overload resolution emit_c would, stashing
      * the winner on call.resolved_method. Codegen reads the stamp to
@@ -3166,7 +3246,8 @@ void sema_visit_node(Node *n, Arena *arena) {
     /* No tu reference — phase 2 doesn't need TU-wide context.
      * cur_scope starts NULL; the visitor pushes function/block
      * scopes as it descends. */
-    Sema s = { .arena = arena, .tu = NULL, .cur_scope = NULL };
+    Sema s = { .arena = arena, .tu = NULL, .cur_scope = NULL,
+               .pass_2 = true };
     visit(&s, n);
 }
 

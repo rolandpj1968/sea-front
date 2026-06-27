@@ -7417,16 +7417,23 @@ static void emit_expr(Node *n) {
                 Type **at = NULL;
                 int na = collect_call_arg_types(n->call.args,
                                                  n->call.nargs, &at);
-                Node *winner = NULL;
+                Node *winner = n->call.resolved_method;
                 Type *winner_origin = NULL;
-                int np = resolve_overload_with_origin(class_type, mname,
+                int np;
+                if (winner) {
+                    static Type *_pty_pool[64];
+                    np = copy_member_param_types(winner, _pty_pool);
+                    call_pty = _pty_pool;
+                } else {
+                    np = resolve_overload_with_origin(class_type, mname,
                                            /*is_ctor=*/false,
                                            at, na,
                                            g_current_method_is_const,
                                            &call_pty, &winner,
                                            &winner_origin);
-                if (np < 0)
-                    die_no_overload(class_type, mname, na, "ND_CALL implicit-this");
+                    if (np < 0)
+                        die_no_overload(class_type, mname, na, "ND_CALL implicit-this");
+                }
                 call_np = np;
                 /* When the winner lives in a base class (reached via
                  * collect_overload_candidates' base walk — most often
