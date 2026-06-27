@@ -457,46 +457,6 @@ void region_add_using(Parser *p, DeclarativeRegion *ns) {
 }
 
 /*
- * Add a base-class region to the current class scope —
- * N4659 §13.1 [class.derived].
- *
- * 'base' is the class_region of a base class (the region holding its
- * member declarations). When unqualified lookup runs in this class
- * scope, base regions are searched after the class's own buckets.
- *
- * Skipped in tentative mode (no declarative-region pollution).
- */
-void region_add_base(Parser *p, DeclarativeRegion *base) {
-    region_add_base_v(p, base, /*is_virtual=*/false);
-}
-
-void region_add_base_v(Parser *p, DeclarativeRegion *base, bool is_virtual) {
-    if (p->tentative || !base)
-        return;
-    DeclarativeRegion *r = p->region;
-    if (r->nbases >= r->bases_cap) {
-        int new_cap = r->bases_cap < 4 ? 4 : r->bases_cap * 2;
-        DeclarativeRegion **new_arr = arena_alloc(p->arena,
-            new_cap * sizeof(DeclarativeRegion *));
-        bool *new_virt = arena_alloc(p->arena, new_cap * sizeof(bool));
-        if (r->bases) {
-            memcpy(new_arr, r->bases,
-                   r->nbases * sizeof(DeclarativeRegion *));
-            if (r->bases_virtual)
-                memcpy(new_virt, r->bases_virtual,
-                       r->nbases * sizeof(bool));
-            else
-                memset(new_virt, 0, r->nbases * sizeof(bool));
-        }
-        r->bases = new_arr;
-        r->bases_virtual = new_virt;
-        r->bases_cap = new_cap;
-    }
-    r->bases_virtual[r->nbases] = is_virtual;
-    r->bases[r->nbases++] = base;
-}
-
-/*
  * lookup_in_scope — qualified-name lookup: 'A::B'.
  *
  * 'scope' is the region of A; we look up B in it (walking bases
@@ -566,25 +526,6 @@ Declaration *region_lookup_own(DeclarativeRegion *r,
             return d;
     }
     return NULL;
-}
-
-/*
- * Add a base-class region to a class region (no Parser needed).
- */
-void region_add_base_raw(DeclarativeRegion *r, DeclarativeRegion *base,
-                          Arena *arena) {
-    if (!r || !base) return;
-    if (r->nbases >= r->bases_cap) {
-        int new_cap = r->bases_cap < 4 ? 4 : r->bases_cap * 2;
-        DeclarativeRegion **new_arr = arena_alloc(arena,
-            new_cap * sizeof(DeclarativeRegion *));
-        if (r->bases)
-            memcpy(new_arr, r->bases,
-                   r->nbases * sizeof(DeclarativeRegion *));
-        r->bases = new_arr;
-        r->bases_cap = new_cap;
-    }
-    r->bases[r->nbases++] = base;
 }
 
 /*

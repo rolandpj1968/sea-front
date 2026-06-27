@@ -17284,12 +17284,11 @@ static void emit_class_def(Node *n) {
             emit_class_def(dep_cd);
     }
     /* Also emit base class definitions first. */
-    if (class_type && class_type->class_region) {
-        for (int i = 0; i < class_type->class_region->nbases; i++) {
-            DeclarativeRegion *br = class_type->class_region->bases[i];
-            if (br && br->owner_type && br->owner_type->class_def &&
-                !br->owner_type->codegen_emitted)
-                emit_class_def(br->owner_type->class_def);
+    if (class_type) {
+        for (int i = 0, nb = class_nbases(class_type); i < nb; i++) {
+            Type *bt = class_base(class_type, i);
+            if (bt && bt->class_def && !bt->codegen_emitted)
+                emit_class_def(bt->class_def);
         }
     }
 
@@ -18468,9 +18467,9 @@ methods_phase:;
                      * adjust by offsetof(cd, __sf_baseN). Base index 0 is
                      * `__sf_base` (first/primary base, no offset adjustment
                      * needed at all — they share offset 0). */
-                    if (cd != cb && cd->class_region) {
-                        for (int ci = 0; ci < cd->class_region->nbases; ci++) {
-                            Type *cbi = cd->class_region->bases[ci]->owner_type;
+                    if (cd != cb) {
+                        for (int ci = 0, nb = class_nbases(cd); ci < nb; ci++) {
+                            Type *cbi = class_base(cd, ci);
                             if (cbi && cb->tag && cbi->tag &&
                                 tokens_equal(cb->tag, cbi->tag)) {
                                 if (ci > 0) {
@@ -19903,10 +19902,8 @@ static void emit_eh_typeinfo_defs(void) {
      * inheritance is the next slice (offset-aware adjust). */
     for (int i = 0; i < g_eh_typeinfo_n; i++) {
         Type *ty = g_eh_typeinfo_set[i].ty;
-        if (!ty || !ty->class_region) continue;
-        if (ty->class_region->nbases == 0) continue;
-        Type *base = ty->class_region->bases[0]
-                       ? ty->class_region->bases[0]->owner_type : NULL;
+        if (!ty) continue;
+        Type *base = class_base(ty, 0);
         if (base && (base->kind == TY_STRUCT || base->kind == TY_UNION))
             eh_typeinfo_sym_for_class(base);
     }
@@ -19920,14 +19917,11 @@ static void emit_eh_typeinfo_defs(void) {
     for (int i = 0; i < g_eh_typeinfo_n; i++) {
         Type *ty = g_eh_typeinfo_set[i].ty;
         const char *parent_sym = NULL;
-        if (ty && ty->class_region && ty->class_region->nbases > 0 &&
-            ty->class_region->bases[0]) {
-            Type *base = ty->class_region->bases[0]->owner_type;
-            if (base && (base->kind == TY_STRUCT || base->kind == TY_UNION)) {
-                /* Reuse the registry entry — the base was registered
-                 * above so the lookup hits, no new entry created. */
-                parent_sym = eh_typeinfo_sym_for_class(base);
-            }
+        Type *base = ty ? class_base(ty, 0) : NULL;
+        if (base && (base->kind == TY_STRUCT || base->kind == TY_UNION)) {
+            /* Reuse the registry entry — the base was registered
+             * above so the lookup hits, no new entry created. */
+            parent_sym = eh_typeinfo_sym_for_class(base);
         }
         if (parent_sym)
             fprintf(stdout,

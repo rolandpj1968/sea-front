@@ -584,15 +584,6 @@ DeclSpec parse_type_specifiers(Parser *p) {
                  * class type from a Declaration's home region. */
                 p->region->owner_type = ty;
 
-                /* Attach base-class regions captured above. Lookup of an
-                 * unqualified name in this scope walks bases after the
-                 * class's own buckets. */
-                for (int i = 0; i < bases.len; i++) {
-                    BaseSpec *bs = bases.data[i];
-                    if (bs->region)
-                        region_add_base_v(p, bs->region, bs->is_virtual);
-                }
-
                 /* Create the class_def Node early — before parsing the
                  * body — so its base_types[] is available for member
                  * lookup walks from inside the body. Members fill in

@@ -17,9 +17,9 @@
 #include "../codegen/mangle.h"
 #include "../sema/sema.h"
 
-/* region_add_base_raw, region_declare_raw, region_build_class,
- * region_build_prototype, region_lookup_own, hash_name are all
- * declared in parse.h and defined in lookup.c. */
+/* region_declare_raw, region_build_class, region_build_prototype,
+ * region_lookup_own, hash_name are all declared in parse.h and
+ * defined in lookup.c. */
 
 /* ------------------------------------------------------------------ */
 /* Template Registry — Phase 1                                        */
@@ -2632,23 +2632,12 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
         }
 
         /* Process base classes: for each base type on the cloned
-         * class_def, find or create its class_region and add it to
-         * the instantiated class_region's bases list. For template
+         * class_def, find or create its class_region. For template
          * bases (e.g. Base<T> → Base<int>), the base type was
-         * already substituted by clone.c's subst_type. If the base
-         * has a template_id_node, it needs to be instantiated too
-         * (this happens transitively in the fixpoint loop). For
-         * concrete bases, just link the existing class_region. */
-        for (int bi = 0; bi < cloned->class_def.nbase_types; bi++) {
-            Type *base_ty = cloned->class_def.base_types[bi].ty;
-            if (!base_ty) continue;
-            if (base_ty->class_region) {
-                /* Concrete base with known class_region */
-                region_add_base_raw(cr, base_ty->class_region, arena);
-            }
-            /* Template bases will be resolved after the fixpoint
-             * loop instantiates them and patch_all_types runs. */
-        }
+         * already substituted by clone.c's subst_type. Class member
+         * lookup reaches each base via class_def.base_types[] now;
+         * no separate region->bases[] mirror to populate. */
+        /* (intentionally empty — was the region->bases[] wiring) */
 
         /* Wire up method param_scopes and class_type on each method. */
         for (int i = 0; i < cloned->class_def.nmembers; i++) {
@@ -2812,8 +2801,6 @@ static Node *instantiate_one(Node *tmpl, Node *template_id,
 
     return cloned;
 }
-
-/* region_add_base_raw moved to lookup.c */
 
 /* Rewrite a member class template's cloned tag to scope it under the
  * enclosing specialization. N4659 §17.5.2 [temp.mem]/2 — a member
@@ -4304,20 +4291,11 @@ void template_instantiate(Node *tu, Arena *arena) {
                 base_ty = base_ty->class_def->class_def.ty;
                 inst->class_def.base_types[bi].ty = base_ty;
             }
-            /* Already linked? */
-            if (base_ty->class_region) {
-                /* Check if already in bases list */
-                bool found = false;
-                for (int k = 0; k < ity->class_region->nbases; k++) {
-                    if (ity->class_region->bases[k] == base_ty->class_region) {
-                        found = true; break;
-                    }
-                }
-                if (!found)
-                    region_add_base_raw(ity->class_region,
-                                         base_ty->class_region, arena);
+            /* Concrete base already has class_region — nothing to do
+             * (the slot is canonical, downstream readers reach it via
+             * class_def.base_types[]). */
+            if (base_ty->class_region)
                 continue;
-            }
             /* Try the dedup set — base may have been instantiated */
             if (base_ty->template_id_node &&
                 base_ty->template_id_node->kind == ND_TEMPLATE_ID) {
@@ -4338,11 +4316,8 @@ void template_instantiate(Node *tu, Arena *arena) {
                     key[pos++] = '\0';
                 }
                 Type *resolved = dedup_find(&ds, key, pos);
-                if (resolved && resolved->class_region) {
+                if (resolved && resolved->class_region)
                     inst->class_def.base_types[bi].ty = resolved;
-                    region_add_base_raw(ity->class_region,
-                                         resolved->class_region, arena);
-                }
             }
         }
     }

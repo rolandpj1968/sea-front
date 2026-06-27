@@ -1116,13 +1116,11 @@ struct Node {
             Node  **members;    /* member-specification as array of nodes */
             int     nmembers;
             /* Per-base entries from the base-clause (type + is_virtual,
-             * source order). Codegen and the template instantiation
-             * pass walk this list to learn the inheritance shape —
-             * it's the authoritative store for both the base type
-             * (template base types whose class_region is NULL at
-             * parse time are reachable here) and the virtual-edge
-             * flag. The mirror on class_region->bases is going away;
-             * see [[implicit-this-stamp-trap]]. */
+             * source order). The authoritative store for inheritance:
+             * base type AND virtual-edge flag live here together. All
+             * downstream consumers (codegen layout, mangling, template
+             * instantiation flag propagation, class member lookup
+             * recursion in lookup_in_region) iterate this list. */
             BaseInfo *base_types;
             int       nbase_types;
             /* Storage-class flags from the decl-specifier seq when the
@@ -1131,11 +1129,7 @@ struct Node {
              * with the original linkage preserved. Empty for normal
              * class definitions. */
             int     storage_flags;
-            /* Note: base-class metadata is ALSO stored on the class_def
-             * node — it lives on Type.class_region->bases (an array
-             * of base-class regions). Codegen reaches it via
-             * class_type->class_region->bases[i]->owner_type. The
-             * struct-vs-class distinction (class-key) is also not
+            /* The struct-vs-class distinction (class-key) is not
              * tracked yet — we treat both as TY_STRUCT. */
         } class_def;
 
@@ -1713,21 +1707,13 @@ struct DeclarativeRegion {
     int                 nusing;
     int                 using_cap;
 
-    /* Base-class regions (REGION_CLASS only) — N4659 §13 [class.derived].
-     * For 'struct Derived : public Base1, private Base2 { ... }', this
-     * holds the class regions of Base1 and Base2 in declaration order.
-     * Lookup of an unqualified name in a derived-class scope walks
-     * these after the class's own buckets (§6.4.2 [class.member.lookup]).
-     * Arena-allocated, scoped with the region. */
-    DeclarativeRegion **bases;
-    int                 nbases;
-    int                 bases_cap;
-    /* Parallel array: is the i-th base virtually inherited?
-     * 'virtual public B' / 'public virtual B' — N4659 §13.1
-     * [class.derived]. Sea-front uses this to decide layout
-     * (vbase = pointer + most-derived-owned storage) and ctor
-     * synthesis (most-derived initialises the vbase storage). */
-    bool               *bases_virtual;
+    /* Inheritance info lives on the class's class_def Node, not on
+     * the region. Class member lookup (N4659 §6.4.3
+     * [class.member.lookup]) reaches base scopes via
+     * Type→class_def→base_types[i].ty→class_region. The scope
+     * abstraction (region) intentionally carries only its own
+     * declarations + enclosing chain — bases are a property of the
+     * CLASS, not its SCOPE. */
 
     /* For REGION_CLASS: back-pointer to the class Type that owns this
      * region. Lets sema/codegen recover the class name (via type->tag)
@@ -2319,10 +2305,6 @@ bool lookup_is_template_name(Parser *p, Token *tok);
  * "also search" list. Lookup will search these after own declarations.
  */
 void region_add_using(Parser *p, DeclarativeRegion *ns);
-void region_add_base(Parser *p, DeclarativeRegion *base);
-/* Like region_add_base but also tracks 'virtual' from the base
- * specifier (N4659 §13.1 [class.derived]). */
-void region_add_base_v(Parser *p, DeclarativeRegion *base, bool is_virtual);
 Declaration *lookup_in_scope(DeclarativeRegion *scope,
                              const char *name, int name_len);
 
@@ -2343,8 +2325,6 @@ Declaration *region_declare_raw(DeclarativeRegion *r, Arena *arena,
                                 EntityKind entity, Type *type);
 Declaration *region_lookup_own(DeclarativeRegion *r,
                                 const char *name, int name_len);
-void region_add_base_raw(DeclarativeRegion *r, DeclarativeRegion *base,
-                          Arena *arena);
 DeclarativeRegion *region_build_class(Node *class_def, Type *owner,
                                       DeclarativeRegion *enclosing,
                                       Arena *arena);
