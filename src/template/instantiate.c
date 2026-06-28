@@ -445,7 +445,19 @@ static Token *template_name(Node *tmpl) {
     switch (decl->kind) {
     case ND_CLASS_DEF:   return decl->class_def.tag;
     case ND_FUNC_DEF:
-    case ND_FUNC_DECL:   return decl->func.name;
+    case ND_FUNC_DECL:
+        /* Template-ctor fallback: the inner FD's name is NULL when
+         * the parser parsed `template <T> ClassName(...)` inside a
+         * class body — REGION_TEMPLATE shielded the in-class ctor
+         * detection so the declarator was parsed as 'function
+         * returning ClassName' (abstract, no name). The class tag
+         * is recoverable from ret_ty. N4659 §15.1 [class.ctor]/2:
+         * a member function named after its class IS the ctor. */
+        if (!decl->func.name && decl->func.ret_ty &&
+            (decl->func.ret_ty->kind == TY_STRUCT ||
+             decl->func.ret_ty->kind == TY_UNION))
+            return decl->func.ret_ty->tag;
+        return decl->func.name;
     case ND_VAR_DECL:
     case ND_TYPEDEF:
         if (decl->var_decl.name) return decl->var_decl.name;
@@ -526,6 +538,29 @@ static void build_registry(TmplRegistry *reg, Node *n) {
                 Node *m = n->class_def.members[i];
                 if (m && m->kind == ND_TEMPLATE_DECL) {
                     Token *mname = template_name(m);
+                    /* Template ctors don't propagate is_constructor /
+                     * func.name to their inner FD (parser gates
+                     * in-class ctor detection on REGION_CLASS, which
+                     * REGION_TEMPLATE shields). Detect by inner FD's
+                     * ret_ty tag matching the class — see
+                     * project_implicit2_resolved. Member name for a
+                     * ctor is the class name (N4659 §15.1
+                     * [class.ctor]/2). */
+                    if (!mname) {
+                        Node *inner = m->template_decl.decl;
+                        while (inner && inner->kind == ND_TEMPLATE_DECL)
+                            inner = inner->template_decl.decl;
+                        if (inner && inner->kind == ND_FUNC_DEF &&
+                            inner->func.ret_ty &&
+                            (inner->func.ret_ty->kind == TY_STRUCT ||
+                             inner->func.ret_ty->kind == TY_UNION) &&
+                            inner->func.ret_ty->tag &&
+                            inner->func.ret_ty->tag->len == n->class_def.tag->len &&
+                            memcmp(inner->func.ret_ty->tag->loc,
+                                   n->class_def.tag->loc,
+                                   n->class_def.tag->len) == 0)
+                            mname = n->class_def.tag;
+                    }
                     if (mname)
                         registry_add_member(reg,
                             n->class_def.tag->loc, n->class_def.tag->len,
@@ -991,35 +1026,21 @@ static void collect_from_node(InstCollector *col, Node *n) {
         break;
 
     case ND_CALL:
-        /* Template-ctor winner stamped by sema: drives instantiation
-         * via the ND_TEMPLATE_ID stashed on call.resolved_ctor_tid.
-         * The tid carries the deduced template args; same machinery
-         * as a free-function ND_TEMPLATE_ID callee. N4659 §17.8.2.1
-         * [temp.deduct.call] + §15.1 [class.ctor]. */
-        if (n->call.resolved_ctor_tid) {
-            Node *tid = n->call.resolved_ctor_tid;
-            Node *tmpl = tid->template_id.resolved_tmpl;
-            if (tmpl && tid->template_id.name) {
-                InstRequest *req = arena_alloc(col->arena,
-                                                 sizeof(InstRequest));
-                req->name = tid->template_id.name;
-                req->template_id = tid;
-                req->tmpl_def = tmpl;
-                req->usage_type = NULL;
-                req->nargs = n->call.nargs;
-                if (n->call.nargs > 0) {
-                    req->arg_types = arena_alloc(col->arena,
-                        n->call.nargs * sizeof(Type *));
-                    for (int i = 0; i < n->call.nargs; i++)
-                        req->arg_types[i] = n->call.args[i]
-                            ? n->call.args[i]->resolved_type : NULL;
-                } else {
-                    req->arg_types = NULL;
-                }
-                req->next = col->head;
-                col->head = req;
-                col->count++;
-            }
+        /* Template-ctor winner stamped by sema: route through the
+         * member-template path so the cloned func gets class context
+         * (class_type), template_args, and ctor-flavoured emit/mangle.
+         * The ctor's member-registry entry is keyed by (class_tag,
+         * class_tag) because a ctor's "member name" IS the class name
+         * (N4659 §15.1 [class.ctor]/2). */
+        if (n->call.resolved_ctor_tid && n->resolved_type &&
+            n->resolved_type->tag) {
+            Token *tag = n->resolved_type->tag;
+            TmplEntry *me = registry_find_member(col->reg,
+                tag->loc, tag->len, tag->loc, tag->len);
+            if (me)
+                record_member_request(col, me, n,
+                                       /*class_tid=*/NULL,
+                                       /*enclosing_class=*/n->resolved_type);
         }
         /* Function-template call with deducible U: 'is_a<Cat>(p)' in
          * 'template<T, U> bool is_a(U*)' — the ND_TEMPLATE_ID callee
@@ -3516,6 +3537,30 @@ void template_instantiate(Node *tu, Arena *arena) {
          * would mangle as the bare class name 'sf__Box__convert_*'
          * and link would fail. N4659 §17.5.2 [temp.mem]. */
         cloned->func.class_type = mr->entry->owner_class;
+        /* Template-ctor specialisation: the source inner FD has
+         * is_constructor=false (parser bug — REGION_TEMPLATE shields
+         * the in-class ctor detection). Detect by member_name ==
+         * class_tag and set the flag on the clone so emit routes
+         * through the ctor mangle / body shape. N4659 §15.1
+         * [class.ctor]/2. */
+        if (member_name && class_tag &&
+            member_name->len == class_tag->len &&
+            memcmp(member_name->loc, class_tag->loc, class_tag->len) == 0) {
+            cloned->func.is_constructor = true;
+            /* Source template inner has name=NULL (parser bug);
+             * emit_method_as_free_fn bails early on !func.name.
+             * Stamp the class tag so the cloned ctor passes that
+             * gate and emits with the proper ctor mangle. */
+            if (!cloned->func.name)
+                cloned->func.name = class_tag;
+            /* Also stamp resolved_ctor on the source call_node so
+             * emit's existing read of resolved_ctor finds the
+             * substituted (cloned) func with concrete param types.
+             * Without this, emit mangles against the SOURCE template
+             * inner's TY_DEPENDENT params → broken symbol. */
+            if (mr->call_node)
+                mr->call_node->call.resolved_ctor = cloned;
+        }
         if (mr->class_tid && mr->class_tid->kind == ND_TEMPLATE_ID &&
             mr->entry->owner_class) {
             int tna = mr->class_tid->template_id.nargs;
