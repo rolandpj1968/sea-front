@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>  /* INT_MIN — overload-res scoring */
 #include "sema.h"
 #include "../sea-front.h"
 #include "../template/clone.h"
@@ -2433,11 +2434,46 @@ static void visit_call(Sema *s, Node *n) {
                 at[i] = n->call.args[i] ? n->call.args[i]->resolved_type : NULL;
             Type **pty = NULL;
             Node *winner = NULL;
-            (void)resolve_overload(tc_type, /*name=*/NULL, /*is_ctor=*/true,
-                                    at, na,
-                                    /*receiver_is_const=*/false,
-                                    &pty, &winner);
+            Type *origin = NULL;
+            bool is_tmpl = false;
+            SubstMap deduced = {0};
+            (void)resolve_overload_template_aware(
+                tc_type, /*name=*/NULL, /*is_ctor=*/true,
+                at, na, /*receiver_is_const=*/false,
+                s->arena, &pty, &winner, &origin, &is_tmpl, &deduced);
             n->call.resolved_ctor = winner;  /* may be NULL on no match */
+            /* Template-ctor winner — build a synthetic ND_TEMPLATE_ID
+             * so the discovery walker drives instantiation, and the
+             * emit site mangles to the instantiated symbol. The
+             * template name IS the class tag (template ctor of class
+             * X is named X). N4659 §17.8.2 [temp.deduct]. */
+            if (is_tmpl && winner && tc_type->tag) {
+                /* Find the wrapping ND_TEMPLATE_DECL — collect peeled,
+                 * so we look it up by walking the class members. */
+                Node *tmpl_decl = NULL;
+                Node *cd = tc_type->class_def;
+                if (!cd && tc_type->class_region &&
+                    tc_type->class_region->owner_type)
+                    cd = tc_type->class_region->owner_type->class_def;
+                if (cd) {
+                    for (int mi = 0; mi < cd->class_def.nmembers; mi++) {
+                        Node *m = cd->class_def.members[mi];
+                        if (!m || m->kind != ND_TEMPLATE_DECL) continue;
+                        Node *inner = m->template_decl.decl;
+                        while (inner && inner->kind == ND_TEMPLATE_DECL)
+                            inner = inner->template_decl.decl;
+                        if (inner == winner) { tmpl_decl = m; break; }
+                    }
+                }
+                if (tmpl_decl) {
+                    Node *tid = build_template_id_from_deduced(
+                        s, tc_type->tag, n->tok, tmpl_decl, &deduced);
+                    if (tid) {
+                        tid->template_id.resolved_tmpl = tmpl_decl;
+                        n->call.resolved_ctor_tid = tid;
+                    }
+                }
+            }
         }
         return;
     }
@@ -3363,9 +3399,34 @@ void collect_overload_candidates(Type *class_type, Token *name,
                                              found, NULL, nfound, cap);
 }
 
+/* Inner implementation — also fills optional is_template parallel
+ * array. */
+static void collect_overload_candidates_inner(
+        Type *class_type, Token *name, bool is_ctor,
+        Node **found, Type **origin, bool *is_template,
+        int *nfound, int cap);
+
+void collect_overload_candidates_with_template_info(
+        Type *class_type, Token *name, bool is_ctor,
+        Node **found, Type **origin, bool *is_template,
+        int *nfound, int cap) {
+    collect_overload_candidates_inner(class_type, name, is_ctor,
+                                       found, origin, is_template,
+                                       nfound, cap);
+}
+
 void collect_overload_candidates_with_origin(
         Type *class_type, Token *name, bool is_ctor,
         Node **found, Type **origin, int *nfound, int cap) {
+    collect_overload_candidates_inner(class_type, name, is_ctor,
+                                       found, origin, /*is_template=*/NULL,
+                                       nfound, cap);
+}
+
+static void collect_overload_candidates_inner(
+        Type *class_type, Token *name, bool is_ctor,
+        Node **found, Type **origin, bool *is_template,
+        int *nfound, int cap) {
     if (!class_type) return;
     /* class_def may be unset on a Type obtained via a method return
      * type or function param, even when class_region IS set. Fall
@@ -3389,20 +3450,50 @@ void collect_overload_candidates_with_origin(
     for (int i = 0; i < cd->class_def.nmembers; i++) {
         Node *m = cd->class_def.members[i];
         if (!m) continue;
+        Node *raw = m;
+        bool was_template = false;
         /* Member templates: peel ND_TEMPLATE_DECL to its inner func/
          * var-decl. The inner candidate is what we score against arg
          * types — its params have TY_DEPENDENT for the template-
-         * parameter positions, which the existing match scorer treats
-         * as wildcards. Real-world shape: va_heap::release<T>
+         * parameter positions; the basic scorer treats them as
+         * wildcards, the template-aware resolver runs deduction +
+         * substitution first. Real-world shape: va_heap::release<T>
          * called as bare release(v) inside va_heap::reserve<T>. */
-        if (m->kind == ND_TEMPLATE_DECL && m->template_decl.decl)
+        if (m->kind == ND_TEMPLATE_DECL && m->template_decl.decl) {
             m = m->template_decl.decl;
+            was_template = true;
+        }
         bool is_def   = m->kind == ND_FUNC_DEF;
         bool is_decl  = m->kind == ND_VAR_DECL && m->var_decl.ty &&
                         m->var_decl.ty->kind == TY_FUNC;
         if (!is_def && !is_decl) continue;
         bool m_is_ctor = is_def ? m->func.is_constructor
                                 : m->var_decl.is_constructor;
+        /* Member-template ctors don't get is_constructor=true
+         * propagated to the inner ND_FUNC_DEF — see
+         * project_implicit2_resolved. Detect them by name OR by
+         * return-type tag matching the enclosing class. Only fires
+         * when caller asked for template info — the plain entries
+         * (is_template==NULL) preserve their historical behavior of
+         * filtering template ctors out, so call sites that don't
+         * know how to mangle template ctors don't silently include
+         * them. */
+        if (is_template && is_ctor && was_template && !m_is_ctor &&
+            is_def) {
+            Token *mn = m->func.name;
+            if (mn && class_type->tag &&
+                mn->len == class_type->tag->len &&
+                memcmp(mn->loc, class_type->tag->loc, mn->len) == 0)
+                m_is_ctor = true;
+            else if (!m_is_ctor && m->func.ret_ty && class_type->tag &&
+                     (m->func.ret_ty->kind == TY_STRUCT ||
+                      m->func.ret_ty->kind == TY_UNION) &&
+                     m->func.ret_ty->tag &&
+                     m->func.ret_ty->tag->len == class_type->tag->len &&
+                     memcmp(m->func.ret_ty->tag->loc, class_type->tag->loc,
+                            class_type->tag->len) == 0)
+                m_is_ctor = true;
+        }
         if (is_ctor != m_is_ctor) continue;
         Token *mn = is_def ? m->func.name : m->var_decl.name;
         if (!is_ctor) {
@@ -3413,6 +3504,8 @@ void collect_overload_candidates_with_origin(
         if (*nfound < cap) {
             found[*nfound] = m;
             if (origin) origin[*nfound] = class_type;
+            if (is_template) is_template[*nfound] = was_template;
+            (void)raw;  /* raw kept conceptually for future use */
             (*nfound)++;
         }
     }
@@ -3423,10 +3516,10 @@ void collect_overload_candidates_with_origin(
         for (int i = 0; i < cd->class_def.nbase_types; i++) {
             Type *bt = cd->class_def.base_types[i].ty;
             if (bt)
-                collect_overload_candidates_with_origin(bt, name,
-                                                         is_ctor,
-                                                         found, origin,
-                                                         nfound, cap);
+                collect_overload_candidates_inner(bt, name,
+                                                   is_ctor,
+                                                   found, origin, is_template,
+                                                   nfound, cap);
         }
     }
 }
@@ -3470,6 +3563,163 @@ int resolve_overload(Type *class_type, Token *name, bool is_ctor,
     return resolve_overload_with_origin(class_type, name, is_ctor,
                                          arg_types, nargs, receiver_is_const,
                                          out_param_types, out_best, NULL);
+}
+
+/* Score (params, arg_types) per the same rules as overload_match_score
+ * but with a cv-bind penalty on ref params that ADD const beyond the
+ * arg's cv. N4659 §16.3.3.2.3 [over.ics.rank]/3.2.3: when two viable
+ * candidates' ref bindings differ only in cv, the less cv-qualified
+ * binding wins. Without the penalty, X(const X&) ties X<T>(T&) for
+ * arg X — non-template tie-break picks the non-template, contradict-
+ * ing gcc/clang and breaking cpp0x/implicit2.C. Templated candidates
+ * pass already-substituted params (T deduced), so this same scorer
+ * works for both. */
+static int overload_match_score_eff(Type **params, int nparams,
+                                     bool is_variadic,
+                                     Type **arg_types, int nargs) {
+    if (nparams < nargs && !is_variadic) return -1;
+    int score = 0;
+    int n = nargs < nparams ? nargs : nparams;
+    for (int k = 0; k < n && k < 64; k++) {
+        Type *pt = params[k];
+        Type *at = arg_types ? arg_types[k] : NULL;
+        score += score_type_pair(pt, at);
+        if (pt && at && ty_is_ref(pt) && pt->base) {
+            /* Compare the ref TARGET's cv: arg cv (after ref strip)
+             * vs param target cv. -1 when target adds const beyond
+             * arg's cv. */
+            bool at_const = at->is_const ||
+                (ty_is_ref(at) && at->base && at->base->is_const);
+            bool tt_const = pt->base->is_const;
+            if (tt_const && !at_const) score--;
+        }
+    }
+    return score;
+}
+
+int resolve_overload_template_aware(
+        Type *class_type, Token *name, bool is_ctor,
+        Type **arg_types, int nargs,
+        bool receiver_is_const,
+        Arena *arena,
+        Type ***out_param_types,
+        Node **out_best,
+        Type **out_origin,
+        bool *out_is_template,
+        SubstMap *out_deduced) {
+    static Type *pool[64];
+    *out_param_types = NULL;
+    if (out_best) *out_best = NULL;
+    if (out_origin) *out_origin = NULL;
+    if (out_is_template) *out_is_template = false;
+    enum { MAX_CAND = 32 };
+    Node *cands[MAX_CAND];
+    Type *origins[MAX_CAND];
+    bool is_tmpl[MAX_CAND];
+    int ncands = 0;
+    collect_overload_candidates_with_template_info(
+        class_type, name, is_ctor,
+        cands, origins, is_tmpl, &ncands, MAX_CAND);
+    if (ncands == 0) return -1;
+    /* Per-cand: effective param types (post-substitution for templates),
+     * and deduced SubstMap (only valid for templates). */
+    Type **eff_params[MAX_CAND];
+    int     eff_nparams[MAX_CAND];
+    bool    viable[MAX_CAND];
+    SubstMap deduced[MAX_CAND];
+    for (int i = 0; i < ncands; i++) {
+        viable[i] = false;
+        eff_params[i] = NULL;
+        eff_nparams[i] = 0;
+        Node *c = cands[i];
+        if (!is_ctor && receiver_is_const && !candidate_is_const(c))
+            continue;  /* non-viable */
+        bool is_def = (c->kind == ND_FUNC_DEF);
+        int np = is_def ? c->func.nparams
+                        : c->var_decl.ty->nparams;
+        Type **declared = NULL;
+        if (np > 0) {
+            declared = arena_alloc(arena, np * sizeof(Type *));
+            for (int k = 0; k < np; k++) {
+                declared[k] = is_def
+                    ? c->func.params[k]->param.ty
+                    : c->var_decl.ty->params[k];
+            }
+        }
+        if (is_tmpl[i] && is_def) {
+            /* Deduce template params from call args. The template
+             * decl wrapping `c` is the source's member entry; recover
+             * its nparams by walking the class members. Simpler: use
+             * the func's own params and run deduce_template_args
+             * which works against the inner func node. */
+            int ntp = 8;  /* worst-case cap; SubstMap grows internally */
+            for (int k = 0; k < np; k++) {
+                /* Heuristic: any TY_DEPENDENT in this slot suggests a
+                 * template param. Over-allocate; SubstMap entries are
+                 * keyed by name not index. */
+                (void)k;
+            }
+            SubstMap map = subst_map_new(arena, ntp > 0 ? ntp : 1);
+            if (!deduce_template_args(c, arg_types, nargs, &map)) {
+                continue;  /* deduction failure → drop cand */
+            }
+            Type **eff = declared;
+            if (np > 0) {
+                eff = arena_alloc(arena, np * sizeof(Type *));
+                for (int k = 0; k < np; k++)
+                    eff[k] = subst_type(declared[k], &map, arena);
+            }
+            eff_params[i] = eff;
+            eff_nparams[i] = np;
+            deduced[i] = map;
+        } else {
+            eff_params[i] = declared;
+            eff_nparams[i] = np;
+        }
+        viable[i] = true;
+    }
+    /* Pick best by score. Tiebreak: non-template wins
+     * (N4659 §16.3.3/1 last bullet [over.match.best]). */
+    int best = -1;
+    int best_score = INT_MIN;
+    for (int i = 0; i < ncands; i++) {
+        if (!viable[i]) continue;
+        bool is_variadic = (cands[i]->kind == ND_FUNC_DEF)
+                              ? cands[i]->func.is_variadic
+                              : cands[i]->var_decl.ty->is_variadic;
+        int s = overload_match_score_eff(eff_params[i], eff_nparams[i],
+                                          is_variadic, arg_types, nargs);
+        if (s < 0) continue;
+        bool better = false;
+        if (best < 0) better = true;
+        else if (s > best_score) better = true;
+        else if (s == best_score) {
+            /* Non-template beats template on tie. */
+            if (is_tmpl[best] && !is_tmpl[i]) better = true;
+            /* Within same template-ness: prefer matching const for
+             * the receiver (existing tiebreak from resolve_overload). */
+            else if (is_tmpl[best] == is_tmpl[i] &&
+                     candidate_is_const(cands[i]) == receiver_is_const &&
+                     candidate_is_const(cands[best]) != receiver_is_const)
+                better = true;
+        }
+        if (better) {
+            best = i;
+            best_score = s;
+        }
+    }
+    if (best < 0) return -1;
+    /* Fill outs. For templates, params are the SUBSTITUTED ones —
+     * the caller mangles against effective types post-deduction. */
+    int n = eff_nparams[best];
+    if (n > 64) n = 64;
+    for (int k = 0; k < n; k++) pool[k] = eff_params[best][k];
+    *out_param_types = pool;
+    if (out_best) *out_best = cands[best];
+    if (out_origin) *out_origin = origins[best];
+    if (out_is_template) *out_is_template = is_tmpl[best];
+    if (out_deduced && is_tmpl[best]) *out_deduced = deduced[best];
+    return n;
 }
 
 int resolve_overload_with_origin(

@@ -494,6 +494,15 @@ struct Node {
              * path (no user ctor matches) and for non-class
              * targets. */
             Node *resolved_ctor;
+            /* When resolve_overload picks a TEMPLATE ctor as the
+             * winner, sema builds an ND_TEMPLATE_ID from the deduced
+             * args and stashes it here. The discovery walker reads
+             * the slot to drive template-ctor instantiation through
+             * the InstRequest pipeline; emit reads it to mangle the
+             * call with template-args (Itanium `I...E` block).
+             * NULL when winner is non-template or when no winner
+             * was selected. N4659 §16.3 [over.match]. */
+            Node *resolved_ctor_tid;
             /* Matched method for method calls (implicit-this or
              * obj.method() / obj->method() forms). Sema picks the
              * static winner via resolve_overload; codegen reads it

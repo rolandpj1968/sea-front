@@ -36,6 +36,7 @@
 
 #include "../parse/parse.h"
 #include "../codegen/mangle.h"  /* OperatorKind */
+#include "../template/clone.h"  /* SubstMap */
 
 /* Whole-TU semantic analysis — see sema.c sema_run for the
  * standard-mapping and detail. Mutates the AST in place. */
@@ -107,6 +108,15 @@ void collect_overload_candidates_with_origin(
         Type *class_type, Token *name, bool is_ctor,
         Node **found, Type **origin, int *nfound, int cap);
 
+/* Like _with_origin but also fills a parallel `is_template` array
+ * recording whether each cand was peeled out of an ND_TEMPLATE_DECL.
+ * Resolve callers that want to drive template-ctor instantiation
+ * need this to discriminate template winners from non-template. */
+void collect_overload_candidates_with_template_info(
+        Type *class_type, Token *name, bool is_ctor,
+        Node **found, Type **origin, bool *is_template,
+        int *nfound, int cap);
+
 /* Resolve an overload — full entry point. Returns the winning decl's
  * param count and fills *out_param_types with its param types (for
  * mangling). NULL-able out_best receives the winning Node. -1 on no
@@ -127,6 +137,28 @@ int resolve_overload_with_origin(
         Type ***out_param_types,
         Node **out_best,
         Type **out_origin);
+
+/* Template-aware overload resolution — extends resolve_overload_with_
+ * origin by considering template members as candidates with full
+ * argument deduction + substitution per N4659 §17.8.2 [temp.deduct],
+ * and applying the §16.3.3/1 last-bullet [over.match.best] tiebreak
+ * (non-template beats equally-ranked template). When the winner is a
+ * template, *out_is_template is set true and *out_deduced carries the
+ * SubstMap so the caller can build an ND_TEMPLATE_ID to drive
+ * instantiation. Pass an arena because template substitution allocates
+ * effective param types. Non-template path is byte-identical to
+ * resolve_overload_with_origin — call sites that don't care about
+ * template winners can stay on the simpler entry. */
+int resolve_overload_template_aware(
+        Type *class_type, Token *name, bool is_ctor,
+        Type **arg_types, int nargs,
+        bool receiver_is_const,
+        Arena *arena,
+        Type ***out_param_types,
+        Node **out_best,
+        Type **out_origin,
+        bool *out_is_template,
+        SubstMap *out_deduced);
 
 /* Collect candidates for an operator overload (matched by
  * operator-symbol suffix, not by name token). */
