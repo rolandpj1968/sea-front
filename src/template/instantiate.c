@@ -613,7 +613,15 @@ struct MemberTmplRequest {
     TmplEntry *entry;       /* registry entry (has tmpl + owner_class) */
     Type     **arg_types;   /* call-site argument types for deduction */
     int        nargs;
-    Node      *call_node;   /* ND_CALL node (to patch resolved_type) */
+    Node      *call_node;   /* ND_CALL node (to patch resolved_type).
+                              * For ctor templates driven by var-decl
+                              * direct-init or new-expr there's no
+                              * ND_CALL — set NULL and use
+                              * stamp_resolved_ctor_slot instead. */
+    Node     **stamp_resolved_ctor_slot;  /* where to write the cloned
+                              * func ptr (override of the call_node->
+                              * call.resolved_ctor stamp for non-call
+                              * shapes). NULL → use call_node's slot. */
     Node      *class_tid;   /* leading template-id for the class qualifier
                               * (Box<int> in 'Box<int>::convert(...)') —
                               * NULL when the qualifier is a non-template
@@ -680,6 +688,7 @@ static void record_member_request(InstCollector *col, TmplEntry *entry,
     MemberTmplRequest *mr = arena_alloc(col->arena, sizeof(MemberTmplRequest));
     mr->entry = entry;
     mr->call_node = call_node;
+    mr->stamp_resolved_ctor_slot = NULL;
     mr->class_tid = class_tid;
     mr->enclosing_class = enclosing_class;
     int na = call_node ? call_node->call.nargs : 0;
@@ -689,6 +698,34 @@ static void record_member_request(InstCollector *col, TmplEntry *entry,
         for (int i = 0; i < na; i++)
             mr->arg_types[i] = call_node->call.args[i]
                 ? call_node->call.args[i]->resolved_type : NULL;
+    } else {
+        mr->arg_types = NULL;
+    }
+    mr->next = col->member_head;
+    col->member_head = mr;
+    col->member_count++;
+}
+
+/* Same as record_member_request but for ctor-template instantiation
+ * triggered by a non-ND_CALL site (var-decl direct-init, new-expr).
+ * arg_types are supplied directly; stamp_slot points to the
+ * resolved_ctor field to update once the clone exists. */
+static void record_member_request_for_ctor(
+        InstCollector *col, TmplEntry *entry,
+        Node **args, int nargs,
+        Node **stamp_slot,
+        Type *enclosing_class) {
+    MemberTmplRequest *mr = arena_alloc(col->arena, sizeof(MemberTmplRequest));
+    mr->entry = entry;
+    mr->call_node = NULL;
+    mr->stamp_resolved_ctor_slot = stamp_slot;
+    mr->class_tid = NULL;
+    mr->enclosing_class = enclosing_class;
+    mr->nargs = nargs;
+    if (nargs > 0 && args) {
+        mr->arg_types = arena_alloc(col->arena, nargs * sizeof(Type *));
+        for (int i = 0; i < nargs; i++)
+            mr->arg_types[i] = args[i] ? args[i]->resolved_type : NULL;
     } else {
         mr->arg_types = NULL;
     }
@@ -808,6 +845,23 @@ static void collect_from_node(InstCollector *col, Node *n) {
     /* Check types on this node */
     switch (n->kind) {
     case ND_VAR_DECL:
+        /* Template-ctor winner stamped by sema on var-decl direct-init:
+         * the ND_TEMPLATE_ID on var_decl.resolved_ctor_tid drives
+         * instantiation just like the ND_CALL case below, but with the
+         * cloned func ptr written into var_decl.resolved_ctor (no
+         * call_node to thread through). N4659 §15.1 [class.ctor] +
+         * §11.6 [dcl.init]. */
+        if (n->var_decl.resolved_ctor_tid && n->var_decl.ty &&
+            n->var_decl.ty->tag) {
+            Token *tag = n->var_decl.ty->tag;
+            TmplEntry *me = registry_find_member(col->reg,
+                tag->loc, tag->len, tag->loc, tag->len);
+            if (me)
+                record_member_request_for_ctor(col, me,
+                    n->var_decl.ctor_args, n->var_decl.ctor_nargs,
+                    &n->var_decl.resolved_ctor,
+                    /*enclosing_class=*/n->var_decl.ty);
+        }
         collect_from_type(col, n->var_decl.ty);
         /* Inline anonymous struct in a var-decl:
          *   static struct { vec<T> m; } foo;
@@ -1179,6 +1233,25 @@ static void collect_from_node(InstCollector *col, Node *n) {
         break;
 
     case ND_CAST:
+        /* `new T(args)` template-ctor: stamp on cast.resolved_ctor_tid
+         * drives instantiation; cloned ctor ptr lands in
+         * cast.resolved_ctor for emit. cast.ty is the POINTER type
+         * (`T*`) for new-expressions; the class is its base. */
+        if (n->cast.resolved_ctor_tid) {
+            Type *cls = n->cast.ty;
+            if (cls && cls->kind == TY_PTR && cls->base)
+                cls = cls->base;
+            if (cls && cls->tag) {
+                Token *tag = cls->tag;
+                TmplEntry *me = registry_find_member(col->reg,
+                    tag->loc, tag->len, tag->loc, tag->len);
+                if (me)
+                    record_member_request_for_ctor(col, me,
+                        n->cast.new_ctor_args, n->cast.new_ctor_nargs,
+                        &n->cast.resolved_ctor,
+                        /*enclosing_class=*/cls);
+            }
+        }
         collect_from_type(col, n->cast.ty);
         collect_from_node(col, n->cast.operand);
         break;
@@ -1416,6 +1489,9 @@ struct DedupEntry {
     char       key[MAX_DEDUP_KEY];
     int        key_len;
     Type      *inst_type;   /* the instantiated Type (for patching) */
+    Node      *inst_node;   /* cloned ND_FUNC_DEF (or NULL) — used by
+                               the ctor-template dedup-hit path to
+                               stamp resolved_ctor at the call site. */
     DedupEntry *next;
 };
 
@@ -1745,8 +1821,21 @@ static void dedup_add(DedupSet *ds, const char *key, int key_len, Type *ty) {
     memcpy(e->key, key, key_len < MAX_DEDUP_KEY ? key_len : MAX_DEDUP_KEY);
     e->key_len = key_len;
     e->inst_type = ty;
+    e->inst_node = NULL;
     e->next = ds->buckets[idx];
     ds->buckets[idx] = e;
+}
+
+/* Look up the cached cloned Node for a dedup key. NULL if no entry
+ * was registered with a node (set explicitly by ctor-template path). */
+static Node *dedup_find_node(DedupSet *ds, const char *key, int key_len) {
+    uint32_t idx = hash_key(key, key_len) % DEDUP_HASH_SIZE;
+    for (DedupEntry *e = ds->buckets[idx]; e; e = e->next) {
+        if (e->key_len == key_len &&
+            memcmp(e->key, key, key_len) == 0)
+            return e->inst_node;
+    }
+    return NULL;
 }
 
 /* ------------------------------------------------------------------ */
@@ -3445,6 +3534,21 @@ void template_instantiate(Node *tu, Arena *arena) {
                 if (mr->call_node && mr->call_node->call.callee &&
                     existing->kind == TY_FUNC && existing->params)
                     mr->call_node->call.callee->resolved_type = existing;
+                /* Ctor-template path: stamp the cached cloned func to
+                 * the slot recorded in the request (or onto the
+                 * call_node's call.resolved_ctor when no slot is
+                 * given), so the 2nd-and-later same-key ctor call
+                 * sites also see the substituted func for emit-side
+                 * mangling. Without this, only the first occurrence
+                 * gets the cloned ctor and later sites keep the
+                 * source template's TY_DEPENDENT-paramed inner. */
+                Node *cached = dedup_find_node(&ds, key, pos);
+                if (cached) {
+                    if (mr->stamp_resolved_ctor_slot)
+                        *mr->stamp_resolved_ctor_slot = cached;
+                    else if (mr->call_node)
+                        mr->call_node->call.resolved_ctor = cached;
+                }
                 continue;
             }
         }
@@ -3553,12 +3657,16 @@ void template_instantiate(Node *tu, Arena *arena) {
              * gate and emits with the proper ctor mangle. */
             if (!cloned->func.name)
                 cloned->func.name = class_tag;
-            /* Also stamp resolved_ctor on the source call_node so
-             * emit's existing read of resolved_ctor finds the
-             * substituted (cloned) func with concrete param types.
-             * Without this, emit mangles against the SOURCE template
-             * inner's TY_DEPENDENT params → broken symbol. */
-            if (mr->call_node)
+            /* Stamp resolved_ctor at the recorded site so emit's
+             * existing read finds the substituted (cloned) func with
+             * concrete param types. The slot can be either an
+             * explicit out-pointer (var-decl direct-init / new-expr)
+             * or the source call_node's slot. Without this, emit
+             * mangles against the SOURCE template inner's
+             * TY_DEPENDENT params → broken symbol. */
+            if (mr->stamp_resolved_ctor_slot)
+                *mr->stamp_resolved_ctor_slot = cloned;
+            else if (mr->call_node)
                 mr->call_node->call.resolved_ctor = cloned;
         }
         if (mr->class_tid && mr->class_tid->kind == ND_TEMPLATE_ID &&
@@ -3719,8 +3827,22 @@ void template_instantiate(Node *tu, Arena *arena) {
             }
         }
 
-        /* Register in dedup set carrying the substituted TY_FUNC. */
+        /* Register in dedup set carrying the substituted TY_FUNC.
+         * Also capture the cloned Node for ctor-template dedup-hits
+         * (mr->stamp_resolved_ctor_slot path) — emit needs the
+         * cloned func ptr at every call site, not just the first. */
         dedup_add(&ds, key, pos, ft);
+        {
+            uint32_t _idx = hash_key(key, pos) % DEDUP_HASH_SIZE;
+            DedupEntry *_e = ds.buckets[_idx];
+            for (; _e; _e = _e->next) {
+                if (_e->key_len == pos &&
+                    memcmp(_e->key, key, pos) == 0) {
+                    _e->inst_node = cloned;
+                    break;
+                }
+            }
+        }
 
         /* Wire a prototype scope so phase-2 sema can resolve names
          * (parameters, sibling class members, free helpers in the

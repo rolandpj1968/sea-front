@@ -1945,12 +1945,22 @@ static void hoist_new_expr(Node *cast, bool in_shortcircuit) {
      * lowered pointer that needs deref. Detect and hoist below. */
     bool implicit_copy_assign = false;
     if (need_ctor && na == 1) {
-        Type **at = NULL;
-        int nat = collect_call_arg_types(cast->cast.new_ctor_args, na, &at);
-        Type **pty = NULL;
-        int np = resolve_overload(p_resolved, NULL, /*is_ctor=*/true, at, nat,
-                                   false, &pty, NULL);
-        if (np < 0 || np != na) implicit_copy_assign = true;
+        /* Prefer the sema-stamped winner (covers template ctors that
+         * basic resolve_overload doesn't see). Falls back to a fresh
+         * resolve only when nothing is stamped. */
+        if (cast->cast.resolved_ctor) {
+            int np = (cast->cast.resolved_ctor->kind == ND_FUNC_DEF)
+                       ? cast->cast.resolved_ctor->func.nparams
+                       : cast->cast.resolved_ctor->var_decl.ty->nparams;
+            if (np != na) implicit_copy_assign = true;
+        } else {
+            Type **at = NULL;
+            int nat = collect_call_arg_types(cast->cast.new_ctor_args, na, &at);
+            Type **pty = NULL;
+            int np = resolve_overload(p_resolved, NULL, /*is_ctor=*/true,
+                                       at, nat, false, &pty, NULL);
+            if (np < 0 || np != na) implicit_copy_assign = true;
+        }
     }
 
     int id = g_cf.next_label_id++;
@@ -2123,11 +2133,21 @@ static void hoist_new_expr(Node *cast, bool in_shortcircuit) {
     }
     /* Regular ctor call, if applicable. */
     else if (is_class && need_ctor) {
-        Type **at = NULL;
-        int nat = collect_call_arg_types(cast->cast.new_ctor_args, na, &at);
         Type **pty = NULL;
-        int np = resolve_overload(p_resolved, NULL, /*is_ctor=*/true, at, nat,
-                                   false, &pty, NULL);
+        int np;
+        /* Prefer the sema-stamped winner — covers template ctors that
+         * basic resolve_overload doesn't include. */
+        if (cast->cast.resolved_ctor) {
+            static Type *_pty_pool_new[64];
+            np = copy_member_param_types(cast->cast.resolved_ctor,
+                                          _pty_pool_new);
+            pty = _pty_pool_new;
+        } else {
+            Type **at = NULL;
+            int nat = collect_call_arg_types(cast->cast.new_ctor_args, na, &at);
+            np = resolve_overload(p_resolved, NULL, /*is_ctor=*/true,
+                                   at, nat, false, &pty, NULL);
+        }
         if (np < 0 && na == 0 && p_resolved->has_default_ctor) {
             np = 0; pty = NULL;
         }

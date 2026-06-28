@@ -596,6 +596,10 @@ struct Node {
              * applies (plain cast, no ctor_args, dependent type) —
              * codegen falls back to its own resolve_overload then. */
             Node  *resolved_ctor;
+            /* Template-ctor winner stamp for `new T(args)` — see
+             * call.resolved_ctor_tid / var_decl.resolved_ctor_tid
+             * for the same pattern at other ctor-call sites. */
+            Node  *resolved_ctor_tid;
         } cast;
 
         /* ND_SIZEOF — N4659 §8.3.3 [expr.sizeof]
@@ -819,6 +823,14 @@ struct Node {
              * synth default ctor / aggregate init). Part of the
              * resolve-everything-before-emit slice. */
             Node  *resolved_ctor;
+            /* When the resolved_ctor is a template ctor, sema builds
+             * an ND_TEMPLATE_ID with the deduced args and stashes it
+             * here. The discovery walker reads the slot to drive
+             * template-ctor instantiation; emit reads it to mangle
+             * the call with template args. NULL when winner is non-
+             * template or no winner. Mirror of call.resolved_ctor_tid
+             * for the var-decl direct-init shape. */
+            Node  *resolved_ctor_tid;
             /* Function-shape declarator staging (prototype OR
              * function-pointer OR a function declarator that's about
              * to be promoted to ND_FUNC_DEF when '{' / ':' follows).

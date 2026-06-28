@@ -71,6 +71,11 @@ typedef struct {
 /* Two-phase lookup: dependency tracking (N4659 §17.7 [temp.res])    */
 /* ------------------------------------------------------------------ */
 
+/* Forward decls. */
+static void stamp_ctor_winner(Sema *s, Token *call_tok, Type *cls_type,
+                              Node **args, int nargs,
+                              Node **out_ctor, Node **out_tid);
+
 static bool type_is_dependent(Type *ty) {
     if (!ty) return false;
     if (ty->kind == TY_DEPENDENT) return true;
@@ -741,21 +746,15 @@ static void visit_var_decl(Sema *s, Node *n) {
          n->var_decl.ty->kind == TY_UNION)) {
         int na = n->var_decl.ctor_nargs;
         bool any_unresolved = false;
-        Type **at = arena_alloc(s->arena, na * sizeof(Type *));
         for (int i = 0; i < na; i++) {
             Node *a = n->var_decl.ctor_args[i];
-            at[i] = a ? a->resolved_type : NULL;
-            if (!at[i]) any_unresolved = true;
+            if (!a || !a->resolved_type) any_unresolved = true;
         }
         if (!any_unresolved) {
-            Type **pty = NULL;
-            Node *winner = NULL;
-            (void)resolve_overload(n->var_decl.ty, /*name=*/NULL,
-                                    /*is_ctor=*/true,
-                                    at, na,
-                                    /*receiver_is_const=*/false,
-                                    &pty, &winner);
-            n->var_decl.resolved_ctor = winner;
+            stamp_ctor_winner(s, n->tok, n->var_decl.ty,
+                              n->var_decl.ctor_args, na,
+                              &n->var_decl.resolved_ctor,
+                              &n->var_decl.resolved_ctor_tid);
         }
     }
 }
@@ -2109,6 +2108,66 @@ static Node *build_template_id_from_deduced(Sema *s, Token *tname,
     return tid;
 }
 
+/* Run template-aware ctor overload res for cls_type with the given
+ * args, and stamp the winner into *out_ctor / *out_tid. Used by every
+ * site that constructs a class object via overload resolution:
+ *   - functional cast `T(args)`              (ND_CALL.is_type_call)
+ *   - var-decl direct-init `T x(args)`       (ND_VAR_DECL.has_ctor_init)
+ *   - new-expression `new T(args)`           (ND_CAST.is_new_expr)
+ * Skips overwriting *out_ctor when already non-NULL (Phase 3a may
+ * have stamped the cloned-instantiation func and sema #2 must
+ * preserve that). */
+static void stamp_ctor_winner(Sema *s, Token *call_tok, Type *cls_type,
+                              Node **args, int nargs,
+                              Node **out_ctor, Node **out_tid) {
+    if (!cls_type ||
+        (cls_type->kind != TY_STRUCT && cls_type->kind != TY_UNION))
+        return;
+    Type **at = nargs > 0
+        ? arena_alloc(s->arena, nargs * sizeof(Type *)) : NULL;
+    for (int i = 0; i < nargs; i++)
+        at[i] = args[i] ? args[i]->resolved_type : NULL;
+    Type **pty = NULL;
+    Node *winner = NULL;
+    Type *origin = NULL;
+    bool is_tmpl = false;
+    SubstMap deduced = {0};
+    (void)resolve_overload_template_aware(
+        cls_type, /*name=*/NULL, /*is_ctor=*/true,
+        at, nargs, /*receiver_is_const=*/false,
+        s->arena, &pty, &winner, &origin, &is_tmpl, &deduced);
+    if (!*out_ctor) *out_ctor = winner;  /* may be NULL */
+    /* Template-ctor winner — build the ND_TEMPLATE_ID that drives
+     * instantiation via the discovery walker. The "template name" for
+     * a ctor IS the class tag (N4659 §17.8.2 [temp.deduct] +
+     * §15.1 [class.ctor]/2). */
+    if (is_tmpl && winner && cls_type->tag && !*out_tid) {
+        Node *cd = cls_type->class_def;
+        if (!cd && cls_type->class_region &&
+            cls_type->class_region->owner_type)
+            cd = cls_type->class_region->owner_type->class_def;
+        Node *tmpl_decl = NULL;
+        if (cd) {
+            for (int mi = 0; mi < cd->class_def.nmembers; mi++) {
+                Node *m = cd->class_def.members[mi];
+                if (!m || m->kind != ND_TEMPLATE_DECL) continue;
+                Node *inner = m->template_decl.decl;
+                while (inner && inner->kind == ND_TEMPLATE_DECL)
+                    inner = inner->template_decl.decl;
+                if (inner == winner) { tmpl_decl = m; break; }
+            }
+        }
+        if (tmpl_decl) {
+            Node *tid = build_template_id_from_deduced(
+                s, cls_type->tag, call_tok, tmpl_decl, &deduced);
+            if (tid) {
+                tid->template_id.resolved_tmpl = tmpl_decl;
+                *out_tid = tid;
+            }
+        }
+    }
+}
+
 static void visit_call(Sema *s, Node *n) {
     visit(s, n->call.callee);
     for (int i = 0; i < n->call.nargs; i++)
@@ -2427,59 +2486,10 @@ static void visit_call(Sema *s, Node *n) {
          * Only fires for class targets; non-class type-calls (scalar
          * conversion shapes) leave resolved_ctor NULL. */
         if (tc_type->kind == TY_STRUCT || tc_type->kind == TY_UNION) {
-            int na = n->call.nargs;
-            Type **at = na > 0
-                ? arena_alloc(s->arena, na * sizeof(Type *)) : NULL;
-            for (int i = 0; i < na; i++)
-                at[i] = n->call.args[i] ? n->call.args[i]->resolved_type : NULL;
-            Type **pty = NULL;
-            Node *winner = NULL;
-            Type *origin = NULL;
-            bool is_tmpl = false;
-            SubstMap deduced = {0};
-            (void)resolve_overload_template_aware(
-                tc_type, /*name=*/NULL, /*is_ctor=*/true,
-                at, na, /*receiver_is_const=*/false,
-                s->arena, &pty, &winner, &origin, &is_tmpl, &deduced);
-            /* Don't overwrite a pre-stamped resolved_ctor from a prior
-             * pass — template_instantiate's Phase 3a sets resolved_ctor
-             * to the substituted cloned func, and sema #2 would
-             * otherwise revert to the source template's TY_DEPENDENT-
-             * paramed inner, breaking call-site mangling. */
-            if (!n->call.resolved_ctor)
-                n->call.resolved_ctor = winner;
-            /* Template-ctor winner — build a synthetic ND_TEMPLATE_ID
-             * so the discovery walker drives instantiation, and the
-             * emit site mangles to the instantiated symbol. The
-             * template name IS the class tag (template ctor of class
-             * X is named X). N4659 §17.8.2 [temp.deduct]. */
-            if (is_tmpl && winner && tc_type->tag) {
-                /* Find the wrapping ND_TEMPLATE_DECL — collect peeled,
-                 * so we look it up by walking the class members. */
-                Node *tmpl_decl = NULL;
-                Node *cd = tc_type->class_def;
-                if (!cd && tc_type->class_region &&
-                    tc_type->class_region->owner_type)
-                    cd = tc_type->class_region->owner_type->class_def;
-                if (cd) {
-                    for (int mi = 0; mi < cd->class_def.nmembers; mi++) {
-                        Node *m = cd->class_def.members[mi];
-                        if (!m || m->kind != ND_TEMPLATE_DECL) continue;
-                        Node *inner = m->template_decl.decl;
-                        while (inner && inner->kind == ND_TEMPLATE_DECL)
-                            inner = inner->template_decl.decl;
-                        if (inner == winner) { tmpl_decl = m; break; }
-                    }
-                }
-                if (tmpl_decl) {
-                    Node *tid = build_template_id_from_deduced(
-                        s, tc_type->tag, n->tok, tmpl_decl, &deduced);
-                    if (tid) {
-                        tid->template_id.resolved_tmpl = tmpl_decl;
-                        n->call.resolved_ctor_tid = tid;
-                    }
-                }
-            }
+            stamp_ctor_winner(s, n->tok, tc_type,
+                              n->call.args, n->call.nargs,
+                              &n->call.resolved_ctor,
+                              &n->call.resolved_ctor_tid);
         }
         return;
     }
@@ -2697,13 +2707,10 @@ static void visit(Sema *s, Node *n) {
                     if (!at[i]) any_unresolved = true;
                 }
                 if (!any_unresolved) {
-                    Type **pty = NULL;
-                    Node *winner = NULL;
-                    (void)resolve_overload(p_resolved, /*name=*/NULL,
-                                            /*is_ctor=*/true, at, na,
-                                            /*receiver_is_const=*/false,
-                                            &pty, &winner);
-                    n->cast.resolved_ctor = winner;
+                    stamp_ctor_winner(s, n->tok, p_resolved,
+                                      n->cast.new_ctor_args, na,
+                                      &n->cast.resolved_ctor,
+                                      &n->cast.resolved_ctor_tid);
                 }
             }
         }
@@ -3580,10 +3587,19 @@ int resolve_overload(Type *class_type, Token *name, bool is_ctor,
  * ing gcc/clang and breaking cpp0x/implicit2.C. Templated candidates
  * pass already-substituted params (T deduced), so this same scorer
  * works for both. */
-static int overload_match_score_eff(Type **params, int nparams,
+static int overload_match_score_eff(Node *cand,
+                                     Type **params, int nparams,
                                      bool is_variadic,
                                      Type **arg_types, int nargs) {
     if (nparams < nargs && !is_variadic) return -1;
+    /* Excess params must have defaults — N4659 §16.3.1.4
+     * [over.match.viable]/2. */
+    if (nparams > nargs) {
+        for (int k = nargs; k < nparams; k++) {
+            Node *p = func_param_node(cand, k);
+            if (!p || !p->param.default_value) return -1;
+        }
+    }
     int score = 0;
     int n = nargs < nparams ? nargs : nparams;
     for (int k = 0; k < n && k < 64; k++) {
@@ -3693,7 +3709,8 @@ int resolve_overload_template_aware(
         bool is_variadic = (cands[i]->kind == ND_FUNC_DEF)
                               ? cands[i]->func.is_variadic
                               : cands[i]->var_decl.ty->is_variadic;
-        int s = overload_match_score_eff(eff_params[i], eff_nparams[i],
+        int s = overload_match_score_eff(cands[i],
+                                          eff_params[i], eff_nparams[i],
                                           is_variadic, arg_types, nargs);
         if (s < 0) continue;
         bool better = false;
