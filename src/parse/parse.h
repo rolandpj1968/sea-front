@@ -1522,6 +1522,18 @@ struct Type {
     Type **template_args;
     int    n_template_args;
 
+    /* Pre-emit synthesis: when this class has a user-declared copy
+     * ctor AND template-aware overload resolution would pick a
+     * template ctor over the non-template copy ctor for a non-const
+     * lvalue source (N4659 §16.3.3.2.3 [over.ics.rank] — identity
+     * ref binding beats qual ref binding), the synth_template_copy_
+     * ctor_pass clones the template ctor (T = this class) and
+     * stashes the resulting ND_FUNC_DEF here. emit_inline_copy_chain
+     * reads the slot to emit a real mangled call to the cloned ctor
+     * (vs. the inline-body stopgap that was used before the full
+     * template-ctor pipeline landed). NULL when no template winner. */
+    Node *synth_template_copy_ctor;
+
     /* TY_NTTP_VALUE: declared type of the non-type template parameter
      * the literal binds to. Set when an instantiated template's args
      * array is built — at that point the template definition's

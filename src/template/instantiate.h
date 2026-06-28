@@ -57,4 +57,14 @@
  */
 void template_instantiate(Node *tu, Arena *arena);
 
+/* Pre-emit synthesis pass: for every class with a user-declared copy
+ * ctor whose template member-ctor BEATS the non-template copy ctor
+ * for an X lvalue (N4659 §16.3.3.2.3 [over.ics.rank]), clone the
+ * template with T=X and append it to the TU, stashing the cloned
+ * Node on cls->synth_template_copy_ctor. emit_inline_copy_chain
+ * reads the slot to emit a real mangled call instead of inlining
+ * the body (the stopgap that predated the full template-ctor
+ * pipeline). N4659 §15.8.1 [class.copy.ctor] + §17.8.2 [temp.deduct]. */
+void synth_template_copy_ctors(Node *tu, Arena *arena);
+
 #endif /* TEMPLATE_INSTANTIATE_H */

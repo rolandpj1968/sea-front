@@ -144,6 +144,11 @@ int main(int argc, char **argv) {
         sema_run(ast, &arena);
         template_instantiate(ast, &arena);
         sema_run(ast, &arena);  /* re-run on instantiated nodes */
+        /* Pre-emit: synthesize cloned template copy ctors for any
+         * class whose template ctor would win copy-ctor overload res
+         * — emit_inline_copy_chain needs the cloned func to call by
+         * mangled name (replaces the prior body-inlining stopgap). */
+        synth_template_copy_ctors(ast, &arena);
         emit_c(ast);
         arena_free_all(&arena);
         return 0;

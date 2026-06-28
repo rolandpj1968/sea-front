@@ -3164,6 +3164,139 @@ static void refresh_inherited_class_flags(Node *tu) {
     walk_class_defs(tu, mark_implicit_virtuals_one);
 }
 
+/* For a class C with a user-declared copy ctor, check whether a
+ * template ctor would BEAT the non-template copy ctor for copy-init
+ * from a non-const C lvalue (the case emit_inline_copy_chain hits
+ * when synthesizing implicit copy ctors for derived classes that
+ * inherit C). When found, clone the template inner with T=C and
+ * stash the result on cls->synth_template_copy_ctor so emit can
+ * mangle a real call instead of inlining the body. N4659 §16.3 +
+ * §15.8.1 [class.copy.ctor]. */
+/* Mirror of emit_c.c's class_has_user_copy_ctor (static there).
+ * Kept locally so the gate runs without exposing the helper. */
+static bool inst_class_has_user_copy_ctor(Type *cls) {
+    if (!cls || !cls->class_def) return false;
+    Node *cdef = cls->class_def;
+    for (int i = 0; i < cdef->class_def.nmembers; i++) {
+        Node *m = cdef->class_def.members[i];
+        if (!m) continue;
+        bool is_def  = (m->kind == ND_FUNC_DEF && m->func.is_constructor);
+        bool is_decl = (m->kind == ND_VAR_DECL && m->var_decl.is_constructor);
+        if (!is_def && !is_decl) continue;
+        int np = is_def ? m->func.nparams
+                        : (m->var_decl.ty ? m->var_decl.ty->nparams : 0);
+        if (np != 1) continue;
+        Type *p0 = NULL;
+        if (is_def) {
+            Node *pp = m->func.params ? m->func.params[0] : NULL;
+            if (pp && pp->kind == ND_PARAM) p0 = pp->param.ty;
+        } else if (m->var_decl.ty && m->var_decl.ty->params) {
+            p0 = m->var_decl.ty->params[0];
+        }
+        if (!p0) continue;
+        Type *base = p0;
+        if (base->kind == TY_REF || base->kind == TY_RVALREF) base = base->base;
+        if (!base || base->kind != TY_STRUCT) continue;
+        if (!base->tag || !cls->tag) continue;
+        if (base->tag->len != cls->tag->len) continue;
+        if (memcmp(base->tag->loc, cls->tag->loc, cls->tag->len) != 0) continue;
+        return true;
+    }
+    return false;
+}
+
+static void synth_template_copy_ctor_for(Node *tu, Type *cls,
+                                          Arena *arena,
+                                          TmplRegistry *reg) {
+    if (!cls || cls->synth_template_copy_ctor) return;
+    if (!cls->class_def) return;
+    /* Only relevant when the class actually has a user copy ctor —
+     * emit_inline_copy_chain's template-winner branch is only
+     * reachable in that case. Without this gate we'd happily clone
+     * X<X>(X&) for classes that have ONLY a template ctor (no user
+     * copy ctor at all), and the template body — written assuming
+     * T is whatever the user passed at the call site — would break
+     * with T=cls (e.g. `(int)t * 3` for class t). */
+    if (!inst_class_has_user_copy_ctor(cls)) return;
+    Node *cdef = cls->class_def;
+    /* Find a member-template ctor that scores better than any non-
+     * template ctor for arg = C (non-const). We piggy-back on
+     * resolve_overload_template_aware by calling it with arg_types =
+     * [cls]; if the winner is a template, that's our target. */
+    Type *arg_types[1] = { cls };
+    Type **pty = NULL;
+    Node *winner = NULL;
+    Type *origin = NULL;
+    bool is_tmpl = false;
+    SubstMap deduced = {0};
+    (void)resolve_overload_template_aware(
+        cls, /*name=*/NULL, /*is_ctor=*/true,
+        arg_types, 1, /*receiver_is_const=*/false,
+        arena, &pty, &winner, &origin, &is_tmpl, &deduced);
+    if (!is_tmpl || !winner) return;
+    /* Find the wrapping ND_TEMPLATE_DECL — winner is the peeled
+     * inner FD; we need the outer to access template params. */
+    Node *tmpl_decl = NULL;
+    for (int mi = 0; mi < cdef->class_def.nmembers; mi++) {
+        Node *m = cdef->class_def.members[mi];
+        if (!m || m->kind != ND_TEMPLATE_DECL) continue;
+        Node *inner = m->template_decl.decl;
+        while (inner && inner->kind == ND_TEMPLATE_DECL)
+            inner = inner->template_decl.decl;
+        if (inner == winner) { tmpl_decl = m; break; }
+    }
+    if (!tmpl_decl) return;
+    /* Clone the inner FD with T → cls. Mark it as a class ctor so
+     * emit routes through the ctor mangle / member-fn path. */
+    Node *cloned = clone_node(winner, &deduced, arena);
+    if (!cloned) return;
+    cloned->func.is_constructor = true;
+    cloned->func.class_type = cls;
+    if (!cloned->func.name && cls->tag)
+        cloned->func.name = cls->tag;
+    /* Source template ctor was misparsed as 'function returning Cls'
+     * (parser bug — REGION_TEMPLATE shielded ctor detection); the
+     * clone inherits that ret_ty. Sea-front's ctor lowering returns
+     * void, so reset. */
+    if (cloned->func.ret_ty &&
+        (cloned->func.ret_ty->kind == TY_STRUCT ||
+         cloned->func.ret_ty->kind == TY_UNION)) {
+        Type *void_ty = arena_alloc(arena, sizeof(Type));
+        memset(void_ty, 0, sizeof(Type));
+        void_ty->kind = TY_VOID;
+        cloned->func.ret_ty = void_ty;
+    }
+    /* Phase-2 sema on the cloned body so its identifiers resolve. */
+    sema_visit_node(cloned, arena);
+    /* Append to TU and stash on the class. */
+    int nd = tu->tu.ndecls;
+    Node **decls = arena_alloc(arena, (nd + 1) * sizeof(Node *));
+    for (int i = 0; i < nd; i++) decls[i] = tu->tu.decls[i];
+    decls[nd] = cloned;
+    tu->tu.decls = decls;
+    tu->tu.ndecls = nd + 1;
+    cls->synth_template_copy_ctor = cloned;
+    (void)reg;  /* reserved for future nested-instantiation needs */
+}
+
+/* Public entry — run AFTER template_instantiate so the ctor template
+ * candidates have any class context they need from class
+ * instantiations. Idempotent: the slot guards prevent double-cloning. */
+void synth_template_copy_ctors(Node *tu, Arena *arena) {
+    if (!tu || tu->kind != ND_TRANSLATION_UNIT) return;
+    /* Reuse a small registry built locally; ctor-template lookup
+     * doesn't actually need TU-wide template lookup since we already
+     * have the ND_TEMPLATE_DECL via class members. */
+    TmplRegistry reg = {0};
+    reg.arena = arena;
+    for (int i = 0; i < tu->tu.ndecls; i++) {
+        Node *d = tu->tu.decls[i];
+        if (!d || d->kind != ND_CLASS_DEF) continue;
+        if (d->class_def.ty)
+            synth_template_copy_ctor_for(tu, d->class_def.ty, arena, &reg);
+    }
+}
+
 void template_instantiate(Node *tu, Arena *arena) {
     if (!tu || tu->kind != ND_TRANSLATION_UNIT) return;
 

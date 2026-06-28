@@ -12274,65 +12274,6 @@ static bool class_has_no_user_ctor(Type *cls) {
     return true;
 }
 
-/* Walk an AST subtree to check whether it's safe to emit verbatim
- * at a call site without subst or parameter substitution. The body
- * is inlineable iff it contains no `this` references, no references
- * to the function's parameters, no TY_DEPENDENT types on any node,
- * and no return statements (the inline form can't `return` out of
- * the calling function). Used by emit_inline_copy_chain's template-
- * ctor winner path; sea-front doesn't yet route template ctors
- * through the normal instantiation pipeline, so inlining is a
- * stopgap for trivial bodies (g++.dg/cpp0x/implicit2.C). */
-static bool template_body_check_safe(Node *n, Node **params, int nparams) {
-    if (!n) return true;
-    if (n->kind == ND_RETURN) return false;
-    if (n->kind == ND_IDENT) {
-        if (n->ident.implicit_this) return false;
-        Node *rd = n->ident.resolved_decl;
-        if (rd) {
-            for (int i = 0; i < nparams; i++)
-                if (params[i] == rd) return false;
-        }
-    }
-    if (n->resolved_type && n->resolved_type->kind == TY_DEPENDENT)
-        return false;
-    /* Conservatively walk common child shapes. */
-    switch (n->kind) {
-    case ND_BLOCK:
-        for (int i = 0; i < n->block.nstmts; i++)
-            if (!template_body_check_safe(n->block.stmts[i], params, nparams))
-                return false;
-        return true;
-    case ND_EXPR_STMT:
-        return template_body_check_safe(n->expr_stmt.expr, params, nparams);
-    case ND_BINARY:
-    case ND_ASSIGN:
-        return template_body_check_safe(n->binary.lhs, params, nparams) &&
-               template_body_check_safe(n->binary.rhs, params, nparams);
-    case ND_UNARY:
-        return template_body_check_safe(n->unary.operand, params, nparams);
-    case ND_IDENT:
-    case ND_NUM:
-    case ND_FNUM:
-    case ND_STR:
-    case ND_CHAR:
-    case ND_BOOL_LIT:
-    case ND_NULLPTR:
-    case ND_NULL_STMT:
-        return true;
-    default:
-        return false;  /* be conservative — unknown shapes fall back */
-    }
-}
-
-static bool template_body_is_inlineable(Node *func_def) {
-    if (!func_def || func_def->kind != ND_FUNC_DEF) return false;
-    if (!func_def->func.body) return false;
-    return template_body_check_safe(func_def->func.body,
-                                     func_def->func.params,
-                                     func_def->func.nparams);
-}
-
 /* See forward-decl comment. */
 static void pick_copy_ctor(Type *cls, bool arg_is_const,
                             Node **out_raw, Node **out_inner,
@@ -12516,12 +12457,12 @@ static void emit_inline_copy_chain(const char *dst_path,
     if (!cls || !cls->class_def) return;
     if (class_has_user_copy_ctor(cls)) {
         /* Pick the best ctor for `cls(src)` via spec-aligned overload
-         * res. For a non-template winner, mangle + call. For a template
-         * winner whose body is "inlineable" (no `this` / param / dep-
-         * type refs), inline its statements directly — sea-front
-         * doesn't yet instantiate template ctors through the normal
-         * pipeline. Pattern: g++.dg/cpp0x/implicit2.C, template A<T>(T&)
-         * with trivial body `r = 0;`. */
+         * res. For a non-template winner, mangle + call. For a
+         * template winner, the synth_template_copy_ctors pre-emit
+         * pass has cloned the template with T=cls and stashed the
+         * cloned func on cls->synth_template_copy_ctor — emit a
+         * mangled call to that. N4659 §15.8.1 [class.copy.ctor] +
+         * §16.3 [over.match]. */
         Node *raw = NULL, *inner = NULL;
         bool is_tmpl = false;
         Type *p0 = NULL;
@@ -12534,23 +12475,13 @@ static void emit_inline_copy_chain(const char *dst_path,
             fprintf(stdout, "(&%s, &%s);\n", dst_path, src_path);
             return;
         }
-        if (raw && is_tmpl && inner && inner->kind == ND_FUNC_DEF &&
-            inner->func.body && template_body_is_inlineable(inner)) {
-            /* Emit the body's statements inline. The body's identifiers
-             * resolve via their resolved_decl (set by sema #1) to non-
-             * dependent globals/etc. — no subst needed when the
-             * predicate passed. */
+        if (raw && is_tmpl && cls->synth_template_copy_ctor) {
+            Node *clo = cls->synth_template_copy_ctor;
+            static Type *_pty_pool_sc[64];
+            int np = copy_member_param_types(clo, _pty_pool_sc);
             emit_indent();
-            fputs("{\n", stdout);
-            g_indent++;
-            Node *body = inner->func.body;
-            for (int s = 0; s < body->block.nstmts; s++) {
-                emit_indent();
-                emit_stmt(body->block.stmts[s]);
-            }
-            g_indent--;
-            emit_indent();
-            fputs("}\n", stdout);
+            mangle_class_ctor(cls, _pty_pool_sc, np);
+            fprintf(stdout, "(&%s, &%s);\n", dst_path, src_path);
             return;
         }
         /* Fallback — old hardcoded scan for (const T&) / (T&). */
