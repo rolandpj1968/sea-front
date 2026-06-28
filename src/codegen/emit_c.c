@@ -1569,6 +1569,11 @@ static void emit_addrof_for_this(Node *n) {
     emit_expr(n);
 }
 
+static bool class_transitively_needs_copy_call(Type *cls);
+static void emit_inline_copy_chain(const char *dst_path,
+                                    const char *src_path,
+                                    Type *cls);
+
 static void hoist_emit_decl(Node *call, bool in_shortcircuit) {
     int id = g_cf.next_label_id++;
     char *name = make_codegen_temp_name("temp", id);
@@ -1724,12 +1729,13 @@ static void hoist_emit_decl(Node *call, bool in_shortcircuit) {
             } else if (call->call.nargs == 1 && ctor_class_type) {
                 /* `T(x)` where x is also a T (or T&) — the implicit
                  * copy ctor (N4659 §15.8.1 [class.copy.ctor]) does
-                 * memberwise copy. In C that's just a struct
-                 * assignment. Preserve the arg instead of dropping
-                 * it via `{0}` (silent corruption: the arg's value
-                 * vanished entirely). Doesn't invoke user template
-                 * ctors — pattern g++.dg/cpp0x/implicit2.C needs a
-                 * full overload-res slice and is xfailed. */
+                 * memberwise copy. If T (or any base/member) has a
+                 * user copy ctor, expand into an inline per-subobject
+                 * copy chain so the user body runs; otherwise a bare
+                 * struct assignment is faithful. Pattern:
+                 * g++.dg/cpp0x/implicit2.C — C inherits A (user copy
+                 * ctor) so the bitwise copy path would skip A's
+                 * ctor entirely. */
                 Node *arg0 = call->call.args[0];
                 Type *art = arg0 ? arg0->resolved_type : NULL;
                 Type *u = art;
@@ -1741,7 +1747,32 @@ static void hoist_emit_decl(Node *call, bool in_shortcircuit) {
                     u->tag->len == ctor_class_type->tag->len &&
                     memcmp(u->tag->loc, ctor_class_type->tag->loc,
                            u->tag->len) == 0;
-                if (same_class) {
+                if (same_class &&
+                    class_transitively_needs_copy_call(ctor_class_type)) {
+                    fprintf(stdout, " %s;\n", name);
+                    bool arg_is_ref = art &&
+                        (art->kind == TY_REF || art->kind == TY_RVALREF);
+                    /* Materialise the source once into a sibling
+                     * temp so the inline-copy-chain can refer to it
+                     * multiple times (one per base / member) without
+                     * re-evaluating side effects. */
+                    char src_buf[64];
+                    emit_indent();
+                    if (arg_is_ref) {
+                        emit_type(art->base);
+                        fprintf(stdout, " *__SF_src_%d = &(", id);
+                        emit_expr(arg0);
+                        fputs(");\n", stdout);
+                        snprintf(src_buf, sizeof(src_buf), "(*__SF_src_%d)", id);
+                    } else {
+                        emit_type(art ? art : ctor_class_type);
+                        fprintf(stdout, " __SF_src_%d = ", id);
+                        emit_expr(arg0);
+                        fputs(";\n", stdout);
+                        snprintf(src_buf, sizeof(src_buf), "__SF_src_%d", id);
+                    }
+                    emit_inline_copy_chain(name, src_buf, ctor_class_type);
+                } else if (same_class) {
                     fprintf(stdout, " %s = ", name);
                     bool arg_is_ref = art &&
                         (art->kind == TY_REF || art->kind == TY_RVALREF);
