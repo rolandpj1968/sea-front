@@ -1,5 +1,13 @@
 # Trusted Bootstrap C++ Compiler: Design Document
 
+> **Current status (2026-06-28):** Stage A (gcc 4.8) reached the
+> **bootstrap fixed point** on 2026-05-30: gcc 4.8 stage 2 ≡ stage 3,
+> instruction-bit-identical (commit `117c206`, see
+> `project_bootstrap_fixed_point`). The gcc 4.8 dg suite holds at
+> 473/0 (`docs/std_status.md`). Stages B and C (modern gcc, Clang)
+> are the forward direction described below; the existing design is
+> still the working plan.
+
 ## The Problem: Trusting Trust
 
 In 1984, Ken Thompson's Turing Award lecture "Reflections on Trusting Trust"

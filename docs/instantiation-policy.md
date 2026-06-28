@@ -157,7 +157,7 @@ void template_instantiate(TU *tu) {
 }
 ```
 
-## Termination — and the cap is fundamental, not engineering debt
+## Termination — recursion-depth guard is fundamental, array cap isn't
 
 C++ template instantiation is **Turing-complete** (Veldhuizen
 2003): you can encode arbitrary Turing machines via recursive
@@ -170,14 +170,15 @@ depth limit of at least 1024. gcc and clang both ship with a
 configurable cap (`-ftemplate-depth=N`, default ~900); hitting it
 is a clear error, not silent loss.
 
-So `MAX_INST` (and the `inst_push` loud-fail) is **part of
-correctness, not engineering debt**. It exists because the
-underlying problem is undecidable, not because we chose a fixed-
-size data structure. Removing the array's size limit would just
-move the cap to wall-clock time / memory pressure. Every
-conforming C++ implementation has the same tradeoff. The cap
-value can be tuned (we set 32768 to leave headroom over real
-gcc 4.8 workloads); the cap itself is unavoidable.
+The **recursion-depth guard** is therefore part of correctness,
+not engineering debt: every conforming C++ implementation has the
+same tradeoff. What's NOT load-bearing is a fixed-size cap on the
+*number* of instantiations. Sea-front's `all_instantiated` is an
+arena-backed `Vec` (see `template_instantiate` in
+`src/template/instantiate.c`); there is no `MAX_INST` ceiling on
+instantiation count. The original round-loop code referred to such
+a constant — it's gone with the worklist refactor. Wall-clock /
+memory pressure is the soft upper bound now.
 
 **What termination guarantees the recursive design DOES make,
 on well-formed input:**
@@ -208,10 +209,9 @@ on well-formed input:**
 | Bug class 2a7fca4 (cap drift) | No counters to drift |
 
 **What stays as a hard cap regardless of structure:**
-`MAX_INST` (or its growable equivalent) and a recursion-depth
-guard. Turing-completeness mandates these. The recursive shape
-is cleaner and matches the standard's wording, but it can't make
-the cap go away.
+recursion-depth guard (Turing-completeness mandates it). The
+instantiation count itself is bounded only by memory + wall-clock
+under sea-front's arena-Vec storage.
 
 ## What stays
 

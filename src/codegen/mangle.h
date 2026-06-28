@@ -21,10 +21,13 @@
 #include "../sea-front.h"
 
 /* Active scheme. Selected at codegen entry by the --mangling=… flag.
- * MANGLE_HUMAN is the default sea-front-native readable scheme that
- * has been the only choice to date; MANGLE_ITANIUM produces names
- * matching the Itanium C++ ABI <https://itanium-cxx-abi.github.io/
- * cxx-abi/abi.html#mangling> for interop with gcc/clang/libstdc++. */
+ * MANGLE_ITANIUM is the default — it produces names matching the
+ * Itanium C++ ABI <https://itanium-cxx-abi.github.io/cxx-abi/abi.html
+ * #mangling> for interop with gcc/clang/libstdc++ (covers NTTPs,
+ * type-arg templates, and a chunk of gcc-parity fixtures).
+ * MANGLE_HUMAN is the sea-front-native readable scheme, still
+ * supported for audit-friendly review (`sf__Class__method_p_..._pe_`
+ * shapes; see docs/mangling.md for the encoding rules). */
 typedef enum {
     MANGLE_HUMAN = 0,
     MANGLE_ITANIUM = 1,

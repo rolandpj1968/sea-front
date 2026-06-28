@@ -203,16 +203,36 @@ intentionally not reported.
 | gcc 14.2 g++.dg dg-do run | 2026-06-13 | 612 / 1671 (37%) |
 | gcc 14.2 g++.dg dg-do run | 2026-06-13 (late) | 616 / 1671 (37%, 3 actionable FAILs) |
 | gcc 14.2 g++.dg dg-do run | 2026-06-13 (end) | 618 / 1671 (37%, 3 actionable FAILs); bulk-xfail of coroutines, ASan, gcov, UBSan, ABI conformance |
+| gcc 4.8 g++.dg dg-do run | 2026-06-28 | **473 / 809 (58%), 0 FAIL** — every remaining non-PASS is in a deferred bucket (E_PP / E_FRONT / E_CC / E_RUN / xfail) |
 
 The gcc-14 number is the primary target going forward. The gcc-4.8
-number is retained as a regression marker — it should not move
-downward as gcc-14 work lands.
+number is retained as a regression marker — and as of 2026-06-28 it
+also serves as the **0-FAIL milestone**: every test that reaches
+sea-front for processing either passes or fails for a documented,
+xfail-listed reason (platform intrinsics, ABI layout, gcc-version
+oddities — see `scripts/dg-xfail-4.8.txt` and
+`project_gcc48_only_xfails`). The bucket counts shuffle when work
+lands; the 0-FAIL invariant holds.
 
-Run reproducers:
+## Bootstrap
+
+Independent of the dg suite, the bootstrap-fixed-point milestone is
+the strongest correctness signal: gcc 4.8 compiled by
+sea-front-compiled-cc1plus reaches **stage 2 ≡ stage 3** instruction-
+bit-identical output (2026-05-30, commit `117c206`; differs only in
+the embedded cc1plus-checksum MD5 which is PID-derived). See
+`project_bootstrap_fixed_point` for the full reproducer chain and
+`docs/trusted-bootstrap-design.md` for the goal-state framing.
+
+## Run reproducers
 
 ```
-make test           # gated suites
+make test           # gated unit / smoke / libstdc++ suites
 scripts/run_gpp_dg.sh > /tmp/dg_4.8.log
 SEA_GCC_TESTSUITE=$HOME/src/sea-front-deps/gcc-14.2.0/gcc/testsuite \
     scripts/run_gpp_dg.sh > /tmp/dg_14.log
+# bootstrap sanity (rebuild cc1plus via sea-front-cc):
+cd $HOME/src/sea-front-deps/gcc-4.8.5/build-sf/gcc && \
+    make CC=$HOME/src/sea-front/scripts/sea-front-cc \
+         CXX=$HOME/src/sea-front/scripts/sea-front-cc cc1plus
 ```

@@ -61,9 +61,10 @@ the rest of the pipeline.
 | NTTP as array bound in the cloned body | Yes |
 | Lambdas inside template bodies | Yes — instantiated per substitution, scope-qualified symbol names |
 | Statement-expressions in template bodies (`__extension__ ({...})`) | Yes — clone walks into the block |
-| Partial specialization | Not yet |
+| Partial specialization | Yes |
 | SFINAE / `enable_if` | Not yet |
-| Variadic templates | Not yet (out of scope for the C++03 bootstrap) |
+| Variadic templates | Partial — Phase 1+2 shipped (pack tagging, pack-binding SubstMap, function-param + call-arg expansion, lambda-capture expansion); see "Variadic templates — status and design" below |
+| Template ctors of non-template classes (`template<T> A::A(T)` etc.) | Yes — see "Template ctor pipeline" below |
 | Two-phase lookup (full §17.7) | Limited — see "Lookup Phases" below |
 
 ## The Pass Pipeline
@@ -266,6 +267,52 @@ before codegen sees it; the mangler reads from there.
 - Multi-TU dedup (the link-time side of the deduplication story):
   [`inline_and_dedup.md`](inline_and_dedup.md)
 - Codegen consumption of instantiated AST: [`emit.md`](emit.md)
+- Use-set policy + recursion-cap discussion:
+  [`instantiation-policy.md`](instantiation-policy.md)
+
+## Template ctor pipeline
+
+Constructor templates of non-template classes (e.g.
+`struct A { template<class T> A(T t); };`) ship through the member-
+template path with three extras layered on top of the regular
+machinery:
+
+1. **Sema-side template-aware ctor overload res** — every ctor-call
+   site (`T(args)` functional cast, `T x(args)` var-decl direct-init,
+   `new T(args)`) runs `resolve_overload_template_aware` (in
+   `src/sema/sema.c`) which deduces template args per candidate and
+   stamps an `ND_TEMPLATE_ID` on `resolved_ctor_tid`. The scorer is
+   cv-aware so identity ref binding wins over qual ref binding
+   per N4659 §16.3.3.2.3 [over.ics.rank].
+2. **Discovery walker + member-template path** — `collect_from_node`
+   reads `resolved_ctor_tid` and creates a `MemberTmplRequest`
+   (carrying a `stamp_resolved_ctor_slot` pointer when there's no
+   ND_CALL to thread through — the var-decl + new-expr cases). Phase
+   3a clones the ctor with class context (`is_constructor=true`,
+   `class_type`, `name`, ret_ty = void), runs phase-2 sema on the
+   cloned body, appends to the TU, and stamps the cloned func back
+   through the slot for emit to read.
+3. **Pre-emit synth pass for implicit copy ctor base inits** —
+   `synth_template_copy_ctors` (in `src/template/instantiate.c`),
+   called from main.c between the second sema_run and emit_c, walks
+   classes whose template member-ctor would win over their own
+   non-template copy ctor for an X lvalue. For each, it clones the
+   template directly (via clone.c + SubstMap) with T = the class,
+   adds the clone to the TU, and stashes it on
+   `cls->synth_template_copy_ctor`. `emit_inline_copy_chain` reads
+   the slot when synthesizing implicit copy ctors so the base-init
+   sites emit a real mangled call instead of inlining the body. This
+   is what closed `g++.dg/cpp0x/implicit2.C`; the prior body-
+   inlining stopgap is gone. Cross-ref:
+   `project_implicit2_resolved` and `project_template_ctor_pipeline`
+   for the milestone history.
+
+The path covers most user-visible template-ctor shapes; the parser
+bug that mis-parses `template<T> A(T)` as "function returning A with
+no name" is worked around by `template_name`'s ret_ty fallback in
+`build_registry`. Re-enabling the parser fix surfaces a variadic-
+template-ctor mangling gap and is gated until that closes — see
+[`mangling.md`](mangling.md) "Known gaps".
 
 ## Variadic templates — status and design
 

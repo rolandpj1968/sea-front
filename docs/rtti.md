@@ -1,9 +1,12 @@
 # C++ RTTI Lowering to C
 
-Status: **design only**, not yet implemented. Current behavior:
-`typeid` and `dynamic_cast` parse but lower to placeholders.
-This document describes the long-term implementation for full C++
-RTTI support.
+Status: **partially shipped (phases 1-2)**. Per-class
+`__sf_typeinfo_<mangled>` symbols emit with a vtable slot reserved
+for the typeinfo pointer; polymorphic `typeid(*p)` lowers via vptr
+dispatch (commit `7acf499`, which let `g++.dg/abi/local1.C` come off
+the xfail list in `26753b0`). Pointer-form `dynamic_cast<T*>` is the
+next phase and is not yet shipped — it parses but emits a placeholder.
+The roadmap further down enumerates the remaining phases.
 
 The bootstrap target (gcc 4.8) was built with `-fno-rtti` and
 needs none of this. Most of the complexity below exists to support
@@ -278,20 +281,22 @@ isn't linked in, "throw bad_cast" when it is.
 
 ## Phased implementation roadmap
 
-1. **Per-class type_info emission.** One `__sf_typeinfo_<mangled>`
-   symbol per polymorphic class, with name + single-parent link.
-   Vtable layout extended with one slot for `typeinfo` pointer.
-   `typeid(T)` for static T lowers to `&__sf_typeinfo_<T>`. Maybe
-   100 lines of codegen.
+1. **Per-class type_info emission. SHIPPED.** One
+   `__sf_typeinfo_<mangled>` symbol per polymorphic class, with
+   name + single-parent link. Vtable layout extended with one slot
+   for `typeinfo` pointer. `typeid(T)` for static T lowers to
+   `&__sf_typeinfo_<T>`.
 
-2. **Polymorphic `typeid(*p)`.** Vtable lookup at the call site.
-   Trivial once vtable slot is reserved.
+2. **Polymorphic `typeid(*p)`. SHIPPED** (commit `7acf499`). Vtable
+   lookup at the call site; relies on the slot reserved by phase 1.
+   Surfaced via `g++.dg/abi/local1.C` removal from xfail in
+   `26753b0`.
 
 3. **Pointer-form `dynamic_cast<T*>` for single inheritance.** The
    parent-chain-walk runtime helper plus codegen at each
    `dynamic_cast` site. Independently useful — works without
    exceptions, covers most real-world casts. ~50 lines runtime, ~20
-   lines codegen.
+   lines codegen. **NEXT.**
 
 4. **`type_info` API surface.** `.name()`, `==`, `.before()`,
    `.hash_code()`. Trivial library-level implementation.
@@ -299,17 +304,20 @@ isn't linked in, "throw bad_cast" when it is.
 5. **Ref-form `dynamic_cast<T&>`.** Same machinery as pointer form,
    plus `__sf_throw_bad_cast`. Decoupled from full exceptions: until
    exceptions are wired up, ref-form aborts on fail. After exceptions,
-   it throws `std::bad_cast` per ISO.
+   it throws `std::bad_cast` per ISO. Cross-ref:
+   [`exceptions.md`](exceptions.md).
 
 6. **Multiple inheritance.** `parents[]` array on `type_info`,
    offset adjustments in the helper, virtual-base sharing logic.
    The "real engineering effort" tier — order of 150 runtime lines.
+   The base_types[] refactor (see [`emit.md`](emit.md) MI section)
+   already provides the AST-side data this would consume.
 
 7. **Sidecast (full ISO conformance).** Diamond-inheritance edge
    cases. Probably never needed; ship if a use case forces it.
 
-Steps 1-5 cover what most real code uses and ship in phase order.
-6+7 are scope expansion when demanded.
+Phases 1-2 are done. 3-5 cover what most real code uses and ship in
+phase order. 6-7 are scope expansion when demanded.
 
 ## Connections to other docs
 

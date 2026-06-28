@@ -1,12 +1,18 @@
 # Name Mangling Design
 
-Status: **implemented** with the human-readable scheme described below;
-the plugin shape is in place so an Itanium scheme can be added without
-re-architecting. Recent additions: NTTP literal-value encoding into the
-instantiation tag (so `<int,42>` and `<int,99>` produce distinct
-symbols), per-class typeinfo placeholder for primitive-typed throws.
-The "System-class interop (deferred design)" section near the end
-captures the open question of how to call into libstdc++ symbols.
+Status: **both schemes ship.** Itanium is the **default** (`g_mangle_kind
+= MANGLE_ITANIUM` in `src/codegen/mangle.c`); the human-readable scheme
+is opt-in via `--mangling=human` and still works as a review/audit aid.
+The Itanium implementation covers nested-name encoding, NTTP literal
+values, type-arg templates, substitution back-refs (`S_`, `S0_`, ...),
+ctor C1/C2 / dtor D0/D1/D2 variants, ref- and cv-qualifiers, and a
+chunk of gcc-parity fixtures (see `tests/test_mangle_itanium`).
+Cross-ref: [`rtti.md`](rtti.md) for typeinfo symbol naming,
+[`inline_and_dedup.md`](inline_and_dedup.md) for how mangled names
+plug into the static-inline dedup story, [`exceptions.md`](exceptions.md)
+for the throw-class typeinfo placeholder. The "System-class interop"
+section near the end captures the open question of how to bridge
+sea-front-mangled symbols to libstdc++.
 
 ## Goal
 
@@ -17,34 +23,68 @@ function or symbol such that:
    different template instantiations, different members of different
    classes, etc., all produce different names.
 2. **The "same" entity always produces the same name across multiple
-   TUs**, so multi-TU compilation paired with `__SF_INLINE` (weak
-   symbols) deduplicates inline functions and template instantiations
-   correctly. Determinism on the same inputs is required.
+   TUs**, so multi-TU compilation paired with `__SF_INLINE`
+   (`static inline`, see [`inline_and_dedup.md`](inline_and_dedup.md))
+   collapses inline functions and template instantiations on a single
+   producer per TU. Determinism on the same inputs is required.
 3. **Generated `.c` files stay reviewable by humans.** Sea-front's
    reason for existing is "trusted bootstrap — read the lowered C
-   yourself and verify it's correct." That makes name readability
-   **load-bearing**, not cosmetic.
+   yourself and verify it's correct." That makes review accessibility
+   **load-bearing**, which is why the human scheme survived as an
+   opt-in (`--mangling=human`) even after Itanium became the default —
+   pipe a small reproducer through it when reading mangled output is
+   the friction.
 4. **Sea-front-emitted symbols never collide with C library or
    `extern "C"` symbols.** Every synthesized name lives behind a
-   prefix that puts it in its own namespace.
+   prefix that puts it in its own namespace (`_Z…` for Itanium,
+   `sf__…` for human).
 
-## Why we don't follow Itanium directly
+## Why Itanium ended up the default
 
-The "Itanium C++ ABI" is the de facto C++ ABI everywhere except MSVC.
-GCC and Clang use it on Linux, macOS, BSD, x86/x86_64/ARM/ARM64/
-RISC-V/PowerPC, etc. — its name is misleading historical baggage.
-Following it gets us tooling for free (`c++filt`, `nm -C`, gdb).
+Despite the early "human-by-default" instinct (preserved in earlier
+drafts of this doc), Itanium ended up shipping as the default for
+three reasons:
 
-The cost is that Itanium-mangled names are dense, e.g. `_ZN3vecIiE3getEv`.
-Our generated `.c` files would be full of these. The reviewability
-proposition gets dramatically weakened — auditing the bootstrap would
-require piping every emitted file through `c++filt`.
+1. **Multi-TU consistency with stock toolchains.** Even though
+   sea-front emits its own producer for every used entity, mixed
+   builds (where some objects are sea-front-built and others are
+   stock-built — see the bootstrap chain in
+   [`trusted-bootstrap-design.md`](trusted-bootstrap-design.md))
+   need a common naming contract at the link stage. Itanium is the
+   obvious one.
+2. **Tooling, debug, link diagnostics.** `c++filt`, `addr2line`, gdb,
+   `nm -C` all demangle Itanium. Undefined-symbol reports from `ld`
+   become readable directly.
+3. **NTTP / template-arg encoding lands cleanly.** Once the framework
+   was in for class templates and member templates, the cost of also
+   doing Itanium was less than feared — the algorithm is bounded and
+   well-specified.
 
-For sea-front specifically, the audit case is the dominant audience.
-Tooling-compat is a nice-to-have. So our **primary scheme is
-human-readable**, with Itanium left as an opt-in alternative.
+The human scheme is retained because the audit story still wins under
+it: a developer eyeballing the lowered C of a single reproducer can
+read off "this is `get` on `vec` with template arg `int`, called with
+one `double`" from `sf__vec_t_int_te___get_p_double` without piping
+through anything. Itanium would produce `_ZN3vecIiE3getEd` — same
+information, more friction.
 
-## The plugin shape
+## Plugin shape (as it actually exists today)
+
+Mangling is fundamentally a **traversal** of the AST/type tree where
+every visited node emits something. Itanium and the human-readable
+scheme **agree on the traversal** (you visit a class type, then its
+template args if any, then a member name, etc.) but **disagree only on
+leaf tokens** (`i` vs `int`, `_Z` vs `sf__`, `N…E` vs `__`).
+
+The actual implementation is plainer than the original "vtable struct"
+sketch this doc described before Itanium shipped — every public mangle
+entry (`mangle_class_ctor`, `mangle_class_method`,
+`mangle_free_function_symbol`, …) dispatches on `g_mangle_kind` at
+the top and routes to an `itan_…` or human implementation. Both
+implementations are around ~700-900 lines each. The vtable struct
+described below would still be a possible refactor; the dispatch shape
+isn't worth changing absent a concrete need.
+
+## The plugin shape (sketched / reference design)
 
 Mangling is fundamentally a **traversal** of the AST/type tree where
 every visited node emits something. Itanium and our human-readable
@@ -166,22 +206,19 @@ Both ugly to different degrees. The human one is at least *grep-able*
 and you can read off "this is `get` on `vec` with template arg `int`,
 called with one `double` parameter."
 
-## Why the plugin shape is genuinely good
+## Why having both schemes is genuinely good
 
-Beyond "you can swap implementations":
+Beyond "you can swap":
 
-1. **Testability** — every mangling test exercises the framework, not
-   the leaf tokens. Changes to leaf encoding don't break framework
-   tests, and vice versa.
-2. **Itanium becomes cheap-to-add-later**, not a redesign. Pick human
-   for now; if anyone wants `c++filt` interop, they implement the
-   Itanium vtable in one focused commit and add a `--mangling=itanium`
-   flag.
-3. **The vtable interface IS the spec.** Each implementation is
-   essentially executable documentation of one scheme.
-4. **Bikeshed deferral.** Ship with the human vtable; if anyone hates
-   the chosen leaf tokens (`_t_`, `_p_`, etc.), they argue about
-   *those* in isolation without touching codegen or the framework.
+1. **Testability** — the encoding tests (`tests/test_mangle_itanium`)
+   exercise the framework and the leaf tokens separately. Changes to
+   leaf encoding don't break framework tests, and vice versa.
+2. **The implementations *are* the spec.** Each scheme is executable
+   documentation of one mangling shape; the Itanium impl is the
+   reference for what sea-front emits when interop matters.
+3. **Bikeshed isolation.** Anyone unhappy with the human leaf tokens
+   (`_t_`, `_p_`, …) argues about *those* under `--mangling=human`
+   without touching the Itanium default.
 
 ## extern "C" handling
 
@@ -214,27 +251,29 @@ decls inherit the C-linkage flag. Today the parser eats `extern "C" {
 ... }` blocks but doesn't propagate the linkage to inner decls. Small
 parser change.
 
-## Implementation plan
+## Known gaps in the Itanium implementation
 
-When we get to it (immediately before the first slice that needs
-overload disambiguation, template instantiation, or operator
-overloading), the rollout is three commits:
+The default Itanium scheme covers nearly everything sea-front emits
+today, but two gaps are worth noting (and are deferred per
+`project_template_ctor_pipeline.md`):
 
-1. **First commit — framework + human vtable, refactor existing
-   callers.** Introduce the `Mangler` struct, implement just the
-   human vtable, switch every existing call site
-   (`emit_method_signature`, `emit_class_def`, the cleanup chain
-   emissions, the temp dtor calls in the hoist code) over to call
-   through it. Outputs change from `Foo_ctor` etc. to the prefixed
-   form `sf__Foo__ctor`. Goldens get bulk-updated. Pure refactor,
-   no new functionality.
-2. **Second commit — free functions + extern "C" tag.** Mangle free
-   functions through the framework too, with `extern "C"` opt-out.
-   Requires the small parser change to tag `extern "C"` blocks and
-   propagate the linkage to contained decls.
-3. **Third commit (optional, deferrable forever).** Implement
-   `mangler_itanium` as a second vtable. Add `--mangling=itanium`
-   flag. Sea-front continues to emit human by default.
+1. **Template ctor mangle omits the `I…E` template-args block.** When
+   the template-ctor pipeline (see
+   [`template-instantiation.md`](template-instantiation.md)) clones
+   `A<T>(T&)` for `T=int`, sea-front emits `_ZN1AC1Ei` rather than
+   the gcc-canonical `_ZN1AC1IiEEi`. Both sea-front sides agree on
+   the shape so internal links resolve; mixing with gcc-built objects
+   that expect the canonical form would not link.
+2. **Variadic-template-ctor leak.** Re-enabling the parser fix that
+   recognises template ctor names propagates `is_constructor=true`
+   onto the inner FD and surfaces an instantiation-mangling bug —
+   variadic packs leak `TY_DEPENDENT` into the symbol
+   (`_ZN1SC1Eu9_DEPENDENT`). The parser fix stays gated until the
+   variadic mangle gap is closed; see
+   `project_template_ctor_pipeline.md` and
+   `project_implicit2_resolved.md` for the workaround discovery story.
+
+Neither blocks internal builds. Both are tracked.
 
 ## Rules of the human encoding (strawman, all bikeshed-able)
 

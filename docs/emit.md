@@ -23,8 +23,12 @@ detail in [`mangling.md`](mangling.md).
   as the first argument.
 - References (`T&`) lower to pointers (`T *`). Callers pass `&x`;
   callees see `*p` semantics.
-- Output uses no nonstandard C extensions except `__attribute__((weak))`
-  for inline / template-instantiation deduplication.
+- Output is C99-clean. `__attribute__((weak))` shows up only when the
+  user source carries it (e.g. `__attribute__((weak))` on a function
+  decl); sea-front passes that through. Inline / template-instantiation
+  deduplication is done via `static inline` (`__SF_INLINE`), not weak
+  symbols — see [`inline_and_dedup.md`](inline_and_dedup.md) for the
+  full story.
 
 ## C++ to C Translation Table
 
@@ -73,7 +77,7 @@ A `B*` is layout-compatible with an `A*` because `__sf_base` is at
 offset zero. Member access through the base walks the chain:
 `b.a_member` in C++ becomes `b.__sf_base.a_member` in C.
 
-#### Multiple inheritance — TODO, currently unsupported
+#### Multiple inheritance
 
 Single inheritance is straightforward: `__sf_base` at offset 0 makes
 `B*` reinterpretable as `A*`. Multiple inheritance breaks this —
@@ -82,20 +86,30 @@ offsets, and `D*` cast to `A2*` (where `A2` is the second base)
 requires *adjusting the pointer* by the offset of `__sf_base_A2` in
 `D`.
 
-The full design (not yet implemented):
+After the `class_def.base_types[]` refactor (commits `381cc21` →
+`27819c9`, summarised in `project_drop_region_bases`), MI ships and
+follows this shape:
 
-- Class layout: each base becomes its own `__sf_base_<TagN>` member,
-  in declaration order.
-- Upcast `D* → A2*` emits `((struct A2 *)((char *)d + offsetof(D,
-  __sf_base_A2)))`. The `((char *)d + ...)` form survives even when
-  the offset isn't a compile-time constant after struct-layout
-  decisions (it always is in C, but gcc tolerates the form anyway).
-- Downcast `A2* → D*` is symmetric: subtract the offset.
+- Class layout: each base becomes its own `__sf_base` /
+  `__sf_base<N>` member, in declaration order. Helpers
+  `class_nbases` / `class_base` iterate; emit / sema / mangling all
+  read from `class_def.base_types[]`.
+- Upcast `D* → A2*` walks the field path: `&d->__sf_base1` for the
+  second base, no `(char *)` arithmetic needed because the field
+  carries the offset.
+- Downcast `A2* → D*` follows the same field path in reverse, gated
+  by the explicit-cast forms (`static_cast` / C-cast).
 - Member access through a non-first base walks
-  `d.__sf_base_A2.member` (no pointer arithmetic needed at the AST
-  level; the field name carries the path).
+  `d.__sf_base1.member` (no pointer arithmetic at the AST level;
+  the field name carries the path). `find_base_path` /
+  `emit_base_chain` synthesize the chain.
 - Implicit conversions in argument-passing: `void f(A2*); D d; f(&d);`
-  emits `f(&d.__sf_base_A2)` rather than `f(&d)`.
+  emits `f(&d.__sf_base1)` via the same path walk.
+
+The implicit-this MI-template-base regression flagged on
+`feedback_implicit_this_stamp_trap` was the primary impetus for the
+refactor; see also `project_template_ctor_pipeline` for the implicit
+copy-ctor + base init plumbing built on top.
 
 #### Virtual + multiple inheritance — vtable interaction
 
@@ -448,9 +462,11 @@ are visible at struct level.
 
 ## Multi-TU Deduplication
 
-Emitted functions and instantiations get `__attribute__((weak))` so
-the linker can pick one copy when multiple TUs emit the same
-template instantiation or inline function. The full scheme is in
+Inline functions and template instantiations emit as
+`static inline` (`__SF_INLINE`) so each TU carries its own
+self-contained copy and the linker never sees same-symbol conflicts.
+The full scheme — including the switch away from
+`__attribute__((weak))` after gcc 4.8 link failures — is in
 [`inline_and_dedup.md`](inline_and_dedup.md).
 
 ## Tracking Emit Order
