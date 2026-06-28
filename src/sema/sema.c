@@ -2441,7 +2441,13 @@ static void visit_call(Sema *s, Node *n) {
                 tc_type, /*name=*/NULL, /*is_ctor=*/true,
                 at, na, /*receiver_is_const=*/false,
                 s->arena, &pty, &winner, &origin, &is_tmpl, &deduced);
-            n->call.resolved_ctor = winner;  /* may be NULL on no match */
+            /* Don't overwrite a pre-stamped resolved_ctor from a prior
+             * pass — template_instantiate's Phase 3a sets resolved_ctor
+             * to the substituted cloned func, and sema #2 would
+             * otherwise revert to the source template's TY_DEPENDENT-
+             * paramed inner, breaking call-site mangling. */
+            if (!n->call.resolved_ctor)
+                n->call.resolved_ctor = winner;
             /* Template-ctor winner — build a synthetic ND_TEMPLATE_ID
              * so the discovery walker drives instantiation, and the
              * emit site mangles to the instantiated symbol. The

@@ -6662,6 +6662,16 @@ static void emit_expr(Node *n) {
             n->call.callee && n->call.callee->kind == ND_IDENT) {
             Type *conc = n->call.callee->resolved_type;
             if (!conc) conc = n->resolved_type;
+            /* When n->resolved_type is a class, prefer it over the
+             * callee ident's own resolved_type — the callee ident
+             * may have been left typed as something else by sema's
+             * type-name handling, and the C-cast emit below would
+             * lower `A(5)` to `((int)(5))`. Class targets fall
+             * through to the ctor-aware emit further down. */
+            if (n->resolved_type &&
+                (n->resolved_type->kind == TY_STRUCT ||
+                 n->resolved_type->kind == TY_UNION))
+                conc = n->resolved_type;
             if (conc && conc->kind != TY_STRUCT && conc->kind != TY_UNION &&
                 conc->kind != TY_DEPENDENT) {
                 if (n->call.nargs == 0) {
@@ -12694,7 +12704,12 @@ static void rewrite_copy_init_ctor_call(Node *n) {
     if (!n->var_decl.init || n->var_decl.init->kind != ND_CALL) return;
     if (n->var_decl.has_ctor_init) return;
     if (!n->var_decl.ty || n->var_decl.ty->kind != TY_STRUCT) return;
-    if (!n->var_decl.ty->has_default_ctor) return;
+    /* Has-default-ctor gate skipped when the call's resolved_ctor is
+     * already pinned (sema stamped a winner — typically a template
+     * ctor — so the direct-init emit can use that exact ctor without
+     * needing the synth default-ctor fallback). */
+    if (!n->var_decl.ty->has_default_ctor &&
+        !n->var_decl.init->call.resolved_ctor) return;
     /* `T v = T(args);` — sema flagged the RHS as a functional cast
      * (N4659 §5.2.3). Promote to direct-init `T v(args);` so the
      * has_ctor_init emit path (`T v; T_ctor(&v, args);`) takes
@@ -12704,6 +12719,10 @@ static void rewrite_copy_init_ctor_call(Node *n) {
     n->var_decl.has_ctor_init = true;
     n->var_decl.ctor_args = call->call.args;
     n->var_decl.ctor_nargs = call->call.nargs;
+    /* Propagate the stamped winner so emit's direct-init path mangles
+     * against the right ctor instead of re-running overload res. */
+    if (call->call.resolved_ctor)
+        n->var_decl.resolved_ctor = call->call.resolved_ctor;
     n->var_decl.init = NULL;
 }
 
