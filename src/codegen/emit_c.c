@@ -10523,6 +10523,21 @@ static void emit_init_with_target(Node *init, Type *target_ty) {
 static bool class_has_user_copy_ctor(Type *cls);
 static bool class_transitively_needs_copy_call(Type *cls);
 
+/* Pick the best ctor of `cls` for copy-initialisation from an lvalue
+ * of type cls with the given cv-qualification. Considers all ctors
+ * including templates (which gcc/clang win for arg type T over
+ * X(const X&) via the less-cv-qualified reference binding rank,
+ * N4659 §16.3.3.2.3 [over.ics.rank]). Returns the raw member node
+ * (ND_TEMPLATE_DECL for templates, ND_FUNC_DEF / ND_VAR_DECL otherwise)
+ * via *out_raw; *out_inner is the peeled func node (== *out_raw when
+ * not a template). *out_is_template is true iff the winner is a
+ * template. *out_p0 is the param-0 type for mangling — for non-
+ * templates this is the declared type; for templates it's the
+ * deduced effective type (TY_REF to cls with the right cv). */
+static void pick_copy_ctor(Type *cls, bool arg_is_const,
+                            Node **out_raw, Node **out_inner,
+                            bool *out_is_template, Type **out_p0);
+
 /* True when target class has any data member of class type with a
  * user-defined copy ctor — i.e. aggregate init via bitwise C
  * struct copy would skip user-written body work. Conservative —
@@ -12229,6 +12244,170 @@ static bool class_has_no_user_ctor(Type *cls) {
     return true;
 }
 
+/* Walk an AST subtree to check whether it's safe to emit verbatim
+ * at a call site without subst or parameter substitution. The body
+ * is inlineable iff it contains no `this` references, no references
+ * to the function's parameters, no TY_DEPENDENT types on any node,
+ * and no return statements (the inline form can't `return` out of
+ * the calling function). Used by emit_inline_copy_chain's template-
+ * ctor winner path; sea-front doesn't yet route template ctors
+ * through the normal instantiation pipeline, so inlining is a
+ * stopgap for trivial bodies (g++.dg/cpp0x/implicit2.C). */
+static bool template_body_check_safe(Node *n, Node **params, int nparams) {
+    if (!n) return true;
+    if (n->kind == ND_RETURN) return false;
+    if (n->kind == ND_IDENT) {
+        if (n->ident.implicit_this) return false;
+        Node *rd = n->ident.resolved_decl;
+        if (rd) {
+            for (int i = 0; i < nparams; i++)
+                if (params[i] == rd) return false;
+        }
+    }
+    if (n->resolved_type && n->resolved_type->kind == TY_DEPENDENT)
+        return false;
+    /* Conservatively walk common child shapes. */
+    switch (n->kind) {
+    case ND_BLOCK:
+        for (int i = 0; i < n->block.nstmts; i++)
+            if (!template_body_check_safe(n->block.stmts[i], params, nparams))
+                return false;
+        return true;
+    case ND_EXPR_STMT:
+        return template_body_check_safe(n->expr_stmt.expr, params, nparams);
+    case ND_BINARY:
+    case ND_ASSIGN:
+        return template_body_check_safe(n->binary.lhs, params, nparams) &&
+               template_body_check_safe(n->binary.rhs, params, nparams);
+    case ND_UNARY:
+        return template_body_check_safe(n->unary.operand, params, nparams);
+    case ND_IDENT:
+    case ND_NUM:
+    case ND_FNUM:
+    case ND_STR:
+    case ND_CHAR:
+    case ND_BOOL_LIT:
+    case ND_NULLPTR:
+    case ND_NULL_STMT:
+        return true;
+    default:
+        return false;  /* be conservative — unknown shapes fall back */
+    }
+}
+
+static bool template_body_is_inlineable(Node *func_def) {
+    if (!func_def || func_def->kind != ND_FUNC_DEF) return false;
+    if (!func_def->func.body) return false;
+    return template_body_check_safe(func_def->func.body,
+                                     func_def->func.params,
+                                     func_def->func.nparams);
+}
+
+/* See forward-decl comment. */
+static void pick_copy_ctor(Type *cls, bool arg_is_const,
+                            Node **out_raw, Node **out_inner,
+                            bool *out_is_template, Type **out_p0) {
+    *out_raw = NULL;
+    *out_inner = NULL;
+    *out_is_template = false;
+    *out_p0 = NULL;
+    if (!cls || !cls->class_def) return;
+    Node *cdef = cls->class_def;
+    /* Rank: identity reference binding (target cv == arg cv) > qual
+     * reference binding (target adds const). Tie-break: non-template
+     * beats template per N4659 §16.3.3/1 last bullet [over.match.best]. */
+    enum { RANK_NONE = 0, RANK_QUAL = 2, RANK_IDENTITY = 4 };
+    int best_rank = RANK_NONE;
+    bool best_is_template = false;
+    Node *best_raw = NULL;
+    Node *best_inner = NULL;
+    Type *best_p0 = NULL;
+    for (int i = 0; i < cdef->class_def.nmembers; i++) {
+        Node *raw = cdef->class_def.members[i];
+        if (!raw) continue;
+        Node *m = raw;
+        bool is_template = false;
+        if (m->kind == ND_TEMPLATE_DECL && m->template_decl.decl) {
+            Node *inner = m->template_decl.decl;
+            while (inner && inner->kind == ND_TEMPLATE_DECL)
+                inner = inner->template_decl.decl;
+            if (!inner) continue;
+            m = inner;
+            is_template = true;
+        }
+        bool is_def  = (m->kind == ND_FUNC_DEF && m->func.is_constructor);
+        bool is_decl = (m->kind == ND_VAR_DECL && m->var_decl.is_constructor);
+        /* Member templates that wrap a ctor don't get
+         * is_constructor=true propagated to the inner ND_FUNC_DEF —
+         * parse_template_declaration pushes a REGION_TEMPLATE scope
+         * and the in-class ctor detection in parse_type's
+         * parse_type_specifiers gates on REGION_CLASS. The parser
+         * then parses 'A(T& t)' as 'function returning A with
+         * abstract params' — leaving name=NULL and ret_ty=A. Detect
+         * the template-ctor shape here: a member-template FD whose
+         * return type tag matches the enclosing class's. N4659 §15.1
+         * [class.ctor]/2. */
+        if (is_template && !is_def && m->kind == ND_FUNC_DEF &&
+            m->func.ret_ty && cls->tag &&
+            (m->func.ret_ty->kind == TY_STRUCT ||
+             m->func.ret_ty->kind == TY_UNION) &&
+            m->func.ret_ty->tag &&
+            m->func.ret_ty->tag->len == cls->tag->len &&
+            memcmp(m->func.ret_ty->tag->loc, cls->tag->loc, cls->tag->len) == 0)
+            is_def = true;
+        if (!is_def && !is_decl) continue;
+        int np = is_def ? m->func.nparams
+                        : (m->var_decl.ty ? m->var_decl.ty->nparams : 0);
+        if (np != 1) continue;
+        Type *p0 = NULL;
+        if (is_def) {
+            Node *pp = m->func.params ? m->func.params[0] : NULL;
+            if (pp && pp->kind == ND_PARAM) p0 = pp->param.ty;
+        } else if (m->var_decl.ty && m->var_decl.ty->params) {
+            p0 = m->var_decl.ty->params[0];
+        }
+        if (!p0) continue;
+        if (p0->kind != TY_REF && p0->kind != TY_RVALREF) continue;
+        Type *target = p0->base;
+        if (!target) continue;
+        bool target_cv = target->is_const;
+        if (is_template) {
+            /* Template `X<T>(T&)` — T deduces from arg of type cls
+             * to T=cls. Param is dependent ref; effective is ref to
+             * cls with target's cv. Skip patterns that don't bind to
+             * the class type (e.g. T must be the dependent target). */
+            if (target->kind != TY_DEPENDENT) continue;
+        } else {
+            /* Non-template — target struct tag must be cls. */
+            if (target->kind != TY_STRUCT) continue;
+            if (!target->tag || !cls->tag) continue;
+            if (target->tag->len != cls->tag->len) continue;
+            if (memcmp(target->tag->loc, cls->tag->loc, cls->tag->len) != 0)
+                continue;
+        }
+        /* Bind-ability + ICS rank:
+         *   target_cv >= arg_cv to bind (can't discard cv);
+         *   identity if target_cv == arg_cv, else qual. */
+        if (!target_cv && arg_is_const) continue;  /* would discard cv */
+        int rank = (target_cv == arg_is_const) ? RANK_IDENTITY : RANK_QUAL;
+        bool better = false;
+        if (rank > best_rank) better = true;
+        else if (rank == best_rank && best_is_template && !is_template)
+            better = true;  /* non-template wins tie */
+        if (better) {
+            best_rank        = rank;
+            best_is_template = is_template;
+            best_raw         = raw;
+            best_inner       = m;
+            best_p0          = p0;
+        }
+    }
+    *out_raw         = best_raw;
+    *out_inner       = best_inner;
+    *out_is_template = best_is_template;
+    *out_p0          = best_p0;
+}
+
 static bool class_has_user_copy_ctor(Type *cls) {
     if (!cls || !cls->class_def) return false;
     Node *cdef = cls->class_def;
@@ -12306,10 +12485,45 @@ static void emit_inline_copy_chain(const char *dst_path,
                                     Type *cls) {
     if (!cls || !cls->class_def) return;
     if (class_has_user_copy_ctor(cls)) {
-        /* Build a single-arg type list so the ctor mangle picks
-         * the (const T&) copy ctor and not a same-arity overload.
-         * The argument's resolved type for mangling is what the
-         * existing direct-init path uses — TY_REF(const T). */
+        /* Pick the best ctor for `cls(src)` via spec-aligned overload
+         * res. For a non-template winner, mangle + call. For a template
+         * winner whose body is "inlineable" (no `this` / param / dep-
+         * type refs), inline its statements directly — sea-front
+         * doesn't yet instantiate template ctors through the normal
+         * pipeline. Pattern: g++.dg/cpp0x/implicit2.C, template A<T>(T&)
+         * with trivial body `r = 0;`. */
+        Node *raw = NULL, *inner = NULL;
+        bool is_tmpl = false;
+        Type *p0 = NULL;
+        pick_copy_ctor(cls, /*arg_is_const=*/false, &raw, &inner,
+                        &is_tmpl, &p0);
+        if (raw && !is_tmpl && p0) {
+            Type *pty_buf[1] = { p0 };
+            emit_indent();
+            mangle_class_ctor(cls, pty_buf, 1);
+            fprintf(stdout, "(&%s, &%s);\n", dst_path, src_path);
+            return;
+        }
+        if (raw && is_tmpl && inner && inner->kind == ND_FUNC_DEF &&
+            inner->func.body && template_body_is_inlineable(inner)) {
+            /* Emit the body's statements inline. The body's identifiers
+             * resolve via their resolved_decl (set by sema #1) to non-
+             * dependent globals/etc. — no subst needed when the
+             * predicate passed. */
+            emit_indent();
+            fputs("{\n", stdout);
+            g_indent++;
+            Node *body = inner->func.body;
+            for (int s = 0; s < body->block.nstmts; s++) {
+                emit_indent();
+                emit_stmt(body->block.stmts[s]);
+            }
+            g_indent--;
+            emit_indent();
+            fputs("}\n", stdout);
+            return;
+        }
+        /* Fallback — old hardcoded scan for (const T&) / (T&). */
         Type *cref_ty = NULL;
         for (int i = 0; cls->class_def &&
                           i < cls->class_def->class_def.nmembers; i++) {
@@ -12321,21 +12535,21 @@ static void emit_inline_copy_chain(const char *dst_path,
             int np = is_def ? m->func.nparams
                             : (m->var_decl.ty ? m->var_decl.ty->nparams : 0);
             if (np != 1) continue;
-            Type *p0 = NULL;
+            Type *p0s = NULL;
             if (is_def) {
                 Node *pp = m->func.params ? m->func.params[0] : NULL;
-                if (pp && pp->kind == ND_PARAM) p0 = pp->param.ty;
+                if (pp && pp->kind == ND_PARAM) p0s = pp->param.ty;
             } else if (m->var_decl.ty && m->var_decl.ty->params) {
-                p0 = m->var_decl.ty->params[0];
+                p0s = m->var_decl.ty->params[0];
             }
-            if (!p0) continue;
-            Type *base = p0;
+            if (!p0s) continue;
+            Type *base = p0s;
             if (base->kind == TY_REF || base->kind == TY_RVALREF) base = base->base;
             if (!base || base->kind != TY_STRUCT) continue;
             if (!base->tag || !cls->tag) continue;
             if (base->tag->len != cls->tag->len) continue;
             if (memcmp(base->tag->loc, cls->tag->loc, cls->tag->len) != 0) continue;
-            cref_ty = p0;
+            cref_ty = p0s;
             break;
         }
         Type *pty_buf[1] = { cref_ty };
