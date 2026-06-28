@@ -991,6 +991,36 @@ static void collect_from_node(InstCollector *col, Node *n) {
         break;
 
     case ND_CALL:
+        /* Template-ctor winner stamped by sema: drives instantiation
+         * via the ND_TEMPLATE_ID stashed on call.resolved_ctor_tid.
+         * The tid carries the deduced template args; same machinery
+         * as a free-function ND_TEMPLATE_ID callee. N4659 §17.8.2.1
+         * [temp.deduct.call] + §15.1 [class.ctor]. */
+        if (n->call.resolved_ctor_tid) {
+            Node *tid = n->call.resolved_ctor_tid;
+            Node *tmpl = tid->template_id.resolved_tmpl;
+            if (tmpl && tid->template_id.name) {
+                InstRequest *req = arena_alloc(col->arena,
+                                                 sizeof(InstRequest));
+                req->name = tid->template_id.name;
+                req->template_id = tid;
+                req->tmpl_def = tmpl;
+                req->usage_type = NULL;
+                req->nargs = n->call.nargs;
+                if (n->call.nargs > 0) {
+                    req->arg_types = arena_alloc(col->arena,
+                        n->call.nargs * sizeof(Type *));
+                    for (int i = 0; i < n->call.nargs; i++)
+                        req->arg_types[i] = n->call.args[i]
+                            ? n->call.args[i]->resolved_type : NULL;
+                } else {
+                    req->arg_types = NULL;
+                }
+                req->next = col->head;
+                col->head = req;
+                col->count++;
+            }
+        }
         /* Function-template call with deducible U: 'is_a<Cat>(p)' in
          * 'template<T, U> bool is_a(U*)' — the ND_TEMPLATE_ID callee
          * only has T explicit; U must be deduced from the call args.
